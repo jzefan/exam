@@ -1,0 +1,41 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: exam
+      POSTGRES_PASSWORD: exam
+      POSTGRES_DB: exam
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U exam"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      EXAM_DATABASE_URL: postgresql+asyncpg://exam:exam@db:5432/exam
+      EXAM_SECRET_KEY: docker-dev-secret-key
+      EXAM_DEBUG: "true"
+      EXAM_CORS_ORIGINS: '["http://localhost:4000"]'
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "4000:4000"
+    environment:
+      API_URL: http://backend:8000
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
