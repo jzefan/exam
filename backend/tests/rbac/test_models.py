@@ -96,3 +96,60 @@ async def test_create_user_organization(db: AsyncSession) -> None:
     assert len(memberships) == 1
     assert memberships[0].org_id == org.id
     assert memberships[0].is_primary is True
+
+
+from app.rbac.schemas import (
+    OrganizationCreate,
+    OrganizationResponse,
+    RoleCreate,
+    RoleResponse,
+    PermissionResponse,
+    UserOrganizationResponse,
+)
+
+
+def test_organization_create_schema() -> None:
+    data = OrganizationCreate(name="Test School", type="school", description="A school")
+    assert data.name == "Test School"
+    assert data.type == "school"
+
+
+def test_organization_response_schema() -> None:
+    import uuid
+    from datetime import datetime, timezone
+
+    response = OrganizationResponse(
+        id=uuid.uuid4(),
+        name="Test",
+        type="school",
+        description=None,
+        logo_url=None,
+        is_active=True,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    assert response.is_active is True
+
+
+def test_role_create_schema() -> None:
+    data = RoleCreate(name="teacher", display_name="Teacher", description="A teacher role")
+    assert data.name == "teacher"
+
+
+def test_role_response_schema() -> None:
+    import uuid
+    from datetime import datetime, timezone
+
+    response = RoleResponse(
+        id=uuid.uuid4(),
+        name="teacher",
+        display_name="Teacher",
+        description="Teacher role",
+        is_system=True,
+        org_id=None,
+        permissions=[],
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    assert response.is_system is True
+    assert response.permissions == []
