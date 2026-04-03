@@ -7,8 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import CurrentUser
-from app.auth.models import UserRole  # Still needed for legacy user.role checks
+from app.auth.dependencies import CurrentUser, user_has_role
 from app.database import get_db
 from app.exams.models import Position
 from app.exams.schemas import PositionCreate, PositionResponse
@@ -48,8 +47,8 @@ async def create_position(
     db: Annotated[AsyncSession, Depends(get_db)],
     user: CurrentUser,
 ) -> PositionResponse:
-    is_system = user.role == UserRole.ADMIN
-    position = Position(name=body.name, created_by=user.id, is_system=is_system)
+    is_admin = await user_has_role(db, user.id, "platform_admin", "school_admin")
+    position = Position(name=body.name, created_by=user.id, is_system=is_admin)
     db.add(position)
     await db.commit()
     await db.refresh(position)
@@ -78,7 +77,8 @@ async def delete_position(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Position not found")
 
     # Only allow deleting own non-system positions (admins can delete system ones)
-    if position.is_system and user.role != UserRole.ADMIN:
+    is_admin = await user_has_role(db, user.id, "platform_admin", "school_admin")
+    if position.is_system and not is_admin:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot delete system position")
     if not position.is_system and position.created_by != user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot delete others' position")

@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import CurrentUser, require_roles
+from app.auth.dependencies import CurrentUser, require_roles, user_has_role
 from app.auth.models import User
 from app.common.pagination import PaginationParams, apply_filters, apply_pagination, get_total_count, parse_filters, parse_pagination
 from app.database import get_db
@@ -256,8 +256,8 @@ async def create_tag_endpoint(
 ) -> TagResponse:
     from app.questions.models import TagType
     if data.type != TagType.CUSTOM:
-        # Standard tags require ADMIN or TEACHER role
-        if user.role.value not in ("admin", "teacher"):
+        # Standard tags require admin or teacher role via RBAC
+        if not await user_has_role(db, user.id, "platform_admin", "school_admin", "teacher"):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
     tag = await create_tag(db, data)
     return TagResponse.model_validate(tag)
@@ -275,7 +275,7 @@ async def update_tag_endpoint(
     if existing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
     if existing.type != TagType.CUSTOM:
-        if user.role.value not in ("admin", "teacher"):
+        if not await user_has_role(db, user.id, "platform_admin", "school_admin", "teacher"):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
     tag = await update_tag(db, tag_id, data)
     if tag is None:
@@ -294,7 +294,7 @@ async def delete_tag_endpoint(
     if existing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
     if existing.type != TagType.CUSTOM:
-        if user.role.value not in ("admin", "teacher"):
+        if not await user_has_role(db, user.id, "platform_admin", "school_admin", "teacher"):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
     await delete_tag(db, tag_id)
 

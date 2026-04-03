@@ -3,7 +3,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.models import User, UserRole
+from app.auth.models import User
 from app.auth.schemas import UserCreate, UserOrgInfo, UserResponse, UserUpdate
 from app.auth.security import hash_password, verify_password
 from app.rbac.models import UserOrganization
@@ -15,7 +15,6 @@ async def create_user(db: AsyncSession, data: UserCreate) -> User:
         email=data.email,
         password_hash=hash_password(data.password),
         full_name=data.full_name,
-        role=UserRole.STUDENT,
     )
     db.add(user)
     await db.flush()

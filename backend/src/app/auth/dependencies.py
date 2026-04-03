@@ -52,3 +52,16 @@ def require_roles(*role_names: str):
         return user
 
     return Depends(checker)
+
+
+async def user_has_role(db: AsyncSession, user_id: uuid.UUID, *role_names: str) -> bool:
+    """Check if user has any of the given role names via RBAC (for inline checks)."""
+    from app.rbac.models import Role, UserOrganization
+
+    result = await db.execute(
+        select(Role.name)
+        .join(UserOrganization, UserOrganization.role_id == Role.id)
+        .where(UserOrganization.user_id == user_id)
+    )
+    user_roles = {row[0] for row in result.all()}
+    return bool(user_roles.intersection(set(role_names)))
