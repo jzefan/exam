@@ -44,7 +44,7 @@ class Role(BaseModel):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_system: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     org_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("organizations.id"), nullable=True
+        Uuid, ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True
     )
 
     organization: Mapped["Organization | None"] = relationship(
@@ -82,7 +82,7 @@ class UserOrganization(Base, TimestampMixin):
         Uuid, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
     )
     role_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("roles.id"), nullable=False
+        Uuid, ForeignKey("roles.id", ondelete="RESTRICT"), nullable=False
     )
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
