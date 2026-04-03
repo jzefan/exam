@@ -1,5 +1,6 @@
 import { useLogout, useGetIdentity } from "@refinedev/core";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { getUserRole } from "@/types/rbac";
 import {
   BookOpen,
   ClipboardList,
@@ -90,13 +91,13 @@ function NavItem({
 
 export function Layout() {
   const { mutate: logout } = useLogout();
-  const { data: identity } = useGetIdentity<{ name: string; role?: string }>();
+  const { data: identity } = useGetIdentity<{ name: string; primary_org?: { role_name: string } | null }>();
   const location = useLocation();
   const navigate = useNavigate();
   const { resolved: themeMode } = useTheme();
 
   const isActive = (prefix: string) => location.pathname.startsWith(prefix);
-  const isStudent = identity?.role === "student";
+  const isStudent = identity ? getUserRole(identity) === "student" : false;
   const isKnowledgePage = location.pathname.startsWith("/knowledge");
 
   return (
@@ -262,7 +263,7 @@ export function Layout() {
           <div className="flex items-center gap-1 shrink-0">
             <ThemeCustomizer />
             <Separator orientation="vertical" className="mx-1 h-5" />
-            <UserDropdown name={identity?.name ?? "用户"} role={identity?.role} onLogout={() => logout()} />
+            <UserDropdown name={identity?.name ?? "用户"} role={identity ? getUserRole(identity) : undefined} onLogout={() => logout()} />
           </div>
         </div>
       </header>

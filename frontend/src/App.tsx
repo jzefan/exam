@@ -8,6 +8,7 @@ import { BrowserRouter, Routes, Route, Outlet, Navigate } from "react-router-dom
 import { dataProvider } from "./providers/data-provider";
 import { authProvider } from "./providers/auth-provider";
 import { accessControlProvider } from "./providers/access-control";
+import { getUserRole } from "@/types/rbac";
 import { ThemeProvider } from "./components/theme-provider";
 import { ThemeConfigProvider } from "./components/theme-customizer";
 import { Layout } from "./components/layout";
@@ -33,17 +34,17 @@ import { ExamTaking } from "./pages/student/exam-taking";
 
 /** Index route: students → /student, everyone else → dashboard */
 function HomeRedirect() {
-  const { data: identity, isLoading } = useGetIdentity<{ role?: string }>();
+  const { data: identity, isLoading } = useGetIdentity<{ primary_org?: { role_name: string } | null }>();
   if (isLoading) return null;
-  if (identity?.role === "student") return <Navigate to="/student" replace />;
+  if (identity && getUserRole(identity) === "student") return <Navigate to="/student" replace />;
   return <Dashboard />;
 }
 
 /** After login redirect: students → /student, everyone else → / */
 function LoginSuccessRedirect() {
-  const { data: identity, isLoading } = useGetIdentity<{ role?: string }>();
+  const { data: identity, isLoading } = useGetIdentity<{ primary_org?: { role_name: string } | null }>();
   if (isLoading) return null;
-  if (identity?.role === "student") return <Navigate to="/student" replace />;
+  if (identity && getUserRole(identity) === "student") return <Navigate to="/student" replace />;
   return <Navigate to="/" replace />;
 }
 

@@ -1,6 +1,7 @@
 import type { AuthProvider } from "@refinedev/core";
 import axios from "axios";
 import type { ITokenResponse, IUser } from "../types";
+import { getUserRole } from "../types/rbac";
 
 const API_URL = "/api";
 
@@ -37,14 +38,19 @@ export const authProvider: AuthProvider = {
     const userStr = localStorage.getItem("user");
     if (!userStr) return null;
     const user: IUser = JSON.parse(userStr);
-    return user.role;
+    return getUserRole(user);
   },
 
   getIdentity: async () => {
     const userStr = localStorage.getItem("user");
     if (!userStr) return null;
     const user: IUser = JSON.parse(userStr);
-    return { id: user.id, name: user.full_name, role: user.role, avatar: undefined };
+    return {
+      id: user.id,
+      name: user.full_name,
+      primary_org: user.primary_org,
+      avatar: undefined,
+    };
   },
 
   onError: async (error) => {

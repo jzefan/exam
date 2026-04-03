@@ -133,7 +133,10 @@ export function UserCreate() {
                 <SelectContent>
                   <SelectItem value="student">学生</SelectItem>
                   <SelectItem value="teacher">教师</SelectItem>
-                  <SelectItem value="admin">管理员</SelectItem>
+                  <SelectItem value="school_admin">学校管理员</SelectItem>
+                  <SelectItem value="enterprise_user">企业用户</SelectItem>
+                  <SelectItem value="enterprise_admin">企业管理员</SelectItem>
+                  <SelectItem value="platform_admin">平台管理员</SelectItem>
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground mt-1">

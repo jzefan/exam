@@ -21,7 +21,7 @@ const navItems = [
 
 export function StudentLayout() {
   const { mutate: logout } = useLogout();
-  const { data: identity } = useGetIdentity<{ name: string; role?: string }>();
+  const { data: identity } = useGetIdentity<{ name: string; primary_org?: { role_name: string } | null }>();
   const name = identity?.name ?? "考生";
   const initials = name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
 

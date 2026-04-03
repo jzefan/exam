@@ -2,6 +2,7 @@ import { useList, useCreate, useUpdate, useDelete, useGetIdentity, useInvalidate
 import { useState, useEffect } from "react";
 import { Plus, Pencil, Trash2, Tag, TagsIcon, ChevronLeft, ChevronRight, BookOpen } from "lucide-react";
 import type { ITag, IQuestion } from "../../types";
+import { getUserRole } from "@/types/rbac";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -457,9 +458,9 @@ function TagSection({
 }
 
 export function TagList() {
-  const { data: identity } = useGetIdentity<{ role?: string }>();
-  const userRole = identity?.role;
-  const isAdminOrTeacher = userRole === "admin" || userRole === "teacher";
+  const { data: identity } = useGetIdentity<{ primary_org?: { role_name: string } | null }>();
+  const userRole = identity ? getUserRole(identity) : undefined;
+  const isAdminOrTeacher = userRole === "platform_admin" || userRole === "enterprise_admin" || userRole === "school_admin" || userRole === "teacher";
 
   const [pageSize, setPageSize] = useState(20);
   const [standardPage, setStandardPage] = useState(1);

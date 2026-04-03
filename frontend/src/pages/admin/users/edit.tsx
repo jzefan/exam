@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import type { IUser } from "../../../types";
+import { getUserRole } from "@/types/rbac";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -43,7 +44,7 @@ export function UserEdit() {
       setForm({
         email: user.email,
         full_name: user.full_name,
-        role: user.role,
+        role: getUserRole(user),
         is_active: user.is_active,
       });
     }
@@ -145,7 +146,10 @@ export function UserEdit() {
                 <SelectContent>
                   <SelectItem value="student">学生</SelectItem>
                   <SelectItem value="teacher">教师</SelectItem>
-                  <SelectItem value="admin">管理员</SelectItem>
+                  <SelectItem value="school_admin">学校管理员</SelectItem>
+                  <SelectItem value="enterprise_user">企业用户</SelectItem>
+                  <SelectItem value="enterprise_admin">企业管理员</SelectItem>
+                  <SelectItem value="platform_admin">平台管理员</SelectItem>
                 </SelectContent>
               </Select>
             </div>

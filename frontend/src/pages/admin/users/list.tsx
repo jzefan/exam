@@ -1,5 +1,6 @@
 import { useTable, useNavigation, useDelete } from "@refinedev/core";
 import type { IUser } from "../../../types";
+import { getUserRole } from "@/types/rbac";
 import {
   Pencil,
   Trash2,
@@ -35,13 +36,19 @@ import {
 import { useState } from "react";
 
 const roleLabel: Record<string, string> = {
-  admin: "管理员",
+  platform_admin: "平台管理员",
+  enterprise_admin: "企业管理员",
+  enterprise_user: "企业用户",
+  school_admin: "学校管理员",
   teacher: "教师",
   student: "学生",
 };
 
 const roleBadgeVariant: Record<string, "default" | "secondary" | "outline" | "success" | "warning" | "destructive"> = {
-  admin: "default",
+  platform_admin: "default",
+  enterprise_admin: "default",
+  enterprise_user: "secondary",
+  school_admin: "default",
   teacher: "secondary",
   student: "outline",
 };
@@ -164,8 +171,8 @@ export function UserList() {
                       </TableCell>
                       <TableCell className="text-muted-foreground">{user.email}</TableCell>
                       <TableCell>
-                        <Badge variant={roleBadgeVariant[user.role] ?? "outline"}>
-                          {roleLabel[user.role] ?? user.role}
+                        <Badge variant={roleBadgeVariant[getUserRole(user)] ?? "outline"}>
+                          {roleLabel[getUserRole(user)] ?? getUserRole(user)}
                         </Badge>
                       </TableCell>
                       <TableCell>

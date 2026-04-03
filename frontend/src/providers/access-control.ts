@@ -1,4 +1,5 @@
 import type { AccessControlProvider } from "@refinedev/core";
+import { getUserRole } from "../types/rbac";
 
 export const accessControlProvider: AccessControlProvider = {
   can: async ({ resource, action }) => {
@@ -7,10 +8,10 @@ export const accessControlProvider: AccessControlProvider = {
       return { can: false, reason: "Not authenticated" };
     }
     const user = JSON.parse(userStr);
-    const role = user.role;
+    const role = getUserRole(user);
 
-    // Admin can do everything
-    if (role === "admin") {
+    // Platform admin and enterprise admin can do everything
+    if (role === "platform_admin" || role === "enterprise_admin" || role === "school_admin") {
       return { can: true };
     }
 
@@ -26,8 +27,8 @@ export const accessControlProvider: AccessControlProvider = {
       }
     }
 
-    // Student permissions
-    if (role === "student") {
+    // Student / enterprise_user permissions
+    if (role === "student" || role === "enterprise_user") {
       if (resource === "exams" && (action === "list" || action === "show")) {
         return { can: true };
       }

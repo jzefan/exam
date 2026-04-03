@@ -1,12 +1,15 @@
-export type UserRole = "admin" | "teacher" | "student";
+import type { IUserOrgInfo } from "./rbac";
+
+export type UserRole = "platform_admin" | "enterprise_admin" | "enterprise_user" | "school_admin" | "teacher" | "student";
 
 export interface IUser {
   id: string;
   username: string;
   email: string;
   full_name: string;
-  role: UserRole;
   is_active: boolean;
+  primary_org: IUserOrgInfo | null;
+  organizations: IUserOrgInfo[];
   created_at: string;
   updated_at: string;
 }
