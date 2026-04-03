@@ -1,3 +1,6 @@
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -11,7 +14,21 @@ from app.questions.router import knowledge_points_router, question_banks_router,
 from app.rbac.router import org_router, permission_router, role_router
 from app.uploads.router import router as uploads_router
 
-app = FastAPI(title="AI Exam Grading System", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    """Seed RBAC data on startup."""
+    from app.database import async_session
+    from app.rbac.seed import seed_permissions, seed_roles
+
+    async with async_session() as db:
+        await seed_permissions(db)
+        await seed_roles(db)
+        await db.commit()
+    yield
+
+
+app = FastAPI(title="AI Exam Grading System", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
