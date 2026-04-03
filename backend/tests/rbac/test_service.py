@@ -113,3 +113,37 @@ async def test_assign_user_to_org_and_check_permissions(db: AsyncSession) -> Non
 
     has_not = await user_has_permission(db, user.id, org.id, "job_model", "delete")
     assert has_not is False
+
+
+from app.rbac.seed import seed_permissions, seed_roles, SYSTEM_PERMISSIONS, SYSTEM_ROLES
+
+
+@pytest.mark.asyncio
+async def test_seed_permissions(db: AsyncSession) -> None:
+    await seed_permissions(db)
+    result = await db.execute(select(Permission))
+    perms = result.scalars().all()
+    assert len(perms) == len(SYSTEM_PERMISSIONS)
+
+
+@pytest.mark.asyncio
+async def test_seed_roles(db: AsyncSession) -> None:
+    await seed_permissions(db)
+    await seed_roles(db)
+    result = await db.execute(select(Role).where(Role.is_system.is_(True)))
+    roles = result.scalars().all()
+    assert len(roles) == len(SYSTEM_ROLES)
+
+    admin_role = next(r for r in roles if r.name == "platform_admin")
+    assert len(admin_role.role_permissions) == len(SYSTEM_PERMISSIONS)
+
+
+@pytest.mark.asyncio
+async def test_seed_is_idempotent(db: AsyncSession) -> None:
+    await seed_permissions(db)
+    await seed_roles(db)
+    await seed_permissions(db)
+    await seed_roles(db)
+    result = await db.execute(select(Permission))
+    perms = result.scalars().all()
+    assert len(perms) == len(SYSTEM_PERMISSIONS)
