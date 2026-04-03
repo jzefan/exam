@@ -12,6 +12,7 @@ from app.models import Base
 from app.auth.models import User  # noqa: F401
 from app.questions.models import KnowledgePoint, Question, QuestionBank, Tag  # noqa: F401
 from app.exams.models import Exam  # noqa: F401
+from app.rbac.models import Organization, Role, Permission  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

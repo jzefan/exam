@@ -8,6 +8,7 @@ from app.exams.positions_router import router as positions_router
 from app.exams.router import router as exams_router
 from app.learning.router import router as knowledge_router
 from app.questions.router import knowledge_points_router, question_banks_router, questions_router, tags_router
+from app.rbac.router import org_router, permission_router, role_router
 from app.uploads.router import router as uploads_router
 
 app = FastAPI(title="AI Exam Grading System", version="0.1.0")
@@ -31,6 +32,9 @@ app.include_router(exams_router, prefix="/api/exams", tags=["exams"])
 app.include_router(positions_router, prefix="/api/positions", tags=["positions"])
 app.include_router(uploads_router, prefix="/api/uploads", tags=["uploads"])
 app.include_router(knowledge_router, prefix="/api/knowledge", tags=["knowledge"])
+app.include_router(org_router, prefix="/api/organizations", tags=["organizations"])
+app.include_router(role_router, prefix="/api/roles", tags=["roles"])
+app.include_router(permission_router, prefix="/api/permissions", tags=["permissions"])
 
 
 @app.get("/api/health")
