@@ -8,7 +8,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser
-from app.auth.models import UserRole
+from app.auth.models import UserRole  # Still needed for legacy user.role checks
 from app.database import get_db
 from app.exams.models import Position
 from app.exams.schemas import PositionCreate, PositionResponse

@@ -5,13 +5,13 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.auth.models import UserRole
 from app.auth.schemas import UserCreate
 from app.auth.security import create_access_token
 from app.auth.service import create_user
 from app.database import get_db
 from app.main import app
 from app.models import Base
+from app.rbac.models import Organization, Role, UserOrganization
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///test.db"
 
@@ -67,11 +67,24 @@ async def admin_token(db_session: AsyncSession) -> str:
             email="admin@example.com",
             password="adminpass123",
             full_name="Admin User",
-            role=UserRole.ADMIN,
         ),
     )
+
+    # Set up RBAC: org + admin role + assignment
+    org = Organization(name="Test Org", type="enterprise", is_active=True)
+    db_session.add(org)
+    await db_session.flush()
+
+    admin_role = Role(name="admin", display_name="Admin", is_system=True)
+    db_session.add(admin_role)
+    await db_session.flush()
+
+    user_org = UserOrganization(
+        user_id=admin.id, org_id=org.id, role_id=admin_role.id, is_primary=True
+    )
+    db_session.add(user_org)
     await db_session.commit()
-    return create_access_token(admin.id, admin.role.value)
+    return create_access_token(admin.id, "")
 
 
 @pytest.fixture

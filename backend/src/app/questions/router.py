@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser, require_roles
-from app.auth.models import User, UserRole
+from app.auth.models import User
 from app.common.pagination import PaginationParams, apply_filters, apply_pagination, get_total_count, parse_filters, parse_pagination
 from app.database import get_db
 from app.questions.models import Question
@@ -125,7 +125,7 @@ async def get_question(
 async def create_question_endpoint(
     data: QuestionCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, require_roles(UserRole.ADMIN, UserRole.TEACHER)],
+    user: Annotated[User, require_roles("admin", "teacher")],
 ) -> QuestionResponse:
     question = await create_question(db, data, user.id)
     return QuestionResponse.from_question(question)
@@ -136,7 +136,7 @@ async def update_question_endpoint(
     question_id: uuid.UUID,
     data: QuestionUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _user: Annotated[User, require_roles(UserRole.ADMIN, UserRole.TEACHER)],
+    _user: Annotated[User, require_roles("admin", "teacher")],
 ) -> QuestionResponse:
     question = await get_question_by_id(db, question_id)
     if question is None:
@@ -149,7 +149,7 @@ async def update_question_endpoint(
 async def delete_question_endpoint(
     question_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _user: Annotated[User, require_roles(UserRole.ADMIN, UserRole.TEACHER)],
+    _user: Annotated[User, require_roles("admin", "teacher")],
 ) -> None:
     question = await get_question_by_id(db, question_id)
     if question is None:
@@ -160,7 +160,7 @@ async def delete_question_endpoint(
 @questions_router.post("/import/analyze", response_model=QuestionImportAnalyzeResponse)
 async def analyze_imported_question_endpoint(
     data: QuestionImportAnalyzeRequest,
-    _user: Annotated[User, require_roles(UserRole.ADMIN, UserRole.TEACHER)],
+    _user: Annotated[User, require_roles("admin", "teacher")],
 ) -> QuestionImportAnalyzeResponse:
     try:
         return await analyze_imported_question(data.question)
@@ -173,7 +173,7 @@ async def analyze_imported_question_endpoint(
 @questions_router.post("/import/recognize", response_model=QuestionImportRecognizeResponse)
 async def recognize_imported_question_endpoint(
     data: QuestionImportRecognizeRequest,
-    _user: Annotated[User, require_roles(UserRole.ADMIN, UserRole.TEACHER)],
+    _user: Annotated[User, require_roles("admin", "teacher")],
 ) -> QuestionImportRecognizeResponse:
     try:
         return await recognize_imported_question(data.raw_text)
@@ -187,7 +187,7 @@ async def recognize_imported_question_endpoint(
 async def bulk_create_questions_endpoint(
     data: QuestionBulkCreateRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, require_roles(UserRole.ADMIN, UserRole.TEACHER)],
+    user: Annotated[User, require_roles("admin", "teacher")],
 ) -> QuestionBulkCreateResponse:
     created = await bulk_create_questions(db, data.questions, user.id)
     return QuestionBulkCreateResponse(created=created)
@@ -257,7 +257,7 @@ async def create_tag_endpoint(
     from app.questions.models import TagType
     if data.type != TagType.CUSTOM:
         # Standard tags require ADMIN or TEACHER role
-        if user.role not in (UserRole.ADMIN, UserRole.TEACHER):
+        if user.role.value not in ("admin", "teacher"):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
     tag = await create_tag(db, data)
     return TagResponse.model_validate(tag)
@@ -275,7 +275,7 @@ async def update_tag_endpoint(
     if existing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
     if existing.type != TagType.CUSTOM:
-        if user.role not in (UserRole.ADMIN, UserRole.TEACHER):
+        if user.role.value not in ("admin", "teacher"):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
     tag = await update_tag(db, tag_id, data)
     if tag is None:
@@ -294,7 +294,7 @@ async def delete_tag_endpoint(
     if existing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
     if existing.type != TagType.CUSTOM:
-        if user.role not in (UserRole.ADMIN, UserRole.TEACHER):
+        if user.role.value not in ("admin", "teacher"):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
     await delete_tag(db, tag_id)
 
@@ -314,7 +314,7 @@ async def list_knowledge_points_endpoint(
 async def create_knowledge_point_endpoint(
     data: KnowledgePointCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _user: Annotated[User, require_roles(UserRole.ADMIN, UserRole.TEACHER)],
+    _user: Annotated[User, require_roles("admin", "teacher")],
 ) -> KnowledgePointResponse:
     kp = await create_knowledge_point(db, data)
     return KnowledgePointResponse.model_validate(kp)
@@ -342,7 +342,7 @@ async def list_question_banks_endpoint(
 async def create_question_bank_endpoint(
     data: QuestionBankCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _user: Annotated[User, require_roles(UserRole.ADMIN, UserRole.TEACHER)],
+    _user: Annotated[User, require_roles("admin", "teacher")],
 ) -> QuestionBankResponse:
     bank = await create_question_bank(db, data)
     return QuestionBankResponse.model_validate(bank)
@@ -352,7 +352,7 @@ async def create_question_bank_endpoint(
 async def delete_question_bank_endpoint(
     bank_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _user: Annotated[User, require_roles(UserRole.ADMIN, UserRole.TEACHER)],
+    _user: Annotated[User, require_roles("admin", "teacher")],
 ) -> None:
     bank = await get_question_bank_by_id(db, bank_id)
     if bank is None:

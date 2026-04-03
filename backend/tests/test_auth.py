@@ -22,7 +22,7 @@ async def test_register_and_login(client: AsyncClient) -> None:
     assert response.status_code == 201
     user = response.json()
     assert user["username"] == "testuser"
-    assert user["role"] == "student"
+    assert user["is_active"] is True
 
     # Login
     login_data = {"username": "testuser", "password": "testpass123"}

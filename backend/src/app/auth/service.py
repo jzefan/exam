@@ -3,9 +3,10 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.models import User
-from app.auth.schemas import UserCreate, UserUpdate
+from app.auth.models import User, UserRole
+from app.auth.schemas import UserCreate, UserOrgInfo, UserResponse, UserUpdate
 from app.auth.security import hash_password, verify_password
+from app.rbac.models import UserOrganization
 
 
 async def create_user(db: AsyncSession, data: UserCreate) -> User:
@@ -14,11 +15,29 @@ async def create_user(db: AsyncSession, data: UserCreate) -> User:
         email=data.email,
         password_hash=hash_password(data.password),
         full_name=data.full_name,
-        role=data.role,
+        role=UserRole.STUDENT,
     )
     db.add(user)
     await db.flush()
     await db.refresh(user)
+
+    if data.org_id and data.role_name:
+        from app.rbac.models import Role
+
+        result = await db.execute(
+            select(Role).where(Role.name == data.role_name, Role.deleted_at.is_(None))
+        )
+        role = result.scalar_one_or_none()
+        if role:
+            user_org = UserOrganization(
+                user_id=user.id,
+                org_id=data.org_id,
+                role_id=role.id,
+                is_primary=True,
+            )
+            db.add(user_org)
+            await db.flush()
+
     return user
 
 
@@ -52,3 +71,40 @@ async def update_user(db: AsyncSession, user: User, data: UserUpdate) -> User:
     await db.flush()
     await db.refresh(user)
     return user
+
+
+async def build_user_response(db: AsyncSession, user: User) -> UserResponse:
+    """Build a UserResponse with organization and role info."""
+    result = await db.execute(
+        select(UserOrganization).where(UserOrganization.user_id == user.id)
+    )
+    memberships = result.scalars().unique().all()
+
+    org_infos: list[UserOrgInfo] = []
+    primary_org: UserOrgInfo | None = None
+
+    for m in memberships:
+        info = UserOrgInfo(
+            org_id=m.org_id,
+            org_name=m.organization.name if m.organization else "",
+            org_type=m.organization.type if m.organization else "",
+            role_id=m.role_id,
+            role_name=m.role.name if m.role else "",
+            role_display_name=m.role.display_name if m.role else "",
+            is_primary=m.is_primary,
+        )
+        org_infos.append(info)
+        if m.is_primary:
+            primary_org = info
+
+    return UserResponse(
+        id=user.id,
+        username=user.username,
+        email=user.email,
+        full_name=user.full_name,
+        is_active=user.is_active,
+        primary_org=primary_org,
+        organizations=org_infos,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+    )

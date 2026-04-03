@@ -3,22 +3,32 @@ from datetime import datetime
 
 from pydantic import BaseModel, EmailStr
 
-from app.auth.models import UserRole
-
 
 class UserCreate(BaseModel):
     username: str
     email: EmailStr
     password: str
     full_name: str
-    role: UserRole = UserRole.STUDENT
+    org_id: uuid.UUID | None = None
+    role_name: str = "student"
 
 
 class UserUpdate(BaseModel):
     email: EmailStr | None = None
     full_name: str | None = None
-    role: UserRole | None = None
     is_active: bool | None = None
+
+
+class UserOrgInfo(BaseModel):
+    model_config = {"from_attributes": True}
+
+    org_id: uuid.UUID
+    org_name: str
+    org_type: str
+    role_id: uuid.UUID
+    role_name: str
+    role_display_name: str
+    is_primary: bool
 
 
 class UserResponse(BaseModel):
@@ -28,8 +38,9 @@ class UserResponse(BaseModel):
     username: str
     email: str
     full_name: str
-    role: UserRole
     is_active: bool
+    primary_org: UserOrgInfo | None = None
+    organizations: list[UserOrgInfo] = []
     created_at: datetime
     updated_at: datetime
 

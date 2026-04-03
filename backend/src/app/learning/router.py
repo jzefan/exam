@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser, require_roles
-from app.auth.models import User, UserRole
+from app.auth.models import User
 from app.database import get_db
 from app.learning import service
 from app.learning.schemas import (
@@ -25,7 +25,7 @@ from app.learning.schemas import (
 
 router = APIRouter()
 DB = Annotated[AsyncSession, Depends(get_db)]
-WriteUser = Annotated[User, require_roles(UserRole.ADMIN, UserRole.TEACHER)]
+WriteUser = Annotated[User, require_roles("admin", "teacher")]
 
 
 @router.get("/majors", response_model=list[MajorResponse])
