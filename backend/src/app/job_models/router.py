@@ -29,6 +29,14 @@ from app.job_models.schemas import (
     TemplateResponse,
     TemplateUpdate,
 )
+from app.job_models.editor_service import (
+    bulk_set_kp_difficulty,
+    bulk_set_skill_level,
+    move_skill_to_dimension,
+    reorder_dimensions,
+    reorder_knowledge_points,
+    reorder_skills,
+)
 from app.job_models.service import (
     create_dimension,
     create_job_model,
@@ -56,6 +64,7 @@ from app.job_models.service import (
     update_template,
 )
 from app.rbac.dependencies import CurrentOrgId
+from pydantic import BaseModel
 
 project_router = APIRouter()
 model_router = APIRouter()
@@ -424,6 +433,121 @@ async def remove_knowledge_point(
     await delete_knowledge_point(db, kp)
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- Editor Request Models ---
+
+
+class ReorderRequest(BaseModel):
+    order_map: dict[str, int]  # {id: sort_order}
+
+
+class MoveSkillRequest(BaseModel):
+    skill_id: uuid.UUID
+    target_dimension_id: uuid.UUID
+
+
+class BulkSetLevelRequest(BaseModel):
+    skill_ids: list[uuid.UUID]
+    level: str
+
+
+class BulkSetDifficultyRequest(BaseModel):
+    kp_ids: list[uuid.UUID]
+    difficulty: str
+
+
+# --- Editor Routes ---
+
+
+@model_router.post("/{model_id}/reorder-dimensions", response_model=list[DimensionResponse])
+async def reorder_dimensions_ep(
+    model_id: uuid.UUID,
+    body: ReorderRequest,
+    db: DbSession,
+    _user: CurrentUser,
+) -> list[DimensionResponse]:
+    """Reorder dimensions within a model."""
+    model = await get_job_model_by_id(db, model_id)
+    if model is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
+
+    order_map = {uuid.UUID(k): v for k, v in body.order_map.items()}
+    dimensions = await reorder_dimensions(db, model_id, order_map)
+    await db.commit()
+    return [DimensionResponse.model_validate(d) for d in dimensions]
+
+
+@model_router.post("/dimensions/{dimension_id}/reorder-skills", response_model=list[SkillResponse])
+async def reorder_skills_ep(
+    dimension_id: uuid.UUID,
+    body: ReorderRequest,
+    db: DbSession,
+    _user: CurrentUser,
+) -> list[SkillResponse]:
+    """Reorder skills within a dimension."""
+    order_map = {uuid.UUID(k): v for k, v in body.order_map.items()}
+    skills = await reorder_skills(db, dimension_id, order_map)
+    await db.commit()
+    return [SkillResponse.model_validate(s) for s in skills]
+
+
+@model_router.post("/skills/{skill_id}/reorder-kps", response_model=list[SkillKnowledgePointResponse])
+async def reorder_kps_ep(
+    skill_id: uuid.UUID,
+    body: ReorderRequest,
+    db: DbSession,
+    _user: CurrentUser,
+) -> list[SkillKnowledgePointResponse]:
+    """Reorder knowledge points within a skill."""
+    order_map = {uuid.UUID(k): v for k, v in body.order_map.items()}
+    kps = await reorder_knowledge_points(db, skill_id, order_map)
+    await db.commit()
+    return [SkillKnowledgePointResponse.model_validate(kp) for kp in kps]
+
+
+@model_router.post("/move-skill", response_model=SkillResponse)
+async def move_skill_ep(
+    body: MoveSkillRequest,
+    db: DbSession,
+    _user: CurrentUser,
+) -> SkillResponse:
+    """Move a skill to a different dimension."""
+    from sqlalchemy.orm import selectinload
+    from app.job_models.models import Skill
+
+    skill = await move_skill_to_dimension(db, body.skill_id, body.target_dimension_id)
+    await db.commit()
+    from sqlalchemy import select as sa_select
+    result = await db.execute(
+        sa_select(Skill).where(Skill.id == skill.id).options(selectinload(Skill.knowledge_points))
+    )
+    loaded = result.scalar_one()
+    return SkillResponse.model_validate(loaded)
+
+
+@model_router.post("/bulk-set-skill-level", response_model=dict[str, int])
+async def bulk_set_level_ep(
+    body: BulkSetLevelRequest,
+    db: DbSession,
+    _user: CurrentUser,
+) -> dict[str, int]:
+    """Set skill level for multiple skills."""
+    count = await bulk_set_skill_level(db, body.skill_ids, body.level)
+    await db.commit()
+    return {"updated": count}
+
+
+@model_router.post("/bulk-set-kp-difficulty", response_model=dict[str, int])
+async def bulk_set_difficulty_ep(
+    body: BulkSetDifficultyRequest,
+    db: DbSession,
+    _user: CurrentUser,
+) -> dict[str, int]:
+    """Set knowledge point difficulty for multiple KPs."""
+    count = await bulk_set_kp_difficulty(db, body.kp_ids, body.difficulty)
+    await db.commit()
+    return {"updated": count}
 
 
 # --- Template Routes ---
