@@ -6,6 +6,7 @@ import { EditorContext, type EditorContextType } from "./context"
 import { Toolbar } from "./toolbar"
 import { StatusBar } from "./status-bar"
 import { TreeView } from "./tree-view"
+import { GraphView } from "./graph-view"
 
 interface ModelDimension {
   skills: Array<{
@@ -131,9 +132,20 @@ export function EditorPage() {
             />
           </div>
 
-          {/* Graph / Properties panel placeholder — replaced in Tasks 4-5 */}
-          <div className="flex-1 overflow-auto p-4 text-gray-500">
-            Graph View / Properties (Tasks 4-5)
+          {/* Graph view */}
+          <div className="flex-1 overflow-hidden">
+            {viewMode === "graph" ? (
+              <GraphView
+                model={model as any}
+                onNodeSelect={(nodeId) => {
+                  setSelectedNodeId(nodeId)
+                }}
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center p-4 text-gray-400">
+                Switch to Graph View to visualize the model hierarchy
+              </div>
+            )}
           </div>
         </div>
 
