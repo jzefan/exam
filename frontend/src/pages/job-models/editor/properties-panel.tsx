@@ -103,31 +103,35 @@ export function PropertiesPanel({
 
   if (!nodeId || !nodeInfo) {
     return (
-      <div className="w-80 border-l bg-gray-50 p-4 overflow-auto">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">Model Overview</CardTitle>
+      <div className="w-80 border-l border-gray-200 bg-gray-50 p-4 overflow-auto">
+        <Card className="shadow-sm">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-semibold text-gray-800">Model Overview</CardTitle>
           </CardHeader>
-          <CardContent className="text-sm space-y-2">
+          <CardContent className="text-sm space-y-3">
             <div>
-              <Label className="text-xs text-gray-600">Job Role</Label>
-              <div className="font-medium">{model?.job_role}</div>
+              <Label className="text-xs text-gray-500 uppercase tracking-wide">Job Role</Label>
+              <div className="font-medium text-gray-900 mt-0.5">{model?.job_role}</div>
             </div>
             <div>
-              <Label className="text-xs text-gray-600">Version</Label>
-              <div className="font-medium">v{modelVersion}</div>
+              <Label className="text-xs text-gray-500 uppercase tracking-wide">Version</Label>
+              <div className="mt-0.5">
+                <span className="font-semibold bg-blue-100 text-blue-900 px-2 py-0.5 rounded text-xs">
+                  v{modelVersion}
+                </span>
+              </div>
             </div>
             <div>
-              <Label className="text-xs text-gray-600">Status</Label>
-              <div className="font-medium capitalize">{model?.status || "draft"}</div>
+              <Label className="text-xs text-gray-500 uppercase tracking-wide">Status</Label>
+              <div className="font-medium capitalize text-gray-900 mt-0.5">{model?.status || "draft"}</div>
             </div>
             <div>
-              <Label className="text-xs text-gray-600">Dimensions</Label>
-              <div className="font-medium">{model?.dimensions?.length || 0}</div>
+              <Label className="text-xs text-gray-500 uppercase tracking-wide">Dimensions</Label>
+              <div className="font-medium text-gray-900 mt-0.5">{model?.dimensions?.length || 0}</div>
             </div>
           </CardContent>
         </Card>
-        <p className="text-xs text-gray-500 mt-4">Select a node to edit</p>
+        <p className="text-xs text-gray-500 mt-4 text-center">Select a node to edit its properties</p>
       </div>
     )
   }
@@ -135,36 +139,38 @@ export function PropertiesPanel({
   const { type, data } = nodeInfo
 
   return (
-    <div className="w-80 border-l bg-gray-50 p-4 overflow-auto space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm capitalize">{type} Properties</CardTitle>
+    <div className="w-80 border-l border-gray-200 bg-gray-50 p-4 overflow-auto space-y-4">
+      <Card className="shadow-sm">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-semibold text-gray-800 capitalize">{type} Properties</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-5">
           {/* Name field (all types) */}
           <div>
-            <Label htmlFor="node-name" className="text-xs">
-              Name
+            <Label htmlFor="node-name" className="text-sm font-semibold text-gray-900">
+              Name *
             </Label>
             <Input
               id="node-name"
               value={editingName}
               onChange={(e) => setEditingName(e.target.value)}
-              className="mt-1"
+              className="mt-2 border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+              placeholder="Enter node name"
             />
           </div>
 
           {/* Description field (dimension and skill only) */}
           {(type === "dimension" || type === "skill") && (
             <div>
-              <Label htmlFor="node-desc" className="text-xs">
+              <Label htmlFor="node-desc" className="text-sm font-semibold text-gray-900">
                 Description
               </Label>
               <Textarea
                 id="node-desc"
                 value={editingDesc}
                 onChange={(e) => setEditingDesc(e.target.value)}
-                className="mt-1 min-h-20 text-xs"
+                className="mt-2 min-h-24 border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm"
+                placeholder="Enter detailed description..."
               />
             </div>
           )}
@@ -172,11 +178,11 @@ export function PropertiesPanel({
           {/* Level field (skill only) */}
           {type === "skill" && (
             <div>
-              <Label htmlFor="skill-level" className="text-xs">
+              <Label htmlFor="skill-level" className="text-sm font-semibold text-gray-900">
                 Proficiency Level
               </Label>
               <Select value={editingLevel} onValueChange={setEditingLevel}>
-                <SelectTrigger id="skill-level" className="mt-1">
+                <SelectTrigger id="skill-level" className="mt-2 border-gray-300 focus:border-blue-500">
                   <SelectValue placeholder="Select level" />
                 </SelectTrigger>
                 <SelectContent>
@@ -193,14 +199,14 @@ export function PropertiesPanel({
           {/* Difficulty field (knowledge point only) */}
           {type === "kp" && (
             <div>
-              <Label htmlFor="kp-difficulty" className="text-xs">
+              <Label htmlFor="kp-difficulty" className="text-sm font-semibold text-gray-900">
                 Difficulty
               </Label>
               <Select
                 value={editingDifficulty}
                 onValueChange={setEditingDifficulty}
               >
-                <SelectTrigger id="kp-difficulty" className="mt-1">
+                <SelectTrigger id="kp-difficulty" className="mt-2 border-gray-300 focus:border-blue-500">
                   <SelectValue placeholder="Select difficulty" />
                 </SelectTrigger>
                 <SelectContent>
@@ -217,7 +223,7 @@ export function PropertiesPanel({
           {/* Teaching suggestion (knowledge point only) */}
           {type === "kp" && (
             <div>
-              <Label htmlFor="teaching-suggestion" className="text-xs">
+              <Label htmlFor="teaching-suggestion" className="text-sm font-semibold text-gray-900">
                 Teaching Suggestion
               </Label>
               <Textarea
@@ -225,36 +231,40 @@ export function PropertiesPanel({
                 value={teachingSuggestion}
                 onChange={(e) => setTeachingSuggestion(e.target.value)}
                 placeholder="E.g., 'Use interactive labs and coding assignments'"
-                className="mt-1 min-h-16 text-xs"
+                className="mt-2 min-h-20 border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm"
               />
             </div>
           )}
 
           {/* Metadata (read-only) */}
           {type === "skill" && data.knowledge_points && (
-            <div className="bg-blue-50 p-2 rounded text-xs">
-              <div className="font-medium">
+            <div className="bg-blue-50 border border-blue-100 p-3 rounded-lg text-xs">
+              <div className="font-semibold text-blue-800">
                 Knowledge Points: {data.knowledge_points.length}
               </div>
             </div>
           )}
 
           {type === "dimension" && data.skills && (
-            <div className="bg-blue-50 p-2 rounded text-xs">
-              <div className="font-medium">Skills: {data.skills.length}</div>
+            <div className="bg-blue-50 border border-blue-100 p-3 rounded-lg text-xs">
+              <div className="font-semibold text-blue-800">Skills: {data.skills.length}</div>
             </div>
           )}
 
           {/* Save and Delete buttons */}
-          <div className="flex gap-2 pt-2">
-            <Button size="sm" onClick={handleSave} className="flex-1">
-              Save
+          <div className="flex gap-3 pt-4 border-t border-gray-200">
+            <Button
+              size="sm"
+              onClick={handleSave}
+              className="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-medium transition-colors"
+            >
+              Save Changes
             </Button>
             <Button
               size="sm"
-              variant="destructive"
+              variant="outline"
               onClick={handleDelete}
-              className="flex-1"
+              className="flex-1 border-red-200 text-red-700 hover:bg-red-50 font-medium transition-colors"
             >
               Delete
             </Button>

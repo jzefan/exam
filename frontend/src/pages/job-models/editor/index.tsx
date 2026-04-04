@@ -12,6 +12,7 @@ import { useAutoSave } from "@/hooks/useAutoSave"
 import { useToast } from "@/hooks/use-toast"
 import { getEndpointForNodeType, resolveNodeType, buildUpdatePayload } from "@/utils/editor-utils"
 import { useState } from "react"
+import { Toaster } from "@/components/ui/toaster"
 
 interface ModelDimension {
   skills: Array<{
@@ -170,20 +171,23 @@ export function EditorPage() {
 
   if (isLoading) {
     return (
-      <div className="flex h-screen items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+      <div className="flex items-center justify-center h-screen bg-gradient-to-br from-blue-50 to-indigo-50">
+        <div className="text-center">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-500 mx-auto" />
+          <p className="text-sm text-gray-600 mt-4">Loading model...</p>
+        </div>
       </div>
     )
   }
 
   return (
     <EditorContext.Provider value={contextValue}>
-      <div className="flex h-screen flex-col bg-white">
+      <div className="flex flex-col h-screen bg-white">
         <Toolbar onSave={handleSave} onPublish={handlePublish} />
 
-        <div className="flex flex-1 overflow-hidden">
-          {/* Tree view */}
-          <div className="w-2/5 overflow-auto border-r">
+        <div className="flex flex-1 overflow-hidden gap-0">
+          {/* Tree view (left panel) - hidden on mobile, shown on lg+ */}
+          <div className="hidden lg:flex flex-col w-2/5 border-r border-gray-200 bg-white overflow-auto">
             <TreeView
               model={model}
               onNodeNameChange={handleNodeNameChange}
@@ -192,8 +196,8 @@ export function EditorPage() {
             />
           </div>
 
-          {/* Right side: graph view or properties panel */}
-          <div className="flex flex-1 overflow-hidden">
+          {/* Right panel - full width on mobile, 3/5 on desktop */}
+          <div className="w-full lg:w-3/5 flex flex-col bg-gray-50 overflow-hidden">
             {viewMode === "graph" ? (
               <GraphView
                 model={model as any}
@@ -203,8 +207,8 @@ export function EditorPage() {
               />
             ) : (
               <div className="flex flex-1 overflow-hidden">
-                <div className="flex flex-1 items-center justify-center p-4 text-gray-400">
-                  Switch to Graph View to visualize the model hierarchy
+                <div className="flex flex-1 items-center justify-center p-4 text-gray-400 text-sm">
+                  Select a node from the tree or switch to Graph View
                 </div>
                 <PropertiesPanel
                   nodeId={selectedNodeId}
@@ -219,6 +223,7 @@ export function EditorPage() {
 
         <StatusBar />
       </div>
+      <Toaster />
     </EditorContext.Provider>
   )
 }

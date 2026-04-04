@@ -34,19 +34,19 @@ interface TreeNodeProps {
 }
 
 const LEVEL_COLORS: Record<string, string> = {
-  L1: "bg-gray-100",
-  L2: "bg-blue-100",
-  L3: "bg-yellow-100",
-  L4: "bg-orange-100",
-  L5: "bg-red-100",
+  L1: "bg-gray-400 text-white",
+  L2: "bg-blue-500 text-white",
+  L3: "bg-yellow-500 text-white",
+  L4: "bg-orange-500 text-white",
+  L5: "bg-red-500 text-white",
 }
 
 const DIFFICULTY_COLORS: Record<string, string> = {
-  入门: "bg-green-50",
-  初级: "bg-blue-50",
-  中级: "bg-yellow-50",
-  高级: "bg-orange-50",
-  困难: "bg-red-50",
+  入门: "bg-green-50 text-green-700",
+  初级: "bg-blue-50 text-blue-700",
+  中级: "bg-yellow-50 text-yellow-700",
+  高级: "bg-orange-50 text-orange-700",
+  困难: "bg-red-50 text-red-700",
 }
 
 export function TreeNode({
@@ -87,36 +87,41 @@ export function TreeNode({
 
   return (
     <div
-      className={`border-l-4 ${isSelected ? "border-blue-500 bg-blue-50" : "border-transparent"} pl-2`}
+      className={`transition-colors ${
+        isSelected
+          ? "border-l-4 border-blue-500 bg-blue-50"
+          : "border-l-4 border-transparent hover:bg-gray-50"
+      }`}
       onClick={onSelect}
     >
-      <div className="flex items-center gap-1 py-1 px-2 hover:bg-gray-50 rounded">
-        {/* Expand toggle */}
+      <div className="flex items-center gap-2 py-2 px-3 rounded mx-1 cursor-pointer group hover:bg-gray-100 transition-colors">
+        {/* Expand toggle with better styling */}
         {childCount > 0 ? (
           <button
-            className="p-0 hover:bg-gray-200 rounded"
+            className="p-1 hover:bg-gray-200 rounded transition-colors flex-shrink-0"
             onClick={(e) => {
               e.stopPropagation()
               onToggleExpand()
             }}
+            aria-label={isExpanded ? "Collapse" : "Expand"}
           >
             {isExpanded ? (
-              <ChevronDownIcon className="w-4 h-4" />
+              <ChevronDownIcon className="w-4 h-4 text-gray-600" />
             ) : (
-              <ChevronRightIcon className="w-4 h-4" />
+              <ChevronRightIcon className="w-4 h-4 text-gray-600" />
             )}
           </button>
         ) : (
-          <div className="w-4" />
+          <div className="w-6 flex-shrink-0" />
         )}
 
         {/* Drag handle */}
         {isDragHandle && (
-          <GripVertical className="w-4 h-4 text-gray-400 cursor-grab active:cursor-grabbing" />
+          <GripVertical className="w-4 h-4 text-gray-300 group-hover:text-gray-500 cursor-grab active:cursor-grabbing flex-shrink-0" />
         )}
 
         {/* Icon */}
-        <span className="text-lg">{icon}</span>
+        <span className="text-lg flex-shrink-0">{icon}</span>
 
         {/* Name (editable) */}
         {isEditing ? (
@@ -130,15 +135,16 @@ export function TreeNode({
               if (e.key === "Escape") setIsEditing(false)
             }}
             onClick={(e) => e.stopPropagation()}
-            className="flex-1 h-6 text-sm"
+            className="flex-1 h-6 text-sm border-2 border-blue-400 focus:ring-2 focus:ring-blue-200"
           />
         ) : (
           <span
-            className="flex-1 text-sm cursor-text"
+            className="flex-1 text-sm font-medium text-gray-900 truncate"
             onDoubleClick={(e) => {
               e.stopPropagation()
               setIsEditing(true)
             }}
+            title={name}
           >
             {name}
           </span>
@@ -147,7 +153,7 @@ export function TreeNode({
         {/* Level badge */}
         {level && (
           <span
-            className={`px-2 py-0 rounded text-xs font-medium ${levelColor}`}
+            className={`px-2 py-0.5 rounded text-xs font-semibold flex-shrink-0 ${levelColor}`}
             onClick={(e) => e.stopPropagation()}
           >
             {level}
@@ -157,7 +163,7 @@ export function TreeNode({
         {/* Difficulty badge */}
         {difficulty && (
           <span
-            className={`px-2 py-0 rounded text-xs font-medium ${difficultyColor}`}
+            className={`px-2 py-0.5 rounded text-xs font-semibold flex-shrink-0 ${difficultyColor}`}
             onClick={(e) => e.stopPropagation()}
           >
             {difficulty}
@@ -166,20 +172,24 @@ export function TreeNode({
 
         {/* Child count badge */}
         {childCount > 0 && (
-          <span className="text-xs text-gray-500 bg-gray-100 px-1.5 rounded">
+          <span className="text-xs font-medium text-gray-500 bg-gray-200 px-2 py-0.5 rounded flex-shrink-0">
             {childCount}
           </span>
         )}
 
         {/* Context menu */}
         <DropdownMenu>
-          <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-            <Button variant="ghost" size="sm" className="w-6 h-6 p-0">
-              <MoreVertical className="w-4 h-4" />
+          <DropdownMenuTrigger
+            asChild
+            onClick={(e) => e.stopPropagation()}
+            className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+          >
+            <Button variant="ghost" size="sm" className="w-6 h-6 p-0 hover:bg-gray-300" aria-label="Node options">
+              <MoreVertical className="w-4 h-4 text-gray-600" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent>
-            <DropdownMenuItem onClick={onDelete}>
+            <DropdownMenuItem onClick={onDelete} className="text-red-600">
               <Trash2 className="w-4 h-4 mr-2" />
               Delete
             </DropdownMenuItem>
