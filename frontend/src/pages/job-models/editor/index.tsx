@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react"
 import { EditorContext, type EditorContextType } from "./context"
 import { Toolbar } from "./toolbar"
 import { StatusBar } from "./status-bar"
+import { TreeView } from "./tree-view"
 
 interface ModelDimension {
   skills: Array<{
@@ -117,9 +118,17 @@ export function EditorPage() {
         <Toolbar onSave={handleSave} onPublish={handlePublish} />
 
         <div className="flex flex-1 overflow-hidden">
-          {/* Tree view placeholder — replaced in Task 3 */}
-          <div className="flex-1 overflow-auto border-r p-4 text-gray-500">
-            Tree View (Task 3)
+          {/* Tree view */}
+          <div className="w-2/5 overflow-auto border-r">
+            <TreeView
+              model={model}
+              onNodeNameChange={(_nodeId, _newName) => {
+                setIsDirty(true)
+              }}
+              onNodeDelete={(_nodeId) => {
+                setIsDirty(true)
+              }}
+            />
           </div>
 
           {/* Graph / Properties panel placeholder — replaced in Tasks 4-5 */}
