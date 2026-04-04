@@ -31,6 +31,7 @@ import { ExamList } from "./pages/exams/list";
 import { ExamCreate } from "./pages/exams/create";
 import { ExamEdit } from "./pages/exams/edit";
 import { ExamTaking } from "./pages/student/exam-taking";
+import { EditorPage } from "./pages/job-models/editor";
 
 /** Index route: students → /student, everyone else → dashboard */
 function HomeRedirect() {
@@ -139,6 +140,16 @@ function App() {
               <Route path="/tags" element={<TagList />} />
               <Route path="/knowledge" element={<KnowledgeManagementPage />} />
             </Route>
+
+            {/* Job model editor — full-screen, no Layout wrapper */}
+            <Route
+              path="/job-models/:projectId/models/:modelId/editor"
+              element={
+                <Authenticated key="editor" fallback={<CatchAllNavigate to="/login" />}>
+                  <EditorPage />
+                </Authenticated>
+              }
+            />
 
             {/* Exam taking — full-screen, no Layout wrapper */}
             <Route
