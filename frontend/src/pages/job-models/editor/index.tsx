@@ -7,6 +7,7 @@ import { Toolbar } from "./toolbar"
 import { StatusBar } from "./status-bar"
 import { TreeView } from "./tree-view"
 import { GraphView } from "./graph-view"
+import { PropertiesPanel } from "./properties-panel"
 
 interface ModelDimension {
   skills: Array<{
@@ -132,8 +133,8 @@ export function EditorPage() {
             />
           </div>
 
-          {/* Graph view */}
-          <div className="flex-1 overflow-hidden">
+          {/* Right side: graph view or properties panel */}
+          <div className="flex flex-1 overflow-hidden">
             {viewMode === "graph" ? (
               <GraphView
                 model={model as any}
@@ -142,8 +143,20 @@ export function EditorPage() {
                 }}
               />
             ) : (
-              <div className="flex h-full items-center justify-center p-4 text-gray-400">
-                Switch to Graph View to visualize the model hierarchy
+              <div className="flex flex-1 overflow-hidden">
+                <div className="flex flex-1 items-center justify-center p-4 text-gray-400">
+                  Switch to Graph View to visualize the model hierarchy
+                </div>
+                <PropertiesPanel
+                  nodeId={selectedNodeId}
+                  model={model}
+                  onNodeUpdate={(_nodeId, _updates) => {
+                    setIsDirty(true)
+                  }}
+                  onNodeDelete={(_nodeId) => {
+                    setIsDirty(true)
+                  }}
+                />
               </div>
             )}
           </div>
