@@ -136,3 +136,47 @@ async def test_create_template(db_session: AsyncSession, user_id: uuid.UUID):
 
     assert template.id is not None
     assert template.usage_count == 0
+
+
+from app.job_models.schemas import (
+    DimensionCreate,
+    JobModelCreate,
+    ProjectCreate,
+    SkillCreate,
+    SkillKnowledgePointCreate,
+    TemplateCreate,
+)
+
+
+def test_project_create_schema() -> None:
+    data = ProjectCreate(name="Test", industry="IT")
+    assert data.name == "Test"
+    assert data.description is None
+
+
+def test_job_model_create_nested() -> None:
+    data = JobModelCreate(
+        job_role="Engineer",
+        dimensions=[
+            DimensionCreate(
+                name="Tech",
+                skills=[
+                    SkillCreate(
+                        name="Python",
+                        level="L3",
+                        knowledge_points=[
+                            SkillKnowledgePointCreate(name="Decorators"),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    )
+    assert len(data.dimensions) == 1
+    assert len(data.dimensions[0].skills) == 1
+    assert len(data.dimensions[0].skills[0].knowledge_points) == 1
+
+
+def test_template_create_schema() -> None:
+    data = TemplateCreate(name="Template", template_data={"dimensions": []})
+    assert data.template_data == {"dimensions": []}
