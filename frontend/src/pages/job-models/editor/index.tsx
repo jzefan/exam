@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react"
+import { useCallback } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { useShow, useUpdate } from "@refinedev/core"
 import { Loader2 } from "lucide-react"
@@ -8,6 +8,10 @@ import { StatusBar } from "./status-bar"
 import { TreeView } from "./tree-view"
 import { GraphView } from "./graph-view"
 import { PropertiesPanel } from "./properties-panel"
+import { useAutoSave } from "@/hooks/useAutoSave"
+import { useToast } from "@/hooks/use-toast"
+import { getEndpointForNodeType, resolveNodeType, buildUpdatePayload } from "@/utils/editor-utils"
+import { useState } from "react"
 
 interface ModelDimension {
   skills: Array<{
@@ -23,6 +27,7 @@ interface ModelData {
 export function EditorPage() {
   const { projectId, modelId } = useParams<{ projectId: string; modelId: string }>()
   const navigate = useNavigate()
+  const { toast } = useToast()
 
   const { data, isLoading, refetch } = useShow<ModelData>({
     resource: `job-models/projects/${projectId}/models`,
@@ -32,8 +37,6 @@ export function EditorPage() {
   const [viewMode, setViewMode] = useState<"tree" | "graph">("tree")
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [isDirty, setIsDirty] = useState(false)
-  const [isSaving, setIsSaving] = useState(false)
-  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null)
 
   const model = data?.data
 
@@ -51,25 +54,76 @@ export function EditorPage() {
     : 0
 
   const { mutate: updateModel } = useUpdate()
+  const {
+    debouncedSave,
+    forceSave,
+    isSaving,
+    lastSavedAt,
+  } = useAutoSave(2000)
+
+  const handleNodeNameChange = useCallback(
+    (nodeId: string, newName: string) => {
+      if (!modelId) return
+      const nodeType = resolveNodeType(model, nodeId)
+      if (!nodeType) return
+      setIsDirty(true)
+      debouncedSave({
+        nodeId,
+        updates: buildUpdatePayload({ name: newName }),
+        resource: getEndpointForNodeType(nodeType, modelId, nodeId),
+      })
+    },
+    [model, modelId, debouncedSave]
+  )
+
+  const handleNodeLevelChange = useCallback(
+    (nodeId: string, level: string) => {
+      if (!modelId) return
+      setIsDirty(true)
+      debouncedSave({
+        nodeId,
+        updates: buildUpdatePayload({ level }),
+        resource: getEndpointForNodeType("skill", modelId, nodeId),
+      })
+    },
+    [modelId, debouncedSave]
+  )
+
+  const handleNodeDelete = useCallback(
+    (_nodeId: string) => {
+      setIsDirty(true)
+      // DELETE call will be wired in a future task
+    },
+    []
+  )
+
+  const handlePropertiesUpdate = useCallback(
+    (nodeId: string, updates: Record<string, unknown>) => {
+      if (!modelId) return
+      const nodeType = resolveNodeType(model, nodeId)
+      if (!nodeType) return
+      setIsDirty(true)
+      debouncedSave({
+        nodeId,
+        updates: buildUpdatePayload(updates),
+        resource: getEndpointForNodeType(nodeType, modelId, nodeId),
+      })
+    },
+    [model, modelId, debouncedSave]
+  )
 
   const handleSave = useCallback(async () => {
-    if (!model || !isDirty) return
-    setIsSaving(true)
-    try {
-      // Placeholder: full save logic wired in Task 6
-      await new Promise<void>((resolve) => setTimeout(resolve, 500))
-      setLastSavedAt(new Date())
-      setIsDirty(false)
-    } catch (error) {
-      // logging handled by caller; re-throw to surface errors
-      throw error
-    } finally {
-      setIsSaving(false)
-    }
-  }, [model, isDirty])
+    forceSave()
+    setIsDirty(false)
+  }, [forceSave])
 
   const handlePublish = useCallback(async () => {
     if (!modelId) return
+
+    if (isDirty) {
+      forceSave()
+    }
+
     await new Promise<void>((resolve, reject) => {
       updateModel(
         {
@@ -79,15 +133,23 @@ export function EditorPage() {
         },
         {
           onSuccess: () => {
+            toast({ title: "Published", description: "New version created" })
             refetch()
             navigate(`/job-models/${projectId}`)
             resolve()
           },
-          onError: reject,
+          onError: (error) => {
+            toast({
+              title: "Publish failed",
+              description: (error as Error).message || "Unknown error",
+              variant: "destructive",
+            })
+            reject(error)
+          },
         }
       )
     })
-  }, [modelId, projectId, updateModel, refetch, navigate])
+  }, [modelId, projectId, isDirty, forceSave, updateModel, refetch, navigate, toast])
 
   const contextValue: EditorContextType = {
     modelId: modelId ?? "",
@@ -98,12 +160,12 @@ export function EditorPage() {
     isDirty,
     setIsDirty,
     isSaving,
-    setIsSaving,
+    setIsSaving: () => {}, // controlled by useAutoSave
     lastSavedAt,
-    setLastSavedAt,
+    setLastSavedAt: () => {}, // controlled by useAutoSave
     nodeCount,
     setNodeCount: () => {}, // derived from model data
-    modelVersion: model?.version ?? 1,
+    modelVersion: (model as any)?.version ?? 1,
   }
 
   if (isLoading) {
@@ -124,12 +186,9 @@ export function EditorPage() {
           <div className="w-2/5 overflow-auto border-r">
             <TreeView
               model={model}
-              onNodeNameChange={(_nodeId, _newName) => {
-                setIsDirty(true)
-              }}
-              onNodeDelete={(_nodeId) => {
-                setIsDirty(true)
-              }}
+              onNodeNameChange={handleNodeNameChange}
+              onNodeDelete={handleNodeDelete}
+              onNodeLevelChange={handleNodeLevelChange}
             />
           </div>
 
@@ -150,12 +209,8 @@ export function EditorPage() {
                 <PropertiesPanel
                   nodeId={selectedNodeId}
                   model={model}
-                  onNodeUpdate={(_nodeId, _updates) => {
-                    setIsDirty(true)
-                  }}
-                  onNodeDelete={(_nodeId) => {
-                    setIsDirty(true)
-                  }}
+                  onNodeUpdate={handlePropertiesUpdate}
+                  onNodeDelete={handleNodeDelete}
                 />
               </div>
             )}
