@@ -1,17 +1,25 @@
-"""Fixtures for job_models service tests."""
+"""Fixtures for job_models service tests and router integration tests."""
 
 import asyncio
 import uuid
+from collections.abc import AsyncGenerator
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.auth.schemas import UserCreate
+from app.auth.security import create_access_token
+from app.auth.service import create_user
+from app.database import get_db
+from app.main import app
 from app.models import Base
-from app.rbac.models import Organization
+from app.rbac.models import Organization, Role, UserOrganization
 from app.job_models.schemas import ProjectCreate
 from app.job_models.service import create_project
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///test_job_models_service.db"
+ROUTER_TEST_DATABASE_URL = "sqlite+aiosqlite:///test_job_models_router.db"
 
 
 @pytest.fixture(scope="module")
@@ -60,3 +68,76 @@ async def project(db_session: AsyncSession, org: Organization, user_id: uuid.UUI
         org_id=org.id,
         user_id=user_id,
     )
+
+
+# --- Router integration test fixtures ---
+
+
+@pytest.fixture(scope="module")
+async def router_db_engine():
+    engine = create_async_engine(ROUTER_TEST_DATABASE_URL, echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield engine
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+    await engine.dispose()
+
+
+@pytest.fixture
+async def router_db_session(router_db_engine) -> AsyncGenerator[AsyncSession, None]:
+    session_factory = async_sessionmaker(router_db_engine, class_=AsyncSession, expire_on_commit=False)
+    async with session_factory() as session:
+        yield session
+
+
+@pytest.fixture
+async def client(router_db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
+    async def override_get_db():
+        try:
+            yield router_db_session
+            await router_db_session.commit()
+        except Exception:
+            await router_db_session.rollback()
+            raise
+
+    app.dependency_overrides[get_db] = override_get_db
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+async def admin_token(router_db_session: AsyncSession) -> str:
+    unique_suffix = uuid.uuid4().hex[:8]
+    admin = await create_user(
+        router_db_session,
+        UserCreate(
+            username=f"admin_{unique_suffix}",
+            email=f"admin_{unique_suffix}@example.com",
+            password="adminpass123",
+            full_name="Admin User",
+        ),
+    )
+
+    org = Organization(name=f"Test Org {unique_suffix}", type="enterprise", is_active=True)
+    router_db_session.add(org)
+    await router_db_session.flush()
+
+    admin_role = Role(name=f"admin_{unique_suffix}", display_name="Admin", is_system=False)
+    router_db_session.add(admin_role)
+    await router_db_session.flush()
+
+    user_org = UserOrganization(
+        user_id=admin.id, org_id=org.id, role_id=admin_role.id, is_primary=True
+    )
+    router_db_session.add(user_org)
+    await router_db_session.commit()
+    return create_access_token(admin.id, "")
+
+
+@pytest.fixture
+async def admin_client(client: AsyncClient, admin_token: str) -> AsyncClient:
+    client.headers.update({"Authorization": f"Bearer {admin_token}"})
+    return client
