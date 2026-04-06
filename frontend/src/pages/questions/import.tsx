@@ -506,7 +506,7 @@ export function QuestionImportPage() {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">导入题目</h1>
+          <h1 className="text-base font-bold tracking-tight text-foreground">导入题目</h1>
           <p className="mt-1 text-sm text-muted-foreground">支持 Excel、Word、PDF、TXT，先预览再导入。</p>
         </div>
         <Button variant="outline" onClick={() => navigate("/questions")} type="button">

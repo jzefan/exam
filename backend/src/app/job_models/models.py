@@ -111,6 +111,25 @@ class SkillKnowledgePoint(BaseModel):
     )
 
 
+class LearningResource(BaseModel):
+    """Learning resources (videos, documents, links) attached to any node."""
+
+    __tablename__ = "learning_resources"
+
+    node_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False, index=True)
+    node_type: Mapped[str] = mapped_column(String(20), nullable=False)  # dimension, skill, kp
+    resource_type: Mapped[str] = mapped_column(String(20), nullable=False)  # video, document, link
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    url: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    file_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str | None] = mapped_column(String(50), nullable=True)  # manual, bilibili, upload
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    uploaded_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+
 class SkillKpMapping(Base, TimestampMixin):
     __tablename__ = "skill_kp_mappings"
 

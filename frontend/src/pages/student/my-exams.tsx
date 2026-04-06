@@ -509,7 +509,7 @@ export function MyExams() {
     <div className="max-w-3xl">
       {/* Header */}
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-foreground tracking-tight">
+        <h1 className="text-base font-bold text-foreground tracking-tight">
           我的考试
         </h1>
         <p className="mt-1.5 text-sm text-muted-foreground">

@@ -58,7 +58,7 @@ export function UserCreate() {
       </button>
 
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-foreground tracking-tight">添加用户</h1>
+        <h1 className="text-base font-bold text-foreground tracking-tight">添加用户</h1>
         <p className="mt-1 text-sm text-muted-foreground">创建一个新的系统用户账号</p>
       </div>
 

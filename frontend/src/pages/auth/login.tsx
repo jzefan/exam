@@ -30,7 +30,7 @@ export function LoginPage() {
         </div>
 
         <div className="mb-6 text-center">
-          <h1 className="text-2xl font-bold text-foreground tracking-tight">
+          <h1 className="text-base font-bold text-foreground tracking-tight">
             欢迎回来
           </h1>
           <p className="mt-1.5 text-sm text-muted-foreground">

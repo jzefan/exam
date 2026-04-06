@@ -299,7 +299,7 @@ export function ExamCreate() {
           <ArrowLeft size={16} />
         </Button>
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold text-foreground tracking-tight">创建考试</h1>
+          <h1 className="text-base font-bold text-foreground tracking-tight">创建考试</h1>
           <p className="text-sm text-muted-foreground">
             按步骤完成信息填写、组卷、选人和设置，最后一次性创建考试。
           </p>

@@ -655,7 +655,7 @@ export function KnowledgeManagementPage() {
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-500 dark:text-stone-400">
               知识结构
             </p>
-            <h1 className="mt-1 text-lg font-semibold text-stone-900 dark:text-stone-100">知识点管理</h1>
+            <h1 className="mt-1 text-base font-semibold text-stone-900 dark:text-stone-100">知识点管理</h1>
           </div>
           {selectedDirectionId && (
             <Button

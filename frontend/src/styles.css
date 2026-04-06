@@ -62,6 +62,11 @@
   --avatar-bg: linear-gradient(135deg, #7c3aed, #4338ca);
 }
 
+html, body, #root {
+  overflow: hidden;
+  height: 100%;
+}
+
 body {
   background-color: hsl(var(--muted));
   color: hsl(var(--foreground));

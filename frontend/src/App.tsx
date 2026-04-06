@@ -31,7 +31,12 @@ import { ExamList } from "./pages/exams/list";
 import { ExamCreate } from "./pages/exams/create";
 import { ExamEdit } from "./pages/exams/edit";
 import { ExamTaking } from "./pages/student/exam-taking";
-import { EditorPage } from "./pages/job-models/editor";
+import { EditorPage } from "./pages/job-models/editor"
+import { JobModelList } from "./pages/job-models/list"
+import { JobModelCreate } from "./pages/job-models/create"
+import { JobModelUploadAI } from "./pages/job-models/upload-ai";
+import { GradingAnalyticsPage } from "./pages/grading/analytics";
+import { GradingCenterPage } from "./pages/grading";
 
 /** Index route: students → /student, everyone else → dashboard */
 function HomeRedirect() {
@@ -91,6 +96,16 @@ function App() {
               list: "/knowledge",
               meta: { label: "知识点管理" },
             },
+            {
+              name: "job-models",
+              list: "/job-models",
+              meta: { label: "职位模型管理" },
+            },
+            {
+              name: "grading",
+              list: "/grading",
+              meta: { label: "阅卷中心" },
+            },
           ]}
           options={{
             syncWithLocation: true,
@@ -139,6 +154,11 @@ function App() {
               </Route>
               <Route path="/tags" element={<TagList />} />
               <Route path="/knowledge" element={<KnowledgeManagementPage />} />
+              <Route path="/grading" element={<GradingCenterPage />} />
+              <Route path="/grading/analytics" element={<GradingAnalyticsPage />} />
+              <Route path="/job-models" element={<JobModelList />} />
+              <Route path="/job-models/create" element={<JobModelCreate />} />
+              <Route path="/job-models/upload-ai" element={<JobModelUploadAI />} />
             </Route>
 
             {/* Job model editor — full-screen, no Layout wrapper */}

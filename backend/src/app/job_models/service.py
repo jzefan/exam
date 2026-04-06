@@ -146,6 +146,30 @@ async def list_job_models(db: AsyncSession, project_id: uuid.UUID) -> list[JobMo
     return list(result.scalars().all())
 
 
+async def list_all_job_models(
+    db: AsyncSession, org_id: uuid.UUID, skip: int = 0, limit: int = 50
+) -> tuple[list[JobModel], int]:
+    """List all job models in an organization with pagination."""
+    # Get total count
+    count_result = await db.execute(
+        select(func.count(JobModel.id)).select_from(JobModel)
+        .join(JobModelProject)
+        .where(JobModelProject.org_id == org_id)
+    )
+    total = count_result.scalar_one()
+
+    # Get paginated results
+    result = await db.execute(
+        select(JobModel)
+        .join(JobModelProject)
+        .where(JobModelProject.org_id == org_id)
+        .order_by(JobModel.updated_at.desc())
+        .offset(skip)
+        .limit(limit)
+    )
+    return list(result.scalars().all()), total
+
+
 async def update_job_model(
     db: AsyncSession,
     model: JobModel,

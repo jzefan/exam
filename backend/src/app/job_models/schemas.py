@@ -6,6 +6,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+ResourceTypeEnum = Literal["video", "document", "link"]
+NodeTypeEnum = Literal["dimension", "skill", "kp"]
+ResourceSourceEnum = Literal["manual", "bilibili", "upload"]
 ProjectStatusEnum = Literal["draft", "generating", "review", "published", "archived"]
 SourceTypeEnum = Literal["ai_generated", "manual", "template"]
 SkillLevelEnum = Literal["L1", "L2", "L3", "L4", "L5"]
@@ -185,6 +188,43 @@ class SourceDocumentResponse(BaseModel):
     file_type: str
     uploaded_by: uuid.UUID | None
     created_at: datetime
+
+
+# LearningResource schemas
+
+class LearningResourceCreate(BaseModel):
+    resource_type: ResourceTypeEnum
+    title: str = Field(max_length=500)
+    url: str | None = Field(default=None, max_length=2000)
+    file_path: str | None = Field(default=None, max_length=1000)
+    description: str | None = None
+    source: ResourceSourceEnum = "manual"
+    sort_order: int = 0
+
+
+class LearningResourceUpdate(BaseModel):
+    title: str | None = Field(default=None, max_length=500)
+    url: str | None = Field(default=None, max_length=2000)
+    description: str | None = None
+    sort_order: int | None = None
+
+
+class LearningResourceResponse(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: uuid.UUID
+    node_id: uuid.UUID
+    node_type: str
+    resource_type: str
+    title: str
+    url: str | None
+    file_path: str | None
+    description: str | None
+    source: str | None
+    sort_order: int
+    uploaded_by: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
 
 
 # Template schemas

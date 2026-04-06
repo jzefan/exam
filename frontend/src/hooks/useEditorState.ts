@@ -75,11 +75,16 @@ export function useEditorState(initialModel: any) {
     setSelectedNodeIds(newSet)
   }
 
+  const expandNode = (nodeId: string) => {
+    setExpandedNodeIds((prev) => new Set(prev).add(nodeId))
+  }
+
   return {
     expandedNodeIds,
     selectedNodeIds,
     nodeMap,
     toggleExpanded,
     toggleSelected,
+    expandNode,
   }
 }

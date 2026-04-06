@@ -98,7 +98,7 @@ export function Dashboard() {
     <div className="space-y-8">
       {/* Welcome */}
       <div>
-        <h1 className="text-2xl font-bold text-foreground tracking-tight">
+        <h1 className="text-base font-bold text-foreground tracking-tight">
           {greeting}，{identity?.name ?? "用户"} 👋
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">

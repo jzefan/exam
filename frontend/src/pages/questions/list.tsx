@@ -1095,7 +1095,7 @@ export function QuestionList() {
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-baseline gap-3">
-          <h1 className="text-2xl font-bold text-foreground tracking-tight">
+          <h1 className="text-base font-bold text-foreground tracking-tight">
             题库管理
           </h1>
           <p className="text-sm text-muted-foreground hidden sm:block">

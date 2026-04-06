@@ -34,6 +34,16 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useState } from "react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const roleLabel: Record<string, string> = {
   platform_admin: "平台管理员",
@@ -80,9 +90,16 @@ export function UserList() {
     setFilters([{ field: "username", operator: "contains", value }]);
   };
 
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+
   const handleDelete = (id: string) => {
-    if (window.confirm("确定要删除该用户吗？此操作不可撤销。")) {
-      deleteUser({ resource: "users", id });
+    setDeleteTarget(id);
+  };
+
+  const confirmDelete = () => {
+    if (deleteTarget) {
+      deleteUser({ resource: "users", id: deleteTarget });
+      setDeleteTarget(null);
     }
   };
 
@@ -90,7 +107,7 @@ export function UserList() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground tracking-tight">用户管理</h1>
+          <h1 className="text-base font-bold text-foreground tracking-tight">用户管理</h1>
           <p className="mt-1 text-sm text-muted-foreground">管理系统用户账号与权限</p>
         </div>
         <Button onClick={() => create("users")}>
@@ -258,6 +275,21 @@ export function UserList() {
           </div>
         )}
       </Card>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认删除</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定要删除该用户吗？此操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDelete}>确认删除</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

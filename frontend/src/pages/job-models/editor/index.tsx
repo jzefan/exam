@@ -1,6 +1,5 @@
-import { useCallback } from "react"
+import { useCallback, useState, useEffect, useRef } from "react"
 import { useParams, useNavigate } from "react-router-dom"
-import { useShow, useUpdate } from "@refinedev/core"
 import { Loader2 } from "lucide-react"
 import { EditorContext, type EditorContextType } from "./context"
 import { Toolbar } from "./toolbar"
@@ -8,21 +7,56 @@ import { StatusBar } from "./status-bar"
 import { TreeView } from "./tree-view"
 import { GraphView } from "./graph-view"
 import { PropertiesPanel } from "./properties-panel"
-import { useAutoSave } from "@/hooks/useAutoSave"
 import { useToast } from "@/hooks/use-toast"
-import { getEndpointForNodeType, resolveNodeType, buildUpdatePayload } from "@/utils/editor-utils"
-import { useState } from "react"
+import { resolveNodeType, buildUpdatePayload } from "@/utils/editor-utils"
+import { ContentPanel } from "./content-panel"
 import { Toaster } from "@/components/ui/toaster"
 
-interface ModelDimension {
-  skills: Array<{
-    knowledge_points: unknown[]
+interface ModelData {
+  id: string
+  project_id: string
+  job_role: string
+  version: number
+  version_note: string | null
+  is_current: boolean
+  source_type: string
+  dimensions: Array<{
+    id: string
+    name: string
+    description: string | null
+    sort_order: number
+    skills: Array<{
+      id: string
+      name: string
+      level: string | null
+      description: string | null
+      sort_order: number
+      knowledge_points: Array<{
+        id: string
+        name: string
+        difficulty: string | null
+        teaching_suggestion: string | null
+        sort_order: number
+      }>
+    }>
   }>
 }
 
-interface ModelData {
-  version: number
-  dimensions: ModelDimension[]
+function getApiEndpoint(nodeType: string, nodeId: string): string {
+  const endpoints: Record<string, string> = {
+    dimension: `/api/job-models/models/dimensions/${nodeId}`,
+    skill: `/api/job-models/models/skills/${nodeId}`,
+    kp: `/api/job-models/models/knowledge-points/${nodeId}`,
+  }
+  return endpoints[nodeType] || ""
+}
+
+function authHeaders(): HeadersInit {
+  const token = localStorage.getItem("access_token")
+  return {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`,
+  }
 }
 
 export function EditorPage() {
@@ -30,127 +64,232 @@ export function EditorPage() {
   const navigate = useNavigate()
   const { toast } = useToast()
 
-  const { data, isLoading, refetch } = useShow<ModelData>({
-    resource: `job-models/projects/${projectId}/models`,
-    id: modelId,
-  })
-
+  const [model, setModel] = useState<ModelData | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
   const [viewMode, setViewMode] = useState<"tree" | "graph">("tree")
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [isDirty, setIsDirty] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null)
 
-  const model = data?.data
+  // Resizable left panel
+  const MIN_PANEL_WIDTH = 260
+  const MAX_PANEL_WIDTH = 700
+  const [leftPanelWidth, setLeftPanelWidth] = useState(420)
+  const isResizing = useRef(false)
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    isResizing.current = true
+    document.body.style.cursor = "col-resize"
+    document.body.style.userSelect = "none"
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!isResizing.current) return
+      const newWidth = Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, ev.clientX))
+      setLeftPanelWidth(newWidth)
+    }
+
+    const onMouseUp = () => {
+      isResizing.current = false
+      document.body.style.cursor = ""
+      document.body.style.userSelect = ""
+      document.removeEventListener("mousemove", onMouseMove)
+      document.removeEventListener("mouseup", onMouseUp)
+    }
+
+    document.addEventListener("mousemove", onMouseMove)
+    document.addEventListener("mouseup", onMouseUp)
+  }, [])
+
+  // Fetch model data
+  const fetchModel = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/job-models/models/${modelId}`, {
+        headers: authHeaders(),
+      })
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+      const data: ModelData = await res.json()
+      setModel(data)
+    } catch (err) {
+      console.error("Failed to load model:", err)
+      toast({
+        title: "加载失败",
+        description: (err as Error).message,
+        variant: "destructive",
+      })
+    } finally {
+      setIsLoading(false)
+    }
+  }, [modelId, toast])
+
+  useEffect(() => {
+    fetchModel()
+  }, [fetchModel])
 
   const nodeCount = model
     ? model.dimensions.reduce(
-        (acc: number, dim: ModelDimension) =>
-          acc +
-          1 +
-          dim.skills.reduce(
-            (skAcc: number, skill) => skAcc + 1 + skill.knowledge_points.length,
-            0
-          ),
+        (acc, dim) =>
+          acc + 1 + dim.skills.reduce((skAcc, skill) => skAcc + 1 + skill.knowledge_points.length, 0),
         0
       )
     : 0
 
-  const { mutate: updateModel } = useUpdate()
-  const {
-    debouncedSave,
-    forceSave,
-    isSaving,
-    lastSavedAt,
-  } = useAutoSave(2000)
+  // Save a single node update
+  const saveNodeUpdate = useCallback(
+    async (nodeType: string, nodeId: string, updates: Record<string, unknown>) => {
+      const endpoint = getApiEndpoint(nodeType, nodeId)
+      if (!endpoint) return
+
+      setIsSaving(true)
+      try {
+        const res = await fetch(endpoint, {
+          method: "PATCH",
+          headers: authHeaders(),
+          body: JSON.stringify(updates),
+        })
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+        setLastSavedAt(new Date())
+        setIsDirty(false)
+        // Refresh model data to keep tree in sync
+        await fetchModel()
+      } catch (err) {
+        toast({
+          title: "保存失败",
+          description: (err as Error).message,
+          variant: "destructive",
+        })
+      } finally {
+        setIsSaving(false)
+      }
+    },
+    [fetchModel, toast]
+  )
 
   const handleNodeNameChange = useCallback(
     (nodeId: string, newName: string) => {
-      if (!modelId) return
+      if (!model) return
       const nodeType = resolveNodeType(model, nodeId)
       if (!nodeType) return
       setIsDirty(true)
-      debouncedSave({
-        nodeId,
-        updates: buildUpdatePayload({ name: newName }),
-        resource: getEndpointForNodeType(nodeType, modelId, nodeId),
-      })
+      saveNodeUpdate(nodeType, nodeId, buildUpdatePayload({ name: newName }))
     },
-    [model, modelId, debouncedSave]
+    [model, saveNodeUpdate]
   )
 
   const handleNodeLevelChange = useCallback(
     (nodeId: string, level: string) => {
-      if (!modelId) return
       setIsDirty(true)
-      debouncedSave({
-        nodeId,
-        updates: buildUpdatePayload({ level }),
-        resource: getEndpointForNodeType("skill", modelId, nodeId),
-      })
+      saveNodeUpdate("skill", nodeId, buildUpdatePayload({ level }))
     },
-    [modelId, debouncedSave]
+    [saveNodeUpdate]
   )
 
   const handleNodeDelete = useCallback(
-    (_nodeId: string) => {
-      setIsDirty(true)
-      // DELETE call will be wired in a future task
+    async (nodeId: string) => {
+      if (!model) return
+      const nodeType = resolveNodeType(model, nodeId)
+      if (!nodeType) return
+
+      const endpoint = getApiEndpoint(nodeType, nodeId)
+      if (!endpoint) return
+
+      try {
+        const res = await fetch(endpoint, {
+          method: "DELETE",
+          headers: authHeaders(),
+        })
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+        setSelectedNodeId(null)
+        toast({ title: "已删除" })
+        await fetchModel()
+      } catch (err) {
+        toast({
+          title: "删除失败",
+          description: (err as Error).message,
+          variant: "destructive",
+        })
+      }
     },
-    []
+    [model, fetchModel, toast]
   )
 
   const handlePropertiesUpdate = useCallback(
     (nodeId: string, updates: Record<string, unknown>) => {
-      if (!modelId) return
+      if (!model) return
       const nodeType = resolveNodeType(model, nodeId)
       if (!nodeType) return
       setIsDirty(true)
-      debouncedSave({
-        nodeId,
-        updates: buildUpdatePayload(updates),
-        resource: getEndpointForNodeType(nodeType, modelId, nodeId),
-      })
+      saveNodeUpdate(nodeType, nodeId, buildUpdatePayload(updates))
     },
-    [model, modelId, debouncedSave]
+    [model, saveNodeUpdate]
+  )
+
+  const handleAddNode = useCallback(
+    async (type: "dimension" | "skill" | "kp", parentId?: string) => {
+      let endpoint = ""
+      let body: Record<string, unknown> = {}
+
+      if (type === "dimension") {
+        endpoint = `/api/job-models/models/${modelId}/dimensions`
+        body = { name: "新维度", sort_order: model?.dimensions.length ?? 0 }
+      } else if (type === "skill" && parentId) {
+        endpoint = `/api/job-models/models/dimensions/${parentId}/skills`
+        const dim = model?.dimensions.find((d) => d.id === parentId)
+        body = { name: "新技能", sort_order: dim?.skills.length ?? 0 }
+      } else if (type === "kp" && parentId) {
+        endpoint = `/api/job-models/models/skills/${parentId}/knowledge-points`
+        const skill = model?.dimensions.flatMap((d) => d.skills).find((s) => s.id === parentId)
+        body = { name: "新知识点", sort_order: skill?.knowledge_points.length ?? 0 }
+      }
+      if (!endpoint) return
+
+      try {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify(body),
+        })
+        if (!res.ok) throw new Error(`${res.status}`)
+        const created = await res.json()
+        await fetchModel()
+        setSelectedNodeId(created.id)
+        // Scroll the new node into view after render
+        requestAnimationFrame(() => {
+          const el = document.querySelector(`[data-node-id="${created.id}"]`)
+          el?.scrollIntoView({ block: "nearest", behavior: "smooth" })
+        })
+      } catch (err) {
+        toast({ title: "创建失败", description: (err as Error).message, variant: "destructive" })
+      }
+    },
+    [modelId, model, fetchModel, toast]
   )
 
   const handleSave = useCallback(async () => {
-    forceSave()
+    // Force save is now handled per-node, just clear dirty flag
     setIsDirty(false)
-  }, [forceSave])
+  }, [])
 
   const handlePublish = useCallback(async () => {
     if (!modelId) return
-
-    if (isDirty) {
-      forceSave()
+    try {
+      const res = await fetch(`/api/job-models/models/${modelId}/publish`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ version_note: "" }),
+      })
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+      toast({ title: "已发布", description: "新版本已创建" })
+      navigate(`/job-models`)
+    } catch (err) {
+      toast({
+        title: "发布失败",
+        description: (err as Error).message,
+        variant: "destructive",
+      })
     }
-
-    await new Promise<void>((resolve, reject) => {
-      updateModel(
-        {
-          resource: `job-models/models/${modelId}/publish`,
-          id: modelId,
-          values: { version_note: "" },
-        },
-        {
-          onSuccess: () => {
-            toast({ title: "Published", description: "New version created" })
-            refetch()
-            navigate(`/job-models/${projectId}`)
-            resolve()
-          },
-          onError: (error) => {
-            toast({
-              title: "Publish failed",
-              description: (error as Error).message || "Unknown error",
-              variant: "destructive",
-            })
-            reject(error)
-          },
-        }
-      )
-    })
-  }, [modelId, projectId, isDirty, forceSave, updateModel, refetch, navigate, toast])
+  }, [modelId, navigate, toast])
 
   const contextValue: EditorContextType = {
     modelId: modelId ?? "",
@@ -161,20 +300,37 @@ export function EditorPage() {
     isDirty,
     setIsDirty,
     isSaving,
-    setIsSaving: () => {}, // controlled by useAutoSave
+    setIsSaving: () => {},
     lastSavedAt,
-    setLastSavedAt: () => {}, // controlled by useAutoSave
+    setLastSavedAt: () => {},
     nodeCount,
-    setNodeCount: () => {}, // derived from model data
-    modelVersion: (model as any)?.version ?? 1,
+    setNodeCount: () => {},
+    modelVersion: model?.version ?? 1,
   }
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-screen bg-gradient-to-br from-blue-50 to-indigo-50">
+      <div className="flex items-center justify-center h-screen bg-background">
         <div className="text-center">
-          <Loader2 className="h-8 w-8 animate-spin text-blue-500 mx-auto" />
-          <p className="text-sm text-gray-600 mt-4">Loading model...</p>
+          <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto" />
+          <p className="text-sm text-muted-foreground mt-4">加载模型中...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!model) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-background">
+        <div className="text-center">
+          <p className="text-base font-semibold text-foreground">模型未找到</p>
+          <p className="text-sm text-muted-foreground mt-2">请返回列表重新选择</p>
+          <button
+            onClick={() => navigate("/job-models")}
+            className="mt-4 text-primary hover:underline text-sm"
+          >
+            返回列表
+          </button>
         </div>
       </div>
     )
@@ -185,31 +341,46 @@ export function EditorPage() {
       <div className="flex flex-col h-screen bg-white">
         <Toolbar onSave={handleSave} onPublish={handlePublish} />
 
-        <div className="flex flex-1 overflow-hidden gap-0">
-          {/* Tree view (left panel) - hidden on mobile, shown on lg+ */}
-          <div className="hidden lg:flex flex-col w-2/5 border-r border-gray-200 bg-white overflow-auto">
+        <div className="flex flex-1 overflow-hidden">
+          {/* Tree view (left panel) - resizable */}
+          <div
+            className="hidden lg:flex flex-col border-r border-gray-200 bg-white overflow-auto shrink-0"
+            style={{ width: leftPanelWidth }}
+            data-testid="tree-panel"
+          >
             <TreeView
               model={model}
               onNodeNameChange={handleNodeNameChange}
               onNodeDelete={handleNodeDelete}
               onNodeLevelChange={handleNodeLevelChange}
+              onAddNode={handleAddNode}
             />
           </div>
 
-          {/* Right panel - full width on mobile, 3/5 on desktop */}
-          <div className="w-full lg:w-3/5 flex flex-col bg-gray-50 overflow-hidden">
-            {viewMode === "graph" ? (
+          {/* Drag handle */}
+          <div
+            className="hidden lg:flex w-1 cursor-col-resize items-center justify-center hover:bg-primary/20 active:bg-primary/30 transition-colors group shrink-0"
+            onMouseDown={handleMouseDown}
+          >
+            <div className="w-0.5 h-8 rounded-full bg-gray-300 group-hover:bg-primary/50 group-active:bg-primary transition-colors" />
+          </div>
+
+          {/* Middle panel - Content or Graph */}
+          {viewMode === "graph" ? (
+            <div className="flex-1 min-w-0 flex flex-col bg-gray-50 overflow-hidden" data-testid="graph-panel">
               <GraphView
-                model={model as any}
+                model={model}
                 onNodeSelect={(nodeId) => {
                   setSelectedNodeId(nodeId)
                 }}
               />
-            ) : (
-              <div className="flex flex-1 overflow-hidden">
-                <div className="flex flex-1 items-center justify-center p-4 text-gray-400 text-sm">
-                  Select a node from the tree or switch to Graph View
-                </div>
+            </div>
+          ) : (
+            <>
+              <ContentPanel nodeId={selectedNodeId} model={model} />
+
+              {/* Properties panel (right) */}
+              <div className="hidden xl:block shrink-0 overflow-auto">
                 <PropertiesPanel
                   nodeId={selectedNodeId}
                   model={model}
@@ -217,8 +388,8 @@ export function EditorPage() {
                   onNodeDelete={handleNodeDelete}
                 />
               </div>
-            )}
-          </div>
+            </>
+          )}
         </div>
 
         <StatusBar />

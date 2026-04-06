@@ -172,7 +172,7 @@ export function QuestionCreate() {
   return (
     <div className="mx-auto w-full max-w-[900px]">
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-foreground tracking-tight">
+        <h1 className="text-base font-bold text-foreground tracking-tight">
           新建题目
         </h1>
         <button

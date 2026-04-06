@@ -2,71 +2,106 @@ import { Handle, Position, type NodeProps } from "@xyflow/react"
 
 interface GraphNodeData {
   label: string
-  type: "dimension" | "skill" | "kp"
+  type: "root" | "dimension" | "skill" | "kp"
   level?: string
   difficulty?: string
   count?: number
   [key: string]: unknown
 }
 
-const LEVEL_COLORS: Record<string, string> = {
-  L1: "#e5e7eb",
-  L2: "#dbeafe",
-  L3: "#fef3c7",
-  L4: "#fed7aa",
-  L5: "#fecaca",
+const TYPE_CONFIG: Record<string, { bg: string; border: string; text: string; icon: string }> = {
+  root: {
+    bg: "bg-primary",
+    border: "border-primary",
+    text: "text-primary-foreground",
+    icon: "🎯",
+  },
+  dimension: {
+    bg: "bg-blue-50",
+    border: "border-blue-200",
+    text: "text-blue-800",
+    icon: "📐",
+  },
+  skill: {
+    bg: "bg-amber-50",
+    border: "border-amber-200",
+    text: "text-amber-800",
+    icon: "⚡",
+  },
+  kp: {
+    bg: "bg-violet-50",
+    border: "border-violet-200",
+    text: "text-violet-800",
+    icon: "💡",
+  },
 }
 
-const TYPE_COLORS: Record<string, string> = {
-  dimension: "#f0f9ff",
-  skill: "#fffbeb",
-  kp: "#f5f3ff",
-}
-
-const ICON_MAP: Record<string, string> = {
-  dimension: "📂",
-  skill: "🔧",
-  kp: "📝",
+const LEVEL_BADGE: Record<string, string> = {
+  L1: "bg-gray-100 text-gray-600",
+  L2: "bg-blue-100 text-blue-700",
+  L3: "bg-amber-100 text-amber-700",
+  L4: "bg-orange-100 text-orange-700",
+  L5: "bg-red-100 text-red-700",
 }
 
 export function GraphNode({ data }: NodeProps) {
-  const nodeData = data as GraphNodeData
-  const bgColor = nodeData.level
-    ? (LEVEL_COLORS[nodeData.level] ?? TYPE_COLORS[nodeData.type])
-    : TYPE_COLORS[nodeData.type]
-
-  const width =
-    nodeData.type === "dimension" ? 140 : nodeData.type === "skill" ? 120 : 100
+  const d = data as GraphNodeData
+  const config = TYPE_CONFIG[d.type] ?? TYPE_CONFIG.kp
+  const isRoot = d.type === "root"
 
   return (
     <div
-      className="rounded-lg border-2 border-gray-300 bg-white p-3 shadow-md"
-      style={{
-        backgroundColor: bgColor,
-        width: `${width}px`,
-        minHeight: "60px",
-      }}
+      className={`rounded-[var(--radius)] border ${config.border} ${config.bg} shadow-sm hover:shadow-md transition-shadow`}
+      style={{ minWidth: isRoot ? 160 : d.type === "kp" ? 130 : 150, maxWidth: 200 }}
     >
-      <Handle type="target" position={Position.Top} />
+      {!isRoot && (
+        <Handle type="target" position={Position.Left} className="!bg-gray-300 !w-2 !h-2 !border-0" />
+      )}
 
-      <div className="flex flex-col items-center text-center">
-        <div className="mb-1 text-xl">{ICON_MAP[nodeData.type]}</div>
-        <div className="w-full truncate text-xs font-medium">{nodeData.label}</div>
+      <div className="px-3 py-2">
+        {/* KP nodes: icon + name + difficulty all in one line */}
+        {d.type === "kp" ? (
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs shrink-0">{config.icon}</span>
+            <span className={`text-xs font-semibold ${config.text} truncate`}>
+              {d.label}
+            </span>
+            {d.difficulty && (
+              <span className="text-[10px] px-1 py-0.5 rounded bg-violet-100 text-violet-600 font-medium shrink-0 ml-auto">
+                {d.difficulty}
+              </span>
+            )}
+          </div>
+        ) : (
+          <>
+            {/* Header: icon + label */}
+            <div className="flex items-center gap-1.5">
+              {!isRoot && <span className="text-sm shrink-0">{config.icon}</span>}
+              <span className={`text-xs font-bold leading-tight ${config.text} line-clamp-2`}>
+                {d.label}
+              </span>
+            </div>
 
-        {nodeData.level && (
-          <div className="mt-1 text-xs font-bold text-gray-700">{nodeData.level}</div>
-        )}
-
-        {nodeData.difficulty && (
-          <div className="mt-0.5 text-xs text-gray-600">{nodeData.difficulty}</div>
-        )}
-
-        {nodeData.count !== undefined && nodeData.count > 0 && (
-          <div className="mt-1 rounded bg-gray-200 px-1.5 text-xs">{nodeData.count}</div>
+            {/* Badges row for non-KP */}
+            {(d.level || (d.count !== undefined && d.count > 0)) && (
+              <div className="flex items-center gap-1.5 mt-1.5">
+                {d.level && (
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${LEVEL_BADGE[d.level] ?? "bg-gray-100 text-gray-600"}`}>
+                    {d.level}
+                  </span>
+                )}
+                {d.count !== undefined && d.count > 0 && (
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${isRoot ? "bg-white/20 text-primary-foreground" : "bg-gray-100 text-gray-500"}`}>
+                    {d.count} 项
+                  </span>
+                )}
+              </div>
+            )}
+          </>
         )}
       </div>
 
-      <Handle type="source" position={Position.Bottom} />
+      <Handle type="source" position={Position.Right} className="!bg-gray-300 !w-2 !h-2 !border-0" />
     </div>
   )
 }

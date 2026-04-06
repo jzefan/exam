@@ -5,6 +5,11 @@ import {
   GripVertical,
   MoreVertical,
   Trash2,
+  Plus,
+  Pencil,
+  Layers,
+  Wrench,
+  Lightbulb,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -30,6 +35,7 @@ interface TreeNodeProps {
   onDelete: () => void
   onNameChange: (newName: string) => void
   onLevelChange?: (level: string) => void
+  onAddChild?: () => void
   isDragHandle?: boolean
 }
 
@@ -62,6 +68,7 @@ export function TreeNode({
   onSelect,
   onDelete,
   onNameChange,
+  onAddChild,
   isDragHandle,
 }: TreeNodeProps) {
   const [isEditing, setIsEditing] = useState(false)
@@ -80,13 +87,20 @@ export function TreeNode({
   }
 
   const icon =
-    type === "dimension" ? "📂" : type === "skill" ? "🔧" : "📝"
+    type === "dimension" ? (
+      <Layers className="h-4 w-4 text-indigo-500" />
+    ) : type === "skill" ? (
+      <Wrench className="h-4 w-4 text-emerald-500" />
+    ) : (
+      <Lightbulb className="h-4 w-4 text-amber-500" />
+    )
 
   const levelColor = level ? (LEVEL_COLORS[level] ?? "") : ""
   const difficultyColor = difficulty ? (DIFFICULTY_COLORS[difficulty] ?? "") : ""
 
   return (
     <div
+      data-node-id={id}
       className={`transition-colors ${
         isSelected
           ? "border-l-4 border-blue-500 bg-blue-50"
@@ -121,7 +135,7 @@ export function TreeNode({
         )}
 
         {/* Icon */}
-        <span className="text-lg flex-shrink-0">{icon}</span>
+        <span className="flex-shrink-0 flex items-center">{icon}</span>
 
         {/* Name (editable) */}
         {isEditing ? (
@@ -189,9 +203,19 @@ export function TreeNode({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent>
+            {onAddChild && type !== "kp" && (
+              <DropdownMenuItem onClick={onAddChild}>
+                <Plus className="w-4 h-4 mr-2" />
+                {type === "dimension" ? "添加技能" : "添加知识点"}
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuItem onClick={() => setIsEditing(true)}>
+              <Pencil className="w-4 h-4 mr-2" />
+              重命名
+            </DropdownMenuItem>
             <DropdownMenuItem onClick={onDelete} className="text-red-600">
               <Trash2 className="w-4 h-4 mr-2" />
-              Delete
+              删除
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

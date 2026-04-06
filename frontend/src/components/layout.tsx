@@ -13,10 +13,6 @@ import {
   ListChecks,
   CalendarClock,
   Send,
-  ScanEye,
-  Bot,
-  MessageSquareText,
-  Scale,
   LayoutDashboard,
   Network,
 } from "lucide-react";
@@ -99,18 +95,21 @@ export function Layout() {
   const isActive = (prefix: string) => location.pathname.startsWith(prefix);
   const isStudent = identity ? getUserRole(identity) === "student" : false;
   const isKnowledgePage = location.pathname.startsWith("/knowledge");
+  const isGradingPage = location.pathname.startsWith("/grading");
 
   return (
     <div
-      className="flex flex-col h-screen"
+      className="flex flex-col h-screen overflow-hidden"
       style={(() => {
-        const bg = themeMode === "dark" ? "#131316" : "#FEFEFA";
-        const line = themeMode === "dark" ? "#1a1a1f" : "#FAFAFA";
+        if (themeMode === "dark") {
+          return {
+            backgroundColor: "#0f0f12",
+            backgroundImage: "radial-gradient(ellipse 80% 60% at 50% 0%, rgba(99,102,241,0.08), transparent)",
+          };
+        }
         return {
-          backgroundColor: bg,
-          backgroundImage: `linear-gradient(0deg, transparent 24%, ${line} 25%, ${line} 26%, transparent 27%, transparent 74%, ${line} 75%, ${line} 76%, transparent 77%, transparent),
-            linear-gradient(90deg, transparent 24%, ${line} 25%, ${line} 26%, transparent 27%, transparent 74%, ${line} 75%, ${line} 76%, transparent 77%, transparent)`,
-          backgroundSize: "55px 55px",
+          backgroundColor: "#f8f9fb",
+          backgroundImage: "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(99,102,241,0.05), transparent)",
         };
       })()}
     >
@@ -128,7 +127,7 @@ export function Layout() {
 
           {/* NavigationMenu 居中 */}
           <div className="flex-1 flex items-center justify-center px-4">
-            <NavigationMenu>
+            <NavigationMenu viewport={false}>
               <NavigationMenuList>
                 {!isStudent && (
                   <>
@@ -151,50 +150,32 @@ export function Layout() {
                       </NavigationMenuLink>
                     </NavigationMenuItem>
 
-                    {/* ---- 题库管理 ---- */}
+                    {/* ---- 阅卷中心 ---- */}
                     <NavigationMenuItem>
-                      <NavigationMenuTrigger
+                      <NavigationMenuLink
                         className={cn(
-                          isActive("/questions") ||
-                            isActive("/tags") ||
-                            isActive("/knowledge")
-                            ? "bg-accent/50 text-accent-foreground"
-                            : "",
+                          navigationMenuTriggerStyle(),
+                          isActive("/grading") ? "bg-accent/50 text-accent-foreground" : "",
                         )}
+                        onClick={(e: React.MouseEvent) => {
+                          e.preventDefault();
+                          navigate("/grading");
+                        }}
                       >
-                        <BookOpen size={16} className="mr-1.5" />
-                        题库管理
-                      </NavigationMenuTrigger>
-                      <NavigationMenuContent>
-                        <ul className="grid w-[400px] gap-1 p-2 md:w-[440px] md:grid-cols-2">
-                          <NavItem href="/questions" title="题目列表" icon={<ListChecks size={14} />}>
-                            浏览和管理所有题目
-                          </NavItem>
-                          <NavItem href="/questions/create" title="创建题目" icon={<FilePlus size={14} />}>
-                            新建选择题、填空题、主观题等
-                          </NavItem>
-                          <NavItem href="/questions/import" title="导入题目" icon={<Upload size={14} />}>
-                            导入 Excel、Word、PDF、TXT 题目
-                          </NavItem>
-                          <NavItem href="/tags" title="标签管理" icon={<Tags size={14} />}>
-                            为题目打标签，方便筛选检索
-                          </NavItem>
-                          <NavItem href="/knowledge" title="知识点管理" icon={<Network size={14} />}>
-                            可视化知识树，前置依赖管理
-                          </NavItem>
-                        </ul>
-                      </NavigationMenuContent>
+                        <FileCheck size={16} className="mr-1.5" />
+                        阅卷中心
+                      </NavigationMenuLink>
                     </NavigationMenuItem>
 
                     {/* ---- 考试管理 ---- */}
-                    <NavigationMenuItem>
+                    <NavigationMenuItem className="relative">
                       <NavigationMenuTrigger
                         className={cn(isActive("/exams") ? "bg-accent/50 text-accent-foreground" : "")}
                       >
                         <ClipboardList size={16} className="mr-1.5" />
                         考试管理
                       </NavigationMenuTrigger>
-                      <NavigationMenuContent>
+                      <NavigationMenuContent className="absolute left-0 top-full z-50 mt-1.5 w-auto overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-lg">
                         <ul className="grid w-[400px] gap-1 p-2 md:w-[440px] md:grid-cols-2">
                           <NavItem href="/exams" title="考试列表" icon={<ListChecks size={14} />}>
                             查看所有考试及状态
@@ -212,27 +193,40 @@ export function Layout() {
                       </NavigationMenuContent>
                     </NavigationMenuItem>
 
-                    {/* ---- 阅卷中心 ---- */}
-                    <NavigationMenuItem>
+                    {/* ---- 题库管理 ---- */}
+                    <NavigationMenuItem className="relative">
                       <NavigationMenuTrigger
-                        className={cn(isActive("/grading") ? "bg-accent/50 text-accent-foreground" : "")}
+                        className={cn(
+                          isActive("/questions") ||
+                            isActive("/tags") ||
+                            isActive("/knowledge") ||
+                            isActive("/job-models")
+                            ? "bg-accent/50 text-accent-foreground"
+                            : "",
+                        )}
                       >
-                        <FileCheck size={16} className="mr-1.5" />
-                        阅卷中心
+                        <BookOpen size={16} className="mr-1.5" />
+                        题库管理
                       </NavigationMenuTrigger>
-                      <NavigationMenuContent>
+                      <NavigationMenuContent className="absolute left-0 top-full z-50 mt-1.5 w-auto overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-lg">
                         <ul className="grid w-[400px] gap-1 p-2 md:w-[440px] md:grid-cols-2">
-                          <NavItem href="/grading" title="待阅卷" icon={<ScanEye size={14} />}>
-                            人工阅卷与评分
+                          <NavItem href="/questions" title="题目列表" icon={<ListChecks size={14} />}>
+                            浏览和管理所有题目
                           </NavItem>
-                          <NavItem href="/grading/ai" title="AI 评分" icon={<Bot size={14} />}>
-                            多模型协同智能评分
+                          <NavItem href="/questions/create" title="创建题目" icon={<FilePlus size={14} />}>
+                            新建选择题、填空题、主观题等
                           </NavItem>
-                          <NavItem href="/grading/appeals" title="成绩申诉" icon={<MessageSquareText size={14} />}>
-                            处理学生评分异议
+                          <NavItem href="/questions/import" title="导入题目" icon={<Upload size={14} />}>
+                            导入 Excel、Word、PDF、TXT 题目
                           </NavItem>
-                          <NavItem href="/grading/arbitration" title="仲裁记录" icon={<Scale size={14} />}>
-                            查看 AI 评分仲裁详情
+                          <NavItem href="/tags" title="标签管理" icon={<Tags size={14} />}>
+                            为题目打标签，方便筛选检索
+                          </NavItem>
+                          <NavItem href="/knowledge" title="知识点管理" icon={<Network size={14} />}>
+                            可视化知识树，前置依赖管理
+                          </NavItem>
+                          <NavItem href="/job-models" title="职位模型管理" icon={<GraduationCap size={14} />}>
+                            编辑职位能力模型，构建竞争力模型
                           </NavItem>
                         </ul>
                       </NavigationMenuContent>
@@ -268,11 +262,11 @@ export function Layout() {
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto">
+      <main className={cn("flex-1", isKnowledgePage || isGradingPage ? "min-h-0 overflow-hidden" : "overflow-y-auto")}>
         <div
           className={cn(
-            isKnowledgePage
-              ? "w-full px-0 py-0"
+            isKnowledgePage || isGradingPage
+              ? "h-full min-h-0 w-full px-0 py-0"
               : "mx-auto w-full max-w-screen-xl px-4 py-6 sm:px-6",
           )}
         >

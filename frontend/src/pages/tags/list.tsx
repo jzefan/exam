@@ -564,7 +564,7 @@ export function TagList() {
     <div className="space-y-6">
       {/* Page header */}
       <div>
-        <h1 className="text-2xl font-bold text-foreground tracking-tight">标签管理</h1>
+        <h1 className="text-base font-bold text-foreground tracking-tight">标签管理</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           管理题目的知识点、学科、用途等分类标签
         </p>

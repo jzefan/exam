@@ -86,7 +86,7 @@ export function WrongAnswers() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-foreground tracking-tight flex items-center gap-2">
+        <h1 className="text-base font-bold text-foreground tracking-tight flex items-center gap-2">
           <NotebookPen size={22} />
           错题本
         </h1>

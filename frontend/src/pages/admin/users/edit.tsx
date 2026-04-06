@@ -94,7 +94,7 @@ export function UserEdit() {
           </AvatarFallback>
         </Avatar>
         <div>
-          <h1 className="text-2xl font-bold text-foreground tracking-tight">编辑用户</h1>
+          <h1 className="text-base font-bold text-foreground tracking-tight">编辑用户</h1>
           <p className="text-sm text-muted-foreground">@{user?.username}</p>
         </div>
       </div>

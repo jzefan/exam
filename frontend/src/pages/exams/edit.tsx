@@ -121,7 +121,7 @@ function ExamEditForm({ id, exam }: { id: string; exam: ExamDetail }) {
           <ArrowLeft size={16} />
         </Button>
         <div>
-          <h1 className="text-2xl font-bold text-foreground tracking-tight">
+          <h1 className="text-base font-bold text-foreground tracking-tight">
             编辑考试
           </h1>
           <p className="text-sm text-muted-foreground">修改考试信息、题目和考生</p>

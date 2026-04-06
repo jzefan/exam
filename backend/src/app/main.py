@@ -25,11 +25,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Seed RBAC and AI pipeline data on startup."""
     from app.ai_pipeline.models import seed_prompt_templates
     from app.database import async_session
+    from app.grading.seed import seed_grading_defaults
     from app.rbac.seed import seed_permissions, seed_roles
 
     async with async_session() as db:
         await seed_permissions(db)
         await seed_roles(db)
+        await seed_grading_defaults(db)
         await seed_prompt_templates(db)
         await db.commit()
     yield

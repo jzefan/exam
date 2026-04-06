@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     kimi_api_key: str | None = None
     kimi_base_url: str = "https://api.moonshot.cn/v1"
     kimi_model_name: str = "moonshot-v1-8k"
+    openrouter_api_key: str | None = None
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_model_name: str = "anthropic/claude-3.5-sonnet"
+    grading_score_diff_threshold: float = 0.15
+    grading_dimension_diff_threshold: float = 0.20
 
 
 settings = Settings()

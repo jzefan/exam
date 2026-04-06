@@ -1,0 +1,1047 @@
+"""Service entry points for the grading engine."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import uuid
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.config import settings
+from app.grading.models import GradingAuditEvent, GradingResultSnapshot, GradingTask, ModelConfig, RoleBinding
+from app.grading.providers import (
+    DeepSeekProvider,
+    GradingProvider,
+    GradingProviderResult,
+    OpenRouterProvider,
+    QwenProvider,
+)
+from app.grading.rubric_builders import build_code_rubric_context, build_short_answer_rubric_context
+from app.grading.orchestrator import should_trigger_arbitration
+
+SNAPSHOT_TYPE_ORDER = {
+    "primary": 0,
+    "review": 1,
+    "arbiter": 2,
+    "final": 3,
+    "manual": 4,
+}
+
+
+def _task_result_source(task: GradingTask) -> str | None:
+    if task.latest_final_snapshot_id == task.latest_manual_snapshot_id and task.latest_manual_snapshot_id is not None:
+        return "manual"
+    if task.latest_final_snapshot_id and task.latest_final_snapshot_id == task.latest_arbitration_snapshot_id:
+        return "arbiter"
+    if task.latest_arbitration_snapshot_id is not None:
+        return "arbiter"
+    if task.latest_final_snapshot_id is not None:
+        return "average"
+    return None
+
+
+def _task_display_status(task: GradingTask) -> str:
+    result_source = _task_result_source(task)
+    if result_source == "manual":
+        return "人工改分"
+    if task.status == "pending":
+        return "待评分"
+    if task.status == "running":
+        return "评分中"
+    if task.status == "arbitration_required":
+        return "待仲裁"
+    return "已完成"
+
+
+def _humanize_exam_id(exam_id: str | None) -> str:
+    if not exam_id:
+        return "独立任务"
+    normalized = re.sub(r"^exam[-_]", "", exam_id, flags=re.IGNORECASE)
+    tokens = [token for token in re.split(r"[-_]", normalized) if token]
+    if not tokens:
+        return exam_id
+    return " ".join(token.upper() if token.isupper() else token.capitalize() for token in tokens)
+
+
+def _humanize_question_id(question_id: str, question_type: str) -> str:
+    match = re.match(r"(essay|short|subjective|code|question)[-_]?q?(\d+)$", question_id, flags=re.IGNORECASE)
+    if match:
+        prefix, number = match.groups()
+        prefix = prefix.lower()
+        if prefix in {"essay", "short", "subjective", "question"}:
+            return f"主观题 {number}"
+        if prefix == "code":
+            return f"代码题 {number}"
+    fallback = "代码题" if question_type == "code" else "主观题"
+    return f"{fallback} {question_id}"
+
+
+def _humanize_candidate(candidate_code: str | None, task_id: uuid.UUID) -> tuple[str, str]:
+    if candidate_code:
+        code = re.sub(r"^candidate[-_]", "", candidate_code, flags=re.IGNORECASE).upper()
+    else:
+        code = str(task_id)[:8].upper()
+    return f"考生 {code}", code
+
+
+def _parse_task_locator(task: GradingTask) -> dict[str, str | None]:
+    source_business_id = task.source_business_id or ""
+    exam_id: str | None = None
+    question_id: str | None = None
+    candidate_code: str | None = None
+
+    if source_business_id:
+        parts = source_business_id.split(":")
+        if task.source_type == "exam_submission" and len(parts) >= 3:
+            exam_id = parts[0]
+            question_id = parts[1]
+            candidate_code = ":".join(parts[2:])
+        elif len(parts) >= 2:
+            question_id = parts[0]
+            candidate_code = ":".join(parts[1:])
+        elif len(parts) == 1:
+            question_id = parts[0]
+
+    if question_id is None:
+        question_id = f"task-{task.id}"
+
+    candidate_name, normalized_candidate_code = _humanize_candidate(candidate_code, task.id)
+    question_key = f"{exam_id}:{question_id}" if exam_id else question_id
+
+    return {
+        "exam_id": exam_id,
+        "exam_label": _humanize_exam_id(exam_id),
+        "question_id": question_id,
+        "question_key": question_key,
+        "question_label": _humanize_question_id(question_id, task.question_type),
+        "candidate_name": candidate_name,
+        "candidate_code": normalized_candidate_code,
+    }
+
+
+async def _load_workspace_tasks(db: AsyncSession) -> list[GradingTask]:
+    result = await db.execute(
+        select(GradingTask)
+        .options(
+            selectinload(GradingTask.latest_final_snapshot),
+            selectinload(GradingTask.latest_manual_snapshot),
+            selectinload(GradingTask.latest_arbitration_snapshot),
+            selectinload(GradingTask.snapshots).selectinload(GradingResultSnapshot.model_config),
+            selectinload(GradingTask.audit_events),
+        )
+        .order_by(GradingTask.updated_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+def format_evidence_summary(summary: dict[str, Any]) -> list[str]:
+    items: list[str] = []
+    for key, value in summary.items():
+        if isinstance(value, list):
+            items.append(f"{key}: {' / '.join(map(str, value))}")
+        elif isinstance(value, dict):
+            items.append(f"{key}: {json.dumps(value, ensure_ascii=False, sort_keys=True)}")
+        else:
+            items.append(f"{key}: {value}")
+    return items
+
+
+def evaluate_arbitration(primary_result: dict[str, Any], review_result: dict[str, Any]) -> tuple[bool, str | None]:
+    """Evaluate whether two grading results need arbitration."""
+
+    return should_trigger_arbitration(
+        primary_result,
+        review_result,
+        score_diff_threshold=settings.grading_score_diff_threshold,
+        dimension_diff_threshold=settings.grading_dimension_diff_threshold,
+    )
+
+
+def _build_provider_for_model(model: ModelConfig) -> GradingProvider:
+    provider = model.provider
+    if provider is None:
+        raise ValueError("grading model provider is not configured")
+    if not provider.is_active or not model.is_active:
+        raise ValueError("grading model or provider is inactive")
+
+    credential_attr_map = {
+        "EXAM_QWEN_API_KEY": "qwen_api_key",
+        "EXAM_DEEPSEEK_API_KEY": "deepseek_api_key",
+        "EXAM_OPENROUTER_API_KEY": "openrouter_api_key",
+    }
+    api_key = os.getenv(provider.credential_env)
+    if not api_key:
+        settings_attr = credential_attr_map.get(provider.credential_env)
+        if settings_attr is not None:
+            api_key = getattr(settings, settings_attr, None)
+    common_kwargs = {
+        "provider_key": provider.key,
+        "base_url": provider.base_url,
+        "model_name": model.model_name,
+        "api_key": api_key,
+        "temperature": model.temperature,
+    }
+
+    if provider.provider_type == "qwen":
+        return QwenProvider(**common_kwargs)
+    if provider.provider_type == "deepseek":
+        return DeepSeekProvider(**common_kwargs)
+    if provider.provider_type == "openrouter":
+        return OpenRouterProvider(**common_kwargs)
+
+    raise ValueError(f"unsupported grading provider type: {provider.provider_type}")
+
+
+async def _load_role_binding(db: AsyncSession, version: int) -> RoleBinding:
+    result = await db.execute(
+        select(RoleBinding)
+        .options(
+            selectinload(RoleBinding.grader_model).selectinload(ModelConfig.provider),
+            selectinload(RoleBinding.reviewer_model).selectinload(ModelConfig.provider),
+            selectinload(RoleBinding.arbiter_model).selectinload(ModelConfig.provider),
+        )
+        .where(RoleBinding.version == version)
+    )
+    binding = result.scalar_one_or_none()
+    if binding is None or not binding.is_active:
+        raise ValueError("grading role binding not found")
+    return binding
+
+
+async def run_grading_task_with_role_binding(db: AsyncSession, task_id: str) -> dict[str, Any]:
+    task = await db.get(GradingTask, uuid.UUID(task_id))
+    if task is None:
+        raise ValueError("grading task not found")
+
+    try:
+        binding = await _load_role_binding(db, task.role_binding_version)
+    except ValueError:
+        binding = None
+    primary_provider = _build_provider_for_model(binding.grader_model)
+    review_provider = _build_provider_for_model(binding.reviewer_model)
+    arbiter_provider = _build_provider_for_model(binding.arbiter_model)
+    return await run_grading_task(db, task_id, primary_provider, review_provider, arbiter_provider)
+
+
+async def create_grading_task(db: AsyncSession, payload: dict[str, Any]) -> GradingTask:
+    """Persist a grading task and its creation audit entry."""
+
+    task = GradingTask(**payload, status="pending")
+    db.add(task)
+    await db.flush()
+
+    audit_event = GradingAuditEvent(
+        task_id=task.id,
+        event_type="task.created",
+        event_payload={"source_type": task.source_type, "question_type": task.question_type},
+        operator_type="system",
+        operator_id="system",
+    )
+    db.add(audit_event)
+    await db.flush()
+    return task
+
+
+async def list_grading_tasks(db: AsyncSession) -> list[dict[str, Any]]:
+    """Return grading tasks for the workbench list."""
+
+    tasks = await _load_workspace_tasks(db)
+
+    items: list[dict[str, Any]] = []
+    for task in tasks:
+        result_source = _task_result_source(task)
+
+        final_score = task.latest_final_snapshot.score_total if task.latest_final_snapshot is not None else None
+        items.append(
+            {
+                "id": str(task.id),
+                "source_type": task.source_type,
+                "source_business_id": task.source_business_id,
+                "status": task.status,
+                "question_type": task.question_type,
+                "question_content": task.question_content,
+                "final_score": final_score,
+                "result_source": result_source,
+                "arbitration_required": task.latest_arbitration_snapshot_id is not None,
+                "manual_override": task.latest_manual_snapshot_id is not None
+                and task.latest_final_snapshot_id == task.latest_manual_snapshot_id,
+                "updated_at": task.updated_at.isoformat(),
+            }
+        )
+
+    return items
+
+
+async def get_grading_inbox(db: AsyncSession) -> dict[str, Any]:
+    tasks = await _load_workspace_tasks(db)
+
+    exam_groups: dict[str, dict[str, Any]] = {}
+    for task in tasks:
+        locator = _parse_task_locator(task)
+        exam_key = locator["exam_id"] or "standalone"
+        exam_entry = exam_groups.setdefault(
+            exam_key,
+            {
+                "exam_id": locator["exam_id"],
+                "exam_label": locator["exam_label"],
+                "exam_date": task.updated_at.isoformat(),
+                "questions": {},
+            },
+        )
+        if task.updated_at.isoformat() > exam_entry["exam_date"]:
+            exam_entry["exam_date"] = task.updated_at.isoformat()
+
+        question_entry = exam_entry["questions"].setdefault(
+            locator["question_key"],
+            {
+                "question_key": locator["question_key"],
+                "question_id": locator["question_id"],
+                "question_label": locator["question_label"],
+                "question_type": task.question_type,
+                "question_content": task.question_content,
+                "max_score": task.max_score,
+                "knowledge_tags": task.knowledge_tags,
+                "pending_count": 0,
+                "completed_count": 0,
+                "candidate_count": 0,
+                "latest_updated_at": task.updated_at.isoformat(),
+            },
+        )
+        question_entry["candidate_count"] += 1
+        if _task_display_status(task) in {"已完成", "人工改分"}:
+            question_entry["completed_count"] += 1
+        else:
+            question_entry["pending_count"] += 1
+        if task.updated_at.isoformat() > question_entry["latest_updated_at"]:
+            question_entry["latest_updated_at"] = task.updated_at.isoformat()
+
+    exams = [
+        {
+            "exam_id": exam["exam_id"],
+            "exam_label": exam["exam_label"],
+            "exam_date": exam["exam_date"],
+            "questions": sorted(
+                exam["questions"].values(),
+                key=lambda item: item["latest_updated_at"],
+                reverse=True,
+            ),
+        }
+        for exam in exam_groups.values()
+    ]
+    exams.sort(key=lambda item: item["exam_date"], reverse=True)
+    return {"exams": exams}
+
+
+async def get_grading_question_candidates(
+    db: AsyncSession,
+    exam_id: str,
+    question_id: str,
+) -> dict[str, Any]:
+    tasks = await _load_workspace_tasks(db)
+    matched: list[tuple[GradingTask, dict[str, str | None]]] = []
+    for task in tasks:
+        locator = _parse_task_locator(task)
+        if (locator["exam_id"] or "standalone") != (exam_id or "standalone"):
+            continue
+        if locator["question_id"] != question_id:
+            continue
+        matched.append((task, locator))
+
+    if not matched:
+        raise ValueError("grading question not found")
+
+    exemplar, locator = matched[0]
+    candidates = [
+        {
+            "task_id": str(task.id),
+            "candidate_name": task_locator["candidate_name"],
+            "candidate_code": task_locator["candidate_code"],
+            "status": _task_display_status(task),
+            "score": task.latest_final_snapshot.score_total if task.latest_final_snapshot else None,
+            "arbitration_required": task.latest_arbitration_snapshot_id is not None,
+            "manual_override": _task_result_source(task) == "manual",
+        }
+        for task, task_locator in matched
+    ]
+    candidates.sort(key=lambda item: (0 if item["status"] in {"待仲裁", "人工改分"} else 1, item["candidate_name"]))
+
+    return {
+        "exam_id": locator["exam_id"],
+        "exam_label": locator["exam_label"],
+        "exam_date": max(task.updated_at.isoformat() for task, _ in matched),
+        "question_key": locator["question_key"],
+        "question_id": locator["question_id"],
+        "question_label": locator["question_label"],
+        "question_type": exemplar.question_type,
+        "question_content": exemplar.question_content,
+        "max_score": exemplar.max_score,
+        "knowledge_tags": exemplar.knowledge_tags,
+        "candidates": candidates,
+    }
+
+
+async def get_grading_candidate_detail(db: AsyncSession, task_id: str) -> dict[str, Any]:
+    result = await db.execute(
+        select(GradingTask)
+        .options(
+            selectinload(GradingTask.snapshots).selectinload(GradingResultSnapshot.model_config),
+            selectinload(GradingTask.latest_final_snapshot),
+            selectinload(GradingTask.latest_manual_snapshot),
+            selectinload(GradingTask.latest_arbitration_snapshot),
+        )
+        .where(GradingTask.id == uuid.UUID(task_id))
+    )
+    task = result.scalar_one_or_none()
+    if task is None:
+        raise ValueError("grading task not found")
+
+    locator = _parse_task_locator(task)
+    try:
+        binding = await _load_role_binding(db, task.role_binding_version)
+    except ValueError:
+        binding = None
+
+    snapshot_model_labels = {
+        "primary": (
+            f"{binding.grader_model.display_name} / {binding.grader_model.model_name}"
+            if binding is not None
+            else "Primary"
+        ),
+        "review": (
+            f"{binding.reviewer_model.display_name} / {binding.reviewer_model.model_name}"
+            if binding is not None
+            else "Review"
+        ),
+        "arbiter": (
+            f"{binding.arbiter_model.display_name} / {binding.arbiter_model.model_name}"
+            if binding is not None
+            else "Arbiter"
+        ),
+    }
+    snapshots = sorted(
+        [snapshot for snapshot in task.snapshots if snapshot.snapshot_type in {"primary", "review", "arbiter"}],
+        key=lambda snapshot: SNAPSHOT_TYPE_ORDER.get(snapshot.snapshot_type, 99),
+    )
+    models = []
+    for snapshot in snapshots:
+        process = [
+            *snapshot.deduction_reasons,
+            *snapshot.strengths,
+            *snapshot.improvement_suggestions,
+            *format_evidence_summary(snapshot.evidence_summary),
+        ]
+        models.append(
+            {
+                "stage": snapshot.snapshot_type,
+                "model_label": snapshot_model_labels.get(snapshot.snapshot_type, snapshot.snapshot_type),
+                "score": snapshot.score_total,
+                "summary": "；".join(snapshot.deduction_reasons) or "已完成评分",
+                "process": process,
+                "risk_flags": snapshot.risk_flags,
+            }
+        )
+
+    return {
+        "task_id": str(task.id),
+        "candidate_name": locator["candidate_name"],
+        "candidate_code": locator["candidate_code"],
+        "status": _task_display_status(task),
+        "suggested_score": task.latest_final_snapshot.score_total if task.latest_final_snapshot else None,
+        "max_score": task.max_score,
+        "question_type": task.question_type,
+        "student_answer_raw": task.student_answer_raw,
+        "knowledge_tags": task.knowledge_tags,
+        "models": models,
+    }
+
+
+async def run_grading_prompt_follow_up(
+    db: AsyncSession,
+    task_id: str,
+    teacher_prompt: str,
+) -> dict[str, Any]:
+    result = await db.execute(
+        select(GradingTask)
+        .options(
+            selectinload(GradingTask.latest_primary_snapshot),
+            selectinload(GradingTask.latest_review_snapshot),
+            selectinload(GradingTask.latest_arbitration_snapshot),
+        )
+        .where(GradingTask.id == uuid.UUID(task_id))
+    )
+    task = result.scalar_one_or_none()
+    if task is None:
+        raise ValueError("grading task not found")
+
+    binding = await _load_role_binding(db, task.role_binding_version)
+    context = _build_grading_context(task)
+
+    providers = [
+        ("primary", "primary grader", binding.grader_model),
+        ("review", "review grader", binding.reviewer_model),
+        ("arbiter", "arbiter", binding.arbiter_model),
+    ]
+    latest_snapshots = {
+        "primary": task.latest_primary_snapshot,
+        "review": task.latest_review_snapshot,
+        "arbiter": task.latest_arbitration_snapshot,
+    }
+
+    models: list[dict[str, Any]] = []
+    for stage, role_name, model_config in providers:
+        provider = _build_provider_for_model(model_config)
+        previous_snapshot = latest_snapshots.get(stage)
+        previous_result = None
+        if previous_snapshot is not None:
+            previous_result = {
+                "score_total": previous_snapshot.score_total,
+                "dimension_scores": previous_snapshot.dimension_scores,
+                "deduction_reasons": previous_snapshot.deduction_reasons,
+                "strengths": previous_snapshot.strengths,
+                "improvement_suggestions": previous_snapshot.improvement_suggestions,
+                "evidence_summary": previous_snapshot.evidence_summary,
+                "risk_flags": previous_snapshot.risk_flags,
+            }
+        system_prompt, user_prompt = _build_follow_up_prompt_pair(
+            task,
+            context,
+            role_name,
+            teacher_prompt,
+            previous_result,
+        )
+        result = await provider.score(system_prompt, user_prompt)
+        models.append(
+            _result_to_comment_payload(
+                result,
+                stage,
+                f"{model_config.display_name} / {model_config.model_name}",
+            )
+        )
+
+    return {"prompt": teacher_prompt, "models": models}
+
+
+async def create_manual_score_override(
+    db: AsyncSession,
+    task_id: str,
+    score_total: float,
+    reason: str,
+) -> GradingResultSnapshot:
+    """Create a manual override snapshot and audit event."""
+
+    task = await db.get(GradingTask, uuid.UUID(task_id))
+    if task is None:
+        raise ValueError("grading task not found")
+
+    snapshot = GradingResultSnapshot(
+        task_id=task.id,
+        snapshot_type="manual",
+        score_total=score_total,
+        dimension_scores={},
+        deduction_reasons=[reason],
+        strengths=[],
+        improvement_suggestions=[],
+        evidence_summary={},
+        risk_flags=[],
+        role_binding_version=task.role_binding_version,
+        created_by="manual",
+    )
+    db.add(snapshot)
+    await db.flush()
+
+    task.latest_manual_snapshot = snapshot
+    task.latest_final_snapshot = snapshot
+
+    db.add(
+        GradingAuditEvent(
+            task_id=task.id,
+            event_type="manual.score_override",
+            event_payload={"score_total": score_total, "reason": reason},
+            operator_type="user",
+            operator_id="manual-reviewer",
+        )
+    )
+    await db.flush()
+    return snapshot
+
+
+async def get_final_report(db: AsyncSession, task_id: str) -> dict[str, Any]:
+    """Return the current final grading report for a task."""
+
+    result = await db.execute(
+        select(GradingTask)
+        .options(
+            selectinload(GradingTask.snapshots).selectinload(GradingResultSnapshot.model_config),
+            selectinload(GradingTask.snapshots).selectinload(GradingResultSnapshot.provider_config),
+            selectinload(GradingTask.audit_events),
+            selectinload(GradingTask.latest_final_snapshot),
+            selectinload(GradingTask.latest_manual_snapshot),
+            selectinload(GradingTask.latest_arbitration_snapshot),
+        )
+        .where(GradingTask.id == uuid.UUID(task_id))
+    )
+    task = result.scalar_one_or_none()
+    if task is None:
+        raise ValueError("grading task not found")
+
+    try:
+        binding = await _load_role_binding(db, task.role_binding_version)
+    except ValueError:
+        binding = None
+    snapshots = sorted(
+        task.snapshots,
+        key=lambda snapshot: (
+            SNAPSHOT_TYPE_ORDER.get(snapshot.snapshot_type, 99),
+            snapshot.created_at,
+            str(snapshot.id),
+        ),
+    )
+    final_snapshot = next(
+        (snapshot for snapshot in snapshots if snapshot.id == task.latest_final_snapshot_id),
+        None,
+    )
+
+    if task.latest_final_snapshot_id == task.latest_manual_snapshot_id and task.latest_manual_snapshot_id is not None:
+        result_source = "manual"
+    elif task.latest_final_snapshot_id and task.latest_final_snapshot_id == task.latest_arbitration_snapshot_id:
+        result_source = "arbiter"
+    elif task.latest_arbitration_snapshot_id is not None:
+        result_source = "arbiter"
+    elif task.latest_final_snapshot_id is not None:
+        result_source = "average"
+    else:
+        result_source = None
+
+    final_model_label = {
+        "manual": "Manual Final / human-override",
+        "arbiter": "Arbiter Final / resolved",
+        "average": "Average Final / merged",
+    }.get(result_source)
+
+    snapshot_model_labels = {
+        "primary": (
+            f"{binding.grader_model.display_name} / {binding.grader_model.model_name}"
+            if binding is not None
+            else None
+        ),
+        "review": (
+            f"{binding.reviewer_model.display_name} / {binding.reviewer_model.model_name}"
+            if binding is not None
+            else None
+        ),
+        "arbiter": (
+            f"{binding.arbiter_model.display_name} / {binding.arbiter_model.model_name}"
+            if binding is not None
+            else None
+        ),
+        "manual": "Manual Review / human-override",
+        "final": final_model_label,
+    }
+
+    return {
+        "task_id": str(task.id),
+        "status": task.status,
+        "question_type": task.question_type,
+        "final_score": final_snapshot.score_total if final_snapshot else None,
+        "result_source": result_source,
+        "context": {
+            "source_type": task.source_type,
+            "source_business_id": task.source_business_id,
+            "status": task.status,
+            "question_type": task.question_type,
+            "question_content": task.question_content,
+            "subject": task.subject,
+            "language": task.language,
+            "max_score": task.max_score,
+            "knowledge_tags": task.knowledge_tags,
+            "fatal_rule_enabled": task.fatal_rule_enabled,
+            "student_answer_raw": task.student_answer_raw,
+            "student_answer_structured": task.student_answer_structured,
+            "ocr_raw_text": task.ocr_raw_text,
+            "ocr_repaired_text": task.ocr_repaired_text,
+            "attachment_refs": task.attachment_refs,
+            "standard_answers": task.standard_answers,
+            "rubric_definition": task.rubric_definition,
+            "scoring_points": task.scoring_points,
+            "dimension_weights": task.dimension_weights,
+            "deduction_rules": task.deduction_rules,
+            "fatal_error_rules": task.fatal_error_rules,
+            "prompt_template_version": task.prompt_template_version,
+            "role_binding_version": task.role_binding_version,
+            "execution_evidence": {
+                "programming_language": task.programming_language,
+                "execution_env": task.execution_env,
+                "test_summary": task.test_summary,
+                "compile_result": task.compile_result,
+                "runtime_result": task.runtime_result,
+                "runtime_logs": task.runtime_logs,
+                "resource_limit_summary": task.resource_limit_summary,
+            },
+        },
+        "snapshots": [
+            {
+                "id": str(snapshot.id),
+                "snapshot_type": snapshot.snapshot_type,
+                "score_total": snapshot.score_total,
+                "model_label": snapshot_model_labels.get(snapshot.snapshot_type),
+                "provider_key": snapshot.provider_config.key if snapshot.provider_config else None,
+                "dimension_scores": snapshot.dimension_scores,
+                "deduction_reasons": snapshot.deduction_reasons,
+                "strengths": snapshot.strengths,
+                "improvement_suggestions": snapshot.improvement_suggestions,
+                "evidence_summary": snapshot.evidence_summary,
+                "risk_flags": snapshot.risk_flags,
+            }
+            for snapshot in snapshots
+        ],
+        "audit_events": [
+            {
+                "id": str(event.id),
+                "event_type": event.event_type,
+                "event_payload": event.event_payload,
+                "operator_type": event.operator_type,
+                "operator_id": event.operator_id,
+                "created_at": event.created_at.isoformat(),
+            }
+            for event in sorted(task.audit_events, key=lambda event: event.created_at)
+        ],
+    }
+
+
+def _build_grading_context(task: GradingTask) -> dict[str, Any]:
+    task_payload = {
+        "question_content": task.question_content,
+        "max_score": task.max_score,
+        "knowledge_tags": task.knowledge_tags,
+        "student_answer_raw": task.student_answer_raw,
+        "rubric_definition": task.rubric_definition,
+        "scoring_points": task.scoring_points,
+        "dimension_weights": task.dimension_weights,
+        "test_summary": task.test_summary,
+        "compile_result": task.compile_result,
+        "runtime_result": task.runtime_result,
+        "runtime_logs": task.runtime_logs,
+    }
+    if task.question_type == "code":
+        return build_code_rubric_context(task_payload)
+    if task.question_type == "short_answer":
+        return build_short_answer_rubric_context(task_payload)
+    raise ValueError(f"unsupported grading question type: {task.question_type}")
+
+
+def _build_prompt_pair(task: GradingTask, context: dict[str, Any], role_name: str) -> tuple[str, str]:
+    system_prompt = (
+        f"You are the {role_name} for a grading engine. "
+        f"Score the answer on the exact 0 to max_score scale, where max_score is {task.max_score}. "
+        "Do not use a 0-1 scale unless max_score is 1. "
+        "Return only structured JSON with score_total, dimension_scores, deduction_reasons, "
+        "strengths, improvement_suggestions, evidence_summary, and risk_flags."
+    )
+    user_prompt = (
+        f"Task ID: {task.id}\n"
+        f"Question type: {task.question_type}\n"
+        f"Question: {task.question_content}\n"
+        f"Max score: {task.max_score}\n"
+        f"Knowledge tags: {json.dumps(task.knowledge_tags, ensure_ascii=False)}\n"
+        f"Context: {json.dumps(context, ensure_ascii=False, sort_keys=True)}"
+    )
+    return system_prompt, user_prompt
+
+
+def _build_arbiter_prompt_pair(
+    task: GradingTask,
+    context: dict[str, Any],
+    primary_result: GradingProviderResult,
+    review_result: GradingProviderResult,
+    reason: str | None,
+) -> tuple[str, str]:
+    system_prompt = (
+        "You are the final arbiter for a grading engine. "
+        "Review the shared grading context plus the conflicting primary and review results. "
+        f"Score the answer on the exact 0 to max_score scale, where max_score is {task.max_score}. "
+        "Do not use a 0-1 scale unless max_score is 1. "
+        "Return only structured JSON with score_total, dimension_scores, deduction_reasons, "
+        "strengths, improvement_suggestions, evidence_summary, and risk_flags."
+    )
+    user_prompt = (
+        f"Task ID: {task.id}\n"
+        f"Question type: {task.question_type}\n"
+        f"Question: {task.question_content}\n"
+        f"Max score: {task.max_score}\n"
+        f"Knowledge tags: {json.dumps(task.knowledge_tags, ensure_ascii=False)}\n"
+        f"Arbitration reason: {reason}\n"
+        f"Context: {json.dumps(context, ensure_ascii=False, sort_keys=True)}\n"
+        "Primary result: "
+        f"{json.dumps(primary_result.raw_content, ensure_ascii=False, sort_keys=True)}\n"
+        "Review result: "
+        f"{json.dumps(review_result.raw_content, ensure_ascii=False, sort_keys=True)}"
+    )
+    return system_prompt, user_prompt
+
+
+def _build_follow_up_prompt_pair(
+    task: GradingTask,
+    context: dict[str, Any],
+    role_name: str,
+    teacher_prompt: str,
+    previous_result: dict[str, Any] | None = None,
+) -> tuple[str, str]:
+    system_prompt = (
+        f"You are the {role_name} for a grading engine follow-up review. "
+        f"Score the answer on the exact 0 to max_score scale, where max_score is {task.max_score}. "
+        "Do not use a 0-1 scale unless max_score is 1. "
+        "Return only structured JSON with score_total, dimension_scores, deduction_reasons, "
+        "strengths, improvement_suggestions, evidence_summary, and risk_flags."
+    )
+    lines = [
+        f"Task ID: {task.id}",
+        f"Question type: {task.question_type}",
+        f"Question: {task.question_content}",
+        f"Max score: {task.max_score}",
+        f"Knowledge tags: {json.dumps(task.knowledge_tags, ensure_ascii=False)}",
+        f"Teacher follow-up prompt: {teacher_prompt}",
+        f"Context: {json.dumps(context, ensure_ascii=False, sort_keys=True)}",
+    ]
+    if previous_result is not None:
+        lines.append(
+            f"Previous result: {json.dumps(previous_result, ensure_ascii=False, sort_keys=True)}"
+        )
+    return system_prompt, "\n".join(lines)
+
+
+def _result_to_comment_payload(
+    result: GradingProviderResult,
+    stage: str,
+    model_label: str,
+) -> dict[str, Any]:
+    return {
+        "stage": stage,
+        "model_label": model_label,
+        "score": result.score_total,
+        "summary": "；".join(result.deduction_reasons) or "已完成补充评价",
+        "process": [
+            *result.deduction_reasons,
+            *result.strengths,
+            *result.improvement_suggestions,
+            *format_evidence_summary(result.evidence_summary),
+        ],
+        "risk_flags": result.risk_flags,
+    }
+
+
+def _result_to_snapshot(
+    task: GradingTask,
+    result: GradingProviderResult,
+    snapshot_type: str,
+) -> GradingResultSnapshot:
+    return GradingResultSnapshot(
+        task_id=task.id,
+        snapshot_type=snapshot_type,
+        score_total=result.score_total,
+        dimension_scores=result.dimension_scores,
+        deduction_reasons=result.deduction_reasons,
+        strengths=result.strengths,
+        improvement_suggestions=result.improvement_suggestions,
+        evidence_summary=result.evidence_summary,
+        risk_flags=result.risk_flags,
+        prompt_template_version=task.prompt_template_version,
+        role_binding_version=task.role_binding_version,
+        created_by="system",
+    )
+
+
+def _build_final_snapshot(
+    task: GradingTask,
+    primary_result: GradingProviderResult,
+    review_result: GradingProviderResult,
+) -> GradingResultSnapshot:
+    dimension_keys = set(primary_result.dimension_scores) | set(review_result.dimension_scores)
+    averaged_dimensions = {
+        key: round(
+            (
+                float(primary_result.dimension_scores.get(key, 0))
+                + float(review_result.dimension_scores.get(key, 0))
+            )
+            / 2,
+            2,
+        )
+        for key in dimension_keys
+    }
+    merged_risk_flags = list(dict.fromkeys(primary_result.risk_flags + review_result.risk_flags))
+
+    return GradingResultSnapshot(
+        task_id=task.id,
+        snapshot_type="final",
+        score_total=round((primary_result.score_total + review_result.score_total) / 2, 2),
+        dimension_scores=averaged_dimensions,
+        deduction_reasons=list(dict.fromkeys(primary_result.deduction_reasons + review_result.deduction_reasons)),
+        strengths=list(dict.fromkeys(primary_result.strengths + review_result.strengths)),
+        improvement_suggestions=list(
+            dict.fromkeys(primary_result.improvement_suggestions + review_result.improvement_suggestions)
+        ),
+        evidence_summary={
+            "primary": primary_result.evidence_summary,
+            "review": review_result.evidence_summary,
+        },
+        risk_flags=merged_risk_flags,
+        prompt_template_version=task.prompt_template_version,
+        role_binding_version=task.role_binding_version,
+        created_by="system",
+    )
+
+
+def _build_final_snapshot_from_arbiter(
+    task: GradingTask,
+    arbiter_result: GradingProviderResult,
+) -> GradingResultSnapshot:
+    return GradingResultSnapshot(
+        task_id=task.id,
+        snapshot_type="final",
+        score_total=arbiter_result.score_total,
+        dimension_scores=arbiter_result.dimension_scores,
+        deduction_reasons=arbiter_result.deduction_reasons,
+        strengths=arbiter_result.strengths,
+        improvement_suggestions=arbiter_result.improvement_suggestions,
+        evidence_summary=arbiter_result.evidence_summary,
+        risk_flags=arbiter_result.risk_flags,
+        prompt_template_version=task.prompt_template_version,
+        role_binding_version=task.role_binding_version,
+        created_by="system",
+    )
+
+
+async def run_grading_task(
+    db: AsyncSession,
+    task_id: str,
+    primary_provider: GradingProvider,
+    review_provider: GradingProvider,
+    arbiter_provider: GradingProvider | None = None,
+) -> dict[str, Any]:
+    """Execute the primary/review grading flow for a task."""
+
+    task = await db.get(GradingTask, uuid.UUID(task_id))
+    if task is None:
+        raise ValueError("grading task not found")
+
+    context = _build_grading_context(task)
+
+    primary_system_prompt, primary_user_prompt = _build_prompt_pair(task, context, "primary grader")
+    primary_result = await primary_provider.score(primary_system_prompt, primary_user_prompt)
+    primary_snapshot = _result_to_snapshot(task, primary_result, "primary")
+    db.add(primary_snapshot)
+    await db.flush()
+    task.latest_primary_snapshot = primary_snapshot
+    db.add(
+        GradingAuditEvent(
+            task_id=task.id,
+            event_type="grading.primary_completed",
+            event_payload={"snapshot_id": str(primary_snapshot.id)},
+            operator_type="system",
+            operator_id="system",
+        )
+    )
+
+    review_system_prompt, review_user_prompt = _build_prompt_pair(task, context, "review grader")
+    review_result = await review_provider.score(review_system_prompt, review_user_prompt)
+    review_snapshot = _result_to_snapshot(task, review_result, "review")
+    db.add(review_snapshot)
+    await db.flush()
+    task.latest_review_snapshot = review_snapshot
+    db.add(
+        GradingAuditEvent(
+            task_id=task.id,
+            event_type="grading.review_completed",
+            event_payload={"snapshot_id": str(review_snapshot.id)},
+            operator_type="system",
+            operator_id="system",
+        )
+    )
+
+    triggered, reason = evaluate_arbitration(
+        {
+            "score_total": primary_result.score_total,
+            "dimension_scores": primary_result.dimension_scores,
+            "risk_flags": primary_result.risk_flags,
+        },
+        {
+            "score_total": review_result.score_total,
+            "dimension_scores": review_result.dimension_scores,
+            "risk_flags": review_result.risk_flags,
+        },
+    )
+
+    if triggered:
+        db.add(
+            GradingAuditEvent(
+                task_id=task.id,
+                event_type="grading.arbitration_required",
+                event_payload={"reason": reason},
+                operator_type="system",
+                operator_id="system",
+            )
+        )
+        if arbiter_provider is None:
+            task.status = "arbitration_required"
+            await db.flush()
+            return {"status": task.status, "arbitration_required": True, "reason": reason}
+
+        arbiter_system_prompt, arbiter_user_prompt = _build_arbiter_prompt_pair(
+            task,
+            context,
+            primary_result,
+            review_result,
+            reason,
+        )
+        arbiter_result = await arbiter_provider.score(arbiter_system_prompt, arbiter_user_prompt)
+        arbiter_snapshot = _result_to_snapshot(task, arbiter_result, "arbiter")
+        db.add(arbiter_snapshot)
+        await db.flush()
+        task.latest_arbitration_snapshot = arbiter_snapshot
+        db.add(
+            GradingAuditEvent(
+                task_id=task.id,
+                event_type="grading.arbiter_completed",
+                event_payload={"snapshot_id": str(arbiter_snapshot.id), "reason": reason},
+                operator_type="system",
+                operator_id="system",
+            )
+        )
+
+        final_snapshot = _build_final_snapshot_from_arbiter(task, arbiter_result)
+        db.add(final_snapshot)
+        await db.flush()
+        task.latest_final_snapshot = final_snapshot
+        task.status = "completed"
+        db.add(
+            GradingAuditEvent(
+                task_id=task.id,
+                event_type="grading.finalized",
+                event_payload={"snapshot_id": str(final_snapshot.id), "source": "arbiter"},
+                operator_type="system",
+                operator_id="system",
+            )
+        )
+        await db.flush()
+        return {"status": task.status, "arbitration_required": False, "reason": reason}
+
+    final_snapshot = _build_final_snapshot(task, primary_result, review_result)
+    db.add(final_snapshot)
+    await db.flush()
+    task.latest_final_snapshot = final_snapshot
+    task.status = "completed"
+    db.add(
+        GradingAuditEvent(
+            task_id=task.id,
+            event_type="grading.finalized",
+            event_payload={"snapshot_id": str(final_snapshot.id)},
+            operator_type="system",
+            operator_id="system",
+        )
+    )
+    await db.flush()
+    return {"status": task.status, "arbitration_required": False, "reason": None}

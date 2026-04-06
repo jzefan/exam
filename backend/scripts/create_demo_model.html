@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>创建Demo职位模型</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            max-width: 600px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .status {
+            background: #f5f5f5;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+            color: #333;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .status-item {
+            margin-bottom: 8px;
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+        }
+
+        .status-icon {
+            display: inline-block;
+            width: 20px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            width: 100%;
+            font-weight: 600;
+        }
+
+        button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .info {
+            background: #e3f2fd;
+            border: 1px solid #90caf9;
+            border-radius: 4px;
+            padding: 15px;
+            margin-top: 20px;
+            font-size: 13px;
+            color: #1565c0;
+            line-height: 1.6;
+        }
+
+        .success-message {
+            background: #e8f5e9;
+            border: 1px solid #81c784;
+            border-radius: 4px;
+            padding: 15px;
+            margin-top: 20px;
+            color: #2e7d32;
+            display: none;
+        }
+
+        .success-message.show {
+            display: block;
+        }
+
+        a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 4px;
+            height: 4px;
+            background: #667eea;
+            border-radius: 50%;
+            animation: loading 1.4s infinite;
+        }
+
+        .loading:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .loading:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes loading {
+            0%, 60%, 100% {
+                opacity: 0.5;
+            }
+            30% {
+                opacity: 1;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 创建Demo职位模型</h1>
+        <p class="subtitle">为您的职位能力模型系统生成一个完整的示例模型</p>
+
+        <div class="status" id="status"></div>
+
+        <button id="createBtn" onclick="createDemoModel()">创建Demo模型</button>
+
+        <div class="success-message" id="successMessage">
+            ✅ <strong>成功！</strong> 已为您创建了一个完整的Demo职位模型。<br><br>
+            <a href="http://localhost:4000/job-models" target="_blank">点击查看职位模型列表 →</a>
+        </div>
+
+        <div class="info">
+            <strong>包含内容：</strong>
+            <ul style="margin-left: 20px; margin-top: 10px;">
+                <li>项目：2024年技术部门招聘</li>
+                <li>岗位：高级后端工程师 (L4)</li>
+                <li>能力维度：4个 (技术能力、工程实践、软实力等)</li>
+                <li>核心技能：9个 (后端开发、数据库设计、系统架构等)</li>
+                <li>知识点：25个 (具体技术、工具、方法等)</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000/api';
+        const APP_URL = 'http://localhost:4000';
+
+        function log(message, type = 'info') {
+            const statusEl = document.getElementById('status');
+            const icon = type === 'info' ? 'ℹ️' : type === 'success' ? '✅' : type === 'error' ? '❌' : '⏳';
+            const item = document.createElement('div');
+            item.className = 'status-item';
+            item.innerHTML = `<span class="status-icon">${icon}</span><span>${message}</span>`;
+            statusEl.appendChild(item);
+            statusEl.scrollTop = statusEl.scrollHeight;
+        }
+
+        function getToken() {
+            // Get token from localStorage (same as the app uses)
+            const token = localStorage.getItem('access_token');
+            if (!token) {
+                throw new Error('未找到access_token。请先在 http://localhost:4000 登录。');
+            }
+            return token;
+        }
+
+        async function createDemoModel() {
+            const btn = document.getElementById('createBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span><span class="loading"></span><span class="loading"></span>';
+
+            try {
+                const token = getToken();
+                log('已获取认证令牌', 'success');
+
+                // Step 1: Create project
+                log('正在创建项目...', 'processing');
+                const projectResponse = await fetch(`${API_BASE}/job-models/projects`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        name: '2024年技术部门招聘',
+                        industry: 'Technology',
+                        description: '2024年度技术部门在线招聘平台的岗位能力模型建设'
+                    })
+                });
+
+                if (!projectResponse.ok) {
+                    const error = await projectResponse.json();
+                    throw new Error(`创建项目失败: ${error.detail || projectResponse.statusText}`);
+                }
+
+                const project = await projectResponse.json();
+                const projectId = project.id;
+                log(`✓ 已创建项目: ${project.name} (ID: ${projectId})`, 'success');
+
+                // Step 2: Create model with all nested structure
+                log('正在创建岗位模型...', 'processing');
+
+                const modelData = {
+                    job_role: '高级后端工程师',
+                    version_note: '初始版本',
+                    source_type: 'manual',
+                    dimensions: [
+                        {
+                            name: '技术能力',
+                            description: '后端工程师需要掌握的核心技术能力',
+                            sort_order: 0,
+                            skills: [
+                                {
+                                    name: '后端开发基础',
+                                    level: 'L4',
+                                    description: '掌握多种编程语言和开发框架',
+                                    sort_order: 0,
+                                    knowledge_points: [
+                                        { name: 'Python高级编程', difficulty: '高级', teaching_suggestion: '学习Python异步编程、元编程等高级特性', sort_order: 0 },
+                                        { name: 'Go并发编程', difficulty: '高级', teaching_suggestion: '深入学习Goroutine、Channel、并发控制', sort_order: 1 },
+                                        { name: 'Java企业应用', difficulty: '中级', teaching_suggestion: '学习Spring Boot框架、依赖注入、事务管理', sort_order: 2 },
+                                        { name: 'API设计与RESTful', difficulty: '高级', teaching_suggestion: '掌握RESTful设计原则、API版本管理、错误处理', sort_order: 3 }
+                                    ]
+                                },
+                                {
+                                    name: '数据库设计',
+                                    level: 'L4',
+                                    description: '深入理解数据库设计和优化',
+                                    sort_order: 1,
+                                    knowledge_points: [
+                                        { name: '关系型数据库设计', difficulty: '高级', teaching_suggestion: '学习范式化、反范式化、索引优化', sort_order: 0 },
+                                        { name: 'SQL优化与性能调优', difficulty: '高级', teaching_suggestion: '掌握查询优化、执行计划分析、慢查询处理', sort_order: 1 },
+                                        { name: 'NoSQL数据库选型', difficulty: '中级', teaching_suggestion: '学习MongoDB、Redis、Cassandra等各类数据库', sort_order: 2 },
+                                        { name: '分布式数据库', difficulty: '高级', teaching_suggestion: '理解一致性模型、分片策略、多主复制', sort_order: 3 }
+                                    ]
+                                },
+                                {
+                                    name: '系统架构设计',
+                                    level: 'L4',
+                                    description: '设计和构建可扩展、高可用的系统',
+                                    sort_order: 2,
+                                    knowledge_points: [
+                                        { name: '微服务架构', difficulty: '高级', teaching_suggestion: '学习服务拆分、通信协议、服务治理', sort_order: 0 },
+                                        { name: '高并发系统设计', difficulty: '高级', teaching_suggestion: '掌握限流、缓存、异步处理、负载均衡', sort_order: 1 },
+                                        { name: '容错与可用性', difficulty: '高级', teaching_suggestion: '学习熔断、降级、重试、超时控制', sort_order: 2 },
+                                        { name: '系统监控与日志', difficulty: '中级', teaching_suggestion: '掌握Prometheus、ELK、分布式追踪等工具', sort_order: 3 }
+                                    ]
+                                }
+                            ]
+                        },
+                        {
+                            name: '工程实践',
+                            description: '软件工程方面的专业能力',
+                            sort_order: 1,
+                            skills: [
+                                {
+                                    name: '代码质量',
+                                    level: 'L4',
+                                    description: '编写高质量、易维护的代码',
+                                    sort_order: 0,
+                                    knowledge_points: [
+                                        { name: '代码审查与规范', difficulty: '中级', teaching_suggestion: '学习编码规范、设计模式、代码审查流程', sort_order: 0 },
+                                        { name: '单元测试与集成测试', difficulty: '高级', teaching_suggestion: '掌握TDD、Mock、测试覆盖率分析', sort_order: 1 },
+                                        { name: '代码重构与优化', difficulty: '中级', teaching_suggestion: '学习重构技巧、性能优化、代码小步快走', sort_order: 2 }
+                                    ]
+                                },
+                                {
+                                    name: '开发工具与流程',
+                                    level: 'L3',
+                                    description: '掌握现代开发工具和工作流',
+                                    sort_order: 1,
+                                    knowledge_points: [
+                                        { name: '版本控制与Git', difficulty: '中级', teaching_suggestion: '学习Git工作流、分支策略、冲突解决', sort_order: 0 },
+                                        { name: 'CI/CD流程', difficulty: '中级', teaching_suggestion: '掌握Jenkins/GitLab CI、自动化测试、灰度发布', sort_order: 1 },
+                                        { name: '容器化与K8s', difficulty: '中级', teaching_suggestion: '学习Docker、Kubernetes基本概念和操作', sort_order: 2 }
+                                    ]
+                                },
+                                {
+                                    name: '文档与沟通',
+                                    level: 'L3',
+                                    description: '清晰地传达技术方案和设计',
+                                    sort_order: 2,
+                                    knowledge_points: [
+                                        { name: '技术文档编写', difficulty: '中级', teaching_suggestion: '学习API文档、架构文档、设计文档的编写', sort_order: 0 },
+                                        { name: '设计评审与方案讨论', difficulty: '中级', teaching_suggestion: '学习技术演讲、方案论证、充分听取意见', sort_order: 1 }
+                                    ]
+                                }
+                            ]
+                        },
+                        {
+                            name: '软实力',
+                            description: '综合素质和职业发展能力',
+                            sort_order: 2,
+                            skills: [
+                                {
+                                    name: '团队协作',
+                                    level: 'L3',
+                                    description: '与团队高效协作，为他人赋能',
+                                    sort_order: 0,
+                                    knowledge_points: [
+                                        { name: '跨部门沟通', difficulty: '中级', teaching_suggestion: '学习有效沟通技巧、同理心、冲突解决', sort_order: 0 },
+                                        { name: '知识分享与培养', difficulty: '中级', teaching_suggestion: '学习mentor新人、组织分享会、文档沉淀', sort_order: 1 }
+                                    ]
+                                },
+                                {
+                                    name: '责任心与主动性',
+                                    level: 'L4',
+                                    description: '主动承担责任，追求卓越',
+                                    sort_order: 1,
+                                    knowledge_points: [
+                                        { name: '技术债管理', difficulty: '中级', teaching_suggestion: '识别技术债、评估影响、推进解决', sort_order: 0 },
+                                        { name: '问题解决能力', difficulty: '高级', teaching_suggestion: '学习问题定位、根因分析、制定解决方案', sort_order: 1 },
+                                        { name: '持续学习与自我提升', difficulty: '中级', teaching_suggestion: '制定学习计划、跟踪技术动态、参加社区', sort_order: 2 }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                };
+
+                const modelResponse = await fetch(
+                    `${API_BASE}/job-models/projects/${projectId}/models`,
+                    {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`
+                        },
+                        body: JSON.stringify(modelData)
+                    }
+                );
+
+                if (!modelResponse.ok) {
+                    const error = await modelResponse.json();
+                    throw new Error(`创建模型失败: ${error.detail || modelResponse.statusText}`);
+                }
+
+                const model = await modelResponse.json();
+                log(`✓ 已创建岗位模型: ${model.job_role} (ID: ${model.id})`, 'success');
+
+                // Count and show stats
+                let totalSkills = 0;
+                let totalKps = 0;
+                for (const dim of model.dimensions) {
+                    for (const skill of dim.skills) {
+                        totalSkills++;
+                        totalKps += skill.knowledge_points.length;
+                    }
+                }
+
+                log(`✓ 能力维度: ${model.dimensions.length} 个`, 'success');
+                log(`✓ 核心技能: ${totalSkills} 个`, 'success');
+                log(`✓ 知识点: ${totalKps} 个`, 'success');
+                log('Demo模型创建完成！', 'success');
+
+                // Show success message
+                document.getElementById('successMessage').classList.add('show');
+
+            } catch (error) {
+                log(`错误: ${error.message}`, 'error');
+                console.error('详细错误:', error);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '创建Demo模型';
+            }
+        }
+
+        // Check if already logged in
+        window.addEventListener('load', () => {
+            const token = localStorage.getItem('access_token');
+            if (!token) {
+                log('⚠️  未检测到登录令牌，请先登录应用再运行此脚本', 'error');
+                document.getElementById('createBtn').disabled = true;
+            }
+        });
+    </script>
+</body>
+</html>
