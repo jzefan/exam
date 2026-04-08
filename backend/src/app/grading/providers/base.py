@@ -275,7 +275,7 @@ class BaseGradingProvider(ABC):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=90.0) as client:
             response = await client.post(
                 f"{self.base_url}/chat/completions",
                 json=payload,

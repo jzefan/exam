@@ -281,7 +281,7 @@ export function EditorPage() {
       })
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
       toast({ title: "已发布", description: "新版本已创建" })
-      navigate(`/job-models`)
+      navigate(`/gwmx/job-models`)
     } catch (err) {
       toast({
         title: "发布失败",
@@ -326,7 +326,7 @@ export function EditorPage() {
           <p className="text-base font-semibold text-foreground">模型未找到</p>
           <p className="text-sm text-muted-foreground mt-2">请返回列表重新选择</p>
           <button
-            onClick={() => navigate("/job-models")}
+            onClick={() => navigate("/gwmx/job-models")}
             className="mt-4 text-primary hover:underline text-sm"
           >
             返回列表

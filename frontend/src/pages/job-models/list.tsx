@@ -2,6 +2,7 @@ import { useState, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { normalizeJobModelsResponse } from "./list-utils"
 import {
   Plus,
   Edit2,
@@ -41,7 +42,7 @@ export function JobModelList() {
     })
       .then((res) => res.json())
       .then((data) => {
-        setModels(data)
+        setModels(normalizeJobModelsResponse(data))
         setIsLoading(false)
       })
       .catch((err) => {
@@ -68,7 +69,7 @@ export function JobModelList() {
         )
       default:
         return (
-          <Badge variant="outline" className="text-muted-foreground gap-1">
+          <Badge variant="outline" className="text-foreground gap-1">
             <Edit2 className="h-3 w-3" />
             手动创建
           </Badge>
@@ -123,7 +124,7 @@ export function JobModelList() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-8 w-full max-w-lg">
               <button
-                onClick={() => navigate("/job-models/upload-ai")}
+                onClick={() => navigate("/gwmx/job-models/upload-ai")}
                 className="group relative rounded-[var(--radius)] border border-border bg-card p-5 text-left transition-all hover:border-primary/40 hover:shadow-md"
               >
                 <div className="h-10 w-10 rounded-[var(--radius)] bg-primary/10 flex items-center justify-center mb-3">
@@ -137,7 +138,7 @@ export function JobModelList() {
               </button>
 
               <button
-                onClick={() => navigate("/job-models/create")}
+                onClick={() => navigate("/gwmx/job-models/create")}
                 className="group relative rounded-[var(--radius)] border border-border bg-card p-5 text-left transition-all hover:border-primary/40 hover:shadow-md"
               >
                 <div className="h-10 w-10 rounded-[var(--radius)] bg-primary/10 flex items-center justify-center mb-3">
@@ -169,12 +170,12 @@ export function JobModelList() {
         <div className="flex gap-2">
           <Button
             variant="outline"
-            onClick={() => navigate("/job-models/upload-ai")}
+            onClick={() => navigate("/gwmx/job-models/upload-ai")}
           >
             <Wand2 className="mr-2 h-4 w-4" />
             AI 生成
           </Button>
-          <Button onClick={() => navigate("/job-models/create")}>
+          <Button onClick={() => navigate("/gwmx/job-models/create")}>
             <Plus className="mr-2 h-4 w-4" />
             新建模型
           </Button>
@@ -189,7 +190,7 @@ export function JobModelList() {
             className="group rounded-[var(--radius)] border border-border bg-card p-4 transition-all hover:border-primary/30 hover:bg-primary/[0.02] hover:shadow-md cursor-pointer"
             onClick={() =>
               navigate(
-                `/job-models/${model.project_id}/models/${model.id}/editor`
+                `/gwmx/job-models/${model.project_id}/models/${model.id}/editor`
               )
             }
           >
@@ -207,9 +208,9 @@ export function JobModelList() {
                   </h3>
                   {getSourceBadge(model.source_type)}
                 </div>
-                <div className="flex items-center gap-4 mt-1.5 text-xs text-muted-foreground">
+                <div className="flex items-center gap-4 mt-1.5 text-xs text-foreground/70">
                   <span className="flex items-center gap-1">
-                    <GitBranch className="h-3 w-3" />
+                    <GitBranch className="h-3.5 w-3.5" />
                     v{model.version}
                   </span>
                   {model.version_note && (
@@ -218,7 +219,7 @@ export function JobModelList() {
                     </span>
                   )}
                   <span className="flex items-center gap-1">
-                    <Clock className="h-3 w-3" />
+                    <Clock className="h-3.5 w-3.5" />
                     {formatDistanceToNow(new Date(model.updated_at), {
                       addSuffix: true,
                       locale: zhCN,
@@ -235,7 +236,7 @@ export function JobModelList() {
                 onClick={(e) => {
                   e.stopPropagation()
                   navigate(
-                    `/job-models/${model.project_id}/models/${model.id}/editor`
+                    `/gwmx/job-models/${model.project_id}/models/${model.id}/editor`
                   )
                 }}
               >

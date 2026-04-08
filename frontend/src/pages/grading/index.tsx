@@ -61,9 +61,7 @@ function candidatePriority(status: string) {
 
 function formatQuestionSummary(question: GradingQuestionDetailResponse | null) {
   if (!question) return "";
-  return question.question_content.length > 96
-    ? `${question.question_content.slice(0, 96)}...`
-    : question.question_content;
+  return question.question_content;
 }
 
 function buildQuestionRef(examId: string | null, questionId: string) {
@@ -352,19 +350,8 @@ export function GradingCenterPage() {
       method: "POST",
       body: JSON.stringify({ prompt: promptDraft.trim() }),
     })
-      .then((payload) => {
-        setModelFollowUps(
-          Object.fromEntries(
-            payload.models.map((item) => [
-              item.stage,
-              {
-                prompt: payload.prompt,
-                summary: item.summary,
-                process: item.process,
-              },
-            ]),
-          ),
-        );
+      .then(async () => {
+        await loadCandidate(selectedTaskId);
         setPromptDraft("");
       })
       .catch((error: unknown) => {
@@ -379,6 +366,17 @@ export function GradingCenterPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden px-0 py-4">
+      {actionLoading === "run" && (
+        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-background/60 backdrop-blur-[2px]">
+          <div className="flex flex-col items-center gap-4 rounded-2xl bg-background px-8 py-10 shadow-2xl border border-border/50">
+            <RefreshCw className="h-10 w-10 animate-spin text-primary" />
+            <div className="space-y-1 text-center">
+              <p className="text-lg font-semibold">正在重新评分</p>
+              <p className="text-sm text-muted-foreground">AI 正在根据您的 Prompt 重新审阅答案，请稍候...</p>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="flex flex-col gap-4 border-b border-border/70 px-4 pb-4 xl:flex-row xl:items-start xl:justify-between">
         <div className="space-y-3">
           <div>
@@ -534,11 +532,11 @@ export function GradingCenterPage() {
             <div className="grid min-h-0 flex-1 gap-0 overflow-hidden xl:grid-cols-[300px_minmax(0,1fr)]">
               <section className="flex min-h-0 flex-col border-r border-border/70 pr-6 dark:border-white/15">
                 <div className="pt-6 pb-4">
-                  <h3 className="text-sm text-muted-foreground">考生列表</h3>
+                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">考生列表</h3>
                 </div>
-                <div className="grid min-h-0 flex-1 grid-cols-2 gap-2 overflow-y-auto pr-3 pb-6">
+                <div className="flex min-h-0 flex-1 flex-wrap align-top content-start gap-2 overflow-y-auto pr-3 pb-6">
                   {loadingQuestion ? (
-                    <div className="col-span-2 rounded-lg border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
+                    <div className="w-full rounded-lg border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
                       正在加载考生...
                     </div>
                   ) : (
@@ -550,27 +548,39 @@ export function GradingCenterPage() {
                               type="button"
                               onClick={() => setSelectedTaskId(candidate.task_id)}
                               className={cn(
-                                "flex h-12 w-full items-center gap-3 rounded-lg border border-transparent px-3 py-2 text-left transition-all hover:border-border hover:bg-accent/30",
+                                "group flex h-8 items-center gap-2 rounded-full border px-3 text-left transition-all duration-200",
                                 candidate.task_id === activeCandidate?.task_id
-                                  ? "border-primary/40 bg-accent/40"
-                                  : "bg-background",
+                                  ? "border-primary bg-primary text-primary-foreground shadow-lg shadow-primary/20"
+                                  : "border-transparent bg-muted/40 text-muted-foreground hover:border-border/50 hover:bg-muted hover:text-foreground",
                               )}
                             >
-                              <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", statusDotClass(candidate.status))} />
-                              <p className="truncate whitespace-nowrap text-sm text-foreground/90">
+                              <span
+                                className={cn(
+                                  "h-1.5 w-1.5 shrink-0 rounded-full transition-transform group-hover:scale-125",
+                                  statusDotClass(candidate.status),
+                                  candidate.task_id === activeCandidate?.task_id && "ring-2 ring-primary-foreground/30",
+                                )}
+                              />
+                              <span
+                                className={cn(
+                                  "whitespace-nowrap text-xs font-semibold tracking-tight",
+                                  candidate.task_id === activeCandidate?.task_id ? "text-primary-foreground" : "text-foreground/70",
+                                )}
+                              >
                                 {candidate.candidate_name}
-                              </p>
+                              </span>
                             </button>
                           </TooltipTrigger>
                           <TooltipContent
-                            side="right"
-                            className="max-w-[220px] rounded-lg border border-border bg-background px-3 py-2 text-foreground shadow-lg"
+                            side="top"
+                            className="rounded-lg border border-border bg-background px-3 py-2 text-foreground shadow-lg"
                           >
-                            <div className="space-y-1 text-sm">
-                              <p className="font-medium">{candidate.candidate_name}</p>
-                              <p className="text-muted-foreground">{candidate.candidate_code}</p>
+                            <div className="space-y-1 text-xs">
+                              <p className="font-semibold">{candidate.candidate_name}</p>
+                              <p className="text-muted-foreground">编号：{candidate.candidate_code}</p>
+                              <p className="text-muted-foreground">状态：{candidate.status}</p>
                               <p className="text-muted-foreground">
-                                当前分数 {candidate.score == null ? "-" : candidate.score}
+                                分数：{candidate.score == null ? "未完成" : candidate.score}
                               </p>
                             </div>
                           </TooltipContent>
@@ -582,50 +592,54 @@ export function GradingCenterPage() {
               </section>
 
               <section className="flex min-h-0 flex-col pl-6">
-                <div className="border-b border-border/70 pt-6 pb-4">
-                  <div className="text-sm text-foreground/90">
-                    <span>名称 {candidateDetail?.candidate_name ?? "-"}</span>
-                    <span className="px-2 text-muted-foreground">|</span>
-                    <span>编号 {candidateDetail?.candidate_code ?? "-"}</span>
-                    <span className="px-2 text-muted-foreground">|</span>
-                    <span>
-                      建议分数：<span className="font-semibold">{candidateDetail?.suggested_score ?? "-"}</span>
-                    </span>
+                <div className="border-b border-border/70 pt-6 pb-5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3 text-sm text-foreground/80">
+                      <span className="font-medium">{candidateDetail?.candidate_name ?? "-"}</span>
+                      <span className="text-muted-foreground/40">/</span>
+                      <span className="text-muted-foreground">{candidateDetail?.candidate_code ?? "-"}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">建议分数</span>
+                      <span className="flex h-8 min-w-[40px] items-center justify-center rounded-lg bg-primary px-3 text-sm font-bold text-primary-foreground shadow-sm">
+                        {candidateDetail?.suggested_score ?? "-"}
+                      </span>
+                    </div>
                   </div>
                   {reportError ? (
-                    <p className="mt-3 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                    <p className="mt-4 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
                       {reportError}
                     </p>
                   ) : null}
                 </div>
 
-                <div className="min-h-0 flex-1 overflow-y-auto py-4">
-                  <div className="space-y-5">
-                    <section className="space-y-2 border-b border-border/70 pb-4">
-                      <p className="text-xs font-medium text-muted-foreground">考生答案</p>
-                      <div className="rounded-lg bg-muted/20 px-4 py-3">
+                <div className="min-h-0 flex-1 overflow-y-auto py-6">
+                  <div className="space-y-8">
+                    <section className="space-y-3">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">考生答案</p>
+                      <div className="rounded-xl border border-border/50 bg-muted/10 p-4 shadow-sm">
                         {candidateDetail?.question_type === "code" ? (
                           <CodeBlock code={candidateDetail.student_answer_raw} language="python" />
                         ) : (
-                          <p className="text-sm leading-7 text-foreground/90">
+                          <p className="text-sm leading-relaxed text-foreground/90">
                             {candidateDetail?.student_answer_raw ?? (loadingCandidate ? "正在加载答案..." : "-")}
                           </p>
                         )}
                       </div>
                     </section>
 
-                    <section className="space-y-3">
-                      <p className="text-xs font-medium text-muted-foreground">LLM 评论输出</p>
+                    <section className="space-y-4">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">LLM 评分意见</p>
                       {loadingCandidate ? (
-                        <div className="rounded-lg border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
-                          正在加载评分详情...
+                        <div className="rounded-lg border border-dashed border-border px-4 py-8 text-sm text-muted-foreground">
+                          正在分析评分详情...
                         </div>
                       ) : (
                         candidateDetail?.models.map((model) => {
                           const modelLogoSrc = getModelLogoSrc(model.model_label);
                           const stage = model.stage as ExpandedStage;
                           return (
-                            <div key={model.stage} className="border-b border-border/70 pb-3 last:border-b-0">
+                            <div key={model.stage} className="rounded-xl border border-border/40 bg-background/50 p-1 transition-colors hover:border-border/70">
                               <button
                                 type="button"
                                 onClick={() =>
@@ -634,61 +648,76 @@ export function GradingCenterPage() {
                                     [stage]: !current[stage],
                                   }))
                                 }
-                                className="flex w-full items-center justify-between gap-4 py-2 text-left"
+                                className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left"
                               >
                                 <div className="flex items-center gap-4">
-                                  {modelLogoSrc ? (
-                                    <span className="inline-flex h-7 w-7 items-center justify-center overflow-hidden rounded-full bg-background">
+                                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-background shadow-sm ring-1 ring-border/50">
+                                    {modelLogoSrc ? (
                                       <img
                                         src={modelLogoSrc}
-                                        alt={`${toShortModelName(model.model_label)} logo`}
-                                        className="h-6 w-6 object-contain"
+                                        alt={model.model_label}
+                                        className="h-5 w-5 object-contain"
                                       />
-                                    </span>
-                                  ) : null}
-                                  <p className="text-base font-medium">{toShortModelName(model.model_label)}</p>
-                                  <p className="text-sm text-muted-foreground">{model.score}</p>
+                                    ) : (
+                                      <RefreshCw className="h-4 w-4 text-muted-foreground" />
+                                    )}
+                                  </div>
+                                  <div>
+                                    <p className="text-sm font-semibold">{toShortModelName(model.model_label)}</p>
+                                    <p className="text-[10px] text-muted-foreground uppercase">{stage}</p>
+                                  </div>
                                 </div>
-                                {expandedStages[stage] ? (
-                                  <ChevronUp className="h-4 w-4 text-muted-foreground" />
-                                ) : (
-                                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                                )}
+                                <div className="flex items-center gap-4">
+                                  <span className="text-sm font-bold text-primary">{model.score}</span>
+                                  {expandedStages[stage] ? (
+                                    <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                                  ) : (
+                                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                                  )}
+                                </div>
                               </button>
                               {expandedStages[stage] ? (
-                                <div className="space-y-3 pt-2">
-                                  <p className="text-sm leading-7 text-muted-foreground">{model.summary}</p>
-                                  {model.process.length > 0 ? (
-                                    <ul className="space-y-2 text-sm">
-                                      {model.process.map((item) => (
-                                        <li key={item} className="flex gap-2">
-                                          <ChevronRight className="mt-0.5 h-4 w-4 text-muted-foreground" />
-                                          <span>{item}</span>
-                                        </li>
-                                      ))}
-                                    </ul>
-                                  ) : null}
-                                  {modelFollowUps[stage] ? (
-                                    <div className="space-y-2 rounded-lg bg-muted/30 p-3">
-                                      <p className="text-xs font-medium text-muted-foreground">
-                                        Prompt 补充复评
-                                      </p>
-                                      <p className="text-sm text-muted-foreground">
-                                        {modelFollowUps[stage].prompt}
-                                      </p>
-                                      <p className="text-sm leading-7 text-muted-foreground">
-                                        {modelFollowUps[stage].summary}
-                                      </p>
-                                      <ul className="space-y-2 text-sm">
-                                        {modelFollowUps[stage].process.map((item) => (
+                                <div className="space-y-5 px-4 pt-1 pb-5 pl-16">
+                                  <div className="space-y-4">
+                                    <p className="text-sm leading-relaxed text-foreground/80 italic">"{model.summary}"</p>
+                                    {model.process.length > 0 ? (
+                                      <ul className="space-y-2.5 text-xs text-muted-foreground">
+                                        {model.process.map((item) => (
                                           <li key={item} className="flex gap-2">
-                                            <ChevronRight className="mt-0.5 h-4 w-4 text-muted-foreground" />
+                                            <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-50" />
                                             <span>{item}</span>
                                           </li>
                                         ))}
                                       </ul>
-                                    </div>
-                                  ) : null}
+                                    ) : null}
+                                  </div>
+
+                                  {(candidateDetail?.follow_ups ?? []).map((fu) => {
+                                    const fuModel = fu.models.find((m) => m.stage === stage);
+                                    if (!fuModel) return null;
+                                    return (
+                                      <div key={fu.prompt} className="relative space-y-3 rounded-lg border-l-2 border-primary/30 bg-primary/5 p-4 transition-all">
+                                        <div className="flex items-center gap-2">
+                                          <div className="h-1.5 w-1.5 rounded-full bg-primary" />
+                                          <p className="text-[10px] font-bold uppercase tracking-tight text-primary/70">
+                                            追加复评指令
+                                          </p>
+                                        </div>
+                                        <p className="text-sm font-medium text-foreground/90">"{fu.prompt}"</p>
+                                        <div className="space-y-3 border-t border-primary/10 pt-3">
+                                          <p className="text-sm leading-relaxed text-foreground/80">{fuModel.summary}</p>
+                                          <ul className="space-y-2 text-xs text-muted-foreground">
+                                            {fuModel.process.map((item) => (
+                                              <li key={item} className="flex gap-2">
+                                                <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-40" />
+                                                <span>{item}</span>
+                                              </li>
+                                            ))}
+                                          </ul>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
                                 </div>
                               ) : null}
                             </div>

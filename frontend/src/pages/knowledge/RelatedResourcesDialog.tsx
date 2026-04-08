@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
 import {
   Select,
   SelectContent,
@@ -20,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import type { IQuestion } from "@/types";
 import type {
   AIRecommendationModel,
   IDirection,
@@ -41,6 +43,8 @@ interface Props {
   major: IMajor | null;
   direction: IDirection | null;
   materials: LearningMaterial[];
+  relatedQuestions: IQuestion[];
+  relatedQuestionsLoading: boolean;
   onAddMaterial: (payload: Omit<LearningMaterial, "id">) => void;
   onDeleteMaterial: (materialId: string) => void;
   onClose: () => void;
@@ -57,6 +61,8 @@ export function RelatedResourcesDialog({
   major,
   direction,
   materials,
+  relatedQuestions,
+  relatedQuestionsLoading,
   onAddMaterial,
   onDeleteMaterial,
   onClose,
@@ -158,21 +164,47 @@ export function RelatedResourcesDialog({
           </TabsList>
 
           <TabsContent value="questions">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <BookOpen className="h-4 w-4" />
-                  关联题目
-                </CardTitle>
-                <CardDescription>当前知识点已关联 {node?.question_count ?? 0} 道题目。</CardDescription>
-              </CardHeader>
-              <CardContent className="flex items-center justify-between gap-3">
-                <p className="text-sm text-muted-foreground">你可以继续为这个知识点关联更多题目。</p>
-                <Button disabled={!node} onClick={() => node && onViewQuestions(node.id)} type="button">
-                  前往题目列表
-                </Button>
-              </CardContent>
-            </Card>
+            <div className="space-y-3">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <BookOpen className="h-4 w-4" />
+                    关联题目
+                  </CardTitle>
+                  <CardDescription>当前知识点已关联 {node?.question_count ?? 0} 道题目。</CardDescription>
+                </CardHeader>
+                <CardContent className="flex items-center justify-between gap-3">
+                  <p className="text-sm text-muted-foreground">你可以继续为这个知识点关联更多题目。</p>
+                  <Button disabled={!node} onClick={() => node && onViewQuestions(node.id)} type="button">
+                    前往题目列表
+                  </Button>
+                </CardContent>
+              </Card>
+
+              {relatedQuestionsLoading ? (
+                <Card>
+                  <CardContent className="py-8 text-center text-sm text-muted-foreground">
+                    <LoaderCircle className="mx-auto mb-2 h-5 w-5 animate-spin" />
+                    正在加载关联题目...
+                  </CardContent>
+                </Card>
+              ) : relatedQuestions.length === 0 ? (
+                <Card>
+                  <CardContent className="py-8 text-center text-sm text-muted-foreground">
+                    当前知识点还没有可展示的题目。
+                  </CardContent>
+                </Card>
+              ) : (
+                relatedQuestions.map((question) => (
+                  <QuestionPreviewCard
+                    key={question.id}
+                    question={question}
+                    mode="compact"
+                    defaultExpanded
+                  />
+                ))
+              )}
+            </div>
           </TabsContent>
 
           <TabsContent value="materials">

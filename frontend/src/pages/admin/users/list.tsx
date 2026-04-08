@@ -7,7 +7,6 @@ import {
   Search,
   ChevronLeft,
   ChevronRight,
-  MoreHorizontal,
   UserPlus,
   Users,
 } from "lucide-react";
@@ -27,12 +26,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { useState } from "react";
 import {
   AlertDialog,
@@ -178,10 +171,10 @@ export function UserList() {
                           </Avatar>
                           <div className="min-w-0">
                             <p className="text-sm font-medium text-foreground truncate">
-                              {user.full_name}
+                              {user.username}
                             </p>
                             <p className="text-xs text-muted-foreground truncate">
-                              @{user.username}
+                              {user.full_name}
                             </p>
                           </div>
                         </div>
@@ -205,26 +198,26 @@ export function UserList() {
                         </div>
                       </TableCell>
                       <TableCell className="text-right pr-4">
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8">
-                              <MoreHorizontal size={16} className="text-muted-foreground" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => edit("users", user.id)}>
-                              <Pencil size={14} />
-                              编辑
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => handleDelete(user.id)}
-                              className="text-red-600 focus:text-red-600 dark:text-red-400 dark:focus:text-red-400"
-                            >
-                              <Trash2 size={14} />
-                              删除
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                        <div className="flex items-center justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => edit("users", user.id)}
+                            title="编辑"
+                          >
+                            <Pencil size={14} className="text-muted-foreground" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => handleDelete(user.id)}
+                            title="删除"
+                          >
+                            <Trash2 size={14} className="text-destructive" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );

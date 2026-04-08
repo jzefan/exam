@@ -6,7 +6,6 @@ import cpp from "highlight.js/lib/languages/cpp";
 import c from "highlight.js/lib/languages/c";
 import go from "highlight.js/lib/languages/go";
 import sql from "highlight.js/lib/languages/sql";
-import "highlight.js/styles/github-dark.css";
 
 hljs.registerLanguage("python", python);
 hljs.registerLanguage("javascript", javascript);
@@ -22,19 +21,20 @@ interface CodeBlockProps {
 }
 
 export function CodeBlock({ code, language }: CodeBlockProps) {
+  const trimmedCode = code.trim();
   const highlighted = (() => {
     try {
       if (language && hljs.getLanguage(language)) {
-        return hljs.highlight(code, { language }).value;
+        return hljs.highlight(trimmedCode, { language }).value;
       }
-      return hljs.highlightAuto(code).value;
+      return hljs.highlightAuto(trimmedCode).value;
     } catch {
-      return escapeHtml(code);
+      return escapeHtml(trimmedCode);
     }
   })();
 
   return (
-    <pre className="rounded-md overflow-x-auto text-xs">
+    <pre className="rounded-md text-xs">
       <code
         className={language ? `hljs language-${language}` : "hljs"}
         dangerouslySetInnerHTML={{ __html: highlighted }}

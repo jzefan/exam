@@ -90,3 +90,42 @@ class UserOrganizationResponse(BaseModel):
     is_primary: bool
     organization: OrganizationResponse | None = None
     role: RoleResponse | None = None
+
+
+class StudentCreate(BaseModel):
+    full_name: str
+    phone: str
+    student_id: str | None = None
+    class_id: uuid.UUID | None = None
+
+
+class ClassCreate(BaseModel):
+    name: str = Field(max_length=100)
+
+
+class ClassResponse(BaseModel):
+    model_config = {"from_attributes": True}
+    id: uuid.UUID
+    name: str
+    org_id: uuid.UUID
+    created_at: datetime
+
+
+class StudentRead(BaseModel):
+    id: uuid.UUID
+    full_name: str
+    phone: str | None
+    student_id: str | None
+    class_id: uuid.UUID | None
+    class_name: str | None = None
+    username: str
+    is_active: bool
+
+    class Config:
+        from_attributes = True
+
+
+class BatchImportResponse(BaseModel):
+    success_count: int
+    failed_count: int
+    errors: list[str] = []

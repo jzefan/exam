@@ -5,7 +5,10 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.models import User
+from app.auth.security import hash_password
 from app.rbac.models import (
+    Class,
     Organization,
     Permission,
     Role,
@@ -13,11 +16,97 @@ from app.rbac.models import (
     UserOrganization,
 )
 from app.rbac.schemas import (
+    ClassCreate,
     OrganizationCreate,
     OrganizationUpdate,
     RoleCreate,
     RoleUpdate,
+    StudentCreate,
 )
+
+
+# --- Class Management ---
+
+
+async def create_class(db: AsyncSession, org_id: uuid.UUID, data: ClassCreate) -> Class:
+    cls = Class(name=data.name, org_id=org_id)
+    db.add(cls)
+    await db.flush()
+    await db.refresh(cls)
+    return cls
+
+
+async def list_org_classes(db: AsyncSession, org_id: uuid.UUID) -> list[Class]:
+    result = await db.execute(
+        select(Class).where(Class.org_id == org_id, Class.deleted_at.is_(None)).order_by(Class.name)
+    )
+    return list(result.scalars().all())
+
+
+async def delete_class(db: AsyncSession, class_id: uuid.UUID) -> None:
+    cls = await db.get(Class, class_id)
+    if cls:
+        await db.delete(cls)
+        await db.flush()
+
+
+# --- Student Management ---
+
+
+async def list_org_students(db: AsyncSession, org_id: uuid.UUID, class_id: uuid.UUID | None = None) -> list[User]:
+    query = (
+        select(User)
+        .join(UserOrganization, UserOrganization.user_id == User.id)
+        .join(Role, Role.id == UserOrganization.role_id)
+        .where(
+            UserOrganization.org_id == org_id,
+            Role.name == "student",
+            User.deleted_at.is_(None)
+        )
+    )
+    if class_id:
+        query = query.where(User.class_id == class_id)
+        
+    result = await db.execute(query.order_by(User.full_name))
+    return list(result.scalars().all())
+
+
+async def create_student(db: AsyncSession, org_id: uuid.UUID, data: StudentCreate) -> User:
+    # Use phone as username and password
+    password_hash = hash_password(data.phone)
+    
+    user = User(
+        username=data.phone,
+        email=f"{data.phone}@example.com", # Default email
+        phone=data.phone,
+        student_id=data.student_id,
+        class_id=data.class_id,
+        full_name=data.full_name,
+        password_hash=password_hash,
+        is_active=True
+    )
+    db.add(user)
+    await db.flush()
+    await db.refresh(user)
+
+    # Find student role
+    result = await db.execute(
+        select(Role).where(Role.name == "student", Role.org_id.is_(None))
+    )
+    role = result.scalar_one_or_none()
+    if not role:
+        raise ValueError("Student role not found in system")
+
+    # Assign to org
+    db.add(UserOrganization(
+        user_id=user.id,
+        org_id=org_id,
+        role_id=role.id,
+        is_primary=True
+    ))
+    await db.flush()
+    
+    return user
 
 
 # --- Organization CRUD ---

@@ -1,12 +1,40 @@
-import { useId, useState, useRef } from "react";
-import { useList } from "@refinedev/core";
+import { useId, useState, useRef, useEffect } from "react";
 import { Search, Check, Upload, Plus, X, Users } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { apiRequest } from "@/pages/grading/api";
+import {
+  buildStudentBatchImportItems,
+  parseStudentImportFile,
+  type StudentImportClassOption,
+} from "@/components/students/student-import-utils";
 import type { IUser } from "@/types";
 
 type Mode = "select" | "import" | "manual";
+type ManualFeedbackTone = "default" | "destructive" | "success";
+
+type ClassItem = StudentImportClassOption;
+
+interface StudentRecord extends IUser {
+  phone?: string | null;
+  student_id?: string | null;
+  class_id?: string | null;
+  class_name?: string | null;
+}
+
+interface ImportResult {
+  success_count: number;
+  failed_count: number;
+  errors: string[];
+}
 
 export function StudentSelector({
   selectedIds,
@@ -17,25 +45,76 @@ export function StudentSelector({
 }) {
   const [mode, setMode] = useState<Mode>("select");
   const [search, setSearch] = useState("");
-  const [manualUsername, setManualUsername] = useState("");
+  const [users, setUsers] = useState<StudentRecord[]>([]);
+  const [classes, setClasses] = useState<ClassItem[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isManualSubmitting, setIsManualSubmitting] = useState(false);
+  const [manualForm, setManualForm] = useState({
+    full_name: "",
+    phone: "",
+    student_id: "",
+    class_name: "",
+  });
   const [importResults, setImportResults] = useState<string[]>([]);
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [manualFeedback, setManualFeedback] = useState<string | null>(null);
+  const [manualFeedbackTone, setManualFeedbackTone] = useState<ManualFeedbackTone>("default");
   const fileRef = useRef<HTMLInputElement>(null);
   const modeId = useId();
 
   const selectedSet = new Set(selectedIds);
 
-  // Load students
-  const { query: userQuery } = useList<IUser>({
-    resource: "users",
-    pagination: { currentPage: 1, pageSize: 200 },
-    filters: [{ field: "role", operator: "eq", value: "student" }],
-  });
-  const users = userQuery.data?.data ?? [];
-  const isLoading = userQuery.isLoading;
+  const resetManualForm = () => {
+    setManualForm({
+      full_name: "",
+      phone: "",
+      student_id: "",
+      class_name: "",
+    });
+  };
+
+  const setManualMessage = (message: string, tone: ManualFeedbackTone) => {
+    setManualFeedback(message);
+    setManualFeedbackTone(tone);
+  };
+
+  const normalizeValue = (value: string) => value.trim().toLowerCase();
+  const loadStudentData = async (applyState = true) => {
+    const [studentData, classData] = await Promise.all([
+      apiRequest<StudentRecord[]>("/rbac/students"),
+      apiRequest<ClassItem[]>("/rbac/students/classes"),
+    ]);
+
+    if (applyState) {
+      setUsers(studentData);
+      setClasses(classData);
+    }
+
+    return { studentData, classData };
+  };
+
+  // Load students/classes via specialized endpoints
+  useEffect(() => {
+    let isMounted = true;
+    setIsLoading(true);
+
+    void loadStudentData(isMounted)
+      .catch((err) => {
+        console.error("StudentSelector fetch error:", err);
+      })
+      .finally(() => {
+        if (isMounted) setIsLoading(false);
+      });
+
+    return () => { isMounted = false; };
+  }, []);
+
   const normalizedSearch = search.trim().toLowerCase();
+  const hasMatchingClass = classes.some(
+    (item) => normalizeValue(item.name) === normalizeValue(manualForm.class_name),
+  );
+  const manualClassSelectValue = hasMatchingClass ? manualForm.class_name : "__custom__";
   const visibleUsers = normalizedSearch
     ? users.filter((u) => {
         const username = u.username.toLowerCase();
@@ -60,69 +139,132 @@ export function StudentSelector({
     setImportMessage(null);
 
     try {
-      const XLSX = await import("xlsx");
-      const data = await file.arrayBuffer();
-      const wb = XLSX.read(data);
-      if (wb.SheetNames.length === 0) {
-        throw new Error("文件中没有可读取的工作表。");
-      }
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json<Record<string, string>>(ws);
-      if (rows.length === 0) {
-        throw new Error("文件内容为空，请检查模板。");
-      }
-
-      // Match by username or full_name
-      const matched: string[] = [];
-      const unmatched: string[] = [];
-      for (const row of rows) {
-        const name = row["姓名"] || row["username"] || row["name"] || "";
-        const user = users.find(
-          (u) => u.username === name || u.full_name === name,
-        );
-        if (user) {
-          matched.push(user.id);
-        } else if (name) {
-          unmatched.push(name);
+      const rows = await parseStudentImportFile(file);
+      const existingStudents = new Map(
+        users.map((user) => [normalizeValue(user.phone ?? user.username), user]),
+      );
+      const existingSelectedIds: string[] = [];
+      const rowsToCreate = rows.filter((row) => {
+        const existing = existingStudents.get(normalizeValue(row.phone));
+        if (!existing) {
+          return true;
         }
+
+        existingSelectedIds.push(existing.id);
+        return false;
+      });
+
+      let response: ImportResult = {
+        success_count: 0,
+        failed_count: 0,
+        errors: [],
+      };
+
+      if (rowsToCreate.length > 0) {
+        const { students: payload } = await buildStudentBatchImportItems({
+          rows: rowsToCreate,
+          classes,
+          createClass: (name) =>
+            apiRequest<ClassItem>("/rbac/students/classes", {
+              method: "POST",
+              body: JSON.stringify({ name }),
+            }),
+        });
+
+        response = await apiRequest<ImportResult>("/rbac/students/batch", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
       }
 
-      // Merge with existing selection
-      const merged = [...new Set([...selectedIds, ...matched])];
+      const { studentData } = await loadStudentData();
+      const createdPhones = new Set(rowsToCreate.map((row) => normalizeValue(row.phone)));
+      const createdIds = studentData
+        .filter((user) => createdPhones.has(normalizeValue(user.phone ?? user.username)))
+        .map((user) => user.id);
+      const matchedIds = [...existingSelectedIds, ...createdIds];
+      const merged = [...new Set([...selectedIds, ...matchedIds])];
       onChange(merged);
-      setImportResults(unmatched);
+      setImportResults(response.errors);
       setImportMessage(
-        matched.length > 0
-          ? `已匹配 ${matched.length} 名学生${unmatched.length > 0 ? `，另有 ${unmatched.length} 名未匹配。` : "。"}`
-          : "没有匹配到任何系统学生。",
+        `已处理 ${rows.length} 条记录，已选中现有学生 ${existingSelectedIds.length} 人，新导入并选中 ${createdIds.length} 人。${
+          response.failed_count > 0 ? ` 另有 ${response.failed_count} 条导入失败。` : ""
+        }`,
       );
     } catch (error) {
       setImportResults([]);
       setImportError(
         error instanceof Error
           ? error.message
-          : "文件解析失败，请上传包含“姓名”或“username”列的 Excel 文件。",
+          : "文件解析失败，请上传包含“姓名”和“手机号”列的 Excel 文件。",
       );
     }
     // Reset file input
     if (fileRef.current) fileRef.current.value = "";
   };
 
-  const handleManualAdd = () => {
-    const username = manualUsername.trim();
-    if (!username) return;
-    const user = users.find(
-      (u) => u.username === username || u.full_name === username,
-    );
-    if (!user) {
-      setManualFeedback("未找到对应学生，请检查用户名或姓名是否正确。");
-    } else if (selectedSet.has(user.id)) {
-      setManualFeedback("该学生已经在已选列表中。");
-    } else {
-      onChange([...selectedIds, user.id]);
-      setManualFeedback(`已添加学生：${user.full_name || user.username}。`);
+  const handleManualAdd = async () => {
+    const fullName = manualForm.full_name.trim();
+    const phone = manualForm.phone.trim();
+    const studentId = manualForm.student_id.trim();
+    const className = manualForm.class_name.trim();
+
+    if (!fullName || !phone || !className) {
+      setManualMessage("请填写姓名、手机号和班级。", "destructive");
+      return;
     }
-    setManualUsername("");
+
+    const existingUser = users.find(
+      (u) => normalizeValue(u.phone ?? "") === normalizeValue(phone) || normalizeValue(u.username) === normalizeValue(phone),
+    );
+    if (existingUser) {
+      if (selectedSet.has(existingUser.id)) {
+        setManualMessage("该学生已经在已选列表中。", "default");
+      } else {
+        onChange([...selectedIds, existingUser.id]);
+        setManualMessage(`系统中已存在该学生，已加入当前考试：${existingUser.full_name || existingUser.username}。`, "success");
+      }
+      resetManualForm();
+      return;
+    }
+
+    setIsManualSubmitting(true);
+    setManualFeedback(null);
+    try {
+      let classId =
+        classes.find((item) => normalizeValue(item.name) === normalizeValue(className))?.id ?? null;
+
+      if (!classId) {
+        const createdClass = await apiRequest<ClassItem>("/rbac/students/classes", {
+          method: "POST",
+          body: JSON.stringify({ name: className }),
+        });
+        classId = createdClass.id;
+        setClasses((prev) => [...prev, createdClass]);
+      }
+
+      const createdStudent = await apiRequest<StudentRecord>("/rbac/students", {
+        method: "POST",
+        body: JSON.stringify({
+          full_name: fullName,
+          phone,
+          student_id: studentId || null,
+          class_id: classId,
+        }),
+      });
+
+      setUsers((prev) => [...prev, createdStudent]);
+      onChange([...selectedIds, createdStudent.id]);
+      setManualMessage(`已新建并添加学生：${createdStudent.full_name || fullName}。`, "success");
+      resetManualForm();
+    } catch (error) {
+      setManualMessage(
+        error instanceof Error ? error.message : "手动添加失败，请稍后重试。",
+        "destructive",
+      );
+    } finally {
+      setIsManualSubmitting(false);
+    }
   };
 
   const modeButtons: { key: Mode; label: string; icon: React.ReactNode }[] = [
@@ -133,15 +275,47 @@ export function StudentSelector({
 
   return (
     <div className="space-y-4">
-      {/* Summary */}
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          已选 <span className="font-semibold text-foreground">{selectedIds.length}</span> 名考生
-        </p>
-        {selectedIds.length > 0 && (
-          <Button variant="ghost" size="sm" onClick={() => onChange([])}>
-            清空选择
-          </Button>
+      <div className="space-y-2 rounded-lg border border-border bg-muted/30 px-3 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-sm text-muted-foreground">
+            已选 <span className="font-semibold text-foreground">{selectedIds.length}</span> 名考生
+          </p>
+          {selectedIds.length > 0 ? (
+            <Button type="button" variant="ghost" size="sm" onClick={() => onChange([])}>
+              清空选择
+            </Button>
+          ) : null}
+        </div>
+
+        {selectedIds.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {selectedIds.slice(0, 20).map((id) => {
+              const user = users.find((u) => u.id === id);
+              return (
+                <span
+                  key={id}
+                  className="inline-flex items-center gap-1 rounded-md bg-background px-2 py-1 text-xs text-foreground shadow-sm"
+                >
+                  {user?.full_name ?? user?.username ?? id.slice(0, 8)}
+                  <button
+                    type="button"
+                    aria-label={`移除考生 ${user?.full_name ?? user?.username ?? id.slice(0, 8)}`}
+                    className="text-muted-foreground transition-colors hover:text-foreground"
+                    onClick={() => toggle(id)}
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              );
+            })}
+            {selectedIds.length > 20 ? (
+              <span className="py-1 text-xs text-muted-foreground">
+                ...还有 {selectedIds.length - 20} 人
+              </span>
+            ) : null}
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">还没有选择考生，可以从列表、Excel 或手动添加。</p>
         )}
       </div>
 
@@ -190,7 +364,7 @@ export function StudentSelector({
               className="h-9 pl-8 text-sm"
             />
           </div>
-          <div className="border rounded-lg divide-y max-h-[300px] overflow-y-auto">
+          <div className="max-h-[360px] overflow-y-auto rounded-lg border p-2">
             {isLoading ? (
               <div className="p-8 text-center text-sm text-muted-foreground">加载中...</div>
             ) : visibleUsers.length === 0 ? (
@@ -199,34 +373,37 @@ export function StudentSelector({
                 {normalizedSearch ? "没有匹配的学生" : "暂无学生"}
               </div>
             ) : (
-              visibleUsers.map((u) => {
-                const isSelected = selectedSet.has(u.id);
-                return (
-                  <button
-                    key={u.id}
-                    type="button"
-                    aria-pressed={isSelected}
-                    className={`w-full flex items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-muted/50 ${
-                      isSelected ? "bg-primary/5" : ""
-                    }`}
-                    onClick={() => toggle(u.id)}
-                  >
-                    <div
-                      className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${
-                        isSelected
-                          ? "bg-primary border-primary text-primary-foreground"
-                          : "border-input"
-                      }`}
+              <div data-student-grid="true" className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
+                {visibleUsers.map((u) => {
+                  const isSelected = selectedSet.has(u.id);
+                  return (
+                    <button
+                      key={u.id}
+                      type="button"
+                      aria-pressed={isSelected}
+                      aria-label={u.full_name || u.username}
+                      className={`flex min-w-0 items-center gap-3 rounded-md border px-3 py-2 text-left transition-colors ${
+                        isSelected ? "border-primary/50" : "border-border"
+                      } hover:bg-muted/50`}
+                      onClick={() => toggle(u.id)}
                     >
-                      {isSelected && <Check size={12} />}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium">{u.full_name}</p>
-                      <p className="text-xs text-muted-foreground">{u.username}</p>
-                    </div>
-                  </button>
-                );
-              })
+                      <div
+                        className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors ${
+                          isSelected
+                            ? "bg-primary border-primary text-primary-foreground"
+                            : "border-input"
+                        }`}
+                      >
+                        {isSelected && <Check size={12} />}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">{u.full_name}</p>
+                        <p className="truncate text-xs text-muted-foreground">{u.username}</p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             )}
           </div>
         </div>
@@ -243,7 +420,7 @@ export function StudentSelector({
           <div className="border-2 border-dashed border-border rounded-lg p-6 text-center">
             <Upload size={24} className="mx-auto mb-2 text-muted-foreground" />
             <p className="text-sm text-muted-foreground mb-3">
-              上传 Excel 文件，包含"姓名"或"username"列
+              上传 Excel 文件，至少包含“姓名”和“手机号”列，可选“学号”和“班级”
             </p>
             <input
               ref={fileRef}
@@ -275,7 +452,7 @@ export function StudentSelector({
           {importResults.length > 0 && (
             <div className="rounded-lg bg-amber-50 dark:bg-amber-950 p-3 text-sm">
               <p className="font-medium text-amber-700 dark:text-amber-300 mb-1">
-                以下学生未匹配到系统用户：
+                以下记录导入失败：
               </p>
               <ul className="list-disc pl-5 text-amber-600 dark:text-amber-400 text-xs space-y-0.5">
                 {importResults.map((name, i) => (
@@ -295,76 +472,129 @@ export function StudentSelector({
           aria-labelledby={`${modeId}-manual-tab`}
           className="space-y-3"
         >
-          <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-end">
-            <div className="flex-1 space-y-1">
-              <Label className="text-xs" htmlFor={`${modeId}-manual-input`}>
-                用户名或姓名
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="space-y-1">
+              <Label className="text-xs" htmlFor={`${modeId}-manual-name`}>
+                姓名
               </Label>
               <Input
-                id={`${modeId}-manual-input`}
-                placeholder="输入用户名或姓名"
-                value={manualUsername}
-                onChange={(e) => setManualUsername(e.target.value)}
+                id={`${modeId}-manual-name`}
+                placeholder="输入学生姓名"
+                value={manualForm.full_name}
+                onChange={(e) => setManualForm((prev) => ({ ...prev, full_name: e.target.value }))}
+                className="h-9 text-sm"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs" htmlFor={`${modeId}-manual-phone`}>
+                手机号
+              </Label>
+              <Input
+                id={`${modeId}-manual-phone`}
+                placeholder="输入手机号"
+                value={manualForm.phone}
+                onChange={(e) => setManualForm((prev) => ({ ...prev, phone: e.target.value }))}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") handleManualAdd();
+                  if (e.key === "Enter") void handleManualAdd();
                 }}
                 className="h-9 text-sm"
               />
             </div>
+            <div className="space-y-1">
+              <Label className="text-xs" htmlFor={`${modeId}-manual-student-id`}>
+                学号（可选）
+              </Label>
+              <Input
+                id={`${modeId}-manual-student-id`}
+                placeholder="输入学号"
+                value={manualForm.student_id}
+                onChange={(e) => setManualForm((prev) => ({ ...prev, student_id: e.target.value }))}
+                className="h-9 text-sm"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">
+                班级
+              </Label>
+              <Select
+                value={manualClassSelectValue}
+                onValueChange={(value) => {
+                  if (value === "__custom__") {
+                    setManualForm((prev) => ({ ...prev, class_name: hasMatchingClass ? "" : prev.class_name }));
+                    return;
+                  }
+
+                  setManualForm((prev) => ({ ...prev, class_name: value }));
+                }}
+              >
+                <SelectTrigger className="h-9 text-sm">
+                  <SelectValue placeholder="选择班级" />
+                </SelectTrigger>
+                <SelectContent>
+                  {classes.map((item) => (
+                    <SelectItem key={item.id} value={item.name}>
+                      {item.name}
+                    </SelectItem>
+                  ))}
+                  <SelectItem value="__custom__">新建班级</SelectItem>
+                </SelectContent>
+              </Select>
+              {!hasMatchingClass && (
+                <Input
+                  id={`${modeId}-manual-class`}
+                  placeholder="输入新班级名称"
+                  value={manualForm.class_name}
+                  onChange={(e) => setManualForm((prev) => ({ ...prev, class_name: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleManualAdd();
+                  }}
+                  className="h-9 text-sm"
+                />
+              )}
+              <datalist id={`${modeId}-class-options`} className="hidden">
+                {classes.map((item) => (
+                  <option key={item.id} value={item.name} />
+                ))}
+              </datalist>
+            </div>
+          </div>
+          <div className="flex justify-end">
             <Button
               type="button"
               size="sm"
-              className="h-9 sm:min-w-20"
-              disabled={!manualUsername.trim()}
-              onClick={handleManualAdd}
+              className="h-9 w-fit"
+              disabled={
+                isManualSubmitting ||
+                !manualForm.full_name.trim() ||
+                !manualForm.phone.trim() ||
+                !manualForm.class_name.trim()
+              }
+              onClick={() => void handleManualAdd()}
             >
               <Plus size={14} className="mr-1" />
-              添加
+              {isManualSubmitting ? "添加中..." : "添加考生"}
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            输入学生的用户名或姓名，系统将自动匹配已有学生
+            手动输入姓名、手机号和班级后，系统会优先匹配已有学生；若不存在，则自动创建并加入当前考试。
           </p>
           {manualFeedback && (
-            <div className="rounded-lg border border-border bg-muted/60 p-3 text-sm text-foreground" role="status">
+            <div
+              className={`rounded-lg border p-3 text-sm ${
+                manualFeedbackTone === "destructive"
+                  ? "border-destructive/20 bg-destructive/10 text-destructive"
+                  : manualFeedbackTone === "success"
+                    ? "border-primary/15 bg-primary/5 text-foreground"
+                    : "border-border bg-muted/60 text-foreground"
+              }`}
+              role="status"
+            >
               {manualFeedback}
             </div>
           )}
         </div>
       )}
 
-      {/* Selected list preview */}
-      {selectedIds.length > 0 && (
-        <div className="space-y-1.5">
-          <p className="text-xs font-medium text-muted-foreground">已选考生</p>
-          <div className="flex flex-wrap gap-1.5">
-            {selectedIds.slice(0, 20).map((id) => {
-              const user = users.find((u) => u.id === id);
-              return (
-                <span
-                  key={id}
-                  className="inline-flex items-center gap-1 bg-muted rounded-md px-2 py-1 text-xs"
-                >
-                  {user?.full_name ?? user?.username ?? id.slice(0, 8)}
-                  <button
-                    type="button"
-                    aria-label={`移除考生 ${user?.full_name ?? user?.username ?? id.slice(0, 8)}`}
-                    className="text-muted-foreground hover:text-foreground"
-                    onClick={() => toggle(id)}
-                  >
-                    <X size={12} />
-                  </button>
-                </span>
-              );
-            })}
-            {selectedIds.length > 20 && (
-              <span className="text-xs text-muted-foreground py-1">
-                ...还有 {selectedIds.length - 20} 人
-              </span>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

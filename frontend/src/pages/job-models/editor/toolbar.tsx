@@ -67,7 +67,7 @@ export function Toolbar({ onSave, onPublish }: ToolbarProps) {
         <Button
           size="sm"
           variant="ghost"
-          onClick={() => navigate("/job-models")}
+          onClick={() => navigate("/gwmx/job-models")}
         >
           <ArrowLeft className="mr-1.5 h-4 w-4" />
           返回列表

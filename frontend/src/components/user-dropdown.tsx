@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { canManageStudents, canManageUsers } from "@/utils/role-routing";
 
 export function UserDropdown({
   name,
@@ -33,7 +34,7 @@ export function UserDropdown({
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" className="flex items-center gap-2 px-2 py-1.5 h-auto">
           <Avatar className="h-7 w-7">
-            <AvatarFallback className="bg-gradient-to-br from-primary to-primary/70 text-primary-foreground text-xs font-semibold">
+            <AvatarFallback className="bg-primary text-primary-foreground text-xs font-bold">
               {initials}
             </AvatarFallback>
           </Avatar>
@@ -45,13 +46,20 @@ export function UserDropdown({
       <DropdownMenuContent align="end" className="w-48">
         <DropdownMenuLabel>{name}</DropdownMenuLabel>
         <DropdownMenuSeparator />
-        {role === "admin" && (
+        {canManageStudents(role ?? "") && (
+          <DropdownMenuItem onClick={() => navigate("/students")}>
+            <Users size={14} className="mr-2" />
+            学生管理
+          </DropdownMenuItem>
+        )}
+        {canManageStudents(role ?? "") && <DropdownMenuSeparator />}
+        {canManageUsers(role ?? "") && (
           <DropdownMenuItem onClick={() => navigate("/users")}>
-            <Users size={14} />
+            <Users size={14} className="mr-2" />
             用户管理
           </DropdownMenuItem>
         )}
-        {role === "admin" && <DropdownMenuSeparator />}
+        {canManageUsers(role ?? "") && <DropdownMenuSeparator />}
         {role === "student" && (
           <DropdownMenuItem onClick={() => navigate("/wrong-answers")}>
             <NotebookPen size={14} />

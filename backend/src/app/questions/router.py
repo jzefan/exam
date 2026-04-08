@@ -13,7 +13,7 @@ from app.auth.models import User
 from app.common.pagination import PaginationParams, apply_filters, apply_pagination, get_total_count, parse_filters, parse_pagination
 from app.database import get_db
 from app.questions.models import Question
-from app.questions.models import question_tags
+from app.questions.models import question_knowledge_points, question_tags
 from app.questions.schemas import (
     KnowledgePointCreate,
     KnowledgePointResponse,
@@ -88,8 +88,15 @@ async def list_questions(
     if tag_id_raw:
         tag_ids = [v.strip() for v in tag_id_raw.split(",") if v.strip()]
 
+    knowledge_point_id_raw = filters.pop("knowledge_point_id", None)
+    knowledge_point_id = uuid.UUID(knowledge_point_id_raw) if knowledge_point_id_raw else None
+
     if tag_ids:
         base_query = base_query.join(question_tags).where(question_tags.c.tag_id.in_(tag_ids))
+    if knowledge_point_id:
+        base_query = base_query.join(question_knowledge_points).where(
+            question_knowledge_points.c.knowledge_point_id == knowledge_point_id
+        )
 
     filtered_query = apply_filters(base_query, filters, Question)
 
@@ -101,6 +108,10 @@ async def list_questions(
         full_query = full_query.where(Question.question_bank_id.is_(None))
     if tag_ids:
         full_query = full_query.join(question_tags).where(question_tags.c.tag_id.in_(tag_ids))
+    if knowledge_point_id:
+        full_query = full_query.join(question_knowledge_points).where(
+            question_knowledge_points.c.knowledge_point_id == knowledge_point_id
+        )
     full_query = apply_filters(full_query, filters, Question)
     full_query = apply_pagination(full_query, pagination, Question)
 

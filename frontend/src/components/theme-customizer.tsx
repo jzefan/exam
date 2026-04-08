@@ -470,8 +470,8 @@ export function ThemeCustomizer() {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground">
-          <Settings2 size={16} />
+        <Button variant="ghost" size="icon" className="h-8 w-8 text-foreground hover:text-primary">
+          <Settings2 size={18} />
           <span className="sr-only">主题设置</span>
         </Button>
       </PopoverTrigger>

@@ -81,6 +81,10 @@ export interface GradingCandidateDetailResponse {
   student_answer_raw: string;
   knowledge_tags: string[];
   models: GradingCandidateModelComment[];
+  follow_ups: Array<{
+    prompt: string;
+    models: GradingCandidateModelComment[];
+  }>;
 }
 
 export interface GradingPromptFollowUpModel {

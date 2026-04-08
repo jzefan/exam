@@ -172,26 +172,23 @@ export function JobModelUploadAI() {
 
   return (
     <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-base font-bold text-foreground tracking-tight">AI 生成职位模型</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            上传职位描述文档（PDF、Word、图片），AI 将自动分析并生成能力模型
+          </p>
+        </div>
+        <button
+          onClick={() => navigate("/gwmx/job-models")}
+          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors shrink-0"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          返回列表
+        </button>
+      </div>
       <Card>
-        <CardHeader>
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex-1">
-              <CardTitle>AI 生成职位模型</CardTitle>
-              <p className="text-sm text-gray-600 mt-2">
-                上传职位描述文档（PDF、Word、图片），AI 将自动分析并生成能力模型
-              </p>
-            </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => navigate("/job-models")}
-              className="flex-shrink-0"
-            >
-              <ArrowLeft className="mr-1 h-4 w-4" />
-              返回
-            </Button>
-          </div>
-        </CardHeader>
+        <CardHeader></CardHeader>
           <CardContent>
             {isSuccess ? (
               <div className="space-y-4 text-center py-8">
@@ -323,7 +320,7 @@ export function JobModelUploadAI() {
                   <Button
                     type="button"
                     variant="outline"
-                    onClick={() => navigate("/job-models")}
+                    onClick={() => navigate("/gwmx/job-models")}
                     disabled={isProcessing}
                   >
                     取消

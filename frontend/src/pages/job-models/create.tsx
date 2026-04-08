@@ -101,21 +101,18 @@ export function JobModelCreate() {
 
   return (
     <div>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-base font-bold text-foreground tracking-tight">创建职位能力模型</h1>
+        <button
+          onClick={() => navigate("/gwmx/job-models")}
+          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors shrink-0"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          返回列表
+        </button>
+      </div>
       <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-4">
-            <CardTitle>创建职位能力模型</CardTitle>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => navigate("/job-models")}
-              className="flex-shrink-0"
-            >
-              <ArrowLeft className="mr-1 h-4 w-4" />
-              返回
-            </Button>
-          </div>
-        </CardHeader>
+        <CardHeader></CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-6">
             {/* Project Section */}
@@ -218,7 +215,7 @@ export function JobModelCreate() {
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => navigate("/job-models")}
+                onClick={() => navigate("/gwmx/job-models")}
                 disabled={isLoading}
               >
                 取消

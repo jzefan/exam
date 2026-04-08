@@ -11,12 +11,15 @@ class UserCreate(BaseModel):
     full_name: str
     org_id: uuid.UUID | None = None
     role_name: str = "student"
+    role_names: list[str] | None = None
 
 
 class UserUpdate(BaseModel):
     email: EmailStr | None = None
     full_name: str | None = None
     is_active: bool | None = None
+    password: str | None = None
+    role_names: list[str] | None = None
 
 
 class UserOrgInfo(BaseModel):

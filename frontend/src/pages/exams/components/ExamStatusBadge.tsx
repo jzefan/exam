@@ -14,32 +14,32 @@ const config: Record<
 > = {
   draft: {
     label: "草稿",
-    icon: <FileEdit size={12} />,
+    icon: <FileEdit size={11} />,
     className:
-      "bg-zinc-100 text-zinc-600 border-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700",
+      "bg-zinc-100 text-zinc-600 border-transparent dark:bg-zinc-800 dark:text-zinc-400",
   },
   upcoming: {
     label: "未开始",
-    icon: <CalendarClock size={12} />,
+    icon: <CalendarClock size={11} />,
     className:
-      "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-800",
+      "bg-sky-50 text-sky-700 border-transparent dark:bg-sky-950 dark:text-sky-300",
   },
   ongoing: {
     label: "进行中",
-    icon: <PlayCircle size={12} />,
+    icon: <PlayCircle size={11} />,
     className:
-      "bg-green-50 text-green-700 border-green-200 dark:bg-green-950 dark:text-green-300 dark:border-green-800",
+      "bg-emerald-50 text-emerald-700 border-transparent dark:bg-emerald-950 dark:text-emerald-300",
   },
   completed: {
     label: "已结束",
-    icon: <CheckCircle2 size={12} />,
-    className: "bg-muted text-muted-foreground border-border",
+    icon: <CheckCircle2 size={11} />,
+    className: "bg-indigo-50 text-indigo-700 border-transparent dark:bg-indigo-950 dark:text-indigo-300",
   },
   closed: {
     label: "已关闭",
-    icon: <Lock size={12} />,
+    icon: <Lock size={11} />,
     className:
-      "bg-red-50 text-red-600 border-red-200 dark:bg-red-950 dark:text-red-400 dark:border-red-800",
+      "bg-rose-50 text-rose-600 border-transparent dark:bg-rose-950 dark:text-rose-400",
   },
 };
 
@@ -47,8 +47,8 @@ export function ExamStatusBadge({ status }: { status: ExamStatus }) {
   const c = config[status] ?? config.draft;
   return (
     <Badge
-      variant="outline"
-      className={`flex items-center gap-1 text-xs font-medium px-2 py-0.5 ${c.className}`}
+      variant="secondary"
+      className={`flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider rounded-full px-2.5 py-0.5 border shadow-none ${c.className}`}
     >
       {c.icon}
       {c.label}

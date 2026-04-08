@@ -24,6 +24,20 @@ class Organization(BaseModel):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
+class Class(BaseModel):
+    __tablename__ = "classes"
+
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+
+    organization: Mapped[Organization] = relationship("Organization", foreign_keys=[org_id])
+    students: Mapped[list["app.auth.models.User"]] = relationship(
+        "User", back_populates="student_class", lazy="selectin"
+    )
+
+
 class Permission(BaseModel):
     __tablename__ = "permissions"
 

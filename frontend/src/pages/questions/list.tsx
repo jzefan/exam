@@ -1,15 +1,15 @@
 import { useList, useCreate, useDelete, useInvalidate, useNavigation, useUpdate } from "@refinedev/core";
 import type { CrudFilter } from "@refinedev/core";
 import type { IQuestion, IQuestionBank, ITag, QuestionType } from "../../types";
-import { Search, BookOpen, Pencil, Trash2, Plus, ChevronDown, ChevronUp, Library, Check, PackageOpen, EllipsisVertical, Tag, GraduationCap, SlidersHorizontal, ChevronsDownUp, ChevronsUpDown, Link2, Save, ChevronRight } from "lucide-react";
+import { Search, BookOpen, Pencil, Trash2, Plus, ChevronDown, ChevronUp, Library, Check, PackageOpen, GraduationCap, SlidersHorizontal, ChevronsDownUp, ChevronsUpDown, Link2, Save, ChevronRight } from "lucide-react";
 import { useState, useCallback, useRef, useEffect, type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Dialog,
@@ -29,8 +29,6 @@ import {
   AlertDialogCancel,
   AlertDialogAction,
 } from "@/components/ui/alert-dialog";
-import { CodeBlock } from "@/components/ui/code-block";
-import { RichContent } from "@/components/ui/rich-content";
 import {
   Pagination,
   PaginationContent,
@@ -40,24 +38,10 @@ import {
   PaginationPrevious,
   PaginationEllipsis,
 } from "@/components/ui/pagination";
-
-const questionTypeChar: Record<QuestionType, string> = {
-  choice: "选",
-  true_false: "判",
-  fill_in: "填",
-  short_answer: "简",
-  essay: "论",
-  code: "编",
-};
-
-const questionTypeColorClass: Record<QuestionType, string> = {
-  choice: "bg-blue-500 text-white",
-  true_false: "bg-teal-500 text-white",
-  fill_in: "bg-purple-500 text-white",
-  short_answer: "bg-orange-500 text-white",
-  essay: "bg-pink-500 text-white",
-  code: "bg-emerald-500 text-white",
-};
+import {
+  QuestionPreviewCard,
+} from "@/components/questions/question-preview-card";
+import { getQuestionTitle } from "@/components/questions/question-preview-utils";
 
 const difficultyConfig: Record<
   number,
@@ -86,109 +70,6 @@ const FILTER_TYPE_ITEMS: { key: FilterTypeKey; label: string; backendType: Quest
 const ALL_FILTER_TYPE_KEYS = new Set<FilterTypeKey>(FILTER_TYPE_ITEMS.map((i) => i.key));
 const ALL_DIFFICULTIES = [1, 2, 3, 4, 5];
 const ALL_DIFFICULTY_SET = new Set(ALL_DIFFICULTIES);
-
-function renderTitle(question: IQuestion) {
-  if (question.content?.text) {
-    return String(question.content.text);
-  }
-  return question.title;
-}
-
-function getContentHtml(question: IQuestion): string | null {
-  if (question.content?.html) {
-    return String(question.content.html);
-  }
-  return null;
-}
-
-
-function isMultiChoice(question: IQuestion): boolean {
-  return question.type === "choice" && Array.isArray(question.answer?.correct);
-}
-
-function renderAnswer(question: IQuestion): string {
-  const answer = question.answer;
-  if (question.type === "choice") {
-    const correct = answer.correct;
-    if (Array.isArray(correct)) return [...correct].sort().join("、") || "-";
-    return String(correct ?? "-");
-  }
-  if (question.type === "true_false")
-    return answer.correct === true ? "正确" : "错误";
-  if (question.type === "fill_in") {
-    const correct = answer.correct;
-    if (Array.isArray(correct)) return correct.map((v, i) => `空${i + 1}: ${v}`).join("；") || "-";
-    return String(correct ?? "-");
-  }
-  if (question.type === "short_answer" || question.type === "essay") {
-    const pts = (answer.points ?? answer.key_points) as string[] | undefined;
-    if (Array.isArray(pts) && pts.length > 0) return pts.join("；");
-    return String(answer.correct ?? "-");
-  }
-  // code type handled separately via CodeBlock
-  return "";
-}
-
-/** Render text that may contain ```code``` fences with syntax highlighting */
-function RenderTextWithCode({ text, language }: { text: string; language?: string }) {
-  // Split on markdown code fences: ```lang\n...\n```
-  const parts = text.split(/(```[\s\S]*?```)/g);
-  if (parts.length === 1) return <>{text}</>;
-  return (
-    <>
-      {parts.map((part, i) => {
-        const fenceMatch = part.match(/^```(\w*)\n?([\s\S]*?)```$/);
-        if (fenceMatch) {
-          const lang = fenceMatch[1] || language || "python";
-          const code = fenceMatch[2].trim();
-          return <CodeBlock key={i} code={code} language={lang} />;
-        }
-        return part ? <span key={i}>{part}</span> : null;
-      })}
-    </>
-  );
-}
-
-/** Render code answer block for code-type questions */
-function renderCodeAnswer(question: IQuestion) {
-  if (question.type !== "code") return null;
-  const code = question.answer?.code as string | undefined;
-  const language = (question.content?.language as string) || "python";
-  return (
-    <div className="mt-1.5">
-      <p className="text-sm text-muted-foreground mb-1">参考代码：</p>
-      {code ? (
-        <CodeBlock code={code} language={language} />
-      ) : (
-        <p className="text-sm text-muted-foreground">无</p>
-      )}
-    </div>
-  );
-}
-
-function renderOptions(question: IQuestion) {
-  if (question.type !== "choice" || !question.options) return null;
-  const opts = question.options as Record<string, string>;
-  const entries = Object.entries(opts);
-  // Determine layout based on max option text length
-  const maxLen = Math.max(...entries.map(([, v]) => v.length));
-  // long text (>30): 1 per row; medium (>10): 2 per row; short: 4 per row (flex wrap)
-  const layoutClass =
-    maxLen > 30
-      ? "grid grid-cols-1 gap-y-0.5"
-      : maxLen > 10
-        ? "grid grid-cols-2 gap-x-6 gap-y-0.5"
-        : "flex flex-wrap gap-x-8 gap-y-0.5";
-  return (
-    <div className={`mt-1.5 ${layoutClass}`}>
-      {entries.map(([key, value]) => (
-        <span key={key} className="text-sm text-muted-foreground">
-          {key}. {value}
-        </span>
-      ))}
-    </div>
-  );
-}
 
 function generatePaginationPages(
   current: number,
@@ -280,6 +161,7 @@ async function knowledgeApiFetch<T>(url: string): Promise<T> {
 }
 
 export function QuestionList() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [current, setCurrent] = useState(1);
   const [filters, setFilters] = useState<CrudFilter[]>([]);
   const [search, setSearch] = useState("");
@@ -288,6 +170,9 @@ export function QuestionList() {
 
   // Active sidebar filter values (multi-select)
   const [activeQuestionBankId, setActiveQuestionBankId] = useState<string | null>(null);
+  const [activeKnowledgePointId, setActiveKnowledgePointId] = useState<string | null>(
+    searchParams.get("knowledge_point_id"),
+  );
   const [activeTypes, setActiveTypes] = useState<Set<FilterTypeKey>>(new Set(ALL_FILTER_TYPE_KEYS));
   const [activeDifficulties, setActiveDifficulties] = useState<Set<number>>(new Set(ALL_DIFFICULTY_SET));
   const [activeTagIds, setActiveTagIds] = useState<Set<string>>(new Set());
@@ -337,6 +222,7 @@ export function QuestionList() {
     (
       searchVal: string,
       bankId: string | null,
+      knowledgePointId: string | null,
       types: Set<FilterTypeKey>,
       difficulties: Set<number>,
       tagIds: Set<string>,
@@ -352,6 +238,10 @@ export function QuestionList() {
       // Question bank
       if (bankId) {
         next.push({ field: "question_bank_id", operator: "eq", value: bankId } as CrudFilter);
+      }
+
+      if (knowledgePointId) {
+        next.push({ field: "knowledge_point_id", operator: "eq", value: knowledgePointId } as CrudFilter);
       }
 
       // Types — dedupe FilterTypeKey -> backend QuestionType
@@ -380,6 +270,12 @@ export function QuestionList() {
     },
     [updateFilters],
   );
+
+  useEffect(() => {
+    const knowledgePointId = searchParams.get("knowledge_point_id");
+    setActiveKnowledgePointId(knowledgePointId);
+    rebuildFilters(search, activeQuestionBankId, knowledgePointId, activeTypes, activeDifficulties, activeTagIds, allTagsSelected);
+  }, [activeDifficulties, activeQuestionBankId, activeTagIds, activeTypes, allTagsSelected, rebuildFilters, search, searchParams]);
 
   // Disable query when no types or no difficulties selected — result must be empty
   const hasEmptyFilter = activeTypes.size === 0 || activeDifficulties.size === 0;
@@ -426,7 +322,7 @@ export function QuestionList() {
   const questions = needChoiceFilter
     ? rawQuestions.filter((q) => {
         if (q.type !== "choice") return true;
-        const isMulti = isMultiChoice(q);
+        const isMulti = Array.isArray(q.answer?.correct);
         if (isMulti) return activeTypes.has("multi_choice");
         return activeTypes.has("single_choice");
       })
@@ -497,7 +393,7 @@ export function QuestionList() {
 
   const handleSearch = (value: string) => {
     setSearch(value);
-    rebuildFilters(value, activeQuestionBankId, activeTypes, activeDifficulties, activeTagIds, allTagsSelected);
+    rebuildFilters(value, activeQuestionBankId, activeKnowledgePointId, activeTypes, activeDifficulties, activeTagIds, allTagsSelected);
   };
 
   const handleBankFilter = (bankId: string | null) => {
@@ -508,7 +404,7 @@ export function QuestionList() {
     setActiveDifficulties(new Set(ALL_DIFFICULTY_SET));
     setActiveTagIds(new Set());
     setAllTagsSelected(true);
-    rebuildFilters(search, bankId, new Set(ALL_FILTER_TYPE_KEYS), new Set(ALL_DIFFICULTY_SET), new Set(), true);
+    rebuildFilters(search, bankId, activeKnowledgePointId, new Set(ALL_FILTER_TYPE_KEYS), new Set(ALL_DIFFICULTY_SET), new Set(), true);
   };
 
   // --- Type multi-select ---
@@ -520,7 +416,7 @@ export function QuestionList() {
       } else {
         next.add(key);
       }
-      rebuildFilters(search, activeQuestionBankId, next, activeDifficulties, activeTagIds, allTagsSelected);
+      rebuildFilters(search, activeQuestionBankId, activeKnowledgePointId, next, activeDifficulties, activeTagIds, allTagsSelected);
       return next;
     });
   };
@@ -529,7 +425,7 @@ export function QuestionList() {
     const allSelected = activeTypes.size === ALL_FILTER_TYPE_KEYS.size;
     const next = allSelected ? new Set<FilterTypeKey>() : new Set(ALL_FILTER_TYPE_KEYS);
     setActiveTypes(next);
-    rebuildFilters(search, activeQuestionBankId, next, activeDifficulties, activeTagIds, allTagsSelected);
+    rebuildFilters(search, activeQuestionBankId, activeKnowledgePointId, next, activeDifficulties, activeTagIds, allTagsSelected);
   };
 
   // --- Difficulty multi-select ---
@@ -541,7 +437,7 @@ export function QuestionList() {
       } else {
         next.add(level);
       }
-      rebuildFilters(search, activeQuestionBankId, activeTypes, next, activeTagIds, allTagsSelected);
+      rebuildFilters(search, activeQuestionBankId, activeKnowledgePointId, activeTypes, next, activeTagIds, allTagsSelected);
       return next;
     });
   };
@@ -550,7 +446,7 @@ export function QuestionList() {
     const allSelected = activeDifficulties.size === ALL_DIFFICULTY_SET.size;
     const next = allSelected ? new Set<number>() : new Set(ALL_DIFFICULTY_SET);
     setActiveDifficulties(next);
-    rebuildFilters(search, activeQuestionBankId, activeTypes, next, activeTagIds, allTagsSelected);
+    rebuildFilters(search, activeQuestionBankId, activeKnowledgePointId, activeTypes, next, activeTagIds, allTagsSelected);
   };
 
   // --- Tag multi-select ---
@@ -568,7 +464,7 @@ export function QuestionList() {
       if (isAll) {
         setAllTagsSelected(true);
       }
-      rebuildFilters(search, activeQuestionBankId, activeTypes, activeDifficulties, next, isAll);
+      rebuildFilters(search, activeQuestionBankId, activeKnowledgePointId, activeTypes, activeDifficulties, next, isAll);
       return next;
     });
   };
@@ -578,7 +474,7 @@ export function QuestionList() {
     setAllTagsSelected(newAll);
     const next = newAll ? new Set<string>() : new Set<string>();
     setActiveTagIds(next);
-    rebuildFilters(search, activeQuestionBankId, activeTypes, activeDifficulties, next, newAll);
+    rebuildFilters(search, activeQuestionBankId, activeKnowledgePointId, activeTypes, activeDifficulties, next, newAll);
   };
 
   const handleDelete = (question: IQuestion) => {
@@ -1131,6 +1027,28 @@ export function QuestionList() {
         </div>
       </div>
 
+      {activeKnowledgePointId ? (
+        <div className="flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-700 dark:border-indigo-900 dark:bg-indigo-950/50 dark:text-indigo-300">
+          <GraduationCap size={15} />
+          <span className="min-w-0 flex-1 truncate">当前只显示指定知识点关联的题目</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-indigo-700 hover:bg-indigo-100 hover:text-indigo-800 dark:text-indigo-300 dark:hover:bg-indigo-900/70"
+            onClick={() => {
+              setSearchParams((currentParams) => {
+                const nextParams = new URLSearchParams(currentParams);
+                nextParams.delete("knowledge_point_id");
+                return nextParams;
+              });
+            }}
+          >
+            清除
+          </Button>
+        </div>
+      ) : null}
+
       {/* Two-column layout: sidebar left, list right */}
       <div className="flex gap-6">
         {/* Left: sidebar filters (desktop only) */}
@@ -1193,17 +1111,51 @@ export function QuestionList() {
           ) : (
             <div className="space-y-3">
               {questions.map((question, idx) => {
-                const diff = difficultyConfig[question.difficulty] ?? {
-                  label: String(question.difficulty),
-                  variant: "outline" as const,
-                };
                 const globalIndex = (current - 1) * PAGE_SIZE + idx + 1;
-                const answerText = renderAnswer(question);
-
                 return (
-                  <div
+                  <QuestionPreviewCard
                     key={question.id}
-                    className="flex gap-2 rounded-lg border border-border bg-card p-3 sm:p-4 transition-all hover:border-primary hover:shadow-md"
+                    question={question}
+                    index={globalIndex}
+                    className="transition-all hover:border-primary hover:shadow-md"
+                    expanded={isCardExpanded(question.id)}
+                    trailing={
+                      <Checkbox
+                        checked={selected.has(question.id)}
+                        onCheckedChange={() => toggleSelect(question.id)}
+                      />
+                    }
+                    actions={
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-1.5 text-xs text-muted-foreground hover:text-blue-600 sm:px-2 dark:hover:text-blue-400"
+                          onClick={() => handleOpenKnowledgeDialog(question)}
+                        >
+                          <Link2 size={13} className="sm:mr-1" />
+                          <span className="hidden sm:inline">关联知识点</span>
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-1.5 text-xs text-muted-foreground hover:text-blue-600 sm:px-2 dark:hover:text-blue-400"
+                          onClick={() => edit("questions", question.id)}
+                        >
+                          <Pencil size={13} className="sm:mr-1" />
+                          <span className="hidden sm:inline">编辑</span>
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-1.5 text-xs text-muted-foreground hover:text-red-600 sm:px-2 dark:hover:text-red-400"
+                          onClick={() => handleDelete(question)}
+                        >
+                          <Trash2 size={13} className="sm:mr-1" />
+                          <span className="hidden sm:inline">删除</span>
+                        </Button>
+                      </>
+                    }
                     onMouseEnter={() => {
                       if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
                       hoverTimerRef.current = setTimeout(() => setHoveredCard(question.id), 500);
@@ -1212,195 +1164,7 @@ export function QuestionList() {
                       if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
                       setHoveredCard(null);
                     }}
-                  >
-                    {/* Left: index number */}
-                    <div className="flex-shrink-0 w-5 pt-0.5 text-sm font-bold text-muted-foreground text-left">
-                      {globalIndex}.
-                    </div>
-
-                    {/* Right: all content */}
-                    <div className="flex-1 min-w-0">
-                      {/* Title row with type badge + checkbox on the right */}
-                      <div className="flex items-start gap-2">
-                        {(() => {
-                          const html = getContentHtml(question);
-                          if (html) {
-                            return (
-                              <RichContent
-                                html={html}
-                                className="flex-1 text-sm text-foreground leading-relaxed"
-                              />
-                            );
-                          }
-                          return (
-                            <p className="flex-1 text-sm text-foreground leading-relaxed">
-                              {renderTitle(question)}
-                            </p>
-                          );
-                        })()}
-                        <div className="flex-shrink-0 flex items-center gap-2 ml-2">
-                          <div
-                            className={`w-6 h-6 rounded flex items-center justify-center text-[11px] font-bold ${
-                              question.type === "choice" && isMultiChoice(question)
-                                ? "bg-cyan-500 text-white"
-                                : questionTypeColorClass[question.type]
-                            }`}
-                          >
-                            {question.type === "choice"
-                              ? isMultiChoice(question)
-                                ? "多"
-                                : "单"
-                              : questionTypeChar[question.type]}
-                          </div>
-                          <Checkbox
-                            checked={selected.has(question.id)}
-                            onCheckedChange={() => toggleSelect(question.id)}
-                          />
-                        </div>
-                      </div>
-
-                      {renderOptions(question)}
-                      {answerText !== "" && (
-                        <p className="mt-1.5 text-sm text-muted-foreground">
-                          {question.type === "short_answer" || question.type === "essay" ? "答案要点：" : "答案："}
-                          {answerText}
-                        </p>
-                      )}
-
-                      {/* Expandable details with smooth transition */}
-                      <div
-                        className="grid transition-[grid-template-rows] duration-300 ease-out"
-                        style={{ gridTemplateRows: isCardExpanded(question.id) ? "1fr" : "0fr" }}
-                      >
-                        <div className="overflow-hidden">
-                      {renderCodeAnswer(question)}
-                      {question.analysis && (
-                        <div className="mt-1.5 text-sm text-muted-foreground">
-                          <span className="text-xs text-muted-foreground/70">解析：</span>
-                          {question.analysis.startsWith("<") ? (
-                            <RichContent html={question.analysis} />
-                          ) : (
-                            <RenderTextWithCode text={question.analysis} language={(question.content?.language as string) || undefined} />
-                          )}
-                        </div>
-                      )}
-
-                      {/* Bottom: metadata left, actions right */}
-                      <div className="mt-2.5 flex items-center justify-between">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Badge variant={diff.variant}>{diff.label}</Badge>
-                          <span className="text-xs text-muted-foreground">
-                            {question.score} 分
-                          </span>
-                          <span className="hidden sm:inline text-xs text-muted-foreground">
-                            {new Date(question.created_at).toLocaleDateString(
-                              "zh-CN",
-                              {
-                                year: "numeric",
-                                month: "2-digit",
-                                day: "2-digit",
-                              }
-                            )}
-                          </span>
-                          <span className="hidden sm:inline text-xs text-muted-foreground">
-                            已使用 {question.usage_count} 次
-                          </span>
-                          {question.tags.length > 0 && (
-                            <>
-                              <span className="h-3.5 w-px bg-border" />
-                              <span className="text-emerald-600 dark:text-emerald-400">
-                                <Tag size={11} />
-                              </span>
-                              {question.tags.slice(0, 4).map((tag) => (
-                                <Badge
-                                  key={tag.id}
-                                  variant="outline"
-                                  className="text-[11px] px-1.5 py-0 bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-400 dark:border-emerald-800"
-                                >
-                                  {tag.name}
-                                </Badge>
-                              ))}
-                              {question.tags.length > 4 && (
-                                <Popover>
-                                  <PopoverTrigger asChild>
-                                    <button
-                                      type="button"
-                                      className="inline-flex items-center rounded p-0.5 text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-950 transition-colors"
-                                      title="查看更多标签"
-                                    >
-                                      <EllipsisVertical size={14} />
-                                    </button>
-                                  </PopoverTrigger>
-                                  <PopoverContent className="w-auto max-w-60 p-2" align="start">
-                                    <div className="flex flex-wrap gap-1">
-                                      {question.tags.slice(4).map((tag) => (
-                                        <Badge
-                                          key={tag.id}
-                                          variant="outline"
-                                          className="text-[11px] px-1.5 py-0 bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-400 dark:border-emerald-800"
-                                        >
-                                          {tag.name}
-                                        </Badge>
-                                      ))}
-                                    </div>
-                                  </PopoverContent>
-                                </Popover>
-                              )}
-                            </>
-                          )}
-                          {question.knowledge_points.length > 0 && (
-                            <>
-                              <span className="h-3.5 w-px bg-border" />
-                              <span className="text-indigo-600 dark:text-indigo-400">
-                                <GraduationCap size={12} />
-                              </span>
-                              {question.knowledge_points.map((kp) => (
-                                <Badge
-                                  key={kp.id}
-                                  variant="outline"
-                                  className="text-[11px] px-1.5 py-0 bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950 dark:text-indigo-400 dark:border-indigo-800"
-                                >
-                                  {kp.name}
-                                </Badge>
-                              ))}
-                            </>
-                          )}
-                        </div>
-
-                        <div className="flex items-center gap-1 flex-shrink-0 ml-2 sm:ml-4">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 px-1.5 sm:px-2 text-xs text-muted-foreground hover:text-blue-600 dark:hover:text-blue-400"
-                            onClick={() => handleOpenKnowledgeDialog(question)}
-                          >
-                            <Link2 size={13} className="sm:mr-1" />
-                            <span className="hidden sm:inline">关联知识点</span>
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 px-1.5 sm:px-2 text-xs text-muted-foreground hover:text-blue-600 dark:hover:text-blue-400"
-                            onClick={() => edit("questions", question.id)}
-                          >
-                            <Pencil size={13} className="sm:mr-1" />
-                            <span className="hidden sm:inline">编辑</span>
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 px-1.5 sm:px-2 text-xs text-muted-foreground hover:text-red-600 dark:hover:text-red-400"
-                            onClick={() => handleDelete(question)}
-                          >
-                            <Trash2 size={13} className="sm:mr-1" />
-                            <span className="hidden sm:inline">删除</span>
-                          </Button>
-                        </div>
-                      </div>
-                        </div>{/* end overflow-hidden */}
-                      </div>{/* end grid transition */}
-                    </div>
-                  </div>
+                  />
                 );
               })}
             </div>
@@ -1489,7 +1253,7 @@ export function QuestionList() {
           <div className="space-y-4">
             <div className="space-y-1">
               <p className="text-sm font-medium text-foreground line-clamp-2">
-                {knowledgeDialogQuestion ? renderTitle(knowledgeDialogQuestion) : ""}
+                {knowledgeDialogQuestion ? getQuestionTitle(knowledgeDialogQuestion) : ""}
               </p>
               <p className="text-xs text-muted-foreground">
                 选择后会更新这道题目的知识点关联。

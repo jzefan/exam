@@ -76,16 +76,18 @@ export function ExamResultPage() {
   if (!result.can_view) {
     return (
       <div className="space-y-6">
-        <button
-          onClick={() => navigate("/my-exams")}
-          className="inline-flex items-center gap-2 text-[14px] text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <ArrowLeft size={16} />
-          返回我的考试
-        </button>
+        <div className="flex items-center justify-between">
+          <h1 className="text-base font-bold text-foreground tracking-tight">{result.title}</h1>
+          <button
+            onClick={() => navigate("/my-exams")}
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <ArrowLeft size={16} />
+            返回我的考试
+          </button>
+        </div>
         <div className="rounded-2xl border border-[#ebe3f4] bg-white/90 p-8">
-          <h1 className="text-[16px] font-semibold text-foreground">{result.title}</h1>
-          <p className="mt-3 text-[14px] text-muted-foreground">{result.blocked_reason ?? "暂无权限查看结果"}</p>
+          <p className="text-[14px] text-muted-foreground">{result.blocked_reason ?? "暂无权限查看结果"}</p>
         </div>
       </div>
     );
@@ -94,15 +96,18 @@ export function ExamResultPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <button
-          onClick={() => navigate("/my-exams")}
-          className="inline-flex items-center gap-2 text-[14px] text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <ArrowLeft size={16} />
-          返回我的考试
-        </button>
-        <div className="text-right text-[14px] text-muted-foreground">
-          提交时间：{formatStudentDate(result.submitted_at)}
+        <h1 className="text-base font-bold text-foreground tracking-tight">考试结果</h1>
+        <div className="flex items-center gap-3">
+          <span className="text-[14px] text-muted-foreground">
+            提交时间：{formatStudentDate(result.submitted_at)}
+          </span>
+          <button
+            onClick={() => navigate("/my-exams")}
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <ArrowLeft size={16} />
+            返回我的考试
+          </button>
         </div>
       </div>
 

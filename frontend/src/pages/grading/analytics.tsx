@@ -46,14 +46,12 @@ export function GradingAnalyticsPage() {
 
   return (
     <div className="space-y-6 px-4 py-4">
-      <div className="flex items-center justify-between gap-4 border-b border-border/70 pb-4">
-        <div className="space-y-2">
-          <Button variant="ghost" size="sm" onClick={() => navigate("/grading")}>
-            <ArrowLeft className="h-4 w-4" />
-            返回收件箱
-          </Button>
-          <h1 className="text-3xl font-bold tracking-tight">阅卷统计</h1>
-        </div>
+      <div className="flex items-center justify-between border-b border-border/70 pb-4">
+        <h1 className="text-base font-bold text-foreground tracking-tight">阅卷统计</h1>
+        <Button variant="ghost" size="sm" onClick={() => navigate("/grading")}>
+          <ArrowLeft className="h-4 w-4" />
+          返回收件箱
+        </Button>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">

@@ -1,5 +1,6 @@
 import type { AccessControlProvider } from "@refinedev/core";
 import { getUserRole } from "../types/rbac";
+import { canAccessJobModels, canManageUsers } from "@/utils/role-routing";
 
 export const accessControlProvider: AccessControlProvider = {
   can: async ({ resource, action }) => {
@@ -22,13 +23,16 @@ export const accessControlProvider: AccessControlProvider = {
         return { can: true };
       }
       // Teachers cannot manage users
-      if (resource === "users") {
+      if (resource === "users" && !canManageUsers(role)) {
         return { can: false, reason: "Teachers cannot manage users" };
       }
     }
 
     // Student / enterprise_user permissions
     if (role === "student" || role === "enterprise_user") {
+      if (resource === "job-models" && canAccessJobModels(role)) {
+        return { can: true };
+      }
       if (resource === "exams" && (action === "list" || action === "show")) {
         return { can: true };
       }

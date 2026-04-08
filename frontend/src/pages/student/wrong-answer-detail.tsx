@@ -48,21 +48,23 @@ export function WrongAnswerDetailPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <button
-          onClick={() => navigate("/wrong-answers")}
-          className="inline-flex items-center gap-2 text-[14px] text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <ArrowLeft size={16} />
-          返回错题本
-        </button>
-
-        <Button
-          onClick={handleMarkMastered}
-          disabled={Boolean(effectiveMastered)}
-          className="text-[14px]"
-        >
-          {effectiveMastered ? "已标记掌握" : "标记已掌握"}
-        </Button>
+        <h1 className="text-base font-bold text-foreground tracking-tight">错题详情</h1>
+        <div className="flex items-center gap-3">
+          <Button
+            onClick={handleMarkMastered}
+            disabled={Boolean(effectiveMastered)}
+            className="text-[14px]"
+          >
+            {effectiveMastered ? "已标记掌握" : "标记已掌握"}
+          </Button>
+          <button
+            onClick={() => navigate("/wrong-answers")}
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <ArrowLeft size={16} />
+            返回错题本
+          </button>
+        </div>
       </div>
 
       <section className="space-y-4 rounded-2xl border border-[#ebe3f4] bg-white/90 p-6">

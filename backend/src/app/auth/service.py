@@ -10,6 +10,8 @@ from app.rbac.models import UserOrganization
 
 
 async def create_user(db: AsyncSession, data: UserCreate) -> User:
+    from app.rbac.models import Organization, Role
+
     user = User(
         username=data.username,
         email=data.email,
@@ -20,28 +22,44 @@ async def create_user(db: AsyncSession, data: UserCreate) -> User:
     await db.flush()
     await db.refresh(user)
 
-    if data.org_id and data.role_name:
-        from app.rbac.models import Role
+    # Determine which roles to assign
+    role_names = data.role_names if data.role_names else [data.role_name]
 
-        result = await db.execute(
-            select(Role).where(Role.name == data.role_name, Role.deleted_at.is_(None))
-        )
-        role = result.scalar_one_or_none()
-        if role:
-            user_org = UserOrganization(
-                user_id=user.id,
-                org_id=data.org_id,
-                role_id=role.id,
-                is_primary=True,
+    # Determine org: use provided or default
+    org_id = data.org_id
+    if not org_id:
+        org_result = await db.execute(select(Organization).limit(1))
+        org = org_result.scalar_one_or_none()
+        if org:
+            org_id = org.id
+
+    if org_id:
+        for i, role_name in enumerate(role_names):
+            result = await db.execute(
+                select(Role).where(Role.name == role_name, Role.deleted_at.is_(None))
             )
-            db.add(user_org)
-            await db.flush()
+            role = result.scalar_one_or_none()
+            if role:
+                db.add(UserOrganization(
+                    user_id=user.id,
+                    org_id=org_id,
+                    role_id=role.id,
+                    is_primary=(i == 0),
+                ))
+        await db.flush()
 
     return user
 
 
 async def authenticate_user(db: AsyncSession, username: str, password: str) -> User | None:
-    result = await db.execute(select(User).where(User.username == username, User.deleted_at.is_(None)))
+    # Try login by username OR phone
+    from sqlalchemy import or_
+    result = await db.execute(
+        select(User).where(
+            or_(User.username == username, User.phone == username),
+            User.deleted_at.is_(None)
+        )
+    )
     user = result.scalar_one_or_none()
     if user is None or not verify_password(password, user.password_hash):
         return None

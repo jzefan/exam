@@ -11,6 +11,7 @@ import { accessControlProvider } from "./providers/access-control";
 import { getUserRole } from "@/types/rbac";
 import { ThemeProvider } from "./components/theme-provider";
 import { ThemeConfigProvider } from "./components/theme-customizer";
+import { Toaster } from "./components/ui/toaster";
 import { Layout } from "./components/layout";
 import { StudentLayout } from "./components/student-layout";
 import { LoginPage } from "./pages/auth/login";
@@ -37,21 +38,36 @@ import { JobModelCreate } from "./pages/job-models/create"
 import { JobModelUploadAI } from "./pages/job-models/upload-ai";
 import { GradingAnalyticsPage } from "./pages/grading/analytics";
 import { GradingCenterPage } from "./pages/grading";
+import { GwmxLanding } from "./pages/gwmx/landing";
+import StudentManagementPage from "./pages/students";
 
-/** Index route: students → /student, everyone else → dashboard */
+import { ENTERPRISE_ROLES, getHomeRoute } from "@/utils/role-routing";
+
+/** Redirect users to their home route if they don't match the allowed roles */
+function RoleGuard({ allow }: { allow: string[] }) {
+  const { data: identity, isLoading } = useGetIdentity<{ primary_org?: { role_name: string } | null }>();
+  if (isLoading) return null;
+  const role = identity ? getUserRole(identity) : "";
+  if (!allow.includes(role)) return <Navigate to={getHomeRoute(role)} replace />;
+  return <Outlet />;
+}
+
+/** Index route: role-based redirect */
 function HomeRedirect() {
   const { data: identity, isLoading } = useGetIdentity<{ primary_org?: { role_name: string } | null }>();
   if (isLoading) return null;
-  if (identity && getUserRole(identity) === "student") return <Navigate to="/student" replace />;
+  const role = identity ? getUserRole(identity) : "";
+  const target = getHomeRoute(role);
+  if (target !== "/dashboard") return <Navigate to={target} replace />;
   return <Dashboard />;
 }
 
-/** After login redirect: students → /student, everyone else → / */
+/** After login redirect: role-based */
 function LoginSuccessRedirect() {
   const { data: identity, isLoading } = useGetIdentity<{ primary_org?: { role_name: string } | null }>();
   if (isLoading) return null;
-  if (identity && getUserRole(identity) === "student") return <Navigate to="/student" replace />;
-  return <Navigate to="/" replace />;
+  const role = identity ? getUserRole(identity) : "";
+  return <Navigate to={getHomeRoute(role)} replace />;
 }
 
 function App() {
@@ -98,7 +114,7 @@ function App() {
             },
             {
               name: "job-models",
-              list: "/job-models",
+              list: "/gwmx/job-models",
               meta: { label: "职位模型管理" },
             },
             {
@@ -113,17 +129,19 @@ function App() {
           }}
         >
           <Routes>
-            {/* Student routes — sidebar layout */}
+            {/* Student routes — sidebar layout, students only */}
             <Route
               element={
                 <Authenticated key="student-auth" fallback={<CatchAllNavigate to="/login" />}>
-                  <StudentLayout />
+                  <RoleGuard allow={["student"]} />
                 </Authenticated>
               }
             >
-              <Route path="/student" element={<StudentDashboard />} />
-              <Route path="/my-exams" element={<MyExams />} />
-              <Route path="/wrong-answers" element={<WrongAnswers />} />
+              <Route element={<StudentLayout />}>
+                <Route path="/student" element={<StudentDashboard />} />
+                <Route path="/my-exams" element={<MyExams />} />
+                <Route path="/wrong-answers" element={<WrongAnswers />} />
+              </Route>
             </Route>
 
             {/* Admin/Teacher routes — top nav layout */}
@@ -156,20 +174,38 @@ function App() {
               <Route path="/knowledge" element={<KnowledgeManagementPage />} />
               <Route path="/grading" element={<GradingCenterPage />} />
               <Route path="/grading/analytics" element={<GradingAnalyticsPage />} />
-              <Route path="/job-models" element={<JobModelList />} />
-              <Route path="/job-models/create" element={<JobModelCreate />} />
-              <Route path="/job-models/upload-ai" element={<JobModelUploadAI />} />
+              <Route path="/students" element={<StudentManagementPage />} />
+            </Route>
+
+            {/* GWMX landing page — public */}
+            <Route path="/gwmx" element={<GwmxLanding />} />
+
+            {/* GWMX authenticated routes */}
+            <Route
+              element={
+                <Authenticated key="gwmx-auth" fallback={<CatchAllNavigate to="/login" />}>
+                  <RoleGuard allow={ENTERPRISE_ROLES} />
+                </Authenticated>
+              }
+            >
+              <Route element={<Layout />}>
+                <Route path="/gwmx/job-models" element={<JobModelList />} />
+                <Route path="/gwmx/job-models/create" element={<JobModelCreate />} />
+                <Route path="/gwmx/job-models/upload-ai" element={<JobModelUploadAI />} />
+              </Route>
             </Route>
 
             {/* Job model editor — full-screen, no Layout wrapper */}
             <Route
-              path="/job-models/:projectId/models/:modelId/editor"
+              path="/gwmx/job-models/:projectId/models/:modelId/editor"
               element={
                 <Authenticated key="editor" fallback={<CatchAllNavigate to="/login" />}>
-                  <EditorPage />
+                  <RoleGuard allow={ENTERPRISE_ROLES} />
                 </Authenticated>
               }
-            />
+            >
+              <Route index element={<EditorPage />} />
+            </Route>
 
             {/* Exam taking — full-screen, no Layout wrapper */}
             <Route
@@ -193,6 +229,7 @@ function App() {
           </Routes>
         </Refine>
       </BrowserRouter>
+      <Toaster />
       {import.meta.env.DEV && <Agentation />}
       </ThemeConfigProvider>
     </ThemeProvider>

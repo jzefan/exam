@@ -4,6 +4,7 @@ import { Search, Check, FileText } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Select,
   SelectContent,
@@ -11,6 +12,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
+import { getQuestionTitle } from "@/components/questions/question-preview-utils";
 import type { IQuestion, IQuestionBank } from "@/types";
 
 const ALL_BANKS = "__all_banks__";
@@ -66,7 +69,11 @@ export function QuestionSelector({
       ...(bankFilter ? [{ field: "question_bank_id", operator: "eq" as const, value: bankFilter }] : []),
     ],
   });
-  const questions = questionQuery.data?.data ?? [];
+  // Backend may return the same question id multiple times when joining
+  // tags / knowledge points. Dedupe by id so users don't see "ghost" selected
+  // rows on other pages caused by row multiplication.
+  const rawQuestions = questionQuery.data?.data ?? [];
+  const questions = Array.from(new Map(rawQuestions.map((q) => [q.id, q])).values());
   const total = questionQuery.data?.total ?? 0;
   const isLoading = questionQuery.isLoading;
   const totalPages = Math.ceil(total / pageSize);
@@ -87,7 +94,7 @@ export function QuestionSelector({
           已选 <span className="font-semibold text-foreground">{selectedIds.length}</span> 题
         </p>
         {selectedIds.length > 0 && (
-          <Button variant="ghost" size="sm" onClick={() => onChange([])}>
+          <Button type="button" variant="ghost" size="sm" onClick={() => onChange([])}>
             清空选择
           </Button>
         )}
@@ -128,7 +135,8 @@ export function QuestionSelector({
       </div>
 
       {/* Question list */}
-      <div className="border rounded-lg divide-y max-h-[400px] overflow-y-auto">
+      <TooltipProvider delayDuration={120}>
+        <div className="max-h-[400px] overflow-y-auto rounded-lg border divide-y">
         {isLoading ? (
           <div className="p-8 text-center text-sm text-muted-foreground">加载中...</div>
         ) : questions.length === 0 ? (
@@ -140,45 +148,54 @@ export function QuestionSelector({
           questions.map((q) => {
             const isSelected = selectedSet.has(q.id);
             const t = typeLabels[q.type] ?? { label: q.type, className: "" };
+            const questionText = getQuestionTitle(q);
             return (
-              <button
-                key={q.id}
-                type="button"
-                aria-pressed={isSelected}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-muted/50 ${
-                  isSelected ? "bg-primary/5" : ""
-                }`}
-                onClick={() => toggle(q.id)}
-              >
-                <div
-                  className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${
-                    isSelected
-                      ? "bg-primary border-primary text-primary-foreground"
-                      : "border-input"
-                  }`}
-                >
-                  {isSelected && <Check size={12} />}
-                </div>
-                <Badge
-                  variant="outline"
-                  className={`text-xs shrink-0 ${t.className}`}
-                >
-                  {t.label}
-                </Badge>
-                <span className="text-sm truncate flex-1">{q.title}</span>
-                <span className="text-xs text-muted-foreground shrink-0">
-                  {q.score}分 · 难度{q.difficulty}
-                </span>
-              </button>
+              <Tooltip key={q.id}>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-pressed={isSelected}
+                    aria-label={questionText}
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors border-l-2 hover:bg-muted/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+                      isSelected ? "border-l-primary" : "border-l-transparent"
+                    }`}
+                    onClick={() => toggle(q.id)}
+                  >
+                    <div
+                      className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${
+                        isSelected
+                          ? "bg-primary border-primary text-primary-foreground"
+                          : "border-input"
+                      }`}
+                    >
+                      {isSelected && <Check size={12} />}
+                    </div>
+                    <Badge variant="outline" className={`text-xs shrink-0 ${t.className}`}>
+                      {t.label}
+                    </Badge>
+                    <span className={`text-sm truncate flex-1 ${isSelected ? "text-primary font-medium" : "text-foreground"}`}>
+                      {questionText}
+                    </span>
+                    <span className="text-xs shrink-0 text-muted-foreground">
+                      {q.score}分 · 难度{q.difficulty}
+                    </span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right" align="start" sideOffset={10} className="max-h-[70vh] w-[min(44rem,calc(100vw-2rem))] overflow-auto rounded-xl border bg-background p-0 text-foreground shadow-xl">
+                  <QuestionPreviewCard question={q} mode="compact" defaultExpanded className="border-0 shadow-none" />
+                </TooltipContent>
+              </Tooltip>
             );
           })
         )}
-      </div>
+        </div>
+      </TooltipProvider>
 
       {/* Pagination */}
       {totalPages > 1 && (
         <div className="flex items-center justify-center gap-2">
           <Button
+            type="button"
             variant="outline"
             size="sm"
             disabled={page <= 1}
@@ -190,6 +207,7 @@ export function QuestionSelector({
             {page} / {totalPages}
           </span>
           <Button
+            type="button"
             variant="outline"
             size="sm"
             disabled={page >= totalPages}

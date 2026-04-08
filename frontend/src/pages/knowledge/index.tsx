@@ -24,6 +24,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import type { IQuestion } from "@/types";
 import { KnowledgeTreeCanvas } from "./KnowledgeTreeCanvas";
 import { MajorDirectionSidebar } from "./MajorDirectionSidebar";
 import { NodeDetailPanel } from "./NodeDetailPanel";
@@ -115,6 +116,8 @@ export function KnowledgeManagementPage() {
   const [renameDraft, setRenameDraft] = useState("");
   const [resourcesNodeId, setResourcesNodeId] = useState<string | null>(null);
   const [materialsByNode, setMaterialsByNode] = useState<Record<string, LearningMaterial[]>>({});
+  const [relatedQuestions, setRelatedQuestions] = useState<IQuestion[]>([]);
+  const [relatedQuestionsLoading, setRelatedQuestionsLoading] = useState(false);
 
   useEffect(() => {
     const stored = localStorage.getItem("knowledge_materials_v1");
@@ -149,12 +152,6 @@ export function KnowledgeManagementPage() {
         setNodes([]);
         setEdges([]);
         setTreeError(null);
-        return null;
-      }
-      return current;
-    });
-    setEditingNodeId((current) => {
-      if (current && !nodes.some((node) => node.id === current)) {
         return null;
       }
       return current;
@@ -423,6 +420,42 @@ export function KnowledgeManagementPage() {
     ? majors.find((major) => major.id === resourcesDirection.major_id) ?? null
     : null;
   const currentMaterials = resourcesNodeId ? materialsByNode[resourcesNodeId] ?? [] : [];
+
+  useEffect(() => {
+    if (!resourcesNodeId) {
+      setRelatedQuestions([]);
+      setRelatedQuestionsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadRelatedQuestions = async () => {
+      setRelatedQuestionsLoading(true);
+      try {
+        const items = await apiFetch<IQuestion[]>(
+          `/api/questions?knowledge_point_id=${resourcesNodeId}&_start=0&_end=20&_sort=updated_at&_order=DESC`,
+        );
+        if (!cancelled) {
+          setRelatedQuestions(items);
+        }
+      } catch {
+        if (!cancelled) {
+          setRelatedQuestions([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setRelatedQuestionsLoading(false);
+        }
+      }
+    };
+
+    void loadRelatedQuestions();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [resourcesNodeId]);
 
   const addMaterial = useCallback(
     (payload: Omit<LearningMaterial, "id">) => {
@@ -742,6 +775,8 @@ export function KnowledgeManagementPage() {
         major={resourcesMajor}
         materials={currentMaterials}
         node={resourcesNode}
+        relatedQuestions={relatedQuestions}
+        relatedQuestionsLoading={relatedQuestionsLoading}
         onAddMaterial={addMaterial}
         onClose={() => setResourcesNodeId(null)}
         onDeleteMaterial={deleteMaterial}
