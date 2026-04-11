@@ -71,7 +71,34 @@ async def list_org_students(db: AsyncSession, org_id: uuid.UUID, class_id: uuid.
     return list(result.scalars().all())
 
 
-async def create_student(db: AsyncSession, org_id: uuid.UUID, data: StudentCreate) -> User:
+async def list_teacher_students(
+    db: AsyncSession,
+    teacher_id: uuid.UUID,
+    class_id: uuid.UUID | None = None,
+) -> list[User]:
+    query = (
+        select(User)
+        .join(UserOrganization, UserOrganization.user_id == User.id)
+        .join(Role, Role.id == UserOrganization.role_id)
+        .where(
+            User.owner_teacher_id == teacher_id,
+            Role.name == "student",
+            User.deleted_at.is_(None),
+        )
+    )
+    if class_id:
+        query = query.where(User.class_id == class_id)
+
+    result = await db.execute(query.order_by(User.full_name))
+    return list(result.scalars().all())
+
+
+async def create_student(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    data: StudentCreate,
+    owner_teacher_id: uuid.UUID | None = None,
+) -> User:
     # Use phone as username and password
     password_hash = hash_password(data.phone)
     
@@ -81,6 +108,7 @@ async def create_student(db: AsyncSession, org_id: uuid.UUID, data: StudentCreat
         phone=data.phone,
         student_id=data.student_id,
         class_id=data.class_id,
+        owner_teacher_id=owner_teacher_id,
         full_name=data.full_name,
         password_hash=password_hash,
         is_active=True

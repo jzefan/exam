@@ -7,6 +7,7 @@ from sqlalchemy import JSON, CheckConstraint, ForeignKey, String, Text, UniqueCo
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.common.data_visibility import OwnerMixin, VisibilityMixin
 from app.models import Base, BaseModel
 
 if TYPE_CHECKING:
@@ -38,7 +39,7 @@ class Direction(BaseModel):
     knowledge_points: Mapped[list["KnowledgePoint"]] = relationship(back_populates="direction")
 
 
-class KnowledgePoint(BaseModel):
+class KnowledgePoint(OwnerMixin, VisibilityMixin, BaseModel):
     """Extended knowledge point with direction, tags, and difficulty."""
 
     __tablename__ = "knowledge_points"

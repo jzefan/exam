@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import axios from "axios";
-import type { IExamTaking } from "@/types";
+import type { IExamTaking, ISubmitExamResponse } from "@/types";
 
 const api = axios.create();
 api.interceptors.request.use((config) => {
@@ -13,13 +13,39 @@ interface UseExamTakingOptions {
   examData: IExamTaking | null;
 }
 
+type SaveState = "idle" | "saving" | "saved" | "error";
+
+function hasAnswerContent(answer: Record<string, unknown> | undefined): boolean {
+  if (!answer) return false;
+  return Object.values(answer).some((value) =>
+    Array.isArray(value)
+      ? value.length > 0 && value.some(Boolean)
+      : value !== "" && value !== null && value !== undefined,
+  );
+}
+
+function buildAnswerBatch(
+  questionIds: string[],
+  currentAnswers: Record<string, Record<string, unknown>>,
+) {
+  return questionIds
+    .map((qid) => ({
+      question_id: qid,
+      answer_content: currentAnswers[qid] ?? {},
+    }))
+    .filter((item) => hasAnswerContent(item.answer_content));
+}
+
 export function useExamTaking({ examData }: UseExamTakingOptions) {
   const [answers, setAnswers] = useState<Record<string, Record<string, unknown>>>({});
   const [currentIndex, setCurrentIndex] = useState(0);
   const [showAll, setShowAll] = useState(false);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [saveMessage, setSaveMessage] = useState("");
   const dirtyRef = useRef(new Set<string>());
   const answersRef = useRef(answers);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     answersRef.current = answers;
@@ -28,40 +54,89 @@ export function useExamTaking({ examData }: UseExamTakingOptions) {
   useEffect(() => {
     if (examData?.saved_answers) {
       setAnswers(examData.saved_answers);
+      answersRef.current = examData.saved_answers;
     }
   }, [examData?.saved_answers]);
 
+  const flushQuestions = useCallback(
+    async (questionIds?: string[]) => {
+      if (!examData) return;
+
+      const ids = questionIds ?? Array.from(dirtyRef.current);
+      if (ids.length === 0) return;
+
+      const currentAnswers = answersRef.current;
+      const batch = buildAnswerBatch(ids, currentAnswers);
+
+      ids.forEach((qid) => dirtyRef.current.delete(qid));
+      if (dirtyRef.current.size === 0 && timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+
+      if (batch.length === 0) return;
+      if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+      setSaveState("saving");
+      setSaveMessage("正在保存...");
+      try {
+        await api.post(`/api/student/exams/${examData.exam_id}/answers`, {
+          answers: batch,
+        });
+        setSaveState("saved");
+        setSaveMessage("已自动保存");
+        feedbackTimerRef.current = setTimeout(() => {
+          setSaveState("idle");
+          setSaveMessage("");
+        }, 1800);
+      } catch (error) {
+        setSaveState("error");
+        setSaveMessage("保存失败，稍后重试");
+        throw error;
+      }
+    },
+    [examData],
+  );
+
   const updateAnswer = useCallback(
     (questionId: string, content: Record<string, unknown>) => {
-      setAnswers((prev) => ({ ...prev, [questionId]: content }));
+      setAnswers((prev) => {
+        const next = { ...prev, [questionId]: content };
+        answersRef.current = next;
+        return next;
+      });
       dirtyRef.current.add(questionId);
 
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => {
-        flushAnswers();
+        void flushQuestions();
       }, 30_000);
     },
-    [],
+    [flushQuestions],
   );
 
   const flushAnswers = useCallback(() => {
-    if (!examData || dirtyRef.current.size === 0) return;
-    const currentAnswers = answersRef.current;
-    const batch = Array.from(dirtyRef.current).map((qid) => ({
-      question_id: qid,
-      answer_content: currentAnswers[qid] ?? {},
-    }));
-    dirtyRef.current.clear();
-    api.post(`/api/student/exams/${examData.exam_id}/answers`, {
-      answers: batch,
-    });
-  }, [examData]);
+    return flushQuestions();
+  }, [flushQuestions]);
+
+  const flushQuestion = useCallback(
+    (questionId: string) => flushQuestions([questionId]),
+    [flushQuestions],
+  );
 
   const submitExam = useCallback(async () => {
     if (!examData) return;
-    flushAnswers();
-    await api.post(`/api/student/exams/${examData.exam_id}/submit`);
-  }, [examData, flushAnswers]);
+    const finalAnswerIds = Object.keys(answersRef.current);
+    const finalAnswers = buildAnswerBatch(finalAnswerIds, answersRef.current);
+    dirtyRef.current.clear();
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    const response = await api.post<ISubmitExamResponse>(`/api/student/exams/${examData.exam_id}/submit`, {
+      answers: finalAnswers,
+    });
+    return response.data;
+  }, [examData]);
 
   const reportSwitch = useCallback(
     (count: number) => {
@@ -82,6 +157,7 @@ export function useExamTaking({ examData }: UseExamTakingOptions) {
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
+      if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, []);
@@ -92,8 +168,11 @@ export function useExamTaking({ examData }: UseExamTakingOptions) {
     setCurrentIndex,
     showAll,
     setShowAll,
+    saveState,
+    saveMessage,
     updateAnswer,
     flushAnswers,
+    flushQuestion,
     submitExam,
     reportSwitch,
   };

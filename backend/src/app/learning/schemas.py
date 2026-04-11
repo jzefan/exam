@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.common.data_visibility import VisibilityScope
+
 
 class MajorCreate(BaseModel):
     name: str = Field(max_length=100)
@@ -65,6 +67,8 @@ class KnowledgePointDetail(BaseModel):
     difficulty: str | None
     parent_id: uuid.UUID | None
     direction_id: uuid.UUID | None
+    owner_id: uuid.UUID
+    visibility: VisibilityScope
     question_count: int = 0
 
 

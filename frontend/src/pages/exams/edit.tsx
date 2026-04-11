@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useOne, useUpdate } from "@refinedev/core";
-import { useNavigate, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
+import { useToast } from "@/hooks/use-toast";
 import { ExamWizardForm } from "./components/ExamWizardForm";
 import { examStatusOptions } from "./components/ExamStatusBadge";
 import type { IExamQuestion, IExamStudent } from "@/types";
@@ -35,16 +36,22 @@ function toExamForm(exam: ExamDetail): ExamFormValues {
     show_result: exam.show_result ?? false,
     notes_template: exam.notes_template || "",
     question_ids: exam.questions.map((q) => q.question_id),
+    question_items: exam.questions.map((q, index) => ({
+      question_id: q.question_id,
+      order: q.order ?? index,
+      score_override: q.score_override ?? q.question_score ?? null,
+    })),
     student_ids: exam.students.map((s) => s.student_id),
   };
 }
 
 function ExamEditForm({ id, exam }: { id: string; exam: ExamDetail }) {
-  const navigate = useNavigate();
   const { mutate: update, mutation } = useUpdate();
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [currentExam, setCurrentExam] = useState(exam);
+  const { toast } = useToast();
 
-  const initialValues = toExamForm(exam);
+  const initialValues = toExamForm(currentExam);
   const isLocked =
     initialValues.status === "ongoing" ||
     initialValues.status === "completed" ||
@@ -62,11 +69,27 @@ function ExamEditForm({ id, exam }: { id: string; exam: ExamDetail }) {
           end_time: values.end_time || null,
           notes_template: values.notes_template || null,
           position_id: values.position_id || null,
+          question_items: values.question_items,
         },
       },
       {
-        onSuccess: () => navigate("/exams"),
-        onError: (error) => setSubmitError(getErrorMessage(error, "保存考试失败，请稍后重试。")),
+        onSuccess: (response) => {
+          setSubmitError(null);
+          setCurrentExam(response.data as ExamDetail);
+          toast({
+            title: "保存成功",
+            description: "考试修改已保存。",
+          });
+        },
+        onError: (error) => {
+          const message = getErrorMessage(error, "保存考试失败，请稍后重试。");
+          setSubmitError(message);
+          toast({
+            title: "保存失败",
+            description: message,
+            variant: "destructive",
+          });
+        },
       },
     );
   };

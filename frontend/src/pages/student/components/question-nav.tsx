@@ -1,3 +1,4 @@
+import { cn } from "@/lib/utils";
 import type { IExamQuestionForStudent } from "@/types";
 import { X } from "lucide-react";
 
@@ -52,6 +53,13 @@ export function QuestionNav({
     isAnswered(answers[q.question_id]),
   ).length;
 
+  const currentItemClassName =
+    "bg-primary text-primary-foreground ring-2 ring-ring ring-offset-2 ring-offset-background";
+  const answeredItemClassName =
+    "border border-border bg-secondary text-foreground shadow-sm ring-1 ring-inset ring-border/70";
+  const pendingItemClassName =
+    "border border-muted-foreground/35 bg-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground";
+
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -73,7 +81,7 @@ export function QuestionNav({
       {/* Progress bar */}
       <div className="h-0.5 bg-muted">
         <div
-          className="h-full bg-foreground/40 transition-all duration-500"
+          className="h-full bg-primary/35 transition-all duration-500"
           style={{
             width: `${questions.length > 0 ? (answeredCount / questions.length) * 100 : 0}%`,
           }}
@@ -95,19 +103,23 @@ export function QuestionNav({
                 return (
                   <button
                     key={q.question_id}
+                    aria-current={isCurrent ? "step" : undefined}
                     onClick={() => {
                       onNavigate(index);
-                      onClose();
                     }}
-                    className={`relative w-full aspect-square rounded-lg text-xs font-semibold tabular-nums transition-all ${
+                    className={cn(
+                      "relative aspect-square w-full rounded-lg text-xs font-semibold tabular-nums transition-colors",
                       isCurrent
-                        ? "bg-foreground text-background ring-2 ring-foreground ring-offset-2 ring-offset-background"
+                        ? currentItemClassName
                         : answered
-                          ? "bg-foreground/10 text-foreground"
-                          : "bg-muted text-muted-foreground hover:bg-foreground/5"
-                    }`}
+                          ? answeredItemClassName
+                          : pendingItemClassName,
+                    )}
                   >
                     {index + 1}
+                    {!isCurrent && answered ? (
+                      <span className="absolute -right-1 -top-1 size-3 rounded-full border border-emerald-500 bg-background dark:border-emerald-400" />
+                    ) : null}
                   </button>
                 );
               })}
@@ -117,17 +129,19 @@ export function QuestionNav({
       </div>
 
       {/* Legend */}
-      <div className="px-5 py-3 border-t border-border flex items-center gap-4 text-[10px] text-muted-foreground">
-        <span className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-sm bg-foreground" />
+      <div className="flex items-center gap-4 border-t border-border px-5 py-3 text-[10px]">
+        <span className="flex items-center gap-1.5 text-foreground">
+          <span className="h-2.5 w-2.5 rounded-sm bg-primary shadow-sm ring-1 ring-primary/30" />
           当前
         </span>
-        <span className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-sm bg-foreground/10" />
+        <span className="flex items-center gap-1.5 text-foreground/90">
+          <span className="relative h-2.5 w-2.5 rounded-sm border border-border bg-secondary shadow-sm ring-1 ring-inset ring-border/70">
+            <span className="absolute -right-1 -top-1 size-2.5 rounded-full border border-emerald-500 bg-background dark:border-emerald-400" />
+          </span>
           已答
         </span>
-        <span className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-sm bg-muted" />
+        <span className="flex items-center gap-1.5 text-muted-foreground">
+          <span className="h-2.5 w-2.5 rounded-sm border border-muted-foreground/60 bg-transparent" />
           未答
         </span>
       </div>

@@ -15,6 +15,9 @@ class User(BaseModel):
     class_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("classes.id", ondelete="SET NULL"), nullable=True
     )
+    owner_teacher_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     full_name: Mapped[str] = mapped_column(String(100), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -22,6 +25,7 @@ class User(BaseModel):
     student_class: Mapped["app.rbac.models.Class | None"] = relationship(
         "Class", back_populates="students", lazy="joined"
     )
+    owner_teacher: Mapped["User | None"] = relationship("User", remote_side="User.id")
 
     __table_args__ = (
         Index("ix_users_username_active", "username", unique=True, postgresql_where="deleted_at IS NULL"),

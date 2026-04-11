@@ -6,14 +6,18 @@ import json
 import os
 import re
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.auth.models import User
 from app.config import settings
+from app.exams.models import Exam, ExamStudent, GradingStatus, StudentExamAnswer, StudentExamAppeal, StudentNotification
 from app.grading.models import GradingAuditEvent, GradingResultSnapshot, GradingTask, ModelConfig, RoleBinding
+from app.questions.models import Question, QuestionType
 from app.grading.providers import (
     DeepSeekProvider,
     GradingProvider,
@@ -31,6 +35,10 @@ SNAPSHOT_TYPE_ORDER = {
     "final": 3,
     "manual": 4,
 }
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _task_result_source(task: GradingTask) -> str | None:
@@ -124,7 +132,196 @@ def _parse_task_locator(task: GradingTask) -> dict[str, str | None]:
     }
 
 
-async def _load_workspace_tasks(db: AsyncSession) -> list[GradingTask]:
+async def _hydrate_task_locators(
+    db: AsyncSession,
+    tasks: list[GradingTask],
+) -> dict[uuid.UUID, dict[str, str | None]]:
+    base_locators = {task.id: _parse_task_locator(task) for task in tasks}
+
+    exam_ids: set[uuid.UUID] = set()
+    student_ids: set[uuid.UUID] = set()
+    for task in tasks:
+        locator = base_locators[task.id]
+        exam_uuid = _try_parse_uuid(locator["exam_id"])
+        if exam_uuid is not None:
+            exam_ids.add(exam_uuid)
+        if task.source_type == "exam_submission":
+            student_uuid = _try_parse_uuid(locator["candidate_code"])
+            if student_uuid is not None:
+                student_ids.add(student_uuid)
+
+    exams_by_id: dict[str, Exam] = {}
+    if exam_ids:
+        exams = (
+            await db.execute(select(Exam).where(Exam.id.in_(exam_ids), Exam.deleted_at.is_(None)))
+        ).scalars().all()
+        exams_by_id = {str(exam.id): exam for exam in exams}
+
+    users_by_id: dict[str, User] = {}
+    if student_ids:
+        users = (
+            await db.execute(select(User).where(User.id.in_(student_ids), User.deleted_at.is_(None)))
+        ).scalars().all()
+        users_by_id = {str(user.id): user for user in users}
+
+    hydrated: dict[uuid.UUID, dict[str, str | None]] = {}
+    for task in tasks:
+        locator = dict(base_locators[task.id])
+        exam = exams_by_id.get(locator["exam_id"] or "")
+        if exam is not None:
+            locator["exam_label"] = exam.title
+
+        if task.source_type == "exam_submission":
+            user_uuid = _try_parse_uuid(locator["candidate_code"])
+            user = users_by_id.get(str(user_uuid)) if user_uuid is not None else None
+            if user is not None:
+                locator["candidate_name"] = user.full_name
+                locator["candidate_code"] = user.student_id or None
+
+        hydrated[task.id] = locator
+
+    return hydrated
+
+
+def _try_parse_uuid(value: str | None) -> uuid.UUID | None:
+    if not value:
+        return None
+    try:
+        return uuid.UUID(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _payload_exam_id(source_type: str, source_business_id: str | None) -> uuid.UUID | None:
+    if not source_business_id:
+        return None
+    parts = source_business_id.split(":")
+    if source_type == "exam_submission" and len(parts) >= 3:
+        return _try_parse_uuid(parts[0])
+    return None
+
+
+async def _can_access_exam_id(
+    db: AsyncSession,
+    exam_id: uuid.UUID | None,
+    *,
+    current_user_id: uuid.UUID | None,
+    is_platform_admin: bool,
+) -> bool:
+    if is_platform_admin:
+        return True
+    if current_user_id is None or exam_id is None:
+        return False
+    owner_id = await db.scalar(select(Exam.owner_id).where(Exam.id == exam_id, Exam.deleted_at.is_(None)))
+    return owner_id == current_user_id
+
+
+async def _filter_tasks_by_exam_access(
+    db: AsyncSession,
+    tasks: list[GradingTask],
+    *,
+    current_user_id: uuid.UUID | None,
+    is_platform_admin: bool,
+) -> list[GradingTask]:
+    if is_platform_admin:
+        return tasks
+    if current_user_id is None:
+        return []
+
+    exam_ids = {
+        exam_id
+        for task in tasks
+        if (exam_id := _payload_exam_id(task.source_type, task.source_business_id)) is not None
+    }
+    if not exam_ids:
+        return []
+
+    owned_exam_ids = set(
+        (
+            await db.execute(
+                select(Exam.id).where(
+                    Exam.id.in_(exam_ids),
+                    Exam.owner_id == current_user_id,
+                    Exam.deleted_at.is_(None),
+                )
+            )
+        ).scalars().all()
+    )
+    return [
+        task
+        for task in tasks
+        if (exam_id := _payload_exam_id(task.source_type, task.source_business_id)) in owned_exam_ids
+    ]
+
+
+async def _ensure_task_access(
+    db: AsyncSession,
+    task: GradingTask,
+    *,
+    current_user_id: uuid.UUID | None,
+    is_platform_admin: bool,
+) -> None:
+    exam_id = _payload_exam_id(task.source_type, task.source_business_id)
+    if not await _can_access_exam_id(
+        db,
+        exam_id,
+        current_user_id=current_user_id,
+        is_platform_admin=is_platform_admin,
+    ):
+        raise ValueError("grading task not found")
+
+
+async def _load_candidate_feedback(
+    db: AsyncSession,
+    *,
+    exam_id: str | None,
+    question_id: str | None,
+    candidate_code: str | None,
+) -> dict[str, Any] | None:
+    exam_uuid = _try_parse_uuid(exam_id)
+    question_uuid = _try_parse_uuid(question_id)
+    if exam_uuid is None or question_uuid is None:
+        return None
+
+    stmt = (
+        select(StudentExamAppeal, User)
+        .join(User, User.id == StudentExamAppeal.student_id)
+        .where(
+            StudentExamAppeal.exam_id == exam_uuid,
+            StudentExamAppeal.question_id == question_uuid,
+            User.deleted_at.is_(None),
+        )
+    )
+
+    if candidate_code:
+        normalized_code = candidate_code.strip().upper()
+        matchers = [
+            func.upper(User.username) == normalized_code,
+            func.upper(func.coalesce(User.student_id, "")) == normalized_code,
+        ]
+        candidate_uuid = _try_parse_uuid(candidate_code)
+        if candidate_uuid is not None:
+            matchers.append(User.id == candidate_uuid)
+        stmt = stmt.where(or_(*matchers))
+
+    row = (await db.execute(stmt.order_by(StudentExamAppeal.created_at.desc()))).first()
+    if row is None:
+        return None
+
+    appeal, _user = row
+    return {
+        "student_feedback": appeal.reason,
+        "teacher_feedback_reply": appeal.teacher_reply,
+        "feedback_created_at": appeal.created_at.isoformat() if appeal.created_at else None,
+    }
+
+
+async def _load_workspace_tasks(
+    db: AsyncSession,
+    *,
+    current_user_id: uuid.UUID | None = None,
+    is_platform_admin: bool = True,
+) -> list[GradingTask]:
     result = await db.execute(
         select(GradingTask)
         .options(
@@ -136,7 +333,13 @@ async def _load_workspace_tasks(db: AsyncSession) -> list[GradingTask]:
         )
         .order_by(GradingTask.updated_at.desc())
     )
-    return list(result.scalars().all())
+    tasks = list(result.scalars().all())
+    return await _filter_tasks_by_exam_access(
+        db,
+        tasks,
+        current_user_id=current_user_id,
+        is_platform_admin=is_platform_admin,
+    )
 
 
 def format_evidence_summary(summary: dict[str, Any]) -> list[str]:
@@ -149,6 +352,14 @@ def format_evidence_summary(summary: dict[str, Any]) -> list[str]:
         else:
             items.append(f"{key}: {value}")
     return items
+
+
+def _resolve_prompt_locale(task_language: str | None, override_locale: str | None = None) -> tuple[str, str]:
+    preferred = (override_locale or task_language or "zh-CN").strip()
+    normalized = preferred.lower()
+    if normalized.startswith("en"):
+        return preferred, "Respond in English."
+    return preferred, "默认使用简体中文回复；如果输入里有英文术语，可保留必要术语原文。"
 
 
 def evaluate_arbitration(primary_result: dict[str, Any], review_result: dict[str, Any]) -> tuple[bool, str | None]:
@@ -213,10 +424,23 @@ async def _load_role_binding(db: AsyncSession, version: int) -> RoleBinding:
     return binding
 
 
-async def run_grading_task_with_role_binding(db: AsyncSession, task_id: str) -> dict[str, Any]:
+async def run_grading_task_with_role_binding(
+    db: AsyncSession,
+    task_id: str,
+    locale: str | None = None,
+    *,
+    current_user_id: uuid.UUID | None = None,
+    is_platform_admin: bool = True,
+) -> dict[str, Any]:
     task = await db.get(GradingTask, uuid.UUID(task_id))
     if task is None:
         raise ValueError("grading task not found")
+    await _ensure_task_access(
+        db,
+        task,
+        current_user_id=current_user_id,
+        is_platform_admin=is_platform_admin,
+    )
 
     try:
         binding = await _load_role_binding(db, task.role_binding_version)
@@ -225,11 +449,26 @@ async def run_grading_task_with_role_binding(db: AsyncSession, task_id: str) -> 
     primary_provider = _build_provider_for_model(binding.grader_model)
     review_provider = _build_provider_for_model(binding.reviewer_model)
     arbiter_provider = _build_provider_for_model(binding.arbiter_model)
-    return await run_grading_task(db, task_id, primary_provider, review_provider, arbiter_provider)
+    return await run_grading_task(db, task_id, primary_provider, review_provider, arbiter_provider, locale)
 
 
-async def create_grading_task(db: AsyncSession, payload: dict[str, Any]) -> GradingTask:
+async def create_grading_task(
+    db: AsyncSession,
+    payload: dict[str, Any],
+    *,
+    current_user_id: uuid.UUID | None = None,
+    is_platform_admin: bool = True,
+) -> GradingTask:
     """Persist a grading task and its creation audit entry."""
+
+    exam_id = _payload_exam_id(payload.get("source_type", ""), payload.get("source_business_id"))
+    if not await _can_access_exam_id(
+        db,
+        exam_id,
+        current_user_id=current_user_id,
+        is_platform_admin=is_platform_admin,
+    ):
+        raise ValueError("grading task not found")
 
     task = GradingTask(**payload, status="pending")
     db.add(task)
@@ -247,10 +486,19 @@ async def create_grading_task(db: AsyncSession, payload: dict[str, Any]) -> Grad
     return task
 
 
-async def list_grading_tasks(db: AsyncSession) -> list[dict[str, Any]]:
+async def list_grading_tasks(
+    db: AsyncSession,
+    *,
+    current_user_id: uuid.UUID | None = None,
+    is_platform_admin: bool = True,
+) -> list[dict[str, Any]]:
     """Return grading tasks for the workbench list."""
 
-    tasks = await _load_workspace_tasks(db)
+    tasks = await _load_workspace_tasks(
+        db,
+        current_user_id=current_user_id,
+        is_platform_admin=is_platform_admin,
+    )
 
     items: list[dict[str, Any]] = []
     for task in tasks:
@@ -277,12 +525,22 @@ async def list_grading_tasks(db: AsyncSession) -> list[dict[str, Any]]:
     return items
 
 
-async def get_grading_inbox(db: AsyncSession) -> dict[str, Any]:
-    tasks = await _load_workspace_tasks(db)
+async def get_grading_inbox(
+    db: AsyncSession,
+    *,
+    current_user_id: uuid.UUID | None = None,
+    is_platform_admin: bool = True,
+) -> dict[str, Any]:
+    tasks = await _load_workspace_tasks(
+        db,
+        current_user_id=current_user_id,
+        is_platform_admin=is_platform_admin,
+    )
+    locators = await _hydrate_task_locators(db, tasks)
 
     exam_groups: dict[str, dict[str, Any]] = {}
     for task in tasks:
-        locator = _parse_task_locator(task)
+        locator = locators[task.id]
         exam_key = locator["exam_id"] or "standalone"
         exam_entry = exam_groups.setdefault(
             exam_key,
@@ -341,11 +599,19 @@ async def get_grading_question_candidates(
     db: AsyncSession,
     exam_id: str,
     question_id: str,
+    *,
+    current_user_id: uuid.UUID | None = None,
+    is_platform_admin: bool = True,
 ) -> dict[str, Any]:
-    tasks = await _load_workspace_tasks(db)
+    tasks = await _load_workspace_tasks(
+        db,
+        current_user_id=current_user_id,
+        is_platform_admin=is_platform_admin,
+    )
+    locators = await _hydrate_task_locators(db, tasks)
     matched: list[tuple[GradingTask, dict[str, str | None]]] = []
     for task in tasks:
-        locator = _parse_task_locator(task)
+        locator = locators[task.id]
         if (locator["exam_id"] or "standalone") != (exam_id or "standalone"):
             continue
         if locator["question_id"] != question_id:
@@ -385,7 +651,13 @@ async def get_grading_question_candidates(
     }
 
 
-async def get_grading_candidate_detail(db: AsyncSession, task_id: str) -> dict[str, Any]:
+async def get_grading_candidate_detail(
+    db: AsyncSession,
+    task_id: str,
+    *,
+    current_user_id: uuid.UUID | None = None,
+    is_platform_admin: bool = True,
+) -> dict[str, Any]:
     result = await db.execute(
         select(GradingTask)
         .options(
@@ -399,8 +671,20 @@ async def get_grading_candidate_detail(db: AsyncSession, task_id: str) -> dict[s
     task = result.scalar_one_or_none()
     if task is None:
         raise ValueError("grading task not found")
+    await _ensure_task_access(
+        db,
+        task,
+        current_user_id=current_user_id,
+        is_platform_admin=is_platform_admin,
+    )
 
-    locator = _parse_task_locator(task)
+    locator = (await _hydrate_task_locators(db, [task]))[task.id]
+    feedback = await _load_candidate_feedback(
+        db,
+        exam_id=locator["exam_id"],
+        question_id=locator["question_id"],
+        candidate_code=locator["candidate_code"],
+    )
     try:
         binding = await _load_role_binding(db, task.role_binding_version)
     except ValueError:
@@ -483,6 +767,9 @@ async def get_grading_candidate_detail(db: AsyncSession, task_id: str) -> dict[s
         "question_type": task.question_type,
         "student_answer_raw": task.student_answer_raw,
         "knowledge_tags": task.knowledge_tags,
+        "student_feedback": feedback["student_feedback"] if feedback else None,
+        "teacher_feedback_reply": feedback["teacher_feedback_reply"] if feedback else None,
+        "feedback_created_at": feedback["feedback_created_at"] if feedback else None,
         "models": models,
         "follow_ups": [
             {"prompt": prompt, "models": results}
@@ -495,6 +782,10 @@ async def run_grading_prompt_follow_up(
     db: AsyncSession,
     task_id: str,
     teacher_prompt: str,
+    locale: str | None = None,
+    *,
+    current_user_id: uuid.UUID | None = None,
+    is_platform_admin: bool = True,
 ) -> dict[str, Any]:
     result = await db.execute(
         select(GradingTask)
@@ -509,6 +800,12 @@ async def run_grading_prompt_follow_up(
     task = result.scalar_one_or_none()
     if task is None:
         raise ValueError("grading task not found")
+    await _ensure_task_access(
+        db,
+        task,
+        current_user_id=current_user_id,
+        is_platform_admin=is_platform_admin,
+    )
 
     # Handle replacement logic: remove previous follow-ups with the same prompt
     for s in list(task.snapshots):
@@ -552,6 +849,7 @@ async def run_grading_prompt_follow_up(
             role_name,
             teacher_prompt,
             previous_result,
+            locale,
         )
         try:
             result = await provider.score(system_prompt, user_prompt)
@@ -607,12 +905,21 @@ async def create_manual_score_override(
     task_id: str,
     score_total: float,
     reason: str,
+    *,
+    current_user_id: uuid.UUID | None = None,
+    is_platform_admin: bool = True,
 ) -> GradingResultSnapshot:
     """Create a manual override snapshot and audit event."""
 
     task = await db.get(GradingTask, uuid.UUID(task_id))
     if task is None:
         raise ValueError("grading task not found")
+    await _ensure_task_access(
+        db,
+        task,
+        current_user_id=current_user_id,
+        is_platform_admin=is_platform_admin,
+    )
 
     snapshot = GradingResultSnapshot(
         task_id=task.id,
@@ -646,7 +953,269 @@ async def create_manual_score_override(
     return snapshot
 
 
-async def get_final_report(db: AsyncSession, task_id: str) -> dict[str, Any]:
+def _parse_exam_submission_locator(source_business_id: str | None) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+    if not source_business_id:
+        raise ValueError("missing source business id")
+    parts = source_business_id.split(":")
+    if len(parts) != 3:
+        raise ValueError("invalid exam submission source business id")
+    try:
+        exam_id = uuid.UUID(parts[0])
+        question_id = uuid.UUID(parts[1])
+        student_id = uuid.UUID(parts[2])
+    except ValueError as exc:
+        raise ValueError("invalid exam submission source business id") from exc
+    return exam_id, question_id, student_id
+
+
+def _build_exam_submission_feedback(snapshot: GradingResultSnapshot) -> dict[str, Any]:
+    dimension_scores = snapshot.dimension_scores or {}
+    dimensions = [
+        {
+            "name": str(name),
+            "score": float(value),
+            "max_score": None,
+            "comment": "",
+        }
+        for name, value in dimension_scores.items()
+    ]
+    return {
+        "dimensions": dimensions,
+        "strengths": snapshot.strengths,
+        "deductions": snapshot.deduction_reasons,
+        "suggestions": snapshot.improvement_suggestions,
+        "risk_flags": snapshot.risk_flags,
+        "evidence_summary": snapshot.evidence_summary,
+    }
+
+
+async def _load_exam_submission_context(
+    db: AsyncSession,
+    task_id: str,
+) -> tuple[GradingTask, ExamStudent, StudentExamAnswer | None]:
+    result = await db.execute(
+        select(GradingTask)
+        .options(selectinload(GradingTask.latest_final_snapshot))
+        .where(GradingTask.id == uuid.UUID(task_id))
+    )
+    task = result.scalar_one_or_none()
+    if task is None:
+        raise ValueError("grading task not found")
+    if task.source_type != "exam_submission":
+        raise ValueError("grading task is not linked to an exam submission")
+
+    exam_id, question_id, student_id = _parse_exam_submission_locator(task.source_business_id)
+    exam_student = (
+        await db.execute(
+            select(ExamStudent).where(
+                ExamStudent.exam_id == exam_id,
+                ExamStudent.student_id == student_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if exam_student is None:
+        raise ValueError("exam submission not found")
+
+    answer = (
+        await db.execute(
+            select(StudentExamAnswer).where(
+                StudentExamAnswer.exam_id == exam_id,
+                StudentExamAnswer.student_id == student_id,
+                StudentExamAnswer.question_id == question_id,
+            )
+        )
+    ).scalar_one_or_none()
+    return task, exam_student, answer
+
+
+async def _recompute_submission_scores(
+    db: AsyncSession,
+    *,
+    exam_id: uuid.UUID,
+    student_id: uuid.UUID,
+) -> tuple[float, float]:
+    rows = (
+        await db.execute(
+            select(StudentExamAnswer, Question)
+            .join(Question, Question.id == StudentExamAnswer.question_id)
+            .where(
+                StudentExamAnswer.exam_id == exam_id,
+                StudentExamAnswer.student_id == student_id,
+            )
+        )
+    ).all()
+
+    objective_score = 0.0
+    subjective_score = 0.0
+    for answer, question in rows:
+        question_type = question.type.value if isinstance(question.type, QuestionType) else str(question.type)
+        if question_type in {
+            QuestionType.SHORT_ANSWER.value,
+            QuestionType.ESSAY.value,
+            QuestionType.CODE.value,
+        }:
+            subjective_score += float(answer.score_awarded or 0)
+        else:
+            objective_score += float(answer.score_awarded or 0)
+    return round(objective_score, 2), round(subjective_score, 2)
+
+
+async def _has_pending_exam_submission_tasks(
+    db: AsyncSession,
+    *,
+    exam_id: uuid.UUID,
+    student_id: uuid.UUID,
+) -> bool:
+    tasks = (
+        await db.execute(select(GradingTask).where(GradingTask.source_type == "exam_submission"))
+    ).scalars().all()
+    exam_id_str = str(exam_id)
+    student_id_str = str(student_id)
+    for task in tasks:
+        try:
+            task_exam_id, _question_id, task_student_id = _parse_exam_submission_locator(task.source_business_id)
+        except ValueError:
+            continue
+        if str(task_exam_id) == exam_id_str and str(task_student_id) == student_id_str and task.status != "completed":
+            return True
+    return False
+
+
+async def apply_grading_task_result_to_exam_submission(db: AsyncSession, task_id: str) -> dict[str, Any]:
+    task, exam_student, answer = await _load_exam_submission_context(db, task_id)
+    if answer is None:
+        raise ValueError("student exam answer not found")
+    if task.latest_final_snapshot is None:
+        raise ValueError("grading task has no final snapshot")
+
+    snapshot = task.latest_final_snapshot
+    answer.score_awarded = float(snapshot.score_total)
+    answer.is_correct = float(snapshot.score_total) >= float(task.max_score) * 0.6
+    answer.feedback = _build_exam_submission_feedback(snapshot)
+
+    exam_id, _question_id, student_id = _parse_exam_submission_locator(task.source_business_id)
+    objective_score, subjective_score = await _recompute_submission_scores(db, exam_id=exam_id, student_id=student_id)
+    exam_student.objective_score = objective_score
+    exam_student.subjective_score = subjective_score
+    exam_student.score = round(objective_score + subjective_score, 2)
+
+    now = _utcnow()
+    if await _has_pending_exam_submission_tasks(db, exam_id=exam_id, student_id=student_id):
+        exam_student.grading_status = GradingStatus.PENDING_AI.value
+    else:
+        exam_student.grading_status = GradingStatus.AI_SCORED.value
+        exam_student.ai_scored_at = now
+    exam_student.graded_at = now
+    await db.flush()
+    return {
+        "status": task.status,
+        "grading_status": exam_student.grading_status,
+        "score": exam_student.score,
+    }
+
+
+async def confirm_grading_task_for_exam_submission(
+    db: AsyncSession,
+    task_id: str,
+    *,
+    current_user_id: uuid.UUID | None = None,
+    is_platform_admin: bool = True,
+) -> dict[str, Any]:
+    task = await db.get(GradingTask, uuid.UUID(task_id))
+    if task is None:
+        raise ValueError("grading task not found")
+    await _ensure_task_access(
+        db,
+        task,
+        current_user_id=current_user_id,
+        is_platform_admin=is_platform_admin,
+    )
+    if task.latest_final_snapshot_id is None:
+        raise ValueError("grading task has no final snapshot")
+
+    if task.source_type != "exam_submission":
+        db.add(
+            GradingAuditEvent(
+                task_id=task.id,
+                event_type="grading.confirmed",
+                event_payload={"mode": "generic"},
+                operator_type="user",
+                operator_id="teacher",
+            )
+        )
+        await db.flush()
+        return {"status": task.status, "grading_status": GradingStatus.REVIEWED.value}
+
+    try:
+        _exam_id, _question_id, _student_id = _parse_exam_submission_locator(task.source_business_id)
+        task, exam_student, _answer = await _load_exam_submission_context(db, task_id)
+    except ValueError:
+        db.add(
+            GradingAuditEvent(
+                task_id=task.id,
+                event_type="grading.confirmed",
+                event_payload={"mode": "legacy_exam_submission"},
+                operator_type="user",
+                operator_id="teacher",
+            )
+        )
+        await db.flush()
+        return {"status": task.status, "grading_status": GradingStatus.REVIEWED.value}
+
+    exam_id, _question_id, student_id = _parse_exam_submission_locator(task.source_business_id)
+    now = _utcnow()
+    if exam_student.grading_status == GradingStatus.REVIEWED.value:
+        return {"status": task.status, "grading_status": exam_student.grading_status}
+
+    exam_student.grading_status = GradingStatus.REVIEWED.value
+    exam_student.reviewed_at = now
+    if exam_student.ai_scored_at is None:
+        exam_student.ai_scored_at = now
+    if exam_student.graded_at is None:
+        exam_student.graded_at = now
+
+    existing_notification = (
+        await db.execute(
+            select(StudentNotification).where(
+                StudentNotification.student_id == student_id,
+                StudentNotification.related_exam_id == exam_id,
+                StudentNotification.type == "exam_reviewed",
+            )
+        )
+    ).scalar_one_or_none()
+    if existing_notification is None:
+        db.add(
+            StudentNotification(
+                student_id=student_id,
+                type="exam_reviewed",
+                title="考试成绩已审核确认",
+                content="你的考试成绩已由教师审核确认，可以查看最新结果。",
+                related_exam_id=exam_id,
+                read_at=None,
+            )
+        )
+    else:
+        existing_notification.read_at = None
+    db.add(
+        GradingAuditEvent(
+            task_id=task.id,
+            event_type="grading.exam_submission_confirmed",
+            event_payload={"exam_id": str(exam_id), "student_id": str(student_id)},
+            operator_type="user",
+            operator_id="teacher",
+        )
+    )
+    await db.flush()
+    return {"status": task.status, "grading_status": exam_student.grading_status}
+
+
+async def get_final_report(
+    db: AsyncSession,
+    task_id: str,
+    *,
+    current_user_id: uuid.UUID | None = None,
+    is_platform_admin: bool = True,
+) -> dict[str, Any]:
     """Return the current final grading report for a task."""
 
     result = await db.execute(
@@ -664,6 +1233,12 @@ async def get_final_report(db: AsyncSession, task_id: str) -> dict[str, Any]:
     task = result.scalar_one_or_none()
     if task is None:
         raise ValueError("grading task not found")
+    await _ensure_task_access(
+        db,
+        task,
+        current_user_id=current_user_id,
+        is_platform_admin=is_platform_admin,
+    )
 
     try:
         binding = await _load_role_binding(db, task.role_binding_version)
@@ -810,11 +1385,18 @@ def _build_grading_context(task: GradingTask) -> dict[str, Any]:
     raise ValueError(f"unsupported grading question type: {task.question_type}")
 
 
-def _build_prompt_pair(task: GradingTask, context: dict[str, Any], role_name: str) -> tuple[str, str]:
+def _build_prompt_pair(
+    task: GradingTask,
+    context: dict[str, Any],
+    role_name: str,
+    locale: str | None = None,
+) -> tuple[str, str]:
+    preferred_locale, language_instruction = _resolve_prompt_locale(task.language, locale)
     system_prompt = (
         f"You are the {role_name} for a grading engine. "
         f"Score the answer on the exact 0 to max_score scale, where max_score is {task.max_score}. "
         "Do not use a 0-1 scale unless max_score is 1. "
+        f"{language_instruction} "
         "Return only structured JSON with score_total, dimension_scores, deduction_reasons, "
         "strengths, improvement_suggestions, evidence_summary, and risk_flags."
     )
@@ -823,6 +1405,7 @@ def _build_prompt_pair(task: GradingTask, context: dict[str, Any], role_name: st
         f"Question type: {task.question_type}\n"
         f"Question: {task.question_content}\n"
         f"Max score: {task.max_score}\n"
+        f"Preferred locale: {preferred_locale}\n"
         f"Knowledge tags: {json.dumps(task.knowledge_tags, ensure_ascii=False)}\n"
         f"Context: {json.dumps(context, ensure_ascii=False, sort_keys=True)}"
     )
@@ -835,12 +1418,15 @@ def _build_arbiter_prompt_pair(
     primary_result: GradingProviderResult,
     review_result: GradingProviderResult,
     reason: str | None,
+    locale: str | None = None,
 ) -> tuple[str, str]:
+    preferred_locale, language_instruction = _resolve_prompt_locale(task.language, locale)
     system_prompt = (
         "You are the final arbiter for a grading engine. "
         "Review the shared grading context plus the conflicting primary and review results. "
         f"Score the answer on the exact 0 to max_score scale, where max_score is {task.max_score}. "
         "Do not use a 0-1 scale unless max_score is 1. "
+        f"{language_instruction} "
         "Return only structured JSON with score_total, dimension_scores, deduction_reasons, "
         "strengths, improvement_suggestions, evidence_summary, and risk_flags."
     )
@@ -849,6 +1435,7 @@ def _build_arbiter_prompt_pair(
         f"Question type: {task.question_type}\n"
         f"Question: {task.question_content}\n"
         f"Max score: {task.max_score}\n"
+        f"Preferred locale: {preferred_locale}\n"
         f"Knowledge tags: {json.dumps(task.knowledge_tags, ensure_ascii=False)}\n"
         f"Arbitration reason: {reason}\n"
         f"Context: {json.dumps(context, ensure_ascii=False, sort_keys=True)}\n"
@@ -866,11 +1453,14 @@ def _build_follow_up_prompt_pair(
     role_name: str,
     teacher_prompt: str,
     previous_result: dict[str, Any] | None = None,
+    locale: str | None = None,
 ) -> tuple[str, str]:
+    preferred_locale, language_instruction = _resolve_prompt_locale(task.language, locale)
     system_prompt = (
         f"You are the {role_name} for a grading engine follow-up review. "
         f"Score the answer on the exact 0 to max_score scale, where max_score is {task.max_score}. "
         "Do not use a 0-1 scale unless max_score is 1. "
+        f"{language_instruction} "
         "Return only structured JSON with score_total, dimension_scores, deduction_reasons, "
         "strengths, improvement_suggestions, evidence_summary, and risk_flags."
     )
@@ -879,6 +1469,7 @@ def _build_follow_up_prompt_pair(
         f"Question type: {task.question_type}",
         f"Question: {task.question_content}",
         f"Max score: {task.max_score}",
+        f"Preferred locale: {preferred_locale}",
         f"Knowledge tags: {json.dumps(task.knowledge_tags, ensure_ascii=False)}",
         f"Teacher follow-up prompt: {teacher_prompt}",
         f"Context: {json.dumps(context, ensure_ascii=False, sort_keys=True)}",
@@ -997,6 +1588,7 @@ async def run_grading_task(
     primary_provider: GradingProvider,
     review_provider: GradingProvider,
     arbiter_provider: GradingProvider | None = None,
+    locale: str | None = None,
 ) -> dict[str, Any]:
     """Execute the primary/review grading flow for a task."""
 
@@ -1006,7 +1598,7 @@ async def run_grading_task(
 
     context = _build_grading_context(task)
 
-    primary_system_prompt, primary_user_prompt = _build_prompt_pair(task, context, "primary grader")
+    primary_system_prompt, primary_user_prompt = _build_prompt_pair(task, context, "primary grader", locale)
     primary_result = await primary_provider.score(primary_system_prompt, primary_user_prompt)
     primary_snapshot = _result_to_snapshot(task, primary_result, "primary")
     db.add(primary_snapshot)
@@ -1022,7 +1614,7 @@ async def run_grading_task(
         )
     )
 
-    review_system_prompt, review_user_prompt = _build_prompt_pair(task, context, "review grader")
+    review_system_prompt, review_user_prompt = _build_prompt_pair(task, context, "review grader", locale)
     review_result = await review_provider.score(review_system_prompt, review_user_prompt)
     review_snapshot = _result_to_snapshot(task, review_result, "review")
     db.add(review_snapshot)
@@ -1072,6 +1664,7 @@ async def run_grading_task(
             primary_result,
             review_result,
             reason,
+            locale,
         )
         arbiter_result = await arbiter_provider.score(arbiter_system_prompt, arbiter_user_prompt)
         arbiter_snapshot = _result_to_snapshot(task, arbiter_result, "arbiter")

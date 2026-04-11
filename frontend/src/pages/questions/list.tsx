@@ -1,7 +1,7 @@
-import { useList, useCreate, useDelete, useInvalidate, useNavigation, useUpdate } from "@refinedev/core";
+import { useList, useCreate, useDelete, useGetIdentity, useInvalidate, useNavigation, useUpdate } from "@refinedev/core";
 import type { CrudFilter } from "@refinedev/core";
 import type { IQuestion, IQuestionBank, ITag, QuestionType } from "../../types";
-import { Search, BookOpen, Pencil, Trash2, Plus, ChevronDown, ChevronUp, Library, Check, PackageOpen, GraduationCap, SlidersHorizontal, ChevronsDownUp, ChevronsUpDown, Link2, Save, ChevronRight } from "lucide-react";
+import { Search, BookOpen, Pencil, Trash2, Plus, ChevronDown, ChevronUp, Library, Check, PackageOpen, GraduationCap, SlidersHorizontal, ChevronsDownUp, ChevronsUpDown, Link2, Save, ChevronRight, Lock } from "lucide-react";
 import { useState, useCallback, useRef, useEffect, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -161,6 +161,7 @@ async function knowledgeApiFetch<T>(url: string): Promise<T> {
 }
 
 export function QuestionList() {
+  const { data: identity } = useGetIdentity<{ id?: string; primary_org?: { role_name?: string } | null }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const [current, setCurrent] = useState(1);
   const [filters, setFilters] = useState<CrudFilter[]>([]);
@@ -329,6 +330,8 @@ export function QuestionList() {
     : rawQuestions;
   const total = hasEmptyFilter ? 0 : (data?.total ?? 0);
   const banks = banksQuery.data?.data ?? [];
+  const roleName = identity?.primary_org?.role_name;
+  const canManageSharedResources = roleName === "admin" || roleName === "platform_admin" || roleName === "school_admin";
   const noBankCount: number = (banksQuery.data as Record<string, unknown>)?.meta
     ? ((banksQuery.data as Record<string, unknown>).meta as Record<string, number>).noBankCount ?? 0
     : 0;
@@ -782,6 +785,10 @@ export function QuestionList() {
           ) : (
             banks.map((bank) => {
               const isActive = activeQuestionBankId === bank.id;
+              const isReadOnlyShared =
+                bank.visibility === "platform" &&
+                bank.owner_id !== identity?.id &&
+                !canManageSharedResources;
               return (
                 <div
                   key={bank.id}
@@ -803,6 +810,12 @@ export function QuestionList() {
                       <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4 shrink-0">
                         {bank.question_count}
                       </Badge>
+                      {isReadOnlyShared && (
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 shrink-0">
+                          <Lock size={10} className="mr-1" />
+                          共享只读
+                        </Badge>
+                      )}
                     </div>
                     {bank.description && (
                       <p className="text-xs text-muted-foreground truncate mt-0.5">
@@ -814,10 +827,12 @@ export function QuestionList() {
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
+                      if (isReadOnlyShared) return;
                       setDeleteBankTarget(bank);
                     }}
-                    className="shrink-0 ml-2 p-0.5 rounded opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all"
-                    title="删除该题库所有题目"
+                    disabled={isReadOnlyShared}
+                    className="shrink-0 ml-2 p-0.5 rounded opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive disabled:hover:text-muted-foreground disabled:cursor-not-allowed transition-all"
+                    title={isReadOnlyShared ? "共享题库只读，不能删除" : "删除该题库所有题目"}
                   >
                     <Trash2 size={13} />
                   </button>

@@ -16,7 +16,7 @@ from app.grading.providers.base import GradingProviderResult
 from app.grading.providers.deepseek import DeepSeekProvider
 from app.grading.providers.openrouter import OpenRouterProvider
 from app.grading.providers.qwen import QwenProvider
-from app.grading.service import _build_provider_for_model, run_grading_task
+from app.grading.service import _build_follow_up_prompt_pair, _build_prompt_pair, _build_provider_for_model, run_grading_task
 
 
 class FakeProvider:
@@ -128,6 +128,7 @@ async def test_run_grading_task_creates_primary_review_and_final_snapshots(db_se
     assert '"max_score": 10' in primary_provider.calls[0][1]
     assert '"knowledge_tags": ["接口设计", "幂等性"]' in primary_provider.calls[0][1]
     assert "0 to max_score" in primary_provider.calls[0][0]
+    assert "默认使用简体中文回复" in primary_provider.calls[0][0]
 
     refreshed_task = await db_session.get(GradingTask, task.id)
     assert refreshed_task is not None
@@ -154,6 +155,39 @@ async def test_run_grading_task_creates_primary_review_and_final_snapshots(db_se
         "grading.review_completed",
         "grading.finalized",
     }
+
+
+@pytest.mark.asyncio
+async def test_grading_prompts_switch_to_english_when_locale_is_en(db_session: AsyncSession) -> None:
+    task = GradingTask(
+        source_type="single_debug",
+        question_type="short_answer",
+        question_content="Explain idempotency in one sentence.",
+        max_score=10,
+        knowledge_tags=["api"],
+        student_answer_raw="Repeated requests yield the same result.",
+        standard_answers=[{"summary": "Repeated execution yields the same result."}],
+        rubric_definition={},
+        role_binding_version=1,
+        status="pending",
+        language="zh-CN",
+    )
+
+    context = {"student_answer": task.student_answer_raw}
+    system_prompt, user_prompt = _build_prompt_pair(task, context, "primary grader", "en-US")
+    follow_up_system_prompt, follow_up_user_prompt = _build_follow_up_prompt_pair(
+        task,
+        context,
+        "review grader",
+        "Please focus on precision.",
+        None,
+        "en-US",
+    )
+
+    assert "Respond in English." in system_prompt
+    assert "Preferred locale: en-US" in user_prompt
+    assert "Respond in English." in follow_up_system_prompt
+    assert "Preferred locale: en-US" in follow_up_user_prompt
 
 
 @pytest.mark.asyncio

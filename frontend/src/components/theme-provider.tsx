@@ -29,6 +29,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const root = document.documentElement;
     root.classList.remove("light", "dark");
     root.classList.add(resolved);
+    root.style.colorScheme = resolved;
     localStorage.setItem("theme", theme);
   }, [theme, resolved]);
 
@@ -37,8 +38,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const handler = () => {
       const root = document.documentElement;
+      const systemTheme = getSystemTheme();
       root.classList.remove("light", "dark");
-      root.classList.add(getSystemTheme());
+      root.classList.add(systemTheme);
+      root.style.colorScheme = systemTheme;
     };
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);

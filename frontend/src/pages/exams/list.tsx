@@ -47,6 +47,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { ExamStatusBadge, examStatusOptions } from "./components/ExamStatusBadge";
+import { getEffectiveExamStatus } from "./utils";
 import type { ExamStatus, IExam } from "@/types";
 
 type FilterKey = "all" | ExamStatus;
@@ -71,8 +72,9 @@ function ExamCard({
   onClose: () => void;
   onDelete: () => void;
 }) {
+  const effectiveStatus = getEffectiveExamStatus(exam);
   const canClose =
-    exam.status !== "ongoing" || exam.submitted_count >= exam.total_students;
+    effectiveStatus !== "ongoing" || exam.submitted_count >= exam.total_students;
 
   return (
     <div className="group relative overflow-hidden rounded-xl border border-border/50 bg-card p-0 transition-all hover:border-primary/20 hover:shadow-xl hover:shadow-primary/[0.03]">
@@ -83,7 +85,7 @@ function ExamCard({
             <h3 className="text-base font-bold text-foreground tracking-tight truncate">
               {exam.title}
             </h3>
-            <ExamStatusBadge status={exam.status} />
+            <ExamStatusBadge status={effectiveStatus} />
           </div>
 
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
@@ -118,7 +120,7 @@ function ExamCard({
           </Button>
 
           {/* 发布 — draft only */}
-          {exam.status === "draft" && (
+          {effectiveStatus === "draft" && (
             <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-primary hover:text-primary hover:bg-primary/5" onClick={onPublish}>
               <Send size={14} className="mr-1" />
               发布
@@ -126,7 +128,7 @@ function ExamCard({
           )}
 
           {/* 关闭 — draft(no), upcoming, ongoing(conditional), completed */}
-          {(exam.status === "upcoming" || exam.status === "ongoing" || exam.status === "completed") && (
+          {(effectiveStatus === "upcoming" || effectiveStatus === "ongoing" || effectiveStatus === "completed") && (
             <TooltipProvider delayDuration={200}>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -153,7 +155,7 @@ function ExamCard({
           )}
 
           {/* 删除 — draft, upcoming, completed */}
-          {(exam.status === "draft" || exam.status === "upcoming" || exam.status === "completed") && (
+          {(effectiveStatus === "draft" || effectiveStatus === "upcoming" || effectiveStatus === "completed") && (
             <Button
               variant="ghost"
               size="sm"

@@ -3,11 +3,12 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Sun, Moon, Monitor, Settings2, Check, RotateCcw } from "lucide-react";
+import { Sun, Moon, Monitor, Settings2, Check, RotateCcw, Maximize, AlignCenter } from "lucide-react";
 import { createContext, useContext, useEffect, useState, useCallback } from "react";
+import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ */
-/*  Color theme definitions — full shadcn/ui CSS variable set          */
+/*  Color theme definitions                                            */
 /* ------------------------------------------------------------------ */
 
 interface ColorTheme {
@@ -21,352 +22,41 @@ interface ColorTheme {
 }
 
 const colorThemes: ColorTheme[] = [
-  {
-    name: "zinc",
-    label: "Zinc",
-    activeColor: "hsl(240 5.9% 10%)",
-    cssVars: {
-      light: {
-        "--background": "0 0% 100%",
-        "--foreground": "240 10% 3.9%",
-        "--card": "0 0% 100%",
-        "--card-foreground": "240 10% 3.9%",
-        "--popover": "0 0% 100%",
-        "--popover-foreground": "240 10% 3.9%",
-        "--primary": "240 5.9% 10%",
-        "--primary-foreground": "0 0% 98%",
-        "--secondary": "240 4.8% 95.9%",
-        "--secondary-foreground": "240 5.9% 10%",
-        "--muted": "240 4.8% 95.9%",
-        "--muted-foreground": "240 3.8% 46.1%",
-        "--accent": "240 4.8% 95.9%",
-        "--accent-foreground": "240 5.9% 10%",
-        "--destructive": "0 84.2% 60.2%",
-        "--destructive-foreground": "0 0% 98%",
-        "--border": "240 5.9% 90%",
-        "--input": "240 5.9% 90%",
-        "--ring": "240 5.9% 10%",
-      },
-      dark: {
-        "--background": "240 10% 3.9%",
-        "--foreground": "0 0% 98%",
-        "--card": "240 10% 3.9%",
-        "--card-foreground": "0 0% 98%",
-        "--popover": "240 10% 3.9%",
-        "--popover-foreground": "0 0% 98%",
-        "--primary": "0 0% 98%",
-        "--primary-foreground": "240 5.9% 10%",
-        "--secondary": "240 3.7% 15.9%",
-        "--secondary-foreground": "0 0% 98%",
-        "--muted": "240 3.7% 15.9%",
-        "--muted-foreground": "240 5% 64.9%",
-        "--accent": "240 3.7% 15.9%",
-        "--accent-foreground": "0 0% 98%",
-        "--destructive": "0 62.8% 30.6%",
-        "--destructive-foreground": "0 0% 98%",
-        "--border": "240 3.7% 15.9%",
-        "--input": "240 3.7% 15.9%",
-        "--ring": "240 4.9% 83.9%",
-      },
-    },
-  },
-  {
-    name: "slate",
-    label: "Slate",
-    activeColor: "hsl(215.4 16.3% 46.9%)",
-    cssVars: {
-      light: {
-        "--background": "0 0% 100%",
-        "--foreground": "222.2 84% 4.9%",
-        "--card": "0 0% 100%",
-        "--card-foreground": "222.2 84% 4.9%",
-        "--popover": "0 0% 100%",
-        "--popover-foreground": "222.2 84% 4.9%",
-        "--primary": "222.2 47.4% 11.2%",
-        "--primary-foreground": "210 40% 98%",
-        "--secondary": "210 40% 96.1%",
-        "--secondary-foreground": "222.2 47.4% 11.2%",
-        "--muted": "210 40% 96.1%",
-        "--muted-foreground": "215.4 16.3% 46.9%",
-        "--accent": "210 40% 96.1%",
-        "--accent-foreground": "222.2 47.4% 11.2%",
-        "--destructive": "0 84.2% 60.2%",
-        "--destructive-foreground": "210 40% 98%",
-        "--border": "214.3 31.8% 91.4%",
-        "--input": "214.3 31.8% 91.4%",
-        "--ring": "222.2 84% 4.9%",
-      },
-      dark: {
-        "--background": "222.2 84% 4.9%",
-        "--foreground": "210 40% 98%",
-        "--card": "222.2 84% 4.9%",
-        "--card-foreground": "210 40% 98%",
-        "--popover": "222.2 84% 4.9%",
-        "--popover-foreground": "210 40% 98%",
-        "--primary": "210 40% 98%",
-        "--primary-foreground": "222.2 47.4% 11.2%",
-        "--secondary": "217.2 32.6% 17.5%",
-        "--secondary-foreground": "210 40% 98%",
-        "--muted": "217.2 32.6% 17.5%",
-        "--muted-foreground": "215 20.2% 65.1%",
-        "--accent": "217.2 32.6% 17.5%",
-        "--accent-foreground": "210 40% 98%",
-        "--destructive": "0 62.8% 30.6%",
-        "--destructive-foreground": "210 40% 98%",
-        "--border": "217.2 32.6% 17.5%",
-        "--input": "217.2 32.6% 17.5%",
-        "--ring": "212.7 26.8% 83.9%",
-      },
-    },
-  },
-  {
-    name: "violet",
-    label: "Violet",
-    activeColor: "hsl(263 70% 50.4%)",
-    cssVars: {
-      light: {
-        "--background": "0 0% 100%",
-        "--foreground": "224 71.4% 4.1%",
-        "--card": "0 0% 100%",
-        "--card-foreground": "224 71.4% 4.1%",
-        "--popover": "0 0% 100%",
-        "--popover-foreground": "224 71.4% 4.1%",
-        "--primary": "262.1 83.3% 57.8%",
-        "--primary-foreground": "210 20% 98%",
-        "--secondary": "220 14.3% 95.9%",
-        "--secondary-foreground": "220.9 39.3% 11%",
-        "--muted": "220 14.3% 95.9%",
-        "--muted-foreground": "220 8.9% 46.1%",
-        "--accent": "220 14.3% 95.9%",
-        "--accent-foreground": "220.9 39.3% 11%",
-        "--destructive": "0 84.2% 60.2%",
-        "--destructive-foreground": "210 20% 98%",
-        "--border": "220 13% 91%",
-        "--input": "220 13% 91%",
-        "--ring": "262.1 83.3% 57.8%",
-      },
-      dark: {
-        "--background": "224 71.4% 4.1%",
-        "--foreground": "210 20% 98%",
-        "--card": "224 71.4% 4.1%",
-        "--card-foreground": "210 20% 98%",
-        "--popover": "224 71.4% 4.1%",
-        "--popover-foreground": "210 20% 98%",
-        "--primary": "263.4 70% 50.4%",
-        "--primary-foreground": "210 20% 98%",
-        "--secondary": "215 27.9% 16.9%",
-        "--secondary-foreground": "210 20% 98%",
-        "--muted": "215 27.9% 16.9%",
-        "--muted-foreground": "217.9 10.6% 64.9%",
-        "--accent": "215 27.9% 16.9%",
-        "--accent-foreground": "210 20% 98%",
-        "--destructive": "0 62.8% 30.6%",
-        "--destructive-foreground": "210 20% 98%",
-        "--border": "215 27.9% 16.9%",
-        "--input": "215 27.9% 16.9%",
-        "--ring": "263.4 70% 50.4%",
-      },
-    },
-  },
-  {
-    name: "blue",
-    label: "Blue",
-    activeColor: "hsl(221.2 83.2% 53.3%)",
-    cssVars: {
-      light: {
-        "--background": "0 0% 100%",
-        "--foreground": "222.2 84% 4.9%",
-        "--card": "0 0% 100%",
-        "--card-foreground": "222.2 84% 4.9%",
-        "--popover": "0 0% 100%",
-        "--popover-foreground": "222.2 84% 4.9%",
-        "--primary": "221.2 83.2% 53.3%",
-        "--primary-foreground": "210 40% 98%",
-        "--secondary": "210 40% 96.1%",
-        "--secondary-foreground": "222.2 47.4% 11.2%",
-        "--muted": "210 40% 96.1%",
-        "--muted-foreground": "215.4 16.3% 46.9%",
-        "--accent": "210 40% 96.1%",
-        "--accent-foreground": "222.2 47.4% 11.2%",
-        "--destructive": "0 84.2% 60.2%",
-        "--destructive-foreground": "210 40% 98%",
-        "--border": "214.3 31.8% 91.4%",
-        "--input": "214.3 31.8% 91.4%",
-        "--ring": "221.2 83.2% 53.3%",
-      },
-      dark: {
-        "--background": "222.2 84% 4.9%",
-        "--foreground": "210 40% 98%",
-        "--card": "222.2 84% 4.9%",
-        "--card-foreground": "210 40% 98%",
-        "--popover": "222.2 84% 4.9%",
-        "--popover-foreground": "210 40% 98%",
-        "--primary": "217.2 91.2% 59.8%",
-        "--primary-foreground": "222.2 47.4% 11.2%",
-        "--secondary": "217.2 32.6% 17.5%",
-        "--secondary-foreground": "210 40% 98%",
-        "--muted": "217.2 32.6% 17.5%",
-        "--muted-foreground": "215 20.2% 65.1%",
-        "--accent": "217.2 32.6% 17.5%",
-        "--accent-foreground": "210 40% 98%",
-        "--destructive": "0 62.8% 30.6%",
-        "--destructive-foreground": "210 40% 98%",
-        "--border": "217.2 32.6% 17.5%",
-        "--input": "217.2 32.6% 17.5%",
-        "--ring": "224.3 76.3% 48%",
-      },
-    },
-  },
-  {
-    name: "green",
-    label: "Green",
-    activeColor: "hsl(142.1 76.2% 36.3%)",
-    cssVars: {
-      light: {
-        "--background": "0 0% 100%",
-        "--foreground": "240 10% 3.9%",
-        "--card": "0 0% 100%",
-        "--card-foreground": "240 10% 3.9%",
-        "--popover": "0 0% 100%",
-        "--popover-foreground": "240 10% 3.9%",
-        "--primary": "142.1 76.2% 36.3%",
-        "--primary-foreground": "355.7 100% 97.3%",
-        "--secondary": "240 4.8% 95.9%",
-        "--secondary-foreground": "240 5.9% 10%",
-        "--muted": "240 4.8% 95.9%",
-        "--muted-foreground": "240 3.8% 46.1%",
-        "--accent": "240 4.8% 95.9%",
-        "--accent-foreground": "240 5.9% 10%",
-        "--destructive": "0 84.2% 60.2%",
-        "--destructive-foreground": "0 0% 98%",
-        "--border": "240 5.9% 90%",
-        "--input": "240 5.9% 90%",
-        "--ring": "142.1 76.2% 36.3%",
-      },
-      dark: {
-        "--background": "20 14.3% 4.1%",
-        "--foreground": "0 0% 95%",
-        "--card": "24 9.8% 10%",
-        "--card-foreground": "0 0% 95%",
-        "--popover": "0 0% 9%",
-        "--popover-foreground": "0 0% 95%",
-        "--primary": "142.1 70.6% 45.3%",
-        "--primary-foreground": "144.9 80.4% 10%",
-        "--secondary": "240 3.7% 15.9%",
-        "--secondary-foreground": "0 0% 98%",
-        "--muted": "0 0% 15%",
-        "--muted-foreground": "240 5% 64.9%",
-        "--accent": "12 6.5% 15.1%",
-        "--accent-foreground": "0 0% 98%",
-        "--destructive": "0 62.8% 30.6%",
-        "--destructive-foreground": "0 85.7% 97.3%",
-        "--border": "240 3.7% 15.9%",
-        "--input": "240 3.7% 15.9%",
-        "--ring": "142.4 71.8% 29.2%",
-      },
-    },
-  },
-  {
-    name: "rose",
-    label: "Rose",
-    activeColor: "hsl(346.8 77.2% 49.8%)",
-    cssVars: {
-      light: {
-        "--background": "0 0% 100%",
-        "--foreground": "240 10% 3.9%",
-        "--card": "0 0% 100%",
-        "--card-foreground": "240 10% 3.9%",
-        "--popover": "0 0% 100%",
-        "--popover-foreground": "240 10% 3.9%",
-        "--primary": "346.8 77.2% 49.8%",
-        "--primary-foreground": "355.7 100% 97.3%",
-        "--secondary": "240 4.8% 95.9%",
-        "--secondary-foreground": "240 5.9% 10%",
-        "--muted": "240 4.8% 95.9%",
-        "--muted-foreground": "240 3.8% 46.1%",
-        "--accent": "240 4.8% 95.9%",
-        "--accent-foreground": "240 5.9% 10%",
-        "--destructive": "0 84.2% 60.2%",
-        "--destructive-foreground": "0 0% 98%",
-        "--border": "240 5.9% 90%",
-        "--input": "240 5.9% 90%",
-        "--ring": "346.8 77.2% 49.8%",
-      },
-      dark: {
-        "--background": "20 14.3% 4.1%",
-        "--foreground": "0 0% 95%",
-        "--card": "24 9.8% 10%",
-        "--card-foreground": "0 0% 95%",
-        "--popover": "0 0% 9%",
-        "--popover-foreground": "0 0% 95%",
-        "--primary": "346.8 77.2% 49.8%",
-        "--primary-foreground": "355.7 100% 97.3%",
-        "--secondary": "240 3.7% 15.9%",
-        "--secondary-foreground": "0 0% 98%",
-        "--muted": "0 0% 15%",
-        "--muted-foreground": "240 5% 64.9%",
-        "--accent": "12 6.5% 15.1%",
-        "--accent-foreground": "0 0% 98%",
-        "--destructive": "0 62.8% 30.6%",
-        "--destructive-foreground": "0 85.7% 97.3%",
-        "--border": "240 3.7% 15.9%",
-        "--input": "240 3.7% 15.9%",
-        "--ring": "346.8 77.2% 49.8%",
-      },
-    },
-  },
-  {
-    name: "orange",
-    label: "Orange",
-    activeColor: "hsl(24.6 95% 53.1%)",
-    cssVars: {
-      light: {
-        "--background": "0 0% 100%",
-        "--foreground": "20 14.3% 4.1%",
-        "--card": "0 0% 100%",
-        "--card-foreground": "20 14.3% 4.1%",
-        "--popover": "0 0% 100%",
-        "--popover-foreground": "20 14.3% 4.1%",
-        "--primary": "24.6 95% 53.1%",
-        "--primary-foreground": "60 9.1% 97.8%",
-        "--secondary": "60 4.8% 95.9%",
-        "--secondary-foreground": "24 9.8% 10%",
-        "--muted": "60 4.8% 95.9%",
-        "--muted-foreground": "25 5.3% 44.7%",
-        "--accent": "60 4.8% 95.9%",
-        "--accent-foreground": "24 9.8% 10%",
-        "--destructive": "0 84.2% 60.2%",
-        "--destructive-foreground": "60 9.1% 97.8%",
-        "--border": "20 5.9% 90%",
-        "--input": "20 5.9% 90%",
-        "--ring": "24.6 95% 53.1%",
-      },
-      dark: {
-        "--background": "20 14.3% 4.1%",
-        "--foreground": "60 9.1% 97.8%",
-        "--card": "20 14.3% 4.1%",
-        "--card-foreground": "60 9.1% 97.8%",
-        "--popover": "20 14.3% 4.1%",
-        "--popover-foreground": "60 9.1% 97.8%",
-        "--primary": "20.5 90.2% 48.2%",
-        "--primary-foreground": "60 9.1% 97.8%",
-        "--secondary": "12 6.5% 15.1%",
-        "--secondary-foreground": "60 9.1% 97.8%",
-        "--muted": "12 6.5% 15.1%",
-        "--muted-foreground": "24 5.4% 63.9%",
-        "--accent": "12 6.5% 15.1%",
-        "--accent-foreground": "60 9.1% 97.8%",
-        "--destructive": "0 62.8% 30.6%",
-        "--destructive-foreground": "60 9.1% 97.8%",
-        "--border": "12 6.5% 15.1%",
-        "--input": "12 6.5% 15.1%",
-        "--ring": "20.5 90.2% 48.2%",
-      },
-    },
-  },
+  { name: "zinc", label: "锌灰", activeColor: "hsl(240 5.9% 10%)", cssVars: { 
+    light: { "--primary": "240 5.9% 10%", "--primary-foreground": "0 0% 98%", "--ring": "240 5.9% 10%", "--accent": "240 4.8% 95.9%", "--accent-foreground": "240 5.9% 10%" },
+    dark: { "--primary": "0 0% 98%", "--primary-foreground": "240 5.9% 10%", "--ring": "240 4.9% 83.9%", "--accent": "240 3.7% 15.9%", "--accent-foreground": "0 0% 98%" }
+  }},
+  { name: "red", label: "红色", activeColor: "hsl(0 72.2% 50.6%)", cssVars: { 
+    light: { "--primary": "0 72.2% 50.6%", "--primary-foreground": "0 85.7% 97.3%", "--ring": "0 72.2% 50.6%", "--accent": "0 72.2% 96%", "--accent-foreground": "0 72.2% 50.6%" },
+    dark: { "--primary": "0 72.2% 50.6%", "--primary-foreground": "0 85.7% 97.3%", "--ring": "0 72.2% 50.6%", "--accent": "0 72.2% 15%", "--accent-foreground": "0 85.7% 97.3%" }
+  }},
+  { name: "rose", label: "玫瑰", activeColor: "hsl(346.8 77.2% 49.8%)", cssVars: { 
+    light: { "--primary": "346.8 77.2% 49.8%", "--primary-foreground": "355.7 100% 97.3%", "--ring": "346.8 77.2% 49.8%", "--accent": "346.8 77.2% 96%", "--accent-foreground": "346.8 77.2% 49.8%" },
+    dark: { "--primary": "346.8 77.2% 49.8%", "--primary-foreground": "355.7 100% 97.3%", "--ring": "346.8 77.2% 49.8%", "--accent": "346.8 77.2% 15%", "--accent-foreground": "355.7 100% 97.3%" }
+  }},
+  { name: "orange", label: "橙色", activeColor: "hsl(24.6 95% 53.1%)", cssVars: { 
+    light: { "--primary": "24.6 95% 53.1%", "--primary-foreground": "60 9.1% 97.8%", "--ring": "24.6 95% 53.1%", "--accent": "24.6 95% 96%", "--accent-foreground": "24.6 95% 53.1%" },
+    dark: { "--primary": "20.5 90.2% 48.2%", "--primary-foreground": "60 9.1% 97.8%", "--ring": "20.5 90.2% 48.2%", "--accent": "20.5 90.2% 15%", "--accent-foreground": "60 9.1% 97.8%" }
+  }},
+  { name: "green", label: "绿色", activeColor: "hsl(142.1 76.2% 36.3%)", cssVars: { 
+    light: { "--primary": "142.1 76.2% 36.3%", "--primary-foreground": "355.7 100% 97.3%", "--ring": "142.1 76.2% 36.3%", "--accent": "142.1 76.2% 96%", "--accent-foreground": "142.1 76.2% 36.3%" },
+    dark: { "--primary": "142.1 70.6% 45.3%", "--primary-foreground": "144.9 80.4% 10%", "--ring": "142.4 71.8% 29.2%", "--accent": "142.1 70.6% 15%", "--accent-foreground": "144.9 80.4% 10%" }
+  }},
+  { name: "blue", label: "蓝色", activeColor: "hsl(221.2 83.2% 53.3%)", cssVars: { 
+    light: { "--primary": "221.2 83.2% 53.3%", "--primary-foreground": "210 40% 98%", "--ring": "221.2 83.2% 53.3%", "--accent": "221.2 83.2% 96%", "--accent-foreground": "221.2 83.2% 53.3%" },
+    dark: { "--primary": "217.2 91.2% 59.8%", "--primary-foreground": "222.2 47.4% 11.2%", "--ring": "224.3 76.3% 48%", "--accent": "217.2 91.2% 15%", "--accent-foreground": "222.2 47.4% 11.2%" }
+  }},
+  { name: "yellow", label: "黄色", activeColor: "hsl(47.9 95.8% 53.1%)", cssVars: { 
+    light: { "--primary": "47.9 95.8% 53.1%", "--primary-foreground": "26 83.3% 14.1%", "--ring": "47.9 95.8% 53.1%", "--accent": "47.9 95.8% 96%", "--accent-foreground": "47.9 95.8% 53.1%" },
+    dark: { "--primary": "47.9 95.8% 53.1%", "--primary-foreground": "26 83.3% 14.1%", "--ring": "47.9 95.8% 53.1%", "--accent": "47.9 95.8% 15%", "--accent-foreground": "26 83.3% 14.1%" }
+  }},
+  { name: "violet", label: "紫色", activeColor: "hsl(263.4 70% 50.4%)", cssVars: { 
+    light: { "--primary": "262.1 83.3% 57.8%", "--primary-foreground": "210 20% 98%", "--ring": "262.1 83.3% 57.8%", "--accent": "262.1 83.3% 96%", "--accent-foreground": "262.1 83.3% 57.8%" },
+    dark: { "--primary": "263.4 70% 50.4%", "--primary-foreground": "210 20% 98%", "--ring": "263.4 70% 50.4%", "--accent": "263.4 70% 15%", "--accent-foreground": "210 20% 98%" }
+  }},
 ];
 
-const radiusOptions = [0, 0.3, 0.5, 0.75, 1.0];
+const radiusOptions = [0, 0.25, 0.5, 0.75, 1.0];
 
 /* ------------------------------------------------------------------ */
 /*  Theme Config Context                                               */
@@ -375,21 +65,24 @@ const radiusOptions = [0, 0.3, 0.5, 0.75, 1.0];
 interface ThemeConfig {
   color: string;
   radius: number;
+  layout: "full" | "centered";
 }
 
 interface ThemeConfigContextValue {
   config: ThemeConfig;
   setColor: (color: string) => void;
   setRadius: (radius: number) => void;
+  setLayout: (layout: "full" | "centered") => void;
   reset: () => void;
 }
 
-const defaultConfig: ThemeConfig = { color: "zinc", radius: 0.5 };
+const defaultConfig: ThemeConfig = { color: "zinc", radius: 0.5, layout: "full" };
 
 const ThemeConfigContext = createContext<ThemeConfigContextValue>({
   config: defaultConfig,
   setColor: () => {},
   setRadius: () => {},
+  setLayout: () => {},
   reset: () => {},
 });
 
@@ -398,6 +91,7 @@ export function useThemeConfig() {
 }
 
 export function ThemeConfigProvider({ children }: { children: React.ReactNode }) {
+  const { resolved } = useTheme();
   const [config, setConfig] = useState<ThemeConfig>(() => {
     const saved = localStorage.getItem("theme-config");
     if (saved) {
@@ -410,15 +104,16 @@ export function ThemeConfigProvider({ children }: { children: React.ReactNode })
     return defaultConfig;
   });
 
-  const applyConfig = useCallback((cfg: ThemeConfig) => {
+  const applyConfig = useCallback((cfg: ThemeConfig, mode: "light" | "dark") => {
     const root = document.documentElement;
-
+    
+    // 1. Apply Radius
     root.style.setProperty("--radius", `${cfg.radius}rem`);
 
+    // 2. Apply Theme Colors
     const theme = colorThemes.find((t) => t.name === cfg.color);
     if (theme) {
-      const isDark = root.classList.contains("dark");
-      const vars = isDark ? theme.cssVars.dark : theme.cssVars.light;
+      const vars = mode === "dark" ? theme.cssVars.dark : theme.cssVars.light;
       for (const [key, value] of Object.entries(vars)) {
         root.style.setProperty(key, value);
       }
@@ -426,28 +121,17 @@ export function ThemeConfigProvider({ children }: { children: React.ReactNode })
   }, []);
 
   useEffect(() => {
-    applyConfig(config);
+    applyConfig(config, resolved);
     localStorage.setItem("theme-config", JSON.stringify(config));
-  }, [config, applyConfig]);
-
-  // Re-apply when dark/light mode changes
-  useEffect(() => {
-    const observer = new MutationObserver(() => {
-      applyConfig(config);
-    });
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class"],
-    });
-    return () => observer.disconnect();
-  }, [config, applyConfig]);
+  }, [config, resolved, applyConfig]);
 
   const setColor = (color: string) => setConfig((prev) => ({ ...prev, color }));
   const setRadius = (radius: number) => setConfig((prev) => ({ ...prev, radius }));
+  const setLayout = (layout: "full" | "centered") => setConfig((prev) => ({ ...prev, layout }));
   const reset = () => setConfig(defaultConfig);
 
   return (
-    <ThemeConfigContext.Provider value={{ config, setColor, setRadius, reset }}>
+    <ThemeConfigContext.Provider value={{ config, setColor, setRadius, setLayout, reset }}>
       {children}
     </ThemeConfigContext.Provider>
   );
@@ -458,104 +142,121 @@ export function ThemeConfigProvider({ children }: { children: React.ReactNode })
 /* ------------------------------------------------------------------ */
 
 export function ThemeCustomizer() {
-  const { theme, setTheme } = useTheme();
-  const { config, setColor, setRadius, reset } = useThemeConfig();
-
-  const modeOptions: { value: "light" | "dark" | "system"; icon: React.ReactNode; label: string }[] = [
-    { value: "light", icon: <Sun size={14} />, label: "浅色" },
-    { value: "dark", icon: <Moon size={14} />, label: "深色" },
-    { value: "system", icon: <Monitor size={14} />, label: "系统" },
-  ];
+  const { theme, resolved, setTheme } = useTheme();
+  const { config, setColor, setRadius, setLayout, reset } = useThemeConfig();
 
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="icon" className="h-8 w-8 text-foreground hover:text-primary">
-          <Settings2 size={18} />
-          <span className="sr-only">主题设置</span>
+        <Button variant="outline" size="sm" className="h-8 gap-2 rounded-full border-border/60 bg-background/50 backdrop-blur-sm px-3 font-bold text-xs shadow-sm hover:bg-muted/80 active:scale-95 transition-all">
+          <Settings2 size={14} className="text-primary" />
+          <span>界面定制</span>
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-72" sideOffset={8}>
-        <div className="flex items-center justify-between mb-3">
-          <span className="text-sm font-semibold text-foreground">主题设置</span>
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={reset}>
-            <RotateCcw size={12} />
-            重置
+      <PopoverContent align="end" className="w-80 rounded-3xl p-6 shadow-2xl border-border/40" sideOffset={12}>
+        <div className="flex items-center justify-between mb-6">
+          <div className="space-y-0.5">
+            <h4 className="text-lg font-black tracking-tight text-foreground">界面定制</h4>
+            <p className="text-[11px] font-medium text-muted-foreground">选择您喜爱的风格和颜色</p>
+          </div>
+          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full hover:bg-muted" onClick={reset}>
+            <RotateCcw size={14} className="text-muted-foreground" />
           </Button>
         </div>
 
-        <div className="space-y-1.5 mb-4">
-          <Label className="text-xs text-muted-foreground">主题色</Label>
-          <div className="grid grid-cols-7 gap-1.5">
-            {colorThemes.map((t) => {
-              const isActive = config.color === t.name;
-              return (
-                <button
-                  key={t.name}
-                  onClick={() => setColor(t.name)}
-                  className="group relative flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors hover:border-foreground/40"
-                  style={isActive ? { borderColor: t.activeColor } : undefined}
-                  title={t.label}
-                >
-                  <span
-                    className="h-5 w-5 rounded-sm"
-                    style={{ backgroundColor: t.activeColor }}
-                  />
-                  {isActive && (
-                    <span className="absolute inset-0 flex items-center justify-center">
-                      <Check size={12} className="text-white drop-shadow-sm" />
-                    </span>
-                  )}
-                </button>
-              );
-            })}
+        <div className="space-y-6">
+          <div className="space-y-3">
+            <Label className="text-[11px] font-black uppercase tracking-widest text-muted-foreground/70">主题配色</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {colorThemes.map((t) => {
+                const isActive = config.color === t.name;
+                return (
+                  <button
+                    key={t.name}
+                    onClick={() => setColor(t.name)}
+                    className={cn(
+                      "flex items-center gap-3 px-3 py-2 rounded-xl border transition-all text-left",
+                      isActive ? "border-foreground bg-foreground/[0.02] ring-1 ring-foreground" : "border-border/50 hover:border-border hover:bg-muted/50"
+                    )}
+                  >
+                    <div className="h-4 w-4 rounded-full shadow-inner" style={{ backgroundColor: t.activeColor }} />
+                    <span className="text-xs font-bold text-foreground/80">{t.label}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        </div>
 
-        <div className="space-y-1.5 mb-4">
-          <Label className="text-xs text-muted-foreground">圆角</Label>
-          <div className="flex gap-1.5">
-            {radiusOptions.map((r) => {
-              const isActive = config.radius === r;
-              return (
+          <div className="space-y-3">
+            <Label className="text-[11px] font-black uppercase tracking-widest text-muted-foreground/70">圆角弧度</Label>
+            <div className="flex gap-2 p-1 bg-muted/50 rounded-xl">
+              {radiusOptions.map((r) => (
                 <button
                   key={r}
                   onClick={() => setRadius(r)}
-                  className={`flex-1 h-8 rounded-md border text-xs font-medium transition-colors ${
-                    isActive
-                      ? "bg-primary text-primary-foreground border-primary"
-                      : "border-border bg-background text-foreground hover:bg-accent"
-                  }`}
+                  className={cn(
+                    "flex-1 h-8 rounded-lg text-[11px] font-black transition-all",
+                    config.radius === r ? "bg-background text-foreground shadow-sm ring-1 ring-border/50" : "text-muted-foreground hover:text-foreground"
+                  )}
                 >
                   {r}
                 </button>
-              );
-            })}
+              ))}
+            </div>
           </div>
-        </div>
 
-        <Separator className="my-3" />
-
-        <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">外观模式</Label>
-          <div className="flex gap-1.5">
-            {modeOptions.map((opt) => {
-              const isActive = theme === opt.value;
-              return (
+          <div className="space-y-3">
+            <Label className="text-[11px] font-black uppercase tracking-widest text-muted-foreground/70">颜色模式</Label>
+            <div className="flex gap-2">
+              {[
+                { v: "light", i: Sun, l: "浅色" },
+                { v: "dark", i: Moon, l: "深色" },
+                { v: "system", i: Monitor, l: "系统" }
+              ].map((opt) => (
                 <button
-                  key={opt.value}
-                  onClick={() => setTheme(opt.value)}
-                  className={`flex-1 flex items-center justify-center gap-1.5 h-8 rounded-md border text-xs font-medium transition-colors ${
-                    isActive
-                      ? "bg-primary text-primary-foreground border-primary"
-                      : "border-border bg-background text-foreground hover:bg-accent"
-                  }`}
+                  key={opt.v}
+                  onClick={() => setTheme(opt.v as any)}
+                  className={cn(
+                    "flex-1 flex items-center justify-center gap-2 h-10 rounded-xl border transition-all",
+                    theme === opt.v || (opt.v === "system" && theme === "system")
+                      ? "border-foreground bg-foreground/[0.02] ring-1 ring-foreground"
+                      : "border-border/50 hover:border-border hover:bg-muted/50"
+                  )}
                 >
-                  {opt.icon}
-                  {opt.label}
+                  <opt.i size={14} className={cn(theme === opt.v ? "text-primary" : "text-muted-foreground")} />
+                  <span className="text-[11px] font-bold">{opt.l}</span>
                 </button>
-              );
-            })}
+              ))}
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              当前实际模式：{resolved === "dark" ? "深色" : "浅色"}
+            </p>
+          </div>
+
+          <div className="space-y-3 pb-2">
+            <Label className="text-[11px] font-black uppercase tracking-widest text-muted-foreground/70">内容布局</Label>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setLayout("full")}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-2 h-10 rounded-xl border transition-all",
+                  config.layout === "full" ? "border-foreground bg-foreground/[0.02] ring-1 ring-foreground" : "border-border/50 hover:border-border hover:bg-muted/50"
+                )}
+              >
+                <Maximize size={14} />
+                <span className="text-[11px] font-bold">全宽</span>
+              </button>
+              <button
+                onClick={() => setLayout("centered")}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-2 h-10 rounded-xl border transition-all",
+                  config.layout === "centered" ? "border-foreground bg-foreground/[0.02] ring-1 ring-foreground" : "border-border/50 hover:border-border hover:bg-muted/50"
+                )}
+              >
+                <AlignCenter size={14} />
+                <span className="text-[11px] font-bold">居中</span>
+              </button>
+            </div>
           </div>
         </div>
       </PopoverContent>

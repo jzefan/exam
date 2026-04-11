@@ -5,7 +5,8 @@ import { useOne } from "@refinedev/core";
 import { ArrowLeft, CheckCircle2, CircleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { IWrongAnswerDetail } from "@/types";
-import { formatStudentDate, questionTypeLabel, renderAnswerSummary, renderStandardAnswer } from "./utils";
+import { formatStudentDate, renderAnswerSummary, renderStandardAnswer } from "./utils";
+import { getStudentLocale, getStudentQuestionTypeLabel, tStudent } from "./i18n";
 
 const api = axios.create();
 api.interceptors.request.use((config) => {
@@ -16,6 +17,7 @@ api.interceptors.request.use((config) => {
 
 export function WrongAnswerDetailPage() {
   const navigate = useNavigate();
+  const locale = getStudentLocale();
   const { id } = useParams<{ id: string }>();
   const [mastered, setMastered] = useState(false);
 
@@ -40,7 +42,7 @@ export function WrongAnswerDetailPage() {
   if (!item) {
     return (
       <div className="rounded-2xl border bg-white/90 p-8 text-[14px] text-muted-foreground">
-        未找到错题详情。
+        {tStudent("wrong_detail_not_found", undefined, locale)}
       </div>
     );
   }
@@ -48,21 +50,23 @@ export function WrongAnswerDetailPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-base font-bold text-foreground tracking-tight">错题详情</h1>
+        <h1 className="text-base font-bold text-foreground tracking-tight">{tStudent("wrong_detail_title", undefined, locale)}</h1>
         <div className="flex items-center gap-3">
           <Button
             onClick={handleMarkMastered}
             disabled={Boolean(effectiveMastered)}
             className="text-[14px]"
           >
-            {effectiveMastered ? "已标记掌握" : "标记已掌握"}
+            {effectiveMastered
+              ? tStudent("wrong_detail_mastered", undefined, locale)
+              : tStudent("wrong_detail_mark_mastered", undefined, locale)}
           </Button>
           <button
             onClick={() => navigate("/wrong-answers")}
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
             <ArrowLeft size={16} />
-            返回错题本
+            {tStudent("wrong_detail_back", undefined, locale)}
           </button>
         </div>
       </div>
@@ -70,10 +74,10 @@ export function WrongAnswerDetailPage() {
       <section className="space-y-4 rounded-2xl border border-[#ebe3f4] bg-white/90 p-6">
         <div className="flex flex-wrap items-center gap-2">
           <span className="rounded-full bg-[#f5f1fb] px-2.5 py-1 text-[12px] text-[#6647d5]">
-            {questionTypeLabel[item.question_type]}
+            {getStudentQuestionTypeLabel(item.question_type, locale)}
           </span>
           <span className="text-[12px] text-muted-foreground">{item.exam_title}</span>
-          <span className="text-[12px] text-muted-foreground">最近错误：{formatStudentDate(item.last_wrong_at)}</span>
+          <span className="text-[12px] text-muted-foreground">{tStudent("wrong_detail_recent_wrong", { time: formatStudentDate(item.last_wrong_at) }, locale)}</span>
         </div>
         <h1
           className="text-[16px] font-semibold leading-7 text-foreground"
@@ -89,7 +93,7 @@ export function WrongAnswerDetailPage() {
 
       <div className="grid gap-6 lg:grid-cols-2">
         <section className="rounded-2xl border border-[#ebe3f4] bg-white/90 p-6">
-          <h2 className="text-[16px] font-semibold">你的答案</h2>
+          <h2 className="text-[16px] font-semibold">{tStudent("wrong_detail_your_answer", undefined, locale)}</h2>
           {item.question_type === "code" && typeof item.student_answer.code === "string" && item.student_answer.code.trim() ? (
             <div className="mt-3 overflow-hidden rounded-xl border border-[#e9e0f5] bg-[#1f1830]">
               <div className="border-b border-white/8 px-3 py-2 text-[12px] text-[#d6cfee]">
@@ -107,7 +111,7 @@ export function WrongAnswerDetailPage() {
         </section>
 
         <section className="rounded-2xl border border-[#ebe3f4] bg-white/90 p-6">
-          <h2 className="text-[16px] font-semibold">正确答案</h2>
+          <h2 className="text-[16px] font-semibold">{tStudent("wrong_detail_standard_answer", undefined, locale)}</h2>
           <p className="mt-3 text-[14px] leading-6 text-muted-foreground">
             {renderStandardAnswer(item.standard_answer)}
           </p>
@@ -115,7 +119,7 @@ export function WrongAnswerDetailPage() {
       </div>
 
       <section className="rounded-2xl border border-[#ebe3f4] bg-white/90 p-6">
-        <h2 className="text-[16px] font-semibold">评分反馈</h2>
+        <h2 className="text-[16px] font-semibold">{tStudent("wrong_detail_feedback", undefined, locale)}</h2>
         <div className="mt-4 space-y-3">
           {item.feedback.strengths?.map((line) => (
             <div key={line} className="flex items-start gap-2 text-[14px] text-emerald-700">
@@ -132,7 +136,7 @@ export function WrongAnswerDetailPage() {
         </div>
         {item.analysis ? (
           <div className="mt-5 rounded-xl bg-[#f8f5fc] p-4 text-[14px] leading-6 text-muted-foreground">
-            题目解析：{item.analysis}
+            {tStudent("result_analysis", { text: item.analysis }, locale)}
           </div>
         ) : null}
       </section>

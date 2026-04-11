@@ -1,0 +1,234 @@
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
+
+import { render, screen, waitFor } from "@/test/test-utils";
+
+import { ExamResultPage } from "./exam-result";
+
+const { getMock, postMock, requestUseMock } = vi.hoisted(() => ({
+  getMock: vi.fn(),
+  postMock: vi.fn(),
+  requestUseMock: vi.fn(),
+}));
+
+vi.mock("axios", () => ({
+  default: {
+    create: () => ({
+      get: getMock,
+      post: postMock,
+      interceptors: {
+        request: {
+          use: requestUseMock,
+        },
+      },
+    }),
+  },
+}));
+
+describe("ExamResultPage", () => {
+  it("shows question navigation and uses feedback wording instead of appeal status", async () => {
+    const user = userEvent.setup();
+    getMock.mockResolvedValue({
+      data: {
+        exam_id: "exam-1",
+        title: "数据库阶段考试",
+        submitted_at: "2026-04-10T08:30:00.000Z",
+        total_score: 100,
+        score: 88,
+        can_view: true,
+        blocked_reason: null,
+        questions: [
+          {
+            question_id: "q-1",
+            order: 0,
+            type: "short_answer",
+            title: "什么是索引覆盖？",
+            content: { text: "<p>请说明什么是索引覆盖，并给出一个简短例子。</p>" },
+            options: null,
+            total_score: 20,
+            score_awarded: 16,
+            is_correct: false,
+            answer_content: { html: "<p>回答一</p>" },
+            standard_answer: { points: ["减少回表", "覆盖查询列"] },
+            analysis: "需要结合回表成本说明。",
+            feedback: {
+              dimensions: [
+                { name: "要点覆盖", score: 10, max_score: 12, comment: "覆盖了核心概念。" },
+              ],
+              deductions: ["缺少回表代价说明"],
+              suggestions: ["补充查询路径解释"],
+            },
+            appeal_status: null,
+            appeal_reason: null,
+            appeal_reply: null,
+          },
+          {
+            question_id: "q-2",
+            order: 1,
+            type: "code",
+            title: "实现一个 LRU Cache",
+            content: { text: "<p>请实现一个支持 get / put 的 LRU Cache。</p>" },
+            options: null,
+            total_score: 30,
+            score_awarded: 24,
+            is_correct: false,
+            answer_content: { language: "cpp", code: "int main() { return 0; }" },
+            standard_answer: { points: ["哈希表", "双向链表"] },
+            analysis: "注意淘汰与更新逻辑。",
+            feedback: {
+              dimensions: [
+                { name: "结构设计", score: 12, max_score: 15, comment: "核心结构基本正确。" },
+              ],
+              deductions: [],
+              suggestions: ["补充淘汰边界处理"],
+            },
+            appeal_status: "pending",
+            appeal_reason: "我的淘汰逻辑已经覆盖边界情况。",
+            appeal_reply: "已收到，稍后复核。",
+          },
+        ],
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/my-exams/exam-1/result"]}>
+        <Routes>
+          <Route path="/my-exams/:id/result" element={<ExamResultPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(getMock).toHaveBeenCalledWith("/api/student/exams/exam-1/result");
+    });
+
+    expect(screen.getByRole("tab", { name: "题目导航" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "按题型" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "按序号" })).toBeInTheDocument();
+    expect(screen.getAllByText("简答题").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("编程题").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("答错")).toHaveLength(2);
+    expect(screen.getByText("请说明什么是索引覆盖，并给出一个简短例子。")).toBeInTheDocument();
+    expect(screen.queryByText("实现一个 LRU Cache")).not.toBeInTheDocument();
+    expect(screen.queryByText("申诉状态：")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "提交反馈" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "按序号" }));
+    expect(screen.getAllByText("第 1 题").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("第 2 题").length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: "跳转到第 2 题" }));
+
+    expect(screen.getByText("请实现一个支持 get / put 的 LRU Cache。")).toBeInTheDocument();
+    expect(screen.getByText("反馈内容：我的淘汰逻辑已经覆盖边界情况。")).toBeInTheDocument();
+    expect(screen.getByText("教师回复：已收到，稍后复核。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "已提交反馈" })).toBeDisabled();
+  });
+
+  it("supports view-all mode with collapsible detail sections", async () => {
+    const user = userEvent.setup();
+    getMock.mockResolvedValue({
+      data: {
+        exam_id: "exam-2",
+        title: "算法综合考试",
+        submitted_at: "2026-04-10T10:00:00.000Z",
+        total_score: 100,
+        score: 92,
+        can_view: true,
+        blocked_reason: null,
+        questions: [
+          {
+            question_id: "q-a",
+            order: 0,
+            type: "choice",
+            title: "二叉树的层序遍历使用什么结构？",
+            content: { text: "<p>二叉树的层序遍历通常依赖哪一种数据结构？</p>" },
+            options: { A: "栈", B: "队列", C: "哈希表", D: "并查集" },
+            total_score: 10,
+            score_awarded: 10,
+            is_correct: true,
+            answer_content: { value: "queue" },
+            standard_answer: { value: "queue" },
+            analysis: "使用队列按层推进。",
+            feedback: {
+              dimensions: [{ name: "答案正确性", score: 10, max_score: 10, comment: "回答正确。" }],
+              deductions: [],
+              suggestions: [],
+            },
+            appeal_status: null,
+            appeal_reason: null,
+            appeal_reply: null,
+          },
+          {
+            question_id: "q-b",
+            order: 1,
+            type: "short_answer",
+            title: "请解释快速排序的分治思想",
+            content: { text: "<p>请解释快速排序的分治思想，并说明递归何时结束。</p>" },
+            options: null,
+            total_score: 20,
+            score_awarded: 14,
+            is_correct: false,
+            answer_content: { html: "<p>先选枢轴，再划分。</p>" },
+            standard_answer: { points: ["选取枢轴", "左右递归划分"] },
+            analysis: "还可以补充分区后的递归终止条件。",
+            feedback: {
+              dimensions: [{ name: "要点完整度", score: 14, max_score: 20, comment: "主干正确，但细节不足。" }],
+              deductions: ["缺少递归终止条件"],
+              suggestions: ["补充边界条件说明"],
+            },
+            appeal_status: null,
+            appeal_reason: "我在答案最后提到了边界情况。",
+            appeal_reply: "教师会结合原答案复核。",
+          },
+        ],
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/my-exams/exam-2/result"]}>
+        <Routes>
+          <Route path="/my-exams/:id/result" element={<ExamResultPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("tab", { name: "全部查看" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "全部查看" }));
+
+    expect(screen.getByText("二叉树的层序遍历通常依赖哪一种数据结构？")).toBeInTheDocument();
+    expect(screen.getByText("请解释快速排序的分治思想，并说明递归何时结束。")).toBeInTheDocument();
+    expect(screen.getByText("队列")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "全部展开" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "展开题目解析和反馈" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "展开评分详情、题目解析和反馈" })).toBeInTheDocument();
+    expect(screen.queryByText("答案正确性")).not.toBeInTheDocument();
+    expect(screen.queryByText("教师回复：教师会结合原答案复核。")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "展开题目解析和反馈" }));
+    expect(screen.queryByText("答案正确性")).not.toBeInTheDocument();
+    expect(screen.getByText("题目解析：使用队列按层推进。")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "收起详细信息" }));
+    expect(screen.queryByText("题目解析：使用队列按层推进。")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "全部展开" }));
+    expect(screen.getByRole("button", { name: "全部收起" })).toBeInTheDocument();
+    expect(screen.queryByText("答案正确性")).not.toBeInTheDocument();
+    expect(screen.getByText("要点完整度")).toBeInTheDocument();
+    expect(screen.getByText("教师回复：教师会结合原答案复核。")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "全部收起" }));
+    expect(screen.queryByText("答案正确性")).not.toBeInTheDocument();
+    expect(screen.queryByText("教师回复：教师会结合原答案复核。")).not.toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("button", { name: "展开评分详情、题目解析和反馈" })[1]);
+    expect(screen.getByText("要点完整度")).toBeInTheDocument();
+    expect(screen.getByText("题目解析：还可以补充分区后的递归终止条件。")).toBeInTheDocument();
+    expect(screen.getByText("反馈内容：我在答案最后提到了边界情况。")).toBeInTheDocument();
+    expect(screen.getByText("教师回复：教师会结合原答案复核。")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "收起详细信息" }).length).toBeGreaterThan(0);
+  });
+});

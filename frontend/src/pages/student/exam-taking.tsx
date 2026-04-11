@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import axios from "axios";
 import {
+  ArrowLeft,
   ChevronLeft,
   ChevronRight,
   LayoutGrid,
@@ -20,11 +21,12 @@ import {
   AlertDialogTitle,
   AlertDialogDescription,
 } from "@/components/ui/alert-dialog";
-import type { IExamTaking } from "@/types";
+import type { IExamTaking, ISubmitExamResponse } from "@/types";
 import { CountdownTimer } from "./components/countdown-timer";
 import { SwitchCounter } from "./components/switch-counter";
 import { QuestionNav } from "./components/question-nav";
 import { QuestionRenderer } from "./components/question-renderer";
+import { getStudentLocale, tStudent, translateStudentError } from "./i18n";
 import { useExamTaking } from "@/hooks/use-exam-taking";
 import { useVisibilityDetection } from "@/hooks/use-visibility-detection";
 
@@ -68,17 +70,21 @@ function isAnswered(ans: Record<string, unknown> | undefined): boolean {
 export function ExamTaking() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const locale = getStudentLocale();
 
   /* ---- State ---- */
   const [examData, setExamData] = useState<IExamTaking | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [switchCount, setSwitchCount] = useState(0);
-  const [navOpen, setNavOpen] = useState(false);
+  const [navOpen, setNavOpen] = useState(true);
   const [showSubmitDialog, setShowSubmitDialog] = useState(false);
   const [switchWarning, setSwitchWarning] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
-  const handleSubmitRef = useRef<() => void>(() => {});
+  const [submitStatusMessage, setSubmitStatusMessage] = useState("");
+  const [timeUpCountdown, setTimeUpCountdown] = useState<number | null>(null);
+  const handleSubmitRef = useRef<((reason?: "time-up" | "switch-limit") => Promise<void>) | null>(null);
+  const submitInFlightRef = useRef(false);
 
   /* ---- Load exam data (once) ---- */
   useEffect(() => {
@@ -94,7 +100,7 @@ export function ExamTaking() {
       .catch((err) => {
         if (!cancelled) {
           setLoadError(
-            err?.response?.data?.detail ?? "无法加载考试数据",
+            translateStudentError(err?.response?.data?.detail, locale),
           );
           setIsLoading(false);
         }
@@ -111,8 +117,10 @@ export function ExamTaking() {
     setCurrentIndex,
     showAll,
     setShowAll,
+    saveState,
+    saveMessage,
     updateAnswer,
-    flushAnswers,
+    flushQuestion,
     submitExam,
     reportSwitch,
   } = useExamTaking({ examData });
@@ -132,14 +140,17 @@ export function ExamTaking() {
   );
 
   const handleMaxReached = useCallback(() => {
-    setSwitchWarning("切屏次数已达上限，考试将自动提交");
-    setTimeout(() => handleSubmitRef.current(), 2000);
-  }, []);
+    if (submitInFlightRef.current || submitted) return;
+    setSwitchWarning(tStudent("switch_limit_countdown", { seconds: 2 }, locale));
+    setTimeout(() => {
+      void handleSubmitRef.current?.("switch-limit");
+    }, 2000);
+  }, [locale, submitted]);
 
   const handleWarning = useCallback((remaining: number) => {
-    setSwitchWarning(`注意：切屏机会仅剩 ${remaining} 次`);
+    setSwitchWarning(tStudent("switch_remaining_warning", { remaining }, locale));
     setTimeout(() => setSwitchWarning(null), 4000);
-  }, []);
+  }, [locale]);
 
   const { setCount: setVisibilityCount } = useVisibilityDetection({
     maxSwitchCount: examData?.max_switch_count ?? 0,
@@ -154,39 +165,109 @@ export function ExamTaking() {
   }, [examData?.switch_count, setVisibilityCount]);
 
   /* ---- Submit ---- */
-  const handleSubmit = useCallback(async () => {
-    flushAnswers();
-    await submitExam();
-    setSubmitted(true);
+  const handleSubmit = useCallback(async (reason?: "time-up" | "switch-limit") => {
+    if (submitInFlightRef.current || submitted) return;
+
+    submitInFlightRef.current = true;
     setShowSubmitDialog(false);
-    setTimeout(() => navigate("/my-exams"), 1500);
-  }, [flushAnswers, submitExam, navigate]);
+
+    if (reason === "time-up") {
+      setSwitchWarning(tStudent("time_up_submitting", undefined, locale));
+    } else if (reason === "switch-limit") {
+      setSwitchWarning(tStudent("switch_limit_submitting", undefined, locale));
+    }
+
+    try {
+      const submitResult = (await submitExam()) as ISubmitExamResponse | undefined;
+      setSubmitted(true);
+      setSwitchWarning(null);
+      const gradingStatus = submitResult?.grading_status;
+      if (gradingStatus === "pending_ai") {
+        setSubmitStatusMessage("主观题已提交，正在等待 AI 评分...");
+        setTimeout(() => navigate("/my-exams"), 1500);
+      } else if (gradingStatus === "reviewed") {
+        setSubmitStatusMessage("考试已提交，正在打开考试结果...");
+        setTimeout(() => navigate(`/my-exams/${examData.exam_id}/result`), 1200);
+      } else {
+        setSubmitStatusMessage("考试已提交，正在返回考试列表...");
+        setTimeout(() => navigate("/my-exams"), 1500);
+      }
+    } catch (error) {
+      submitInFlightRef.current = false;
+      const detail = axios.isAxiosError(error)
+        ? error.response?.data?.detail
+        : null;
+      setSwitchWarning(
+        typeof detail === "string" && detail
+          ? translateStudentError(detail, locale)
+          : reason === "time-up"
+            ? tStudent("auto_submit_failed", undefined, locale)
+            : tStudent("submit_failed", undefined, locale),
+      );
+    }
+  }, [examData?.exam_id, locale, navigate, submitExam, submitted]);
 
   useEffect(() => {
     handleSubmitRef.current = handleSubmit;
   }, [handleSubmit]);
 
   const handleTimeUp = useCallback(() => {
-    setSwitchWarning("考试时间到，正在自动提交...");
-    setTimeout(() => handleSubmitRef.current(), 1500);
-  }, []);
+    if (submitInFlightRef.current || submitted) return;
+    setTimeUpCountdown((prev) => prev ?? 3);
+  }, [submitted]);
+
+  useEffect(() => {
+    if (timeUpCountdown === null) return;
+    if (timeUpCountdown <= 0) {
+      setTimeUpCountdown(null);
+      void handleSubmitRef.current?.("time-up");
+      return;
+    }
+
+    setSwitchWarning(
+      tStudent("time_up_countdown", { seconds: timeUpCountdown }, locale),
+    );
+    const timer = setTimeout(() => {
+      setTimeUpCountdown((prev) => (prev === null ? null : prev - 1));
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [locale, timeUpCountdown]);
+
+  const questions = examData?.questions ?? [];
+  const currentQuestion = questions[currentIndex];
+  const answeredCount = questions.filter((q) =>
+    isAnswered(answers[q.question_id]),
+  ).length;
+  const progressPct =
+    questions.length > 0 ? (answeredCount / questions.length) * 100 : 0;
+  const isCodeQuestion = !showAll && currentQuestion?.type === "code";
+
+  const navigateToQuestion = useCallback(
+    async (nextIndex: number) => {
+      if (!questions[nextIndex] || !currentQuestion) return;
+      await flushQuestion(currentQuestion.question_id);
+      setCurrentIndex(nextIndex);
+    },
+    [currentQuestion, flushQuestion, questions, setCurrentIndex],
+  );
 
   /* ---- Keyboard navigation ---- */
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (showAll || !examData) return;
       if (e.key === "ArrowLeft" && currentIndex > 0) {
-        setCurrentIndex(currentIndex - 1);
+        void navigateToQuestion(currentIndex - 1);
       } else if (
         e.key === "ArrowRight" &&
         currentIndex < examData.questions.length - 1
       ) {
-        setCurrentIndex(currentIndex + 1);
+        void navigateToQuestion(currentIndex + 1);
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [showAll, examData, currentIndex, setCurrentIndex]);
+  }, [showAll, examData, currentIndex, navigateToQuestion]);
 
   /* ---------------------------------------------------------------- */
   /*  Render states                                                    */
@@ -239,20 +320,12 @@ export function ExamTaking() {
           </div>
           <p className="text-lg font-semibold text-foreground">考试已提交</p>
           <p className="text-sm text-muted-foreground mt-1">
-            正在返回考试列表...
+            {submitStatusMessage || "正在返回考试列表..."}
           </p>
         </div>
       </div>
     );
   }
-
-  const questions = examData.questions;
-  const currentQuestion = questions[currentIndex];
-  const answeredCount = questions.filter((q) =>
-    isAnswered(answers[q.question_id]),
-  ).length;
-  const progressPct =
-    questions.length > 0 ? (answeredCount / questions.length) * 100 : 0;
 
   /* ---------------------------------------------------------------- */
   /*  Main exam UI                                                     */
@@ -270,30 +343,44 @@ export function ExamTaking() {
       {/* ── Progress strip (2px) ── */}
       <div className="h-0.5 bg-muted shrink-0 z-50 relative">
         <div
-          className="h-full bg-foreground/30 transition-all duration-700 ease-out"
+          className="h-full bg-primary/30 transition-all duration-700 ease-out"
           style={{ width: `${progressPct}%` }}
         />
       </div>
 
       {/* ── Top control bar ── */}
-      <header className="shrink-0 flex items-center justify-between px-4 sm:px-6 h-12 border-b border-border/60 bg-background z-50">
+      <header className="z-50 flex h-12 shrink-0 items-center justify-between gap-3 border-b border-border/60 bg-background px-4 sm:px-6">
         {/* Left: nav toggle + title */}
-        <div className="flex items-center gap-3 min-w-0">
-          <button
-            onClick={() => setNavOpen(true)}
-            className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-            title="答题卡"
+        <div className="flex min-w-0 flex-1 items-center gap-2.5">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => navigate("/my-exams")}
+            className="h-8 shrink-0 px-2.5 text-xs text-muted-foreground"
           >
-            <Map size={16} />
-          </button>
-          <h1 className="text-sm font-semibold text-foreground truncate max-w-[200px] sm:max-w-xs">
+            <ArrowLeft data-icon="inline-start" />
+            <span className="sm:hidden">返回</span>
+            <span className="hidden sm:inline">返回我的考试</span>
+          </Button>
+          <div className="hidden h-4 w-px shrink-0 bg-border sm:block" />
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setNavOpen(true)}
+            className="size-8 shrink-0 text-muted-foreground"
+            title="答题卡"
+            aria-label="打开答题卡"
+          >
+            <Map />
+          </Button>
+          <h1 className="max-w-[160px] truncate text-sm font-semibold text-foreground sm:max-w-xs">
             {examData.title}
           </h1>
         </div>
 
         {/* Center: question counter (hidden on mobile) */}
         {!showAll && (
-          <div className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground">
+          <div className="hidden shrink-0 items-center gap-1.5 rounded-full border border-border/70 bg-muted/50 px-2.5 py-1 text-xs text-muted-foreground md:flex">
             <span className="font-semibold text-foreground tabular-nums">
               {currentIndex + 1}
             </span>
@@ -303,7 +390,16 @@ export function ExamTaking() {
         )}
 
         {/* Right: controls */}
-        <div className="flex items-center gap-4">
+        <div className="flex shrink-0 items-center gap-3">
+          {saveMessage ? (
+            <div
+              className={`hidden text-xs sm:block ${
+                saveState === "error" ? "text-destructive" : "text-muted-foreground"
+              }`}
+            >
+              {saveMessage}
+            </div>
+          ) : null}
           <SwitchCounter
             switchCount={switchCount}
             maxSwitchCount={examData.max_switch_count}
@@ -345,14 +441,23 @@ export function ExamTaking() {
             questions={questions}
             answers={answers}
             currentIndex={currentIndex}
-            onNavigate={setCurrentIndex}
+            onNavigate={(index) => {
+              void navigateToQuestion(index);
+            }}
             onClose={() => setNavOpen(false)}
           />
         </div>
 
         {/* Question area */}
         <main className="flex-1 overflow-y-auto">
-          <div className="max-w-2xl mx-auto px-5 sm:px-8 py-6 sm:py-10">
+          <div
+            data-testid="exam-content-shell"
+            className={
+              isCodeQuestion
+                ? "mx-auto w-full max-w-none px-4 py-6 sm:px-6 sm:py-8 xl:px-8"
+                : "mx-auto max-w-2xl px-5 py-6 sm:px-8 sm:py-10"
+            }
+          >
             {/* View mode toggle */}
             <div className="flex items-center justify-between mb-6">
               {!showAll && currentQuestion ? (
@@ -422,7 +527,9 @@ export function ExamTaking() {
                 <div className="flex items-center justify-between mt-10 pt-6 border-t border-border/40">
                   <button
                     disabled={currentIndex === 0}
-                    onClick={() => setCurrentIndex(currentIndex - 1)}
+                    onClick={() => {
+                      void navigateToQuestion(currentIndex - 1);
+                    }}
                     className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                   >
                     <ChevronLeft size={16} />
@@ -439,13 +546,15 @@ export function ExamTaking() {
                       return (
                         <button
                           key={q.question_id}
-                          onClick={() => setCurrentIndex(realIdx)}
+                          onClick={() => {
+                            void navigateToQuestion(realIdx);
+                          }}
                           className={`w-1.5 h-1.5 rounded-full transition-all ${
                             realIdx === currentIndex
-                              ? "bg-foreground w-4"
+                              ? "bg-primary w-4"
                               : isAnswered(answers[q.question_id])
-                                ? "bg-foreground/30"
-                                : "bg-foreground/10"
+                                ? "bg-primary/30"
+                                : "bg-muted-foreground/20"
                           }`}
                         />
                       );
@@ -454,7 +563,9 @@ export function ExamTaking() {
 
                   <button
                     disabled={currentIndex === questions.length - 1}
-                    onClick={() => setCurrentIndex(currentIndex + 1)}
+                    onClick={() => {
+                      void navigateToQuestion(currentIndex + 1);
+                    }}
                     className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                   >
                     下一题

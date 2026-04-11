@@ -9,6 +9,8 @@ from app.auth.users_router import router as users_router
 from app.config import settings
 from app.exams.positions_router import router as positions_router
 from app.exams.router import router as exams_router
+from app.exams.student_router import router as student_exams_router
+from app.exams.student_router import wrong_answers_router
 from app.grading.router import router as grading_router
 from app.learning.router import router as knowledge_router
 from app.questions.router import knowledge_points_router, question_banks_router, questions_router, tags_router
@@ -57,6 +59,8 @@ app.include_router(tags_router, prefix="/api/tags", tags=["tags"])
 app.include_router(knowledge_points_router, prefix="/api/knowledge-points", tags=["knowledge-points"])
 app.include_router(question_banks_router, prefix="/api/question-banks", tags=["question-banks"])
 app.include_router(exams_router, prefix="/api/exams", tags=["exams"])
+app.include_router(student_exams_router, prefix="/api/student", tags=["student-exams"])
+app.include_router(wrong_answers_router, prefix="/api/wrong-answers", tags=["wrong-answers"])
 app.include_router(positions_router, prefix="/api/positions", tags=["positions"])
 app.include_router(uploads_router, prefix="/api/uploads", tags=["uploads"])
 app.include_router(knowledge_router, prefix="/api/knowledge", tags=["knowledge"])

@@ -139,6 +139,15 @@ class GradingTaskRunRead(BaseModel):
     reason: str | None = None
 
 
+class GradingTaskRunRequest(BaseModel):
+    locale: str | None = None
+
+
+class GradingTaskConfirmRead(BaseModel):
+    status: str
+    grading_status: str
+
+
 class GradingInboxQuestionRead(BaseModel):
     question_key: str
     question_id: str
@@ -167,7 +176,7 @@ class GradingInboxRead(BaseModel):
 class GradingInboxCandidateRead(BaseModel):
     task_id: str
     candidate_name: str
-    candidate_code: str
+    candidate_code: str | None = None
     status: str
     score: float | None = None
     arbitration_required: bool = False
@@ -200,18 +209,22 @@ class GradingInboxModelCommentRead(BaseModel):
 class GradingInboxCandidateDetailRead(BaseModel):
     task_id: str
     candidate_name: str
-    candidate_code: str
+    candidate_code: str | None = None
     status: str
     suggested_score: float | None = None
     max_score: int
     question_type: str
     student_answer_raw: str
     knowledge_tags: list = Field(default_factory=list)
+    student_feedback: str | None = None
+    teacher_feedback_reply: str | None = None
+    feedback_created_at: str | None = None
     models: list[GradingInboxModelCommentRead] = Field(default_factory=list)
 
 
 class GradingPromptFollowUpCreate(BaseModel):
     prompt: str
+    locale: str | None = None
 
 
 class GradingPromptFollowUpModelRead(BaseModel):

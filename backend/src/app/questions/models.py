@@ -7,6 +7,7 @@ from sqlalchemy import JSON, Column, Enum, Float, ForeignKey, Integer, String, T
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.common.data_visibility import OwnerMixin, VisibilityMixin
 from app.models import Base, BaseModel
 
 
@@ -56,7 +57,7 @@ class Tag(BaseModel):
 from app.learning.models import KnowledgePoint as KnowledgePoint  # noqa: E402,F401
 
 
-class QuestionBank(BaseModel):
+class QuestionBank(OwnerMixin, VisibilityMixin, BaseModel):
     __tablename__ = "question_banks"
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -65,7 +66,7 @@ class QuestionBank(BaseModel):
     questions: Mapped[list["Question"]] = relationship(back_populates="question_bank")
 
 
-class Question(BaseModel):
+class Question(OwnerMixin, BaseModel):
     __tablename__ = "questions"
 
     json_field = JSON().with_variant(JSONB, "postgresql")
@@ -82,7 +83,7 @@ class Question(BaseModel):
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False)
     question_bank_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("question_banks.id"), nullable=True)
 
-    creator: Mapped["User"] = relationship()  # type: ignore[name-defined]
+    creator: Mapped["User"] = relationship("User", foreign_keys=[created_by])  # type: ignore[name-defined]
     question_bank: Mapped["QuestionBank | None"] = relationship(back_populates="questions")
     tags: Mapped[list[Tag]] = relationship(secondary=question_tags, back_populates="questions", lazy="selectin")
     knowledge_points: Mapped[list[KnowledgePoint]] = relationship(

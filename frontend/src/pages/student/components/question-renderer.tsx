@@ -4,6 +4,7 @@ import { ChoiceQuestion } from "./choice-question";
 import { FillInQuestion } from "./fill-in-question";
 import { ShortAnswerQuestion } from "./short-answer-question";
 import { EssayQuestion } from "./essay-question";
+import { CodeQuestion } from "./code-question";
 
 interface Props {
   question: IExamQuestionForStudent;
@@ -17,6 +18,7 @@ const COMPONENTS: Record<string, React.ComponentType<Props>> = {
   fill_in: FillInQuestion,
   short_answer: ShortAnswerQuestion,
   essay: EssayQuestion,
+  code: CodeQuestion,
 };
 
 export function QuestionRenderer({ question, answer, onChange }: Props) {

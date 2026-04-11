@@ -1,7 +1,13 @@
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.grading.models import ModelConfig, ProviderConfig, RoleBinding
+from app.auth.schemas import UserCreate
+from app.auth.security import create_access_token
+from app.auth.service import create_user
+from app.auth.models import User
+from app.exams.models import Exam, StudentExamAppeal
+from app.grading.models import GradingTask, ModelConfig, ProviderConfig, RoleBinding
+from app.questions.models import Question, QuestionType
 
 
 async def _seed_role_binding_v1(db_session: AsyncSession) -> None:
@@ -150,6 +156,37 @@ async def test_manual_score_override_creates_audit_facing_snapshot(admin_client)
 
 
 @pytest.mark.asyncio
+async def test_confirm_grading_task_supports_legacy_exam_submission_locator(admin_client) -> None:
+    create_response = await admin_client.post(
+        "/api/grading/tasks",
+        json={
+            "source_type": "exam_submission",
+            "source_business_id": "exam-java-midterm:essay-q3:A-102",
+            "question_type": "short_answer",
+            "question_content": "什么是幂等性",
+            "max_score": 10,
+            "student_answer_raw": "重复执行结果一致",
+            "standard_answers": [{"summary": "同一请求多次执行结果一致"}],
+            "rubric_definition": {"dimensions": [{"key": "coverage", "weight": 0.5}]},
+            "role_binding_version": 1,
+        },
+    )
+    task_id = create_response.json()["id"]
+
+    await admin_client.post(
+        f"/api/grading/tasks/{task_id}/manual-score",
+        json={"score_total": 9, "reason": "教师确认语义已覆盖"},
+    )
+
+    confirm_response = await admin_client.post(f"/api/grading/tasks/{task_id}/confirm")
+
+    assert confirm_response.status_code == 200
+    payload = confirm_response.json()
+    assert payload["status"] == "pending"
+    assert payload["grading_status"] == "reviewed"
+
+
+@pytest.mark.asyncio
 async def test_get_grading_report_returns_manual_final_score(admin_client) -> None:
     create_response = await admin_client.post(
         "/api/grading/tasks",
@@ -186,6 +223,200 @@ async def test_get_grading_report_returns_manual_final_score(admin_client) -> No
     assert payload["snapshots"][0]["snapshot_type"] == "manual"
     assert payload["snapshots"][0]["deduction_reasons"] == ["教师确认语义已覆盖"]
     assert payload["audit_events"][-1]["event_type"] == "manual.score_override"
+
+
+@pytest.mark.asyncio
+async def test_grading_inbox_uses_real_exam_and_candidate_labels(
+    admin_client,
+    db_session: AsyncSession,
+) -> None:
+    creator = await create_user(
+        db_session,
+        UserCreate(
+            username="teacher_inbox",
+            email="teacher_inbox@example.com",
+            password="teacherpass123",
+            full_name="阅卷老师",
+        ),
+    )
+    student = await create_user(
+        db_session,
+        UserCreate(
+            username="student_inbox",
+            email="student_inbox@example.com",
+            password="studentpass123",
+            full_name="张三",
+        ),
+    )
+    student.student_id = "S2026001"
+
+    exam = Exam(
+        title="Java 后端期中考试",
+        description=None,
+        duration_minutes=90,
+        total_score=100,
+        status="draft",
+        position_id=None,
+        max_switch_count=0,
+        show_result=False,
+        notes_template=None,
+        created_by=creator.id,
+        owner_id=creator.id,
+    )
+    question = Question(
+        type=QuestionType.SHORT_ANSWER,
+        title="什么是幂等性",
+        content={"text": "什么是幂等性"},
+        options=None,
+        answer={"points": ["重复执行结果一致"]},
+        analysis=None,
+        difficulty=3,
+        score=10,
+        created_by=creator.id,
+        owner_id=creator.id,
+    )
+    db_session.add_all([exam, question])
+    await db_session.commit()
+
+    create_response = await admin_client.post(
+        "/api/grading/tasks",
+        json={
+            "source_type": "exam_submission",
+            "source_business_id": f"{exam.id}:{question.id}:{student.id}",
+            "question_type": "short_answer",
+            "question_content": "什么是幂等性，请一句话解释。",
+            "max_score": 10,
+            "student_answer_raw": "同一个请求重复执行多次，结果保持一致。",
+            "standard_answers": [{"summary": "重复执行结果一致"}],
+            "rubric_definition": {"dimensions": [{"key": "coverage", "weight": 1}]},
+            "role_binding_version": 1,
+        },
+    )
+
+    task_id = create_response.json()["id"]
+
+    inbox_response = await admin_client.get("/api/grading/inbox")
+    assert inbox_response.status_code == 200
+    inbox_payload = inbox_response.json()
+    assert inbox_payload["exams"][0]["exam_label"] == "Java 后端期中考试"
+
+    question_response = await admin_client.get(f"/api/grading/inbox/questions/{exam.id}/{question.id}")
+    assert question_response.status_code == 200
+    question_payload = question_response.json()
+    assert question_payload["exam_label"] == "Java 后端期中考试"
+    assert question_payload["candidates"][0]["candidate_name"] == "张三"
+    assert question_payload["candidates"][0]["candidate_code"] == "S2026001"
+
+    detail_response = await admin_client.get(f"/api/grading/inbox/tasks/{task_id}")
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.json()
+    assert detail_payload["candidate_name"] == "张三"
+    assert detail_payload["candidate_code"] == "S2026001"
+
+
+@pytest.mark.asyncio
+async def test_teacher_grading_inbox_only_includes_owned_exam_tasks(
+    client,
+    db_session: AsyncSession,
+) -> None:
+    teacher = await create_user(
+        db_session,
+        UserCreate(
+            username="teacher_grading_owner",
+            email="teacher_grading_owner@example.com",
+            password="teacherpass123",
+            full_name="Owner Teacher",
+        ),
+    )
+    other_teacher = await create_user(
+        db_session,
+        UserCreate(
+            username="teacher_grading_other",
+            email="teacher_grading_other@example.com",
+            password="teacherpass123",
+            full_name="Other Teacher",
+        ),
+    )
+    student = await create_user(
+        db_session,
+        UserCreate(
+            username="student_grading_scope",
+            email="student_grading_scope@example.com",
+            password="studentpass123",
+            full_name="Scope Student",
+        ),
+    )
+    own_exam = Exam(
+        title="我的阅卷考试",
+        duration_minutes=60,
+        total_score=10,
+        status="completed",
+        max_switch_count=0,
+        show_result=True,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    other_exam = Exam(
+        title="他人阅卷考试",
+        duration_minutes=60,
+        total_score=10,
+        status="completed",
+        max_switch_count=0,
+        show_result=True,
+        created_by=other_teacher.id,
+        owner_id=other_teacher.id,
+    )
+    question = Question(
+        type=QuestionType.SHORT_ANSWER,
+        title="阅卷范围题",
+        content={"text": "scope"},
+        options=None,
+        answer={"points": ["scope"]},
+        analysis=None,
+        difficulty=2,
+        score=10,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    db_session.add_all([own_exam, other_exam, question])
+    await db_session.flush()
+
+    own_task = GradingTask(
+        source_type="exam_submission",
+        source_business_id=f"{own_exam.id}:{question.id}:{student.id}",
+        question_type="short_answer",
+        question_content="scope",
+        max_score=10,
+        student_answer_raw="scope",
+        standard_answers=[],
+        rubric_definition={},
+        knowledge_tags=[],
+        role_binding_version=1,
+        status="pending",
+    )
+    other_task = GradingTask(
+        source_type="exam_submission",
+        source_business_id=f"{other_exam.id}:{question.id}:{student.id}",
+        question_type="short_answer",
+        question_content="scope",
+        max_score=10,
+        student_answer_raw="scope",
+        standard_answers=[],
+        rubric_definition={},
+        knowledge_tags=[],
+        role_binding_version=1,
+        status="pending",
+    )
+    db_session.add_all([own_task, other_task])
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    inbox_response = await client.get("/api/grading/inbox")
+    detail_response = await client.get(f"/api/grading/inbox/tasks/{other_task.id}")
+
+    assert inbox_response.status_code == 200
+    assert [exam["exam_label"] for exam in inbox_response.json()["exams"]] == ["我的阅卷考试"]
+    assert detail_response.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -618,6 +849,84 @@ async def test_grading_candidate_detail_endpoint_returns_llm_comments(
 
 
 @pytest.mark.asyncio
+async def test_grading_candidate_detail_endpoint_includes_student_feedback(
+    admin_client,
+    db_session: AsyncSession,
+) -> None:
+    student = User(
+        username="stud-feedback",
+        email="stud-feedback@example.com",
+        password_hash="hashed",
+        full_name="Stud Feedback",
+        is_active=True,
+    )
+    db_session.add(student)
+    await db_session.flush()
+
+    question = Question(
+        type=QuestionType.SHORT_ANSWER,
+        title="什么是幂等性？",
+        content={"html": "<p>什么是幂等性？</p>"},
+        options=None,
+        answer={"points": ["重复执行结果一致"]},
+        analysis="关注重复执行后的系统状态。",
+        difficulty=2,
+        score=20,
+        created_by=student.id,
+        owner_id=student.id,
+    )
+    exam = Exam(
+        title="反馈联调考试",
+        description=None,
+        duration_minutes=60,
+        total_score=20,
+        status="completed",
+        max_switch_count=0,
+        show_result=True,
+        notes_template=None,
+        created_by=student.id,
+        owner_id=student.id,
+    )
+    db_session.add_all([question, exam])
+    await db_session.flush()
+
+    db_session.add(
+        StudentExamAppeal(
+            exam_id=exam.id,
+            student_id=student.id,
+            question_id=question.id,
+            reason="我已经补充了重复写入场景，请老师再看一下。",
+            teacher_reply="好的，我会结合你的说明重新检查。",
+        )
+    )
+    await db_session.commit()
+
+    create_response = await admin_client.post(
+        "/api/grading/tasks",
+        json={
+            "source_type": "exam_submission",
+            "source_business_id": f"{exam.id}:{question.id}:{student.username}",
+            "question_type": "short_answer",
+            "question_content": "什么是幂等性？",
+            "max_score": 20,
+            "student_answer_raw": "重复执行结果一致。",
+            "standard_answers": [{"summary": "重复执行结果一致"}],
+            "rubric_definition": {"dimensions": [{"key": "coverage", "weight": 0.5}]},
+            "role_binding_version": 1,
+        },
+    )
+    task_id = create_response.json()["id"]
+
+    response = await admin_client.get(f"/api/grading/inbox/tasks/{task_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["student_feedback"] == "我已经补充了重复写入场景，请老师再看一下。"
+    assert payload["teacher_feedback_reply"] == "好的，我会结合你的说明重新检查。"
+    assert payload["feedback_created_at"] is not None
+
+
+@pytest.mark.asyncio
 async def test_grading_prompt_follow_up_endpoint_returns_model_comments(
     admin_client,
     db_session: AsyncSession,
@@ -629,9 +938,11 @@ async def test_grading_prompt_follow_up_endpoint_returns_model_comments(
     monkeypatch.setenv("EXAM_OPENROUTER_API_KEY", "openrouter-secret")
 
     captured_prompts: dict[str, str] = {}
+    captured_system_prompts: dict[str, str] = {}
 
     async def fake_request_completion(self, payload):
         messages = payload["messages"]
+        captured_system_prompts[self.provider_name] = messages[0]["content"]
         captured_prompts[self.provider_name] = messages[-1]["content"]
         if self.provider_name == "qwen":
             return {
@@ -675,7 +986,7 @@ async def test_grading_prompt_follow_up_endpoint_returns_model_comments(
 
     response = await admin_client.post(
         f"/api/grading/tasks/{task_id}/follow-up",
-        json={"prompt": "请重点检查是否明确体现了副作用不会重复发生"},
+        json={"prompt": "请重点检查是否明确体现了副作用不会重复发生", "locale": "en-US"},
     )
 
     assert response.status_code == 200
@@ -686,5 +997,7 @@ async def test_grading_prompt_follow_up_endpoint_returns_model_comments(
     assert payload["models"][2]["model_label"] == "Claude Sonnet 4.6 / anthropic/claude-sonnet-4.6"
     assert payload["models"][2]["risk_flags"] == ["follow_up"]
     assert "Teacher follow-up prompt: 请重点检查是否明确体现了副作用不会重复发生" in captured_prompts["qwen"]
+    assert "Respond in English." in captured_system_prompts["qwen"]
+    assert "Preferred locale: en-US" in captured_prompts["qwen"]
     assert "Max score: 10" in captured_prompts["qwen"]
     assert 'Knowledge tags: ["接口设计", "幂等性"]' in captured_prompts["qwen"]

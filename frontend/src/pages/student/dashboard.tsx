@@ -5,12 +5,11 @@ import {
   Clock,
   Timer,
   ArrowRight,
-  Trophy,
-  CheckCircle2,
   BookOpen,
   CalendarClock,
-  Info,
-  Lock,
+  Target,
+  Medal,
+  Play,
 } from "lucide-react";
 import {
   Table,
@@ -20,6 +19,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { getEffectiveStudentExamStatus } from "./utils";
+import { getStudentDateLocale, getStudentLocale, tStudent } from "./i18n";
 
 type ExamStatus = "upcoming" | "ongoing" | "completed" | "closed";
 
@@ -30,19 +34,22 @@ interface IMyExam {
   status: ExamStatus;
   start_time: string | null;
   end_time: string | null;
+  started_at: string | null;
   duration_minutes: number;
   total_score: number;
   max_switch_count: number;
   notes_template: string | null;
   total_questions: number;
   score: number | null;
+  grading_status?: "pending_ai" | "ai_scored" | "reviewed" | null;
   participated: boolean;
   submitted_at: string | null;
 }
 
 function formatDate(iso: string | null): string {
-  if (!iso) return "待定";
-  return new Date(iso).toLocaleString("zh-CN", {
+  const locale = getStudentLocale();
+  if (!iso) return tStudent("common_tbd", undefined, locale);
+  return new Date(iso).toLocaleString(getStudentDateLocale(locale), {
     year: "numeric",
     month: "long",
     day: "numeric",
@@ -50,36 +57,50 @@ function formatDate(iso: string | null): string {
 }
 
 function formatTimeRange(start: string | null, end: string | null): string {
-  if (!start) return "时间待定";
-  const s = new Date(start);
-  const fmt = (d: Date) =>
-    d.toLocaleString("zh-CN", { hour: "2-digit", minute: "2-digit" });
-  const timeStr = end ? `${fmt(s)} - ${fmt(new Date(end))}` : fmt(s);
-  const today = new Date();
-  if (
-    s.getFullYear() === today.getFullYear() &&
-    s.getMonth() === today.getMonth() &&
-    s.getDate() === today.getDate()
-  ) {
-    return `今天 ${timeStr}`;
-  }
-  const tomorrow = new Date(today);
-  tomorrow.setDate(today.getDate() + 1);
-  if (
-    s.getFullYear() === tomorrow.getFullYear() &&
-    s.getMonth() === tomorrow.getMonth() &&
-    s.getDate() === tomorrow.getDate()
-  ) {
-    return `明天 ${timeStr}`;
-  }
-  const day = s.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
-  return `${day} ${timeStr}`;
+  const locale = getStudentLocale();
+  if (!start) return tStudent("common_time_tbd", undefined, locale);
+  const formatPoint = (value: string) =>
+    new Date(value).toLocaleString(getStudentDateLocale(locale), {
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  return end ? `${formatPoint(start)} - ${formatPoint(end)}` : formatPoint(start);
+}
+
+function formatDateTime(iso: string | null): string {
+  const locale = getStudentLocale();
+  if (!iso) return tStudent("common_unsubmitted", undefined, locale);
+  return new Date(iso).toLocaleString(getStudentDateLocale(locale), {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatUsedTime(startedAt: string | null, submittedAt: string | null, durationMinutes: number): string {
+  const locale = getStudentLocale();
+  if (!startedAt || !submittedAt) return "--";
+  const diffMinutes = Math.max(
+    0,
+    Math.round((new Date(submittedAt).getTime() - new Date(startedAt).getTime()) / 60_000),
+  );
+  const safeMinutes = durationMinutes > 0 ? Math.min(diffMinutes, durationMinutes) : diffMinutes;
+  if (safeMinutes < 60) return tStudent("dashboard_minutes", { minutes: safeMinutes }, locale);
+  const hours = Math.floor(safeMinutes / 60);
+  const minutes = safeMinutes % 60;
+  return minutes === 0
+    ? `${hours} ${tStudent("common_hours_suffix", undefined, locale)}`
+    : `${hours} ${tStudent("common_hours_suffix", undefined, locale)} ${minutes} ${tStudent("common_minutes_suffix", undefined, locale)}`;
 }
 
 type CompletedFilter = "all" | "graded" | "pending";
 
 export function StudentDashboard() {
   const navigate = useNavigate();
+  const locale = getStudentLocale();
   const { data: identity } = useGetIdentity<{ name: string; role?: string }>();
   const [completedFilter, setCompletedFilter] = useState<CompletedFilter>("all");
 
@@ -92,16 +113,25 @@ export function StudentDashboard() {
   const allExams = query.data?.data ?? [];
   const isLoading = query.isLoading;
 
-  const pending = allExams.filter(
-    (e) => e.status === "ongoing" || e.status === "upcoming",
-  );
-  const completed = allExams.filter(
-    (e) => e.status === "completed" || e.status === "closed",
+  const examsWithDerivedStatus = allExams.map((exam) => ({
+    ...exam,
+    effectiveStatus: getEffectiveStudentExamStatus(exam),
+  }));
+
+  const pending = examsWithDerivedStatus
+    .filter((e) => e.effectiveStatus === "ongoing" || e.effectiveStatus === "upcoming")
+    .sort((a, b) => {
+      if (a.effectiveStatus === "ongoing" && b.effectiveStatus !== "ongoing") return -1;
+      if (b.effectiveStatus === "ongoing" && a.effectiveStatus !== "ongoing") return 1;
+      return new Date(a.start_time ?? "").getTime() - new Date(b.start_time ?? "").getTime();
+    });
+
+  const completed = examsWithDerivedStatus.filter(
+    (e) => e.effectiveStatus === "completed",
   );
   const completedWithScore = completed.filter(
     (e) => e.score !== null && e.score !== undefined,
   );
-
   const avgScore =
     completedWithScore.length > 0
       ? Math.round(
@@ -113,313 +143,240 @@ export function StudentDashboard() {
   const userName = identity?.name ?? "同学";
   const pendingCount = pending.length;
 
-  // Filter completed exams
   const filteredCompleted =
     completedFilter === "graded"
-      ? completed.filter((e) => e.score !== null)
+      ? completed.filter((e) => e.grading_status === "ai_scored" || e.grading_status === "reviewed")
       : completedFilter === "pending"
-        ? completed.filter((e) => e.score === null)
+        ? completed.filter((e) => e.grading_status === "pending_ai")
         : completed;
 
   const filterTabs: { key: CompletedFilter; label: string }[] = [
-    { key: "all", label: "全部" },
-    { key: "graded", label: "已评分" },
-    { key: "pending", label: "待评分" },
+    { key: "all", label: tStudent("dashboard_all", undefined, locale) },
+    { key: "graded", label: tStudent("dashboard_graded", undefined, locale) },
+    { key: "pending", label: tStudent("dashboard_pending_review", undefined, locale) },
   ];
 
   return (
-    <div className="space-y-12">
-      {/* ── Welcome Section ── */}
-      <section>
-        <div className="flex justify-between items-end">
-          <div>
-            <h2 className="text-3xl font-extrabold text-foreground tracking-tight mb-2">
-              欢迎回来，{userName}
-            </h2>
-            <p className="text-muted-foreground flex items-center gap-2 text-sm">
-              <CheckCircle2 size={16} className="text-primary" />
-              {pendingCount > 0 ? (
-                <>
-                  有{" "}
-                  <span className="text-primary font-bold underline decoration-primary/20 underline-offset-4">
-                    {pendingCount}
-                  </span>{" "}
-                  场考试即将开始，请做好准备。
-                </>
-              ) : (
-                "暂无待参加的考试，可以去复习错题。"
-              )}
-            </p>
-          </div>
-          <div className="flex gap-4">
-            <div className="bg-muted/50 border border-border/30 px-6 py-4 rounded-[var(--radius)] flex flex-col items-center shadow-sm">
-              <span className="text-2xl font-bold text-foreground">{avgScore}</span>
-              <span className="text-[10px] text-muted-foreground font-bold tracking-widest uppercase mt-1">
-                平均分
-              </span>
-            </div>
-            <div className="bg-muted/50 border border-border/30 px-6 py-4 rounded-[var(--radius)] flex flex-col items-center shadow-sm">
-              <span className="text-2xl font-bold text-foreground">{passedCount}</span>
-              <span className="text-[10px] text-muted-foreground font-bold tracking-widest uppercase mt-1">
-                已过考试
-              </span>
-            </div>
+    <div className="space-y-8">
+      <section className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
+        <div className="space-y-2">
+          <h2 className="text-lg font-black text-foreground tracking-tight">
+            {tStudent("dashboard_greeting", { name: userName }, locale)}
+          </h2>
+          <div className="text-sm text-muted-foreground/65 font-medium">
+            <span>
+              {pendingCount > 0
+                ? tStudent("dashboard_pending_summary", { count: pendingCount }, locale)
+                : tStudent("dashboard_empty_summary", undefined, locale)}
+            </span>
           </div>
         </div>
-      </section>
 
-      {/* ── Upcoming Exams ── */}
-      <section>
-        <div className="flex items-center justify-between mb-8">
-          <h3 className="text-xl font-bold text-foreground flex items-center gap-2">
-            <span className="w-1.5 h-6 bg-primary rounded-full" />
-            待参加考试
-          </h3>
-          <button
-            className="text-primary text-sm font-bold hover:opacity-70 transition-opacity"
-            onClick={() => navigate("/my-exams")}
-          >
-            查看全部
-          </button>
-        </div>
-
-        {isLoading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="h-64 rounded-[var(--radius)] bg-muted animate-pulse" />
-            ))}
-          </div>
-        ) : pending.length === 0 ? (
-          <div className="rounded-[var(--radius)] border border-border bg-card p-12 text-center text-sm text-muted-foreground">
-            <CalendarClock size={32} className="mx-auto mb-3 opacity-30" />
-            暂无待参加的考试
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-            {pending.slice(0, 2).map((exam) => {
-              const isOngoing = exam.status === "ongoing";
-              return (
-                <div
-                  key={exam.id}
-                  className={`bg-card/70 backdrop-blur border border-border/50 rounded-[var(--radius)] p-8 shadow-sm hover:shadow-lg transition-all duration-300 group ${
-                    !isOngoing ? "opacity-90" : ""
-                  }`}
-                >
-                  {/* Enrolled count */}
-                  <div className="flex justify-between items-start mb-8">
-                    <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
-                      {exam.total_questions} 题 · {exam.total_score} 分
-                    </div>
-                  </div>
-
-                  {/* Title */}
-                  <h4 className="text-xl font-bold text-foreground mb-6 group-hover:text-primary transition-colors leading-snug">
-                    {exam.title}
-                  </h4>
-
-                  {/* Details */}
-                  <div className="space-y-4 mb-10">
-                    <div className={`flex items-center gap-3 text-sm ${isOngoing ? "text-muted-foreground" : "text-muted-foreground/60"}`}>
-                      <Clock size={18} className={isOngoing ? "text-primary" : "text-muted-foreground/40"} />
-                      <span className="font-medium">
-                        {formatTimeRange(exam.start_time, exam.end_time)}
-                      </span>
-                    </div>
-                    <div className={`flex items-center gap-3 text-sm ${isOngoing ? "text-muted-foreground" : "text-muted-foreground/60"}`}>
-                      <Timer size={18} className={isOngoing ? "text-primary" : "text-muted-foreground/40"} />
-                      <span className="font-medium">
-                        考试时长：{exam.duration_minutes} 分钟
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Action button */}
-                  {isOngoing ? (
-                    <button
-                      className="w-full py-4 bg-primary text-primary-foreground rounded-[var(--radius)] font-bold shadow-md hover:opacity-90 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
-                      onClick={() => navigate("/my-exams")}
-                    >
-                      进入考试
-                      <ArrowRight size={16} />
-                    </button>
-                  ) : (
-                    <button
-                      className="w-full py-4 bg-muted text-muted-foreground/40 rounded-[var(--radius)] font-bold cursor-not-allowed flex items-center justify-center gap-2"
-                      disabled
-                    >
-                      尚未开始
-                      <Lock size={16} />
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-
-            {/* ── Action Card (gradient) ── */}
-            <div className="bg-gradient-to-br from-primary to-primary/60 rounded-[var(--radius)] p-8 shadow-xl text-primary-foreground flex flex-col justify-between relative overflow-hidden group">
-              <div className="absolute -right-8 -top-8 w-32 h-32 bg-white/10 rounded-full blur-2xl group-hover:scale-150 transition-transform duration-700" />
-              <div className="relative z-10">
-                <div className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-[var(--radius)] flex items-center justify-center mb-6">
-                  <BookOpen size={24} />
-                </div>
-                <h4 className="text-2xl font-bold mb-3 tracking-tight">备考提醒</h4>
-                <p className="text-sm text-primary-foreground/90 leading-relaxed mb-8">
-                  考前温习错题本，有针对性地巩固薄弱知识点，可以有效提升考试成绩。
-                </p>
+        <div className="flex gap-3">
+          <Card className="min-w-[148px] rounded-2xl border border-border/60 bg-background/95 shadow-sm">
+            <CardContent className="flex items-center gap-3 px-5 py-4">
+              <div className="h-10 w-10 rounded-xl bg-primary/12 flex items-center justify-center text-primary">
+                <Target size={18} />
               </div>
-              <button
-                className="relative z-10 inline-flex items-center justify-center gap-2 text-primary font-bold bg-white px-6 py-4 rounded-[var(--radius)] hover:bg-white/90 transition-all shadow-lg active:scale-[0.98]"
-                onClick={() => navigate("/wrong-answers")}
-              >
-                去复习错题
-              </button>
-            </div>
-          </div>
-        )}
+              <div className="flex flex-col">
+                <span className="text-lg font-bold tabular-nums text-foreground leading-none">{avgScore}</span>
+                <span className="mt-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/80">{tStudent("dashboard_avg_score", undefined, locale)}</span>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="min-w-[148px] rounded-2xl border border-border/60 bg-background/95 shadow-sm">
+            <CardContent className="flex items-center gap-3 px-5 py-4">
+              <div className="h-10 w-10 rounded-xl bg-muted flex items-center justify-center text-foreground/80">
+                <Medal size={18} />
+              </div>
+              <div className="flex flex-col">
+                <span className="text-lg font-bold tabular-nums text-foreground leading-none">{passedCount}</span>
+                <span className="mt-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/80">{tStudent("dashboard_passed_exams", undefined, locale)}</span>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       </section>
 
-      {/* ── Completed Exams ── */}
-      <section>
-        <div className="flex items-center justify-between mb-8">
-          <h3 className="text-xl font-bold text-foreground flex items-center gap-2">
-            <span className="w-1.5 h-6 bg-border rounded-full" />
-            已参加考试
-          </h3>
-          <div className="flex bg-muted p-1 rounded-[var(--radius)]">
-            {filterTabs.map((tab) => (
-              <button
-                key={tab.key}
-                className={`px-6 py-2 text-xs font-bold rounded-[calc(var(--radius)-2px)] transition-colors ${
-                  completedFilter === tab.key
-                    ? "text-primary bg-card shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-                onClick={() => setCompletedFilter(tab.key)}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-        </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
+        <div className="lg:col-span-2 space-y-8">
+          <section>
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-sm font-semibold tracking-tight text-muted-foreground/85">{tStudent("dashboard_pending_exams", undefined, locale)}</h3>
+              <Button variant="ghost" size="sm" className="font-semibold text-primary/85 hover:bg-primary/5 hover:text-primary" onClick={() => navigate("/my-exams")}>
+                {tStudent("dashboard_view_all", undefined, locale)} <ArrowRight size={14} className="ml-1" />
+              </Button>
+            </div>
 
-        {filteredCompleted.length === 0 ? (
-          <div className="rounded-[var(--radius)] border border-border bg-card p-12 text-center text-sm text-muted-foreground">
-            <Trophy size={32} className="mx-auto mb-3 opacity-30" />
-            暂无已参加的考试
-          </div>
-        ) : (
-          <div className="bg-card rounded-[var(--radius)] overflow-hidden shadow-sm border border-border/50">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-muted/50 border-b border-border/30">
-                  <TableHead className="px-10 py-5 text-[10px] font-bold text-muted-foreground tracking-widest uppercase">
-                    考试名称
-                  </TableHead>
-                  <TableHead className="px-10 py-5 text-[10px] font-bold text-muted-foreground tracking-widest uppercase">
-                    完成日期
-                  </TableHead>
-                  <TableHead className="px-10 py-5 text-[10px] font-bold text-muted-foreground tracking-widest uppercase text-center">
-                    最终得分
-                  </TableHead>
-                  <TableHead className="px-10 py-5 text-[10px] font-bold text-muted-foreground tracking-widest uppercase text-right">
-                    操作
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody className="divide-y divide-border/10">
-                {filteredCompleted.slice(0, 8).map((exam) => {
-                  const hasScore = exam.score !== null && exam.score !== undefined;
-                  const scorePercent =
-                    hasScore && exam.total_score > 0
-                      ? (exam.score ?? 0) / exam.total_score
-                      : 0;
-                  const passed = scorePercent >= 0.6;
-
+            {isLoading ? (
+              <div className="space-y-4">
+                {[1, 2].map(i => <div key={i} className="h-32 rounded-2xl border border-border/40 bg-muted/60 animate-pulse" />)}
+              </div>
+            ) : pending.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-border p-12 text-center">
+                <CalendarClock size={32} className="mx-auto mb-3 text-muted-foreground/30" />
+                <p className="text-sm text-muted-foreground font-medium">{tStudent("dashboard_no_pending_title", undefined, locale)}</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {pending.slice(0, 2).map((exam) => {
+                  const isOngoing = exam.effectiveStatus === "ongoing";
                   return (
-                    <TableRow
-                      key={exam.id}
-                      className="group hover:bg-primary/5 transition-colors"
+                    <div 
+                      key={exam.id} 
+                      className={cn(
+                        "group flex flex-col md:flex-row md:items-center justify-between gap-6 p-6 rounded-2xl border transition-all duration-300",
+                        isOngoing 
+                          ? "bg-primary/[0.04] border-primary/20 shadow-md shadow-primary/10 hover:border-primary/40" 
+                          : "bg-card border-border/50 hover:border-border"
+                      )}
                     >
-                      {/* Exam name with icon */}
-                      <TableCell className="px-10 py-6">
-                        <div className="flex items-center gap-4">
-                          <div className={`w-12 h-12 rounded-[var(--radius)] flex items-center justify-center group-hover:scale-105 transition-transform ${
-                            hasScore && passed
-                              ? "bg-primary/5 text-primary"
-                              : hasScore
-                                ? "bg-destructive/5 text-destructive"
-                                : "bg-muted text-muted-foreground"
-                          }`}>
-                            <BookOpen size={22} />
-                          </div>
-                          <div>
-                            <p className="font-bold text-foreground text-base">{exam.title}</p>
-                          </div>
+                      <div className="min-w-0 flex-1 space-y-3">
+                        <div className="flex items-center gap-3">
+                          {isOngoing && <span className="flex h-2 w-2 rounded-full bg-primary animate-pulse" />}
+                          <h4 className="text-base font-bold text-foreground truncate">{exam.title}</h4>
                         </div>
-                      </TableCell>
-
-                      {/* Date */}
-                      <TableCell className="px-10 py-6 text-sm text-muted-foreground font-medium">
-                        {formatDate(exam.submitted_at ?? exam.end_time)}
-                      </TableCell>
-
-                      {/* Score */}
-                      <TableCell className="px-10 py-6 text-center">
-                        {hasScore ? (
-                          <div className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full ${
-                            passed ? "bg-primary/10" : "bg-muted"
-                          }`}>
-                            <span className={`text-lg font-extrabold ${
-                              passed ? "text-primary" : "text-foreground"
-                            }`}>
-                              {exam.score}
-                            </span>
-                            <span className={`text-[10px] font-bold ${
-                              passed ? "text-primary/60" : "text-muted-foreground"
-                            }`}>
-                              / {exam.total_score}
-                            </span>
-                          </div>
-                        ) : (
-                          <span className="px-4 py-1.5 bg-muted text-muted-foreground text-xs font-bold rounded-full">
-                            评分中...
-                          </span>
+                        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs font-medium text-muted-foreground/70">
+                          <span className="flex items-center gap-1.5"><Clock size={14} className="opacity-50" /> {formatTimeRange(exam.start_time, exam.end_time)}</span>
+                          <span className="flex items-center gap-1.5"><Timer size={14} className="opacity-50" /> {tStudent("dashboard_minutes", { minutes: exam.duration_minutes }, locale)}</span>
+                        </div>
+                      </div>
+                      
+                      <Button
+                        disabled={!isOngoing}
+                        onClick={() => navigate(`/my-exams/${exam.id}/take`)}
+                        className={cn(
+                          "h-10 px-5 rounded-xl font-semibold transition-all active:scale-95",
+                          isOngoing ? "shadow-md shadow-primary/15" : "bg-muted text-muted-foreground/50"
                         )}
-                      </TableCell>
-
-                      {/* Action */}
-                      <TableCell className="px-10 py-6 text-right">
-                        {hasScore ? (
-                          <button
-                            className="text-primary text-sm font-bold hover:underline underline-offset-4 inline-flex items-center gap-2 ml-auto"
-                            onClick={() => navigate("/my-exams")}
-                          >
-                            查看详情
-                            <ArrowRight size={16} />
-                          </button>
-                        ) : (
-                          <span className="text-muted-foreground/30 text-sm font-bold">
-                            暂无权限
-                          </span>
-                        )}
-                      </TableCell>
-                    </TableRow>
+                      >
+                        {isOngoing ? <><Play size={16} className="mr-2 fill-current" /> {tStudent("dashboard_enter_exam", undefined, locale)}</> : tStudent("dashboard_exam_not_started", undefined, locale)}
+                      </Button>
+                    </div>
                   );
                 })}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </section>
+              </div>
+            )}
+          </section>
 
-      {/* ── Info Banner ── */}
-      <div className="flex items-center gap-4 bg-muted/50 border border-border/30 rounded-[var(--radius)] p-5 shadow-sm">
-        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-          <Info size={16} className="text-primary" />
+          <section className="space-y-6">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold tracking-tight text-muted-foreground/85">{tStudent("dashboard_completed_exams", undefined, locale)}</h3>
+              <div className="flex bg-muted/50 p-1 rounded-lg">
+                {filterTabs.map(tab => (
+                  <button
+                    key={tab.key}
+                    onClick={() => setCompletedFilter(tab.key)}
+                    className={cn(
+                      "px-4 py-1.5 text-xs font-bold rounded-md transition-all",
+                      completedFilter === tab.key ? "bg-background text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-border/50 bg-card overflow-hidden shadow-sm">
+              <Table>
+                <TableHeader className="bg-muted/30">
+                  <TableRow>
+                    <TableHead className="pl-6 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">{tStudent("dashboard_exam_name", undefined, locale)}</TableHead>
+                    <TableHead className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">{tStudent("dashboard_exam_time", undefined, locale)}</TableHead>
+                    <TableHead className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">{tStudent("dashboard_submit_time", undefined, locale)}</TableHead>
+                    <TableHead className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">{tStudent("dashboard_duration_used", undefined, locale)}</TableHead>
+                    <TableHead className="text-center text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">{tStudent("dashboard_final_score", undefined, locale)}</TableHead>
+                    <TableHead className="pr-6 text-right text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">{tStudent("dashboard_action", undefined, locale)}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredCompleted.length === 0 ? (
+                    <TableRow><TableCell colSpan={6} className="text-center py-12 text-muted-foreground">{tStudent("dashboard_no_pending_title", undefined, locale)}</TableCell></TableRow>
+                  ) : (
+                    filteredCompleted.slice(0, 5).map((exam) => {
+                      const hasScore = exam.score !== null;
+                      const passed = (exam.score ?? 0) / exam.total_score >= 0.6;
+                      const gradingStatus = exam.grading_status ?? "reviewed";
+                      return (
+                        <TableRow key={exam.id} className="group hover:bg-muted/20 transition-colors">
+                          <TableCell className="pl-6 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className="h-8 w-8 rounded-lg bg-muted flex items-center justify-center text-muted-foreground group-hover:scale-110 transition-transform">
+                                <BookOpen size={16} />
+                              </div>
+                              <span className="font-bold text-foreground/90">{exam.title}</span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-xs font-medium text-muted-foreground">
+                            {formatTimeRange(exam.start_time, exam.end_time)}
+                          </TableCell>
+                          <TableCell className="text-xs font-medium text-muted-foreground">
+                            {formatDateTime(exam.submitted_at)}
+                          </TableCell>
+                          <TableCell className="text-xs font-medium text-muted-foreground">
+                            {formatUsedTime(exam.started_at, exam.submitted_at, exam.duration_minutes)}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {gradingStatus === "pending_ai" ? (
+                              <span className="text-xs font-bold text-muted-foreground/60">待AI评分</span>
+                            ) : gradingStatus === "ai_scored" ? (
+                              <div className="inline-flex items-center gap-1 rounded-full bg-secondary px-3 py-1 text-sm font-black text-secondary-foreground">
+                                AI已评分
+                              </div>
+                            ) : hasScore ? (
+                              <div className={cn(
+                                "inline-flex items-center gap-1 px-3 py-1 rounded-full font-black text-sm",
+                                passed ? "bg-primary/10 text-primary" : "bg-destructive/10 text-destructive"
+                              )}>
+                                {exam.score} <span className="text-[10px] opacity-60">/ {exam.total_score}</span>
+                              </div>
+                            ) : (
+                              <span className="text-xs font-bold text-muted-foreground/50">{tStudent("dashboard_score_pending", undefined, locale)}</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="pr-6 text-right">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="font-bold text-primary"
+                              onClick={() => navigate(`/my-exams/${exam.id}/result`)}
+                            >
+                              {tStudent("dashboard_detail", undefined, locale)}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </section>
         </div>
-        <p className="text-xs text-muted-foreground leading-relaxed">
-          提示：部分考试详情可见性受限，具体查看权限由该考试的管理员设定。如有疑问请联系教务处。
-        </p>
+
+        <div className="space-y-8">
+          <section className="group relative overflow-hidden rounded-3xl border border-primary/15 bg-primary/[0.08] p-8 text-foreground shadow-sm">
+            <div className="absolute top-0 right-0 h-40 w-40 translate-x-1/4 -translate-y-1/2 rounded-full bg-primary/10 blur-3xl transition-transform duration-700 group-hover:scale-125" />
+            <div className="relative z-10 space-y-6">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/12 text-primary shadow-inner">
+                <BookOpen size={22} />
+              </div>
+              <div className="space-y-2">
+                <h4 className="text-lg font-black tracking-tight">{locale === "en" ? "Review Tips" : "高效提分秘籍"}</h4>
+                <p className="text-sm font-medium leading-relaxed text-muted-foreground">
+                  {locale === "en"
+                    ? "Spend a few minutes reviewing recent practice and wrong answers before the next exam to get into the flow faster."
+                    : "考试前花几分钟回顾近期练习和错题记录，通常能更快进入答题状态，也更容易避免重复失误。"}
+                </p>
+              </div>
+              <Button className="h-10 w-full rounded-xl font-semibold shadow-sm" onClick={() => navigate("/wrong-answers")}>
+                {locale === "en" ? "Review wrong answers" : "立即复习错题"}
+              </Button>
+            </div>
+          </section>
+        </div>
       </div>
     </div>
   );

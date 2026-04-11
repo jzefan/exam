@@ -1,4 +1,4 @@
-import { format, addMonths, subMonths } from "date-fns";
+import { format, addMonths, startOfDay, subMonths } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import { CalendarIcon, ChevronLeft, ChevronRight } from "lucide-react";
 import type { ChangeEvent, ChangeEventHandler } from "react";
@@ -26,6 +26,7 @@ interface DatePickerProps {
   placeholder?: string;
   className?: string;
   includeTime?: boolean;
+  minDateTime?: Date;
 }
 
 export function DatePicker({
@@ -34,9 +35,20 @@ export function DatePicker({
   placeholder = "选择日期",
   className,
   includeTime = false,
+  minDateTime,
 }: DatePickerProps) {
   const [month, setMonth] = useState<Date>(value ?? new Date());
   const [open, setOpen] = useState(false);
+
+  const isSameDay = (left: Date, right: Date) =>
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate();
+
+  const clampToMinDateTime = (date: Date) => {
+    if (!minDateTime) return date;
+    return date.getTime() < minDateTime.getTime() ? new Date(minDateTime) : date;
+  };
 
   const commitTimeValue = (time: string) => {
     const base = value ?? month ?? new Date();
@@ -45,7 +57,7 @@ export function DatePicker({
     const minutes = Number(minutesText);
     const next = new Date(base);
     next.setHours(Number.isFinite(hours) ? hours : 0, Number.isFinite(minutes) ? minutes : 0, 0, 0);
-    onChange(next);
+    onChange(clampToMinDateTime(next));
   };
 
   const timeValue = value
@@ -61,6 +73,11 @@ export function DatePicker({
     } as ChangeEvent<HTMLSelectElement>;
     handler(newEvent);
   };
+
+  const minTimeValue =
+    includeTime && minDateTime && value && isSameDay(value, minDateTime)
+      ? `${String(minDateTime.getHours()).padStart(2, "0")}:${String(minDateTime.getMinutes()).padStart(2, "0")}`
+      : undefined;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -135,11 +152,12 @@ export function DatePicker({
             hideNavigation
             showOutsideDays
             mode="single"
+            disabled={minDateTime ? { before: startOfDay(minDateTime) } : undefined}
             month={month}
             onMonthChange={setMonth}
             onSelect={(date) => {
               if (!includeTime) {
-                onChange(date);
+                onChange(date ? clampToMinDateTime(date) : undefined);
                 setOpen(false);
                 return;
               }
@@ -153,7 +171,7 @@ export function DatePicker({
               } else {
                 next.setHours(9, 0, 0, 0);
               }
-              onChange(next);
+              onChange(clampToMinDateTime(next));
             }}
             selected={value}
             locale={zhCN}
@@ -165,6 +183,7 @@ export function DatePicker({
                 <input
                   type="time"
                   value={timeValue}
+                  min={minTimeValue}
                   className="h-8 rounded-md border border-input bg-background px-2 text-sm"
                   onChange={(event) => commitTimeValue(event.target.value)}
                 />

@@ -8,8 +8,15 @@ import {
   FileText,
   MonitorOff,
   ChevronRight,
+  Play,
+  Calendar,
+  Award,
+  CheckCircle2,
+  X,
+  BookOpen,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,6 +27,9 @@ import {
   AlertDialogTitle,
   AlertDialogDescription,
 } from "@/components/ui/alert-dialog";
+import { cn } from "@/lib/utils";
+import { getEffectiveStudentExamStatus } from "./utils";
+import { getStudentDateLocale, getStudentLocale, tStudent } from "./i18n";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -34,12 +44,14 @@ interface IMyExam {
   status: ExamStatus;
   start_time: string | null;
   end_time: string | null;
+  started_at: string | null;
   duration_minutes: number;
   total_score: number;
   max_switch_count: number;
   notes_template: string | null;
   total_questions: number;
   score: number | null;
+  grading_status?: "pending_ai" | "ai_scored" | "reviewed" | null;
   participated: boolean;
   submitted_at: string | null;
 }
@@ -49,8 +61,9 @@ interface IMyExam {
 /* ------------------------------------------------------------------ */
 
 function formatDateShort(iso: string | null): string {
-  if (!iso) return "待定";
-  return new Date(iso).toLocaleString("zh-CN", {
+  const locale = getStudentLocale();
+  if (!iso) return tStudent("common_tbd", undefined, locale);
+  return new Date(iso).toLocaleString(getStudentDateLocale(locale), {
     month: "numeric",
     day: "numeric",
     hour: "2-digit",
@@ -59,6 +72,7 @@ function formatDateShort(iso: string | null): string {
 }
 
 function useRelativeTime(iso: string | null): string {
+  const locale = getStudentLocale();
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -70,390 +84,157 @@ function useRelativeTime(iso: string | null): string {
   const target = new Date(iso).getTime();
   const diff = target - now;
 
-  if (diff < 0) return "已开始";
+  if (diff < 0) return tStudent("my_exams_started", undefined, locale);
   const minutes = Math.floor(diff / 60_000);
-  if (minutes < 60) return `${minutes} 分钟后`;
+  if (minutes < 60) return tStudent("my_exams_minutes_later", { count: minutes }, locale);
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} 小时后`;
+  if (hours < 24) return tStudent("my_exams_hours_later", { count: hours }, locale);
   const days = Math.floor(hours / 24);
-  return `${days} 天后`;
+  return tStudent("my_exams_days_later", { count: days }, locale);
 }
 
 /* ------------------------------------------------------------------ */
-/*  Live pulse dot for ongoing exams                                   */
+/*  Components                                                         */
 /* ------------------------------------------------------------------ */
 
-function PulseDot() {
+function OngoingExamHero({ exam, onClick }: { exam: IMyExam; onClick: () => void }) {
+  const locale = getStudentLocale();
   return (
-    <span className="relative flex h-2.5 w-2.5">
-      <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-75 animate-ping" />
-      <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
-    </span>
-  );
-}
+    <div className="group relative overflow-hidden rounded-2xl border border-primary/20 bg-primary/[0.04] px-6 py-5 transition-all hover:shadow-lg hover:shadow-primary/10">
+      <div className="absolute top-0 right-0 p-6 opacity-5 transition-transform group-hover:scale-110">
+        <Play size={96} className="fill-primary" />
+      </div>
 
-/* ------------------------------------------------------------------ */
-/*  Ongoing exam — hero treatment                                      */
-/* ------------------------------------------------------------------ */
-
-function OngoingExamHero({
-  exam,
-  onClick,
-}: {
-  exam: IMyExam;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className="group w-full text-left relative overflow-hidden rounded-2xl border-2 border-emerald-200 dark:border-emerald-900 bg-gradient-to-br from-emerald-50/80 via-background to-background dark:from-emerald-950/30 transition-all hover:border-emerald-300 dark:hover:border-emerald-800 hover:shadow-lg hover:shadow-emerald-500/5"
-    >
-      {/* Subtle corner accent */}
-      <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/[0.04] rounded-bl-[80px]" />
-
-      <div className="relative p-6 sm:p-8">
-        {/* Status row */}
-        <div className="flex items-center gap-2.5 mb-4">
-          <PulseDot />
-          <span className="text-xs font-semibold tracking-wide uppercase text-emerald-600 dark:text-emerald-400">
-            正在进行
+      <div className="relative flex flex-col gap-4">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <Badge className="rounded-full border-none bg-primary px-2.5 py-1 hover:bg-primary/90">
+            {tStudent("my_exams_ongoing", undefined, locale)}
+          </Badge>
+          <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+            {tStudent("my_exams_remaining_minutes", { minutes: exam.duration_minutes }, locale)}
           </span>
         </div>
 
-        {/* Title */}
-        <h3 className="text-xl sm:text-2xl font-bold text-foreground leading-tight mb-2 group-hover:text-emerald-700 dark:group-hover:text-emerald-300 transition-colors">
-          {exam.title}
-        </h3>
-
-        {exam.description && (
-          <p className="text-sm text-muted-foreground line-clamp-2 mb-5 max-w-2xl">
-            {exam.description}
-          </p>
-        )}
-
-        {/* Meta row */}
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground mb-6">
-          <span className="flex items-center gap-1.5">
-            <Timer size={14} className="text-emerald-500" />
-            {exam.duration_minutes} 分钟
-          </span>
-          <span className="flex items-center gap-1.5">
-            <FileText size={14} className="text-emerald-500" />
-            {exam.total_questions} 题 &middot; {exam.total_score} 分
-          </span>
-          {exam.start_time && (
-            <span className="flex items-center gap-1.5">
-              <Clock size={14} className="text-emerald-500" />
-              {formatDateShort(exam.start_time)} 开始
-            </span>
+        <div className="flex flex-col gap-1.5">
+          <h3 className="text-lg font-extrabold text-foreground tracking-tight transition-colors group-hover:text-primary">
+            {exam.title}
+          </h3>
+          {exam.description && (
+            <p className="max-w-2xl text-sm leading-6 text-muted-foreground line-clamp-2">
+              {exam.description}
+            </p>
           )}
         </div>
 
-        {/* CTA */}
-        <div className="flex items-center gap-2 text-sm font-semibold text-emerald-600 dark:text-emerald-400 group-hover:gap-3 transition-all">
-          进入考试
-          <ArrowRight size={16} className="transition-transform group-hover:translate-x-0.5" />
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
+          <div className="flex items-center gap-2 font-semibold">
+            <FileText size={16} className="text-primary/60" />
+            <span>{tStudent("my_exams_questions", { count: exam.total_questions }, locale)}</span>
+          </div>
+          <div className="flex items-center gap-2 font-semibold">
+            <Award size={16} className="text-primary/60" />
+            <span>{tStudent("my_exams_total_score", { score: exam.total_score }, locale)}</span>
+          </div>
         </div>
+
+        <Button onClick={onClick} className="h-10 w-fit rounded-lg px-5 font-semibold shadow-sm shadow-primary/20">
+          {tStudent("my_exams_enter_exam", undefined, locale)} <ArrowRight size={20} className="ml-2" />
+        </Button>
       </div>
-    </button>
+    </div>
   );
 }
 
-/* ------------------------------------------------------------------ */
-/*  Upcoming exam — compact timeline row                               */
-/* ------------------------------------------------------------------ */
-
-function UpcomingExamRow({
-  exam,
-  onClick,
-}: {
-  exam: IMyExam;
-  onClick: () => void;
-}) {
+function UpcomingExamRow({ exam, onClick }: { exam: IMyExam; onClick: () => void }) {
+  const locale = getStudentLocale();
   const timeUntil = useRelativeTime(exam.start_time);
-  const isImminent =
-    exam.start_time &&
-    new Date(exam.start_time).getTime() - Date.now() < 3600_000;
-
   return (
-    <button
+    <button 
       onClick={onClick}
-      className="group w-full text-left flex items-center gap-4 sm:gap-6 py-4 px-4 sm:px-5 rounded-xl border border-transparent hover:border-border hover:bg-card transition-all"
+      className="group flex w-full items-center justify-between rounded-xl border border-border/50 bg-card/50 px-4 py-3.5 transition-all hover:border-primary/30 hover:bg-primary/[0.01]"
     >
-      {/* Time column */}
-      <div className="shrink-0 w-20 sm:w-24 text-right">
-        {isImminent ? (
-          <span className="text-sm font-semibold text-amber-600 dark:text-amber-400">
-            {timeUntil}
-          </span>
-        ) : (
-          <span className="text-sm text-muted-foreground">{timeUntil}</span>
-        )}
-      </div>
-
-      {/* Divider dot */}
-      <div className="shrink-0 flex flex-col items-center">
-        <div
-          className={`w-2.5 h-2.5 rounded-full border-2 ${
-            isImminent
-              ? "border-amber-400 bg-amber-100 dark:border-amber-500 dark:bg-amber-950"
-              : "border-border bg-muted"
-          }`}
-        />
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 min-w-0">
-        <h4 className="text-sm font-semibold text-foreground truncate group-hover:text-foreground/80 transition-colors">
-          {exam.title}
-        </h4>
-        <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
-          <span>{exam.duration_minutes} 分钟</span>
-          <span>{exam.total_questions} 题</span>
-          {exam.start_time && (
-            <span className="hidden sm:inline">
-              {formatDateShort(exam.start_time)}
-            </span>
-          )}
+      <div className="flex min-w-0 items-center gap-4">
+        <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted transition-colors group-hover:bg-primary/10">
+          <Calendar size={20} className="text-muted-foreground group-hover:text-primary transition-colors" />
+        </div>
+        <div className="flex min-w-0 flex-col gap-1 text-left">
+          <h4 className="truncate text-sm font-semibold text-foreground">{exam.title}</h4>
+          <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span>{tStudent("my_exams_start_time", { time: formatDateShort(exam.start_time) }, locale)}</span>
+            <span>•</span>
+            <span className="font-semibold text-primary">{timeUntil}</span>
+          </p>
         </div>
       </div>
-
-      {/* Arrow */}
-      <ChevronRight
-        size={16}
-        className="shrink-0 text-muted-foreground/40 group-hover:text-foreground/60 transition-colors"
-      />
+      <ChevronRight size={18} className="shrink-0 text-muted-foreground/40 transition-all group-hover:translate-x-1 group-hover:text-primary" />
     </button>
   );
 }
 
-/* ------------------------------------------------------------------ */
-/*  Completed exam — archive row                                       */
-/* ------------------------------------------------------------------ */
-
-function CompletedExamRow({ exam }: { exam: IMyExam }) {
-  const scorePercent =
-    exam.score !== null && exam.total_score > 0
-      ? Math.round((exam.score / exam.total_score) * 100)
-      : null;
-
+function CompletedExamRow({ exam, onClick }: { exam: IMyExam; onClick: () => void }) {
+  const locale = getStudentLocale();
+  const hasScore = exam.score !== null;
+  const passed = (exam.score ?? 0) / exam.total_score >= 0.6;
+  const gradingStatus = exam.grading_status ?? "reviewed";
+  const statusLabel =
+    gradingStatus === "pending_ai"
+      ? "待AI评分"
+      : gradingStatus === "ai_scored"
+        ? "AI已评分"
+        : hasScore
+          ? `${exam.score} / ${exam.total_score}`
+          : "已审核确定";
   return (
-    <div className="flex items-center gap-4 sm:gap-6 py-3.5 px-4 sm:px-5 rounded-xl transition-colors hover:bg-card/60">
-      {/* Date column */}
-      <div className="shrink-0 w-20 sm:w-24 text-right">
-        <span className="text-xs text-muted-foreground">
-          {exam.submitted_at
-            ? formatDateShort(exam.submitted_at)
-            : formatDateShort(exam.end_time)}
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full items-center justify-between rounded-xl border border-border/40 bg-card/30 px-4 py-3.5 text-left transition-colors hover:bg-muted/30"
+    >
+      <div className="flex min-w-0 items-center gap-4">
+        <div className={cn(
+          "flex size-9 shrink-0 items-center justify-center rounded-full",
+          passed ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"
+        )}>
+          {passed ? <CheckCircle2 size={18} /> : <BookOpen size={18} />}
+        </div>
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <h4 className="truncate text-sm font-semibold text-foreground">{exam.title}</h4>
+          <p className="text-[11px] text-muted-foreground">
+            {tStudent("my_exams_completed_at", { time: exam.submitted_at ? formatDateShort(exam.submitted_at) : formatDateShort(exam.end_time) }, locale)}
+          </p>
+        </div>
+      </div>
+      
+        <div className="flex shrink-0 items-center gap-4">
+          <div className="min-w-[88px] text-right">
+          {hasScore && gradingStatus !== "pending_ai" ? (
+            <div className={cn(
+              "rounded-full px-2.5 py-1 text-sm font-semibold tabular-nums",
+              gradingStatus === "reviewed"
+                ? passed ? "bg-primary/10 text-primary" : "bg-destructive/10 text-destructive"
+                : "bg-secondary text-secondary-foreground"
+            )}>
+              {statusLabel}
+            </div>
+          ) : (
+            <Badge variant="outline" className="border-muted text-[10px] font-medium text-muted-foreground">{statusLabel}</Badge>
+          )}
+        </div>
+        <span className="inline-flex size-7 items-center justify-center text-muted-foreground transition-colors group-hover:text-primary">
+          <ChevronRight size={18} />
         </span>
       </div>
-
-      {/* Dot */}
-      <div className="shrink-0">
-        <div className="w-2 h-2 rounded-full bg-muted-foreground/20" />
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 min-w-0">
-        <h4 className="text-sm text-foreground/70 truncate">{exam.title}</h4>
-        <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
-          <span>{exam.duration_minutes} 分钟</span>
-          <span>{exam.total_questions} 题</span>
-        </div>
-      </div>
-
-      {/* Score */}
-      {scorePercent !== null ? (
-        <div className="shrink-0 flex items-center gap-2.5">
-          <div className="text-right">
-            <span
-              className={`text-lg font-bold tabular-nums ${
-                scorePercent >= 60
-                  ? "text-foreground"
-                  : "text-red-500 dark:text-red-400"
-              }`}
-            >
-              {exam.score}
-            </span>
-            <span className="text-xs text-muted-foreground ml-0.5">
-              /{exam.total_score}
-            </span>
-          </div>
-          {/* Mini bar */}
-          <div className="w-12 h-1.5 rounded-full bg-muted overflow-hidden hidden sm:block">
-            <div
-              className={`h-full rounded-full transition-all ${
-                scorePercent >= 90
-                  ? "bg-emerald-500"
-                  : scorePercent >= 60
-                    ? "bg-foreground/40"
-                    : "bg-red-400"
-              }`}
-              style={{ width: `${scorePercent}%` }}
-            />
-          </div>
-        </div>
-      ) : (
-        <Badge variant="secondary" className="text-[10px] shrink-0">
-          待批阅
-        </Badge>
-      )}
-    </div>
+    </button>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/*  Empty state                                                        */
+/*  Main Page                                                          */
 /* ------------------------------------------------------------------ */
-
-function EmptyState({ message }: { message: string }) {
-  return (
-    <div className="flex flex-col items-center justify-center py-16 sm:py-24">
-      <div className="w-12 h-12 rounded-2xl bg-muted flex items-center justify-center mb-4">
-        <FileText size={20} className="text-muted-foreground/40" />
-      </div>
-      <p className="text-sm text-muted-foreground">{message}</p>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/*  Loading skeleton                                                   */
-/* ------------------------------------------------------------------ */
-
-function Skeleton() {
-  return (
-    <div className="space-y-4 animate-pulse">
-      <div className="h-44 rounded-2xl bg-muted" />
-      <div className="h-16 rounded-xl bg-muted" />
-      <div className="h-16 rounded-xl bg-muted" />
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/*  Exam notice dialog                                                 */
-/* ------------------------------------------------------------------ */
-
-function ExamNoticeDialog({
-  exam,
-  open,
-  onConfirm,
-  onCancel,
-}: {
-  exam: IMyExam | null;
-  open: boolean;
-  onConfirm: () => void;
-  onCancel: () => void;
-}) {
-  if (!exam) return null;
-
-  return (
-    <AlertDialog open={open} onOpenChange={(v) => !v && onCancel()}>
-      <AlertDialogContent className="max-w-md">
-        <AlertDialogHeader>
-          <AlertDialogTitle className="text-lg">
-            考试须知
-          </AlertDialogTitle>
-          <AlertDialogDescription className="sr-only">
-            即将进入考试
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-
-        <div className="space-y-5 py-1">
-          {/* Exam title */}
-          <div>
-            <h3 className="font-semibold text-foreground leading-snug">
-              {exam.title}
-            </h3>
-            {exam.description && (
-              <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
-                {exam.description}
-              </p>
-            )}
-          </div>
-
-          {/* Stats */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-lg bg-muted/60 px-3.5 py-2.5">
-              <p className="text-xs text-muted-foreground mb-0.5">考试时长</p>
-              <p className="text-sm font-semibold text-foreground">
-                {exam.duration_minutes} 分钟
-              </p>
-            </div>
-            <div className="rounded-lg bg-muted/60 px-3.5 py-2.5">
-              <p className="text-xs text-muted-foreground mb-0.5">题目数量</p>
-              <p className="text-sm font-semibold text-foreground">
-                {exam.total_questions} 题
-              </p>
-            </div>
-            <div className="rounded-lg bg-muted/60 px-3.5 py-2.5">
-              <p className="text-xs text-muted-foreground mb-0.5">总分</p>
-              <p className="text-sm font-semibold text-foreground">
-                {exam.total_score} 分
-              </p>
-            </div>
-            {exam.max_switch_count > 0 && (
-              <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 px-3.5 py-2.5">
-                <p className="text-xs text-amber-600 dark:text-amber-400 mb-0.5 flex items-center gap-1">
-                  <MonitorOff size={10} />
-                  切屏限制
-                </p>
-                <p className="text-sm font-semibold text-amber-700 dark:text-amber-300">
-                  最多 {exam.max_switch_count} 次
-                </p>
-              </div>
-            )}
-          </div>
-
-          {/* Custom notes */}
-          {exam.notes_template && (
-            <div className="rounded-lg border border-border px-4 py-3 text-sm text-muted-foreground leading-relaxed">
-              <div
-                className="prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
-                dangerouslySetInnerHTML={{ __html: exam.notes_template }}
-              />
-            </div>
-          )}
-
-          {/* Reminders */}
-          <ul className="space-y-1.5 text-xs text-muted-foreground">
-            <li className="flex items-start gap-2">
-              <span className="shrink-0 mt-0.5 w-1 h-1 rounded-full bg-muted-foreground/40" />
-              确保网络连接稳定
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="shrink-0 mt-0.5 w-1 h-1 rounded-full bg-muted-foreground/40" />
-              考试期间请勿切换窗口
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="shrink-0 mt-0.5 w-1 h-1 rounded-full bg-muted-foreground/40" />
-              答案每 30 秒自动保存
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="shrink-0 mt-0.5 w-1 h-1 rounded-full bg-muted-foreground/40" />
-              时间结束将自动提交
-            </li>
-          </ul>
-        </div>
-
-        <AlertDialogFooter>
-          <AlertDialogCancel onClick={onCancel}>取消</AlertDialogCancel>
-          <AlertDialogAction onClick={onConfirm}>进入考试</AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/*  Main page                                                          */
-/* ------------------------------------------------------------------ */
-
-type TabKey = "pending" | "completed";
 
 export function MyExams() {
   const navigate = useNavigate();
+  const locale = getStudentLocale();
   const [tab, setTab] = useState<TabKey>("pending");
   const [noticeExam, setNoticeExam] = useState<IMyExam | null>(null);
 
@@ -466,157 +247,181 @@ export function MyExams() {
   const exams = query.data?.data ?? [];
   const isLoading = query.isLoading;
 
-  // Split by participation: "participated" === submitted
-  const pending = exams
-    .filter((e) => !e.participated && e.status !== "closed")
+  const examsWithDerivedStatus = exams.map((exam) => ({
+    ...exam,
+    effectiveStatus: getEffectiveStudentExamStatus(exam),
+  }));
+
+  const pending = examsWithDerivedStatus
+    .filter((e) => e.effectiveStatus === "ongoing" || e.effectiveStatus === "upcoming")
     .sort((a, b) => {
-      // ongoing first, then by start_time asc
-      if (a.status === "ongoing" && b.status !== "ongoing") return -1;
-      if (b.status === "ongoing" && a.status !== "ongoing") return 1;
-      const ta = a.start_time ? new Date(a.start_time).getTime() : Infinity;
-      const tb = b.start_time ? new Date(b.start_time).getTime() : Infinity;
-      return ta - tb;
+      if (a.effectiveStatus === "ongoing" && b.effectiveStatus !== "ongoing") return -1;
+      if (b.effectiveStatus === "ongoing" && a.effectiveStatus !== "ongoing") return 1;
+      return new Date(a.start_time ?? "").getTime() - new Date(b.start_time ?? "").getTime();
     });
 
-  const completed = exams
-    .filter((e) => e.participated || e.status === "completed" || e.status === "closed")
-    .sort((a, b) => {
-      const ta = a.submitted_at ?? a.end_time ?? "";
-      const tb = b.submitted_at ?? b.end_time ?? "";
-      return tb.localeCompare(ta); // newest first
-    });
+  const completed = examsWithDerivedStatus
+    .filter((e) => e.effectiveStatus === "completed")
+    .sort((a, b) => new Date(b.submitted_at || b.end_time || "").getTime() - new Date(a.submitted_at || a.end_time || "").getTime());
 
-  const ongoingExams = pending.filter((e) => e.status === "ongoing");
-  const upcomingExams = pending.filter((e) => e.status !== "ongoing");
-
-  const handleExamClick = (exam: IMyExam) => {
-    if (exam.status === "ongoing") {
-      setNoticeExam(exam);
-    } else {
-      // Upcoming — show notice but disable entry
-      setNoticeExam(exam);
-    }
-  };
-
-  const handleConfirmEnter = () => {
-    if (noticeExam) {
-      navigate(`/my-exams/${noticeExam.id}/take`);
-      setNoticeExam(null);
-    }
-  };
+  const ongoingExams = pending.filter(e => e.effectiveStatus === "ongoing");
+  const upcomingExams = pending.filter(e => e.effectiveStatus === "upcoming");
 
   return (
-    <div className="max-w-3xl">
-      {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-base font-bold text-foreground tracking-tight">
-          我的考试
-        </h1>
-        <p className="mt-1.5 text-sm text-muted-foreground">
+    <div className="flex flex-col gap-8">
+      <header className="flex flex-col gap-1.5">
+        <h1 className="text-lg font-extrabold text-foreground tracking-tight">{tStudent("my_exams_title", undefined, locale)}</h1>
+        <p className="text-sm font-medium text-muted-foreground">
           {pending.length > 0
-            ? `${pending.length} 场考试待完成`
-            : "当前没有待参加的考试"}
+            ? tStudent("my_exams_pending_summary", { count: pending.length }, locale)
+            : tStudent("my_exams_empty_summary", undefined, locale)}
         </p>
-      </div>
+      </header>
 
-      {/* Tab bar */}
-      <div className="flex items-center gap-1 mb-6 border-b border-border">
-        {([
-          { key: "pending" as const, label: "未参加", count: pending.length },
-          { key: "completed" as const, label: "已参加", count: completed.length },
-        ]).map((t) => (
+      <div className="flex w-fit rounded-xl bg-muted/50 p-1">
+        {[
+          { key: "pending" as const, label: tStudent("my_exams_pending_tab", undefined, locale), count: pending.length },
+          { key: "completed" as const, label: tStudent("my_exams_completed_tab", undefined, locale), count: completed.length }
+        ].map(t => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            className={`relative px-4 py-2.5 text-sm font-medium transition-colors ${
-              tab === t.key
-                ? "text-foreground"
-                : "text-muted-foreground hover:text-foreground/70"
-            }`}
+            className={cn(
+              "flex items-center gap-2 rounded-lg px-5 py-2 text-sm font-semibold transition-all",
+              tab === t.key ? "bg-background text-primary shadow-sm ring-1 ring-border/50" : "text-muted-foreground hover:text-foreground"
+            )}
           >
-            <span className="flex items-center gap-1.5">
-              {t.label}
-              {t.count > 0 && (
-                <span
-                  className={`text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded-full ${
-                    tab === t.key
-                      ? t.key === "pending"
-                        ? "bg-foreground text-background"
-                        : "bg-muted-foreground/20 text-muted-foreground"
-                      : "bg-muted text-muted-foreground"
-                  }`}
-                >
-                  {t.count}
-                </span>
-              )}
-            </span>
-            {/* Active indicator */}
-            {tab === t.key && (
-              <span className="absolute bottom-0 left-4 right-4 h-0.5 bg-foreground rounded-full" />
+            {t.label}
+            {t.count > 0 && (
+              <span className={cn(
+                "px-1.5 py-0.5 rounded-md text-[10px] tabular-nums",
+                tab === t.key ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"
+              )}>
+                {t.count}
+              </span>
             )}
           </button>
         ))}
       </div>
 
-      {/* Content */}
-      {isLoading ? (
-        <Skeleton />
-      ) : tab === "pending" ? (
-        pending.length === 0 ? (
-          <EmptyState message="暂无待参加的考试" />
-        ) : (
-          <div className="space-y-6">
-            {/* Ongoing — hero cards */}
-            {ongoingExams.length > 0 && (
-              <div className="space-y-3">
-                {ongoingExams.map((exam) => (
-                  <OngoingExamHero
-                    key={exam.id}
-                    exam={exam}
-                    onClick={() => handleExamClick(exam)}
-                  />
-                ))}
-              </div>
-            )}
-
-            {/* Upcoming — timeline rows */}
-            {upcomingExams.length > 0 && (
-              <div>
-                {ongoingExams.length > 0 && (
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2 px-4">
-                    即将开始
-                  </p>
-                )}
-                <div className="divide-y divide-border/50">
-                  {upcomingExams.map((exam) => (
-                    <UpcomingExamRow
-                      key={exam.id}
-                      exam={exam}
-                      onClick={() => handleExamClick(exam)}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
+      <div className="flex flex-col gap-5">
+        {isLoading ? (
+          <div className="flex flex-col gap-3 animate-pulse">
+            <div className="h-40 rounded-2xl bg-muted" />
+            <div className="h-16 rounded-xl bg-muted" />
           </div>
-        )
-      ) : completed.length === 0 ? (
-        <EmptyState message="暂无已参加的考试" />
-      ) : (
-        <div className="divide-y divide-border/50">
-          {completed.map((exam) => (
-            <CompletedExamRow key={exam.id} exam={exam} />
-          ))}
-        </div>
-      )}
+        ) : tab === "pending" ? (
+          pending.length === 0 ? (
+            <div className="flex flex-col gap-3 rounded-2xl border-2 border-dashed border-border/40 py-16 text-center">
+              <Calendar className="mx-auto h-12 w-12 text-muted-foreground/20" />
+              <p className="text-sm font-bold text-muted-foreground">{tStudent("my_exams_pending_empty", undefined, locale)}</p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-6">
+              {ongoingExams.map(e => <OngoingExamHero key={e.id} exam={e} onClick={() => setNoticeExam(e)} />)}
+              {upcomingExams.length > 0 && (
+                <div className="flex flex-col gap-3">
+                  <h3 className="px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{locale === "en" ? "Starting Soon" : "即将开始"}</h3>
+                  <div className="flex flex-col gap-2.5">
+                    {upcomingExams.map(e => <UpcomingExamRow key={e.id} exam={e} onClick={() => setNoticeExam(e)} />)}
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        ) : (
+          completed.length === 0 ? (
+            <div className="flex flex-col gap-3 rounded-2xl border-2 border-dashed border-border/40 py-16 text-center">
+              <CheckCircle2 className="mx-auto h-12 w-12 text-muted-foreground/20" />
+              <p className="text-sm font-bold text-muted-foreground">{tStudent("my_exams_completed_empty", undefined, locale)}</p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2.5">
+              {completed.map((e) => (
+                <CompletedExamRow
+                  key={e.id}
+                  exam={e}
+                  onClick={() => navigate(`/my-exams/${e.id}/result`)}
+                />
+              ))}
+            </div>
+          )
+        )}
+      </div>
 
-      {/* Notice dialog */}
       <ExamNoticeDialog
         exam={noticeExam}
         open={noticeExam !== null}
-        onConfirm={handleConfirmEnter}
+        onConfirm={() => { navigate(`/my-exams/${noticeExam!.id}/take`); setNoticeExam(null); }}
         onCancel={() => setNoticeExam(null)}
       />
     </div>
+  );
+}
+
+function ExamNoticeDialog({ exam, open, onConfirm, onCancel }: any) {
+  if (!exam) return null;
+  const locale = getStudentLocale();
+  return (
+    <AlertDialog open={open} onOpenChange={v => !v && onCancel()}>
+      <AlertDialogContent className="rounded-3xl border-none shadow-2xl p-0 overflow-hidden">
+        <div className="bg-primary p-8 text-primary-foreground relative overflow-hidden">
+          <div className="absolute top-0 right-0 translate-x-1/4 -translate-y-1/4 w-40 h-40 bg-background/10 rounded-full blur-2xl" />
+          <AlertDialogHeader className="relative z-10">
+            <AlertDialogTitle className="text-lg font-black tracking-tight">{locale === "en" ? "Exam Notes" : "考试须知"}</AlertDialogTitle>
+            <AlertDialogDescription className="text-primary-foreground/80 font-medium">
+              {locale === "en"
+                ? "Please review the rules below before entering the exam."
+                : "请在进入考试前仔细阅读以下规则，祝您取得好成绩。"}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+        </div>
+        
+        <div className="p-8 space-y-6">
+          <div className="grid grid-cols-3 gap-4">
+            {[
+              { icon: Timer, label: locale === "en" ? "Duration" : "考试时长", value: `${exam.duration_minutes}m` },
+              { icon: FileText, label: locale === "en" ? "Questions" : "题目总数", value: locale === "en" ? `${exam.total_questions}` : `${exam.total_questions}题` },
+              { icon: Award, label: locale === "en" ? "Total Score" : "卷面总分", value: locale === "en" ? `${exam.total_score}` : `${exam.total_score}分` }
+            ].map((item, i) => (
+              <div key={i} className="flex flex-col items-center gap-1 p-3 rounded-2xl bg-muted/50 border border-border/50">
+                <item.icon size={16} className="text-primary/60" />
+                <span className="text-[10px] font-bold text-muted-foreground uppercase">{item.label}</span>
+                <span className="text-sm font-black">{item.value}</span>
+              </div>
+            ))}
+          </div>
+
+          {exam.notes_template && (
+            <div className="rounded-2xl bg-muted/30 border border-border/40 p-4 text-sm leading-relaxed text-foreground/80 italic">
+              <div dangerouslySetInnerHTML={{ __html: exam.notes_template }} />
+            </div>
+          )}
+
+          <div className="space-y-3">
+            <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">{locale === "en" ? "Notes" : "特别提示"}</p>
+            <ul className="space-y-2.5">
+              {[
+                locale === "en" ? "Your current answer is auto-saved every 30 seconds" : "系统将每 30 秒自动保存一次当前答案",
+                locale === "en" ? "Exceeding the tab-switch limit will force submission" : "考试期间切屏超过限制将被强制交卷",
+                locale === "en" ? "Please keep your camera and network in good condition" : "请确保摄像头及网络环境处于良好状态"
+              ].map((t, i) => (
+                <li key={i} className="flex items-start gap-3 text-xs font-semibold text-foreground/70">
+                  <div className="h-1.5 w-1.5 rounded-full bg-primary mt-1.5 shrink-0" />
+                  {t}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+
+        <AlertDialogFooter className="p-8 pt-0 gap-3">
+          <Button variant="ghost" onClick={onCancel} className="flex-1 h-12 rounded-xl font-bold">{locale === "en" ? "Cancel" : "取消"}</Button>
+          <AlertDialogAction asChild>
+            <Button onClick={onConfirm} className="flex-[2] h-12 rounded-xl font-black shadow-lg shadow-primary/20">{locale === "en" ? "Start Exam" : "开始考试"}</Button>
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

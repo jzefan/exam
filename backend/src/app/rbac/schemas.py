@@ -117,6 +117,7 @@ class StudentRead(BaseModel):
     phone: str | None
     student_id: str | None
     class_id: uuid.UUID | None
+    owner_teacher_id: uuid.UUID | None = None
     class_name: str | None = None
     username: str
     is_active: bool

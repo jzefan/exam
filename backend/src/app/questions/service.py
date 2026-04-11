@@ -1,20 +1,31 @@
 """CRUD service functions for Question, Tag, and KnowledgePoint."""
 
 import json
+import re
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
+from app.auth.models import User
+from app.common.data_visibility import VisibilityScope
+from app.common.resource_access import teacher_owned_resource_filter, teacher_visible_resource_filter
 from app.config import settings
 from app.questions.models import KnowledgePoint, Question, QuestionBank, Tag, question_tags
 from app.questions.schemas import (
+    ImportRecognitionMode,
+    ImportReviewStatus,
     ImportedQuestionDraft,
     KnowledgePointCreate,
     QuestionBankCreate,
+    QuestionImportDocumentRecognizeRequest,
+    QuestionImportDocumentRecognizeResponse,
+    QuestionImportDocumentSummary,
+    QuestionImportDraft,
     QuestionImportRecognizeResponse,
     QuestionCreate,
     QuestionImportAnalyzeResponse,
@@ -87,15 +98,27 @@ async def delete_tag(db: AsyncSession, tag_id: uuid.UUID) -> bool:
 
 # --- KnowledgePoint ---
 
-async def list_knowledge_points(db: AsyncSession) -> list[KnowledgePoint]:
-    result = await db.execute(
-        select(KnowledgePoint).where(KnowledgePoint.deleted_at.is_(None)).order_by(KnowledgePoint.name)
-    )
+async def list_knowledge_points(
+    db: AsyncSession,
+    *,
+    user: User,
+    is_platform_admin: bool,
+) -> list[KnowledgePoint]:
+    stmt = select(KnowledgePoint).where(KnowledgePoint.deleted_at.is_(None))
+    if not is_platform_admin:
+        stmt = stmt.where(teacher_visible_resource_filter(KnowledgePoint, user.id))
+    result = await db.execute(stmt.order_by(KnowledgePoint.name))
     return list(result.scalars().all())
 
 
-async def create_knowledge_point(db: AsyncSession, data: KnowledgePointCreate) -> KnowledgePoint:
-    kp = KnowledgePoint(name=data.name, parent_id=data.parent_id, description=data.description)
+async def create_knowledge_point(db: AsyncSession, data: KnowledgePointCreate, user_id: uuid.UUID) -> KnowledgePoint:
+    kp = KnowledgePoint(
+        name=data.name,
+        parent_id=data.parent_id,
+        description=data.description,
+        owner_id=user_id,
+        visibility=VisibilityScope.PRIVATE,
+    )
     db.add(kp)
     await db.flush()
     await db.refresh(kp)
@@ -104,7 +127,12 @@ async def create_knowledge_point(db: AsyncSession, data: KnowledgePointCreate) -
 
 # --- QuestionBank ---
 
-async def list_question_banks(db: AsyncSession) -> tuple[list[dict], int]:
+async def list_question_banks(
+    db: AsyncSession,
+    *,
+    user: User,
+    is_platform_admin: bool,
+) -> tuple[list[dict], int]:
     """Return question banks with question_count, plus no-bank count."""
     count_subq = (
         select(Question.question_bank_id, func.count().label("cnt"))
@@ -117,23 +145,31 @@ async def list_question_banks(db: AsyncSession) -> tuple[list[dict], int]:
         select(QuestionBank, func.coalesce(count_subq.c.cnt, 0).label("question_count"))
         .outerjoin(count_subq, QuestionBank.id == count_subq.c.question_bank_id)
         .where(QuestionBank.deleted_at.is_(None))
-        .order_by(QuestionBank.name)
     )
+    if not is_platform_admin:
+        stmt = stmt.where(teacher_visible_resource_filter(QuestionBank, user.id))
+    stmt = stmt.order_by(QuestionBank.name)
     result = await db.execute(stmt)
     rows = result.all()
 
-    no_bank_result = await db.execute(
-        select(func.count()).select_from(Question).where(
-            Question.deleted_at.is_(None), Question.question_bank_id.is_(None)
-        )
+    no_bank_stmt = select(func.count()).select_from(Question).where(
+        Question.deleted_at.is_(None), Question.question_bank_id.is_(None)
     )
+    if not is_platform_admin:
+        no_bank_stmt = no_bank_stmt.where(teacher_owned_resource_filter(Question, user.id))
+    no_bank_result = await db.execute(no_bank_stmt)
     no_bank_count = no_bank_result.scalar_one()
 
     return [{"bank": row[0], "question_count": row[1]} for row in rows], no_bank_count
 
 
-async def create_question_bank(db: AsyncSession, data: QuestionBankCreate) -> QuestionBank:
-    qb = QuestionBank(name=data.name, description=data.description)
+async def create_question_bank(db: AsyncSession, data: QuestionBankCreate, user_id: uuid.UUID) -> QuestionBank:
+    qb = QuestionBank(
+        name=data.name,
+        description=data.description,
+        owner_id=user_id,
+        visibility=VisibilityScope.PRIVATE,
+    )
     db.add(qb)
     await db.flush()
     await db.refresh(qb)
@@ -163,21 +199,43 @@ async def soft_delete_question_bank(db: AsyncSession, bank: QuestionBank) -> Non
 
 # --- Question ---
 
-def _question_base_query() -> select:
+def _question_scope_query(*, user: User | None, is_platform_admin: bool) -> Select:
+    query = select(Question).where(Question.deleted_at.is_(None))
+    if not is_platform_admin and user is not None:
+        query = query.outerjoin(QuestionBank, Question.question_bank_id == QuestionBank.id).where(
+            or_(
+                teacher_owned_resource_filter(Question, user.id),
+                and_(
+                    Question.question_bank_id.is_not(None),
+                    QuestionBank.visibility == VisibilityScope.PLATFORM,
+                ),
+            )
+        )
+    return query
+
+
+def _question_base_query(*, user: User | None, is_platform_admin: bool) -> Select:
     return (
-        select(Question)
-        .where(Question.deleted_at.is_(None))
+        _question_scope_query(user=user, is_platform_admin=is_platform_admin)
         .options(
             joinedload(Question.creator),
             joinedload(Question.question_bank),
-            joinedload(Question.tags),
-            joinedload(Question.knowledge_points),
+            selectinload(Question.tags),
+            selectinload(Question.knowledge_points),
         )
     )
 
 
-async def get_question_by_id(db: AsyncSession, question_id: uuid.UUID) -> Question | None:
-    result = await db.execute(_question_base_query().where(Question.id == question_id))
+async def get_question_by_id(
+    db: AsyncSession,
+    question_id: uuid.UUID,
+    *,
+    user: User | None,
+    is_platform_admin: bool,
+) -> Question | None:
+    result = await db.execute(
+        _question_base_query(user=user, is_platform_admin=is_platform_admin).where(Question.id == question_id)
+    )
     return result.unique().scalar_one_or_none()
 
 
@@ -192,6 +250,7 @@ async def create_question(db: AsyncSession, data: QuestionCreate, user_id: uuid.
         difficulty=data.difficulty,
         score=data.score,
         created_by=user_id,
+        owner_id=user_id,
         question_bank_id=data.question_bank_id,
     )
 
@@ -207,7 +266,13 @@ async def create_question(db: AsyncSession, data: QuestionCreate, user_id: uuid.
     await db.flush()
     await db.refresh(question)
 
-    return await get_question_by_id(db, question.id)  # type: ignore[return-value]
+    created = await db.execute(
+        _question_base_query(
+            user=None,
+            is_platform_admin=True,
+        ).where(Question.id == question.id)
+    )
+    return created.unique().scalar_one()  # type: ignore[return-value]
 
 
 async def update_question(db: AsyncSession, question: Question, data: QuestionUpdate) -> Question:
@@ -224,7 +289,13 @@ async def update_question(db: AsyncSession, question: Question, data: QuestionUp
         question.knowledge_points = list(kps_result.scalars().all())
 
     await db.flush()
-    return await get_question_by_id(db, question.id)  # type: ignore[return-value]
+    refreshed = await db.execute(
+        _question_base_query(
+            user=None,
+            is_platform_admin=True,
+        ).where(Question.id == question.id)
+    )
+    return refreshed.unique().scalar_one()  # type: ignore[return-value]
 
 
 async def soft_delete_question(db: AsyncSession, question: Question) -> None:
@@ -303,6 +374,312 @@ difficulty_reason: 给出难度建议的理由
 
 
 _VALID_QUESTION_TYPES = {"choice", "true_false", "fill_in", "short_answer", "essay", "code"}
+
+
+_TEMPLATE_PREFIXES = ("题型：", "题目内容：", "答案：", "分析：", "解析：", "难度：")
+_QUESTION_START_PATTERNS = [
+    re.compile(r"^\s*(\d+[\.．\)）]|[\(\（]\d+[\)）]|\[\d+\]|【\d+】|\d+、)\s*"),
+    re.compile(r"^\s*([一二三四五六七八九十]+[、\.．])\s*"),
+    re.compile(r"^\s*(单选题|单选|多选题|多选|选择题|判断题|判断|填空题|填空|简答题|简答|编程题|编程|论述题|论述)\b"),
+]
+
+
+@dataclass(slots=True)
+class SegmentedBlock:
+    raw_text: str
+    segment_source: str = "rule"
+    boundary_confidence: str = "high"
+
+
+def detect_import_template_mode(raw_text: str) -> str:
+    """Detect whether document text looks like the supported field template."""
+    lines = [line.strip() for line in raw_text.replace("\r\n", "\n").split("\n") if line.strip()]
+    prefix_hits = sum(
+        1
+        for line in lines[:30]
+        if any(line.startswith(prefix) for prefix in _TEMPLATE_PREFIXES)
+    )
+    return ImportRecognitionMode.TEMPLATE.value if prefix_hits >= 3 else ImportRecognitionMode.SMART.value
+
+
+def _is_question_start(line: str) -> tuple[bool, str]:
+    for index, pattern in enumerate(_QUESTION_START_PATTERNS):
+        if pattern.search(line):
+            return True, "high" if index == 0 else "medium"
+    return False, "low"
+
+
+def _is_attachment_line(line: str) -> bool:
+    return bool(
+        re.match(r"^([A-H])[\.．、\)]\s*(.+)$", line, re.IGNORECASE)
+        or re.match(r"^(答案|参考答案|解析|分析|难度|难易度)[:：]", line)
+        or line.startswith("```")
+    )
+
+
+def segment_question_document(raw_text: str) -> list[SegmentedBlock]:
+    """Segment non-template text into candidate question blocks."""
+    lines = [line.rstrip() for line in raw_text.replace("\r\n", "\n").split("\n")]
+    blocks: list[SegmentedBlock] = []
+    current: list[str] = []
+    current_confidence = "high"
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            if current:
+                current.append("")
+            continue
+
+        is_start, confidence = _is_question_start(stripped)
+        if is_start and current and not _is_attachment_line(stripped):
+            text = "\n".join(part for part in current if part.strip()).strip()
+            if text:
+                blocks.append(SegmentedBlock(raw_text=text, boundary_confidence=current_confidence))
+            current = [stripped]
+            current_confidence = confidence
+        else:
+            if not current:
+                current_confidence = confidence if is_start else "low"
+            current.append(stripped)
+
+    if current:
+        text = "\n".join(part for part in current if part.strip()).strip()
+        if text:
+            blocks.append(SegmentedBlock(raw_text=text, boundary_confidence=current_confidence))
+
+    return blocks
+
+
+def _strip_question_start_prefix(text: str) -> str:
+    next_text = text
+    for pattern in _QUESTION_START_PATTERNS[:2]:
+        next_text = pattern.sub("", next_text, count=1).strip()
+    return next_text
+
+
+def _extract_options(lines: list[str]) -> dict[str, str]:
+    options: dict[str, str] = {}
+    for line in lines:
+        match = re.match(r"^([A-H])[\.．、\)]\s*(.+)$", line, re.IGNORECASE)
+        if match:
+            options[match.group(1).upper()] = match.group(2).strip()
+    return options
+
+
+def _normalize_difficulty(value: str | None) -> int:
+    if not value:
+        return 3
+    number_match = re.search(r"[1-5]", value)
+    if number_match:
+        return int(number_match.group(0))
+    labels = {
+        "容易": 1,
+        "简单": 1,
+        "较易": 2,
+        "一般": 3,
+        "中等": 3,
+        "较难": 4,
+        "困难": 5,
+        "很难": 5,
+    }
+    for label, difficulty in labels.items():
+        if label in value:
+            return difficulty
+    return 3
+
+
+def _detect_question_type(raw_text: str, options: dict[str, str], answer_text: str) -> tuple[str, str]:
+    if re.search(r"(单选题|单选|多选题|多选|选择题)", raw_text):
+        return "choice", "high"
+    if re.search(r"(判断题|判断)", raw_text) or re.fullmatch(
+        r"(正确|错误|对|错|√|×|T|F|True|False)", answer_text.strip(), re.IGNORECASE
+    ):
+        return "true_false", "high"
+    if re.search(r"(_{2,}|（\s*）|\(\s*\)|【\s*】|\[\s*\])", raw_text):
+        return "fill_in", "high"
+    if re.search(r"(编程题|程序设计|实现函数|编写程序|示例输入|示例输出|```)", raw_text, re.IGNORECASE):
+        return "code", "high"
+    if re.search(r"(论述题|论述|阐述|分析并评价|结合实际谈谈)", raw_text):
+        return "essay", "medium"
+    if len(options) >= 2:
+        return "choice", "medium"
+    return "short_answer", "medium"
+
+
+def build_import_draft_from_segment(
+    raw_text: str,
+    *,
+    segment_source: str = "rule",
+    boundary_confidence: str = "high",
+) -> QuestionImportDraft:
+    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+    options = _extract_options(lines)
+    answer_text = ""
+    analysis = ""
+    difficulty_text = ""
+    content_lines: list[str] = []
+
+    for line in lines:
+        answer_match = re.match(r"^(答案|参考答案|answer)[:：]?\s*(.+)$", line, re.IGNORECASE)
+        analysis_match = re.match(r"^(解析|分析|analysis)[:：]\s*(.+)$", line, re.IGNORECASE)
+        difficulty_match = re.match(r"^(难度|难易度|difficulty)[:：]\s*(.+)$", line, re.IGNORECASE)
+        option_match = re.match(r"^([A-H])[\.．、\)]\s*(.+)$", line, re.IGNORECASE)
+        if answer_match:
+            answer_text = answer_match.group(2).strip()
+        elif analysis_match:
+            analysis = analysis_match.group(2).strip()
+        elif difficulty_match:
+            difficulty_text = difficulty_match.group(2).strip()
+        elif not option_match:
+            content_lines.append(_strip_question_start_prefix(line))
+
+    content_text = "\n".join(line for line in content_lines if line).strip()
+    question_type, type_confidence = _detect_question_type(content_text or raw_text, options, answer_text)
+    issues: list[str] = []
+    if not content_text:
+        issues.append("题目内容为空")
+    if question_type == "choice" and len(options) < 2:
+        issues.append("选择题选项不完整")
+    if not answer_text:
+        issues.append("未识别到答案")
+    if type_confidence == "low":
+        issues.append("题型不确定")
+
+    return QuestionImportDraft(
+        draft_id=str(uuid.uuid4()),
+        raw_text=raw_text,
+        title=(content_text or raw_text).replace("\n", " ")[:120],
+        type=question_type,  # type: ignore[arg-type]
+        content_text=content_text,
+        options=options or None,
+        answer_text=answer_text or None,
+        analysis=analysis or None,
+        difficulty=_normalize_difficulty(difficulty_text),
+        segment_source=segment_source,
+        type_confidence=type_confidence,  # type: ignore[arg-type]
+        boundary_confidence=boundary_confidence,  # type: ignore[arg-type]
+        issues=issues,
+        review_status=ImportReviewStatus.PENDING,
+        review_required=True,
+    )
+
+
+def parse_template_document(raw_text: str) -> list[QuestionImportDraft]:
+    blocks = [block.strip() for block in re.split(r"\n\s*(?:---+)?\s*\n", raw_text.replace("\r\n", "\n")) if block.strip()]
+    drafts: list[QuestionImportDraft] = []
+    for block in blocks:
+        fields: dict[str, str] = {}
+        for line in block.splitlines():
+            match = re.match(r"^(题型|题目内容|答案|参考答案|分析|解析|难度)[:：]\s*(.*)$", line.strip())
+            if match:
+                fields[match.group(1)] = match.group(2).strip()
+        if not fields:
+            continue
+        text = "\n".join(
+            [
+                fields.get("题型", ""),
+                fields.get("题目内容", ""),
+                f"答案：{fields.get('答案') or fields.get('参考答案') or ''}",
+                f"解析：{fields.get('分析') or fields.get('解析') or ''}",
+                f"难度：{fields.get('难度') or '3'}",
+            ]
+        )
+        draft = build_import_draft_from_segment(
+            text,
+            segment_source="template",
+            boundary_confidence="high",
+        )
+        drafts.append(draft)
+    return drafts
+
+
+def _needs_ai_completion(draft: QuestionImportDraft) -> bool:
+    return (
+        draft.boundary_confidence.value == "low"
+        or draft.type_confidence.value == "low"
+        or "选择题选项不完整" in draft.issues
+        or "题型不确定" in draft.issues
+    )
+
+
+async def complete_import_draft_with_ai(draft: QuestionImportDraft) -> QuestionImportDraft:
+    if not _needs_ai_completion(draft):
+        return draft
+    try:
+        recognized = await recognize_imported_question(draft.raw_text)
+    except Exception:
+        return draft.model_copy(update={"issues": [*draft.issues, "AI 补全失败，请人工审核"]})
+
+    merged = draft.model_copy(
+        update={
+            "type": recognized.type,
+            "content_text": recognized.content_text or draft.content_text,
+            "title": (recognized.content_text or draft.content_text or draft.title).replace("\n", " ")[:120],
+            "options": recognized.options or draft.options,
+            "answer_text": recognized.answer_text or draft.answer_text,
+            "segment_source": f"{draft.segment_source}+ai" if "ai" not in draft.segment_source else draft.segment_source,
+            "type_confidence": "medium" if draft.type_confidence.value == "low" else draft.type_confidence,
+            "review_status": ImportReviewStatus.PENDING,
+            "review_required": True,
+        }
+    )
+    return merged
+
+
+def build_import_document_summary(
+    drafts: list[QuestionImportDraft],
+) -> QuestionImportDocumentSummary:
+    return QuestionImportDocumentSummary(
+        total=len(drafts),
+        high_confidence=sum(
+            1
+            for draft in drafts
+            if draft.type_confidence.value == "high" and draft.boundary_confidence.value == "high"
+        ),
+        medium_confidence=sum(
+            1
+            for draft in drafts
+            if "medium" in {draft.type_confidence.value, draft.boundary_confidence.value}
+        ),
+        low_confidence=sum(
+            1
+            for draft in drafts
+            if "low" in {draft.type_confidence.value, draft.boundary_confidence.value}
+        ),
+        issue_count=sum(1 for draft in drafts if draft.issues),
+        pending_review=sum(1 for draft in drafts if draft.review_status == ImportReviewStatus.PENDING),
+        approved=sum(1 for draft in drafts if draft.review_status == ImportReviewStatus.APPROVED),
+        skipped=sum(1 for draft in drafts if draft.review_status == ImportReviewStatus.SKIPPED),
+    )
+
+
+async def recognize_question_document(
+    payload: QuestionImportDocumentRecognizeRequest,
+) -> QuestionImportDocumentRecognizeResponse:
+    mode = (
+        ImportRecognitionMode.TEMPLATE.value
+        if payload.prefer_template
+        else detect_import_template_mode(payload.raw_text)
+    )
+    drafts = (
+        parse_template_document(payload.raw_text)
+        if mode == ImportRecognitionMode.TEMPLATE.value
+        else [
+            build_import_draft_from_segment(
+                segment.raw_text,
+                segment_source=segment.segment_source,
+                boundary_confidence=segment.boundary_confidence,
+            )
+            for segment in segment_question_document(payload.raw_text)
+        ]
+    )
+    completed = [await complete_import_draft_with_ai(draft) for draft in drafts]
+    return QuestionImportDocumentRecognizeResponse(
+        mode=mode,  # type: ignore[arg-type]
+        summary=build_import_document_summary(completed),
+        drafts=completed,
+    )
 
 
 async def recognize_imported_question(raw_text: str) -> QuestionImportRecognizeResponse:

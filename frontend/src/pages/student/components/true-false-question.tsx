@@ -1,3 +1,4 @@
+import { cn } from "@/lib/utils";
 import type { IExamQuestionForStudent } from "@/types";
 
 interface Props {
@@ -31,27 +32,31 @@ export function TrueFalseQuestion({ question, answer, onChange }: Props) {
             <button
               key={String(opt.value)}
               type="button"
+              aria-pressed={isSelected}
               onClick={() => onChange({ value: opt.value })}
-              className={`group relative flex items-center gap-3.5 px-5 py-4 rounded-xl border-2 text-left transition-all ${
+              className={cn(
+                "group relative flex items-center gap-3.5 rounded-xl border-2 px-5 py-4 text-left transition-colors",
                 isSelected
-                  ? "border-foreground bg-foreground/[0.03]"
-                  : "border-border hover:border-foreground/20"
-              }`}
+                  ? "border-primary/50 bg-secondary text-secondary-foreground shadow-sm"
+                  : "border-border bg-background hover:border-primary/20 hover:bg-accent/40",
+              )}
             >
               {/* Letter circle */}
               <span
-                className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-colors ${
+                className={cn(
+                  "flex size-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold transition-colors",
                   isSelected
-                    ? "bg-foreground text-background"
-                    : "bg-muted text-muted-foreground group-hover:bg-foreground/10"
-                }`}
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-muted-foreground group-hover:bg-accent group-hover:text-accent-foreground",
+                )}
               >
                 {opt.label}
               </span>
               <span
-                className={`text-sm font-medium ${
-                  isSelected ? "text-foreground" : "text-foreground/70"
-                }`}
+                className={cn(
+                  "text-sm font-medium",
+                  isSelected ? "text-secondary-foreground" : "text-foreground/70",
+                )}
               >
                 {opt.sub}
               </span>

@@ -1,3 +1,4 @@
+import { cn } from "@/lib/utils";
 import type { IExamQuestionForStudent } from "@/types";
 
 interface Props {
@@ -56,27 +57,31 @@ export function ChoiceQuestion({ question, answer, onChange }: Props) {
             <button
               key={key}
               type="button"
+              aria-pressed={isSelected}
               onClick={() => toggle(key)}
-              className={`group w-full flex items-start gap-3.5 px-4 py-3.5 rounded-xl border-2 text-left transition-all ${
+              className={cn(
+                "group flex w-full items-start gap-3.5 rounded-xl border-2 px-4 py-3.5 text-left transition-colors",
                 isSelected
-                  ? "border-foreground bg-foreground/[0.03]"
-                  : "border-border hover:border-foreground/20"
-              }`}
+                  ? "border-primary/50 bg-secondary text-secondary-foreground shadow-sm"
+                  : "border-border bg-background hover:border-primary/20 hover:bg-accent/40",
+              )}
             >
               {/* Letter indicator */}
               <span
-                className={`shrink-0 w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold transition-colors mt-0.5 ${
+                className={cn(
+                  "mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold transition-colors",
                   isSelected
-                    ? "bg-foreground text-background"
-                    : "bg-muted text-muted-foreground group-hover:bg-foreground/10"
-                }`}
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-muted-foreground group-hover:bg-accent group-hover:text-accent-foreground",
+                )}
               >
                 {key}
               </span>
               <span
-                className={`text-sm leading-relaxed pt-0.5 ${
-                  isSelected ? "text-foreground" : "text-foreground/70"
-                }`}
+                className={cn(
+                  "pt-0.5 text-sm leading-relaxed",
+                  isSelected ? "text-secondary-foreground" : "text-foreground/70",
+                )}
               >
                 {text}
               </span>

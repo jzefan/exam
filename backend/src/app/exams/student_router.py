@@ -3,24 +3,29 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser
-from app.database import get_db
+from app.database import async_session, get_db
 from app.exams.models import (
     AppealStatus,
     Exam,
     ExamStudent,
+    GradingStatus,
     StudentExamAnswer,
     StudentExamAppeal,
+    StudentNotification,
     StudentQuestionProgress,
 )
 from app.exams.student_schemas import (
     AppealCreateRequest,
     AppealResponse,
     SaveAnswersRequest,
+    SubmitExamRequest,
+    SubmitExamResponse,
+    StudentNotificationResponse,
     StudentExamResultQuestionResponse,
     StudentExamResultResponse,
     StudentExamStartResponse,
@@ -29,6 +34,8 @@ from app.exams.student_schemas import (
     WrongAnswerDetailResponse,
     WrongAnswerListItem,
 )
+from app.grading.models import RoleBinding
+from app.grading.service import apply_grading_task_result_to_exam_submission, create_grading_task, run_grading_task_with_role_binding
 from app.questions.models import Question, QuestionType
 
 router = APIRouter()
@@ -87,6 +94,81 @@ def _extract_answer_text(answer_content: dict[str, Any]) -> str:
         return "true" if value else "false"
 
     return ""
+
+
+def _is_subjective_question_type(question_type: str) -> bool:
+    return question_type in {
+        QuestionType.SHORT_ANSWER.value,
+        QuestionType.ESSAY.value,
+        QuestionType.CODE.value,
+    }
+
+
+async def _get_active_role_binding_version(db: AsyncSession) -> int:
+    binding = (
+        await db.execute(
+            select(RoleBinding).where(RoleBinding.is_active.is_(True)).order_by(RoleBinding.version.desc())
+        )
+    ).scalar_one_or_none()
+    if binding is None:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="No active grading role binding")
+    return binding.version
+
+
+def _build_grading_task_payload(
+    *,
+    exam: Exam,
+    question: Question,
+    question_score: float,
+    answer_content: dict[str, Any],
+    role_binding_version: int,
+    source_business_id: str,
+) -> dict[str, Any]:
+    question_type = question.type.value if isinstance(question.type, QuestionType) else str(question.type)
+    question_content = question.content.get("text") if isinstance(question.content, dict) else None
+    raw_question_content = _strip_html(question_content if isinstance(question_content, str) else question.title)
+    standard_answer = question.answer if isinstance(question.answer, dict) else {}
+    language = answer_content.get("language") if isinstance(answer_content.get("language"), str) else None
+
+    return {
+        "source_type": "exam_submission",
+        "source_business_id": source_business_id,
+        "question_type": question_type,
+        "question_content": raw_question_content or question.title,
+        "subject": exam.title,
+        "language": "zh-CN",
+        "max_score": int(round(question_score)),
+        "knowledge_tags": [],
+        "fatal_rule_enabled": True,
+        "student_answer_raw": _extract_answer_text(answer_content),
+        "student_answer_structured": answer_content,
+        "attachment_refs": [],
+        "standard_answers": [standard_answer],
+        "rubric_definition": {},
+        "scoring_points": [],
+        "dimension_weights": {},
+        "deduction_rules": [],
+        "fatal_error_rules": [],
+        "role_binding_version": role_binding_version,
+        "programming_language": language,
+        "runtime_logs": [],
+    }
+
+
+async def _run_subjective_grading_tasks(task_ids: list[str]) -> None:
+    async with async_session() as db:
+        for task_id in task_ids:
+            try:
+                await run_grading_task_with_role_binding(db, task_id)
+                await apply_grading_task_result_to_exam_submission(db, task_id)
+                await db.commit()
+            except Exception:
+                await db.rollback()
+
+
+async def _schedule_subjective_grading_tasks(background_tasks: BackgroundTasks, task_ids: list[str]) -> None:
+    if task_ids:
+        background_tasks.add_task(_run_subjective_grading_tasks, task_ids)
 
 
 def _build_objective_feedback(
@@ -334,7 +416,11 @@ def _grade_question(question: Question, answer_content: dict[str, Any], score: f
     return actual_score, correct, feedback
 
 
-async def _get_exam_for_student(db: AsyncSession, exam_id: uuid.UUID, student_id: uuid.UUID) -> tuple[Exam, ExamStudent]:
+async def _get_exam_for_student(
+    db: AsyncSession,
+    exam_id: uuid.UUID,
+    student_id: uuid.UUID,
+) -> tuple[Exam, ExamStudent]:
     result = await db.execute(
         select(Exam)
         .join(ExamStudent, ExamStudent.exam_id == Exam.id)
@@ -447,17 +533,22 @@ async def report_switch(
     }
 
 
-@router.post("/exams/{exam_id}/submit")
+@router.post("/exams/{exam_id}/submit", response_model=SubmitExamResponse)
 async def submit_exam(
     exam_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     db: Annotated[AsyncSession, Depends(get_db)],
     user: CurrentUser,
-) -> dict[str, Any]:
+    payload: SubmitExamRequest | None = None,
+) -> SubmitExamResponse:
     exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)
     if exam_student.submitted_at is not None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exam already submitted")
 
     answers_map = dict(exam_student.saved_answers or {})
+    for item in payload.answers if payload else []:
+        answers_map[str(item.question_id)] = item.answer_content
+    exam_student.saved_answers = answers_map
 
     await db.execute(
         delete(StudentExamAnswer).where(
@@ -466,14 +557,26 @@ async def submit_exam(
         )
     )
 
-    total_score = 0.0
+    objective_score = 0.0
+    subjective_score = 0.0
     now = _utcnow()
+    subjective_task_ids: list[str] = []
+    role_binding_version: int | None = None
     for exam_question in sorted(exam.exam_questions, key=lambda item: item.order):
         question = exam_question.question
         answer_content = answers_map.get(str(question.id), {})
         question_score = exam_question.score_override if exam_question.score_override is not None else question.score
-        score_awarded, is_correct, feedback = _grade_question(question, answer_content, question_score)
-        total_score += score_awarded
+        question_type = question.type.value if isinstance(question.type, QuestionType) else str(question.type)
+
+        if _is_subjective_question_type(question_type):
+            if role_binding_version is None:
+                role_binding_version = await _get_active_role_binding_version(db)
+            score_awarded = 0.0
+            is_correct = False
+            feedback = {}
+        else:
+            score_awarded, is_correct, feedback = _grade_question(question, answer_content, question_score)
+            objective_score += score_awarded
 
         db.add(
             StudentExamAnswer(
@@ -486,6 +589,20 @@ async def submit_exam(
                 feedback=feedback,
             )
         )
+
+        if _is_subjective_question_type(question_type):
+            task = await create_grading_task(
+                db,
+                _build_grading_task_payload(
+                    exam=exam,
+                    question=question,
+                    question_score=question_score,
+                    answer_content=answer_content,
+                    role_binding_version=role_binding_version or 1,
+                    source_business_id=f"{exam.id}:{question.id}:{user.id}",
+                ),
+            )
+            subjective_task_ids.append(str(task.id))
 
         progress_result = await db.execute(
             select(StudentQuestionProgress).where(
@@ -511,11 +628,27 @@ async def submit_exam(
             progress.mastered_at = None
 
     exam_student.submitted_at = now
-    exam_student.score = round(total_score, 2)
-    exam_student.graded_at = now
+    exam_student.objective_score = round(objective_score, 2)
+    exam_student.subjective_score = round(subjective_score, 2)
+    exam_student.score = round(objective_score + subjective_score, 2)
+    if subjective_task_ids:
+        exam_student.grading_status = GradingStatus.PENDING_AI.value
+        exam_student.ai_scored_at = None
+        exam_student.reviewed_at = None
+        exam_student.graded_at = None
+    else:
+        exam_student.grading_status = GradingStatus.REVIEWED.value
+        exam_student.ai_scored_at = now
+        exam_student.reviewed_at = now
+        exam_student.graded_at = now
     await db.commit()
+    await _schedule_subjective_grading_tasks(background_tasks, subjective_task_ids)
 
-    return {"submitted": True, "score": exam_student.score}
+    return SubmitExamResponse(
+        submitted=True,
+        score=exam_student.score,
+        grading_status=exam_student.grading_status,
+    )
 
 
 @router.get("/exams/{exam_id}/result", response_model=StudentExamResultResponse)
@@ -527,6 +660,17 @@ async def get_exam_result(
     exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)
     if exam_student.submitted_at is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exam not submitted")
+    if exam_student.grading_status == GradingStatus.PENDING_AI.value:
+        return StudentExamResultResponse(
+            exam_id=exam.id,
+            title=exam.title,
+            submitted_at=exam_student.submitted_at,
+            total_score=exam.total_score,
+            score=exam_student.score,
+            grading_status=exam_student.grading_status,
+            can_view=False,
+            blocked_reason="主观题正在进行 AI 评分，结果稍后可查看。",
+        )
     if not exam.show_result:
         return StudentExamResultResponse(
             exam_id=exam.id,
@@ -534,6 +678,7 @@ async def get_exam_result(
             submitted_at=exam_student.submitted_at,
             total_score=exam.total_score,
             score=exam_student.score,
+            grading_status=exam_student.grading_status,
             can_view=False,
             blocked_reason="教师暂未开放查看结果权限",
         )
@@ -589,9 +734,49 @@ async def get_exam_result(
         submitted_at=exam_student.submitted_at,
         total_score=exam.total_score,
         score=exam_student.score,
+        grading_status=exam_student.grading_status,
         can_view=True,
         questions=question_items,
     )
+
+
+@router.get("/notifications/unread", response_model=list[StudentNotificationResponse])
+async def list_unread_notifications(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+) -> list[StudentNotificationResponse]:
+    notifications = (
+        await db.execute(
+            select(StudentNotification)
+            .where(
+                StudentNotification.student_id == user.id,
+                StudentNotification.read_at.is_(None),
+            )
+            .order_by(StudentNotification.created_at.desc())
+        )
+    ).scalars().all()
+    return [StudentNotificationResponse.model_validate(notification) for notification in notifications]
+
+
+@router.post("/notifications/{notification_id}/read")
+async def mark_notification_read(
+    notification_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+) -> dict[str, Any]:
+    notification = (
+        await db.execute(
+            select(StudentNotification).where(
+                StudentNotification.id == notification_id,
+                StudentNotification.student_id == user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if notification is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found")
+    notification.read_at = _utcnow()
+    await db.commit()
+    return {"read": True}
 
 
 @router.post("/exams/{exam_id}/appeals", response_model=AppealResponse, status_code=status.HTTP_201_CREATED)
@@ -643,6 +828,7 @@ async def list_wrong_answers(
         .where(
             StudentQuestionProgress.student_id == user.id,
             StudentQuestionProgress.wrong_count > 0,
+            StudentQuestionProgress.mastered.is_(False),
         )
         .order_by(StudentQuestionProgress.last_wrong_at.desc())
     )

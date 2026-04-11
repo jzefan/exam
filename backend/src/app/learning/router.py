@@ -6,8 +6,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import CurrentUser, require_roles
+from app.auth.dependencies import CurrentUser, require_roles, user_has_role
 from app.auth.models import User
+from app.common.resource_access import can_write_owned_resource
 from app.database import get_db
 from app.learning import service
 from app.learning.schemas import (
@@ -25,7 +26,32 @@ from app.learning.schemas import (
 
 router = APIRouter()
 DB = Annotated[AsyncSession, Depends(get_db)]
-WriteUser = Annotated[User, require_roles("admin", "teacher")]
+WriteUser = Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")]
+
+
+async def _is_knowledge_admin(db: AsyncSession, user: User) -> bool:
+    return await user_has_role(db, user.id, "platform_admin", "school_admin", "admin")
+
+
+def _ensure_can_write_kp(kp, user: User, is_admin: bool) -> None:
+    if not can_write_owned_resource(
+        is_platform_admin=is_admin,
+        current_user_id=user.id,
+        owner_id=kp.owner_id,
+    ):
+        raise HTTPException(status_code=403, detail="No permission to modify this knowledge point")
+
+
+async def _get_visible_kp_or_404(
+    db: AsyncSession,
+    kp_id: uuid.UUID,
+    user: User,
+    is_admin: bool,
+):
+    kp = await service.get_knowledge_point(db, kp_id, user=user, is_platform_admin=is_admin)
+    if not kp:
+        raise HTTPException(status_code=404, detail="Knowledge point not found")
+    return kp
 
 
 @router.get("/majors", response_model=list[MajorResponse])
@@ -103,45 +129,51 @@ async def delete_direction(direction_id: uuid.UUID, db: DB, _: WriteUser) -> Non
 
 
 @router.get("/directions/{direction_id}/tree", response_model=FlowData)
-async def get_tree(direction_id: uuid.UUID, db: DB, _user: CurrentUser) -> FlowData:
+async def get_tree(direction_id: uuid.UUID, db: DB, user: CurrentUser) -> FlowData:
     direction = await service.get_direction(db, direction_id)
     if not direction:
         raise HTTPException(status_code=404, detail="Direction not found")
+    is_admin = await _is_knowledge_admin(db, user)
     try:
-        data = await service.get_direction_tree(db, direction_id)
+        data = await service.get_direction_tree(db, direction_id, user=user, is_platform_admin=is_admin)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return FlowData(**data)
 
 
 @router.post("/knowledge-points", response_model=dict, status_code=201)
-async def create_kp(data: KnowledgePointCreate, db: DB, _: WriteUser) -> dict[str, str]:
-    kp = await service.create_knowledge_point(db, data)
-    return {"id": str(kp.id), "name": kp.name}
+async def create_kp(data: KnowledgePointCreate, db: DB, user: WriteUser) -> dict[str, str]:
+    is_admin = await _is_knowledge_admin(db, user)
+    if data.parent_id is not None:
+        parent = await _get_visible_kp_or_404(db, data.parent_id, user, is_admin)
+        _ensure_can_write_kp(parent, user, is_admin)
+    kp = await service.create_knowledge_point(db, data, user.id)
+    return {"id": str(kp.id), "name": kp.name, "owner_id": str(kp.owner_id), "visibility": kp.visibility.value}
 
 
 @router.put("/knowledge-points/{kp_id}", response_model=dict)
-async def update_kp(kp_id: uuid.UUID, data: KnowledgePointUpdate, db: DB, _: WriteUser) -> dict[str, str]:
-    kp = await service.get_knowledge_point(db, kp_id)
-    if not kp:
-        raise HTTPException(status_code=404, detail="Knowledge point not found")
+async def update_kp(kp_id: uuid.UUID, data: KnowledgePointUpdate, db: DB, user: WriteUser) -> dict[str, str]:
+    is_admin = await _is_knowledge_admin(db, user)
+    kp = await _get_visible_kp_or_404(db, kp_id, user, is_admin)
+    _ensure_can_write_kp(kp, user, is_admin)
     kp = await service.update_knowledge_point(db, kp, data)
-    return {"id": str(kp.id), "name": kp.name}
+    return {"id": str(kp.id), "name": kp.name, "owner_id": str(kp.owner_id), "visibility": kp.visibility.value}
 
 
 @router.delete("/knowledge-points/{kp_id}", status_code=204)
-async def delete_kp(kp_id: uuid.UUID, db: DB, _: WriteUser) -> None:
-    kp = await service.get_knowledge_point(db, kp_id)
-    if not kp:
-        raise HTTPException(status_code=404, detail="Knowledge point not found")
+async def delete_kp(kp_id: uuid.UUID, db: DB, user: WriteUser) -> None:
+    is_admin = await _is_knowledge_admin(db, user)
+    kp = await _get_visible_kp_or_404(db, kp_id, user, is_admin)
+    _ensure_can_write_kp(kp, user, is_admin)
     await service.soft_delete_knowledge_point(db, kp)
 
 
 @router.post("/knowledge-points/{kp_id}/prerequisites", response_model=dict, status_code=201)
-async def add_prereq(kp_id: uuid.UUID, data: PrerequisiteCreate, db: DB, _: WriteUser) -> dict[str, str]:
-    kp = await service.get_knowledge_point(db, kp_id)
-    if not kp:
-        raise HTTPException(status_code=404, detail="Knowledge point not found")
+async def add_prereq(kp_id: uuid.UUID, data: PrerequisiteCreate, db: DB, user: WriteUser) -> dict[str, str]:
+    is_admin = await _is_knowledge_admin(db, user)
+    kp = await _get_visible_kp_or_404(db, kp_id, user, is_admin)
+    _ensure_can_write_kp(kp, user, is_admin)
+    await _get_visible_kp_or_404(db, data.from_id, user, is_admin)
     try:
         prereq = await service.add_prerequisite(db, kp_id, data.from_id)
     except ValueError as exc:
@@ -150,7 +182,10 @@ async def add_prereq(kp_id: uuid.UUID, data: PrerequisiteCreate, db: DB, _: Writ
 
 
 @router.delete("/knowledge-points/{kp_id}/prerequisites/{prereq_id}", status_code=204)
-async def remove_prereq(kp_id: uuid.UUID, prereq_id: uuid.UUID, db: DB, _: WriteUser) -> None:
+async def remove_prereq(kp_id: uuid.UUID, prereq_id: uuid.UUID, db: DB, user: WriteUser) -> None:
+    is_admin = await _is_knowledge_admin(db, user)
+    kp = await _get_visible_kp_or_404(db, kp_id, user, is_admin)
+    _ensure_can_write_kp(kp, user, is_admin)
     await service.remove_prerequisite(db, kp_id, prereq_id)
 
 
@@ -162,11 +197,10 @@ async def generate_recommendations(
     kp_id: uuid.UUID,
     data: RecommendationGenerateRequest,
     db: DB,
-    _user: CurrentUser,
+    user: CurrentUser,
 ) -> RecommendationGenerateResponse:
-    kp = await service.get_knowledge_point(db, kp_id)
-    if not kp:
-        raise HTTPException(status_code=404, detail="Knowledge point not found")
+    is_admin = await _is_knowledge_admin(db, user)
+    await _get_visible_kp_or_404(db, kp_id, user, is_admin)
     try:
         items = await service.generate_bilibili_recommendations(db, kp_id, data.model)
     except ValueError as exc:

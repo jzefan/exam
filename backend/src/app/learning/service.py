@@ -12,6 +12,9 @@ import httpx
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.models import User
+from app.common.data_visibility import VisibilityScope
+from app.common.resource_access import teacher_visible_resource_filter
 from app.config import settings
 from app.learning.models import Direction, KnowledgePoint, KnowledgePointPrerequisite, Major
 from app.learning.schemas import (
@@ -205,7 +208,20 @@ async def soft_delete_direction(db: AsyncSession, direction: Direction) -> None:
     await db.commit()
 
 
-async def get_direction_tree(db: AsyncSession, direction_id: uuid.UUID) -> dict[str, Any]:
+def _visible_knowledge_point_query(*, user: User | None, is_platform_admin: bool):
+    query = select(KnowledgePoint).where(KnowledgePoint.deleted_at.is_(None))
+    if not is_platform_admin and user is not None:
+        query = query.where(teacher_visible_resource_filter(KnowledgePoint, user.id))
+    return query
+
+
+async def get_direction_tree(
+    db: AsyncSession,
+    direction_id: uuid.UUID,
+    *,
+    user: User | None = None,
+    is_platform_admin: bool = True,
+) -> dict[str, Any]:
     """Return ReactFlow-compatible flow data for one direction."""
 
     count_subq = (
@@ -218,6 +234,8 @@ async def get_direction_tree(db: AsyncSession, direction_id: uuid.UUID) -> dict[
         .outerjoin(count_subq, KnowledgePoint.id == count_subq.c.knowledge_point_id)
         .where(KnowledgePoint.direction_id == direction_id, KnowledgePoint.deleted_at.is_(None))
     )
+    if not is_platform_admin and user is not None:
+        stmt = stmt.where(teacher_visible_resource_filter(KnowledgePoint, user.id))
     rows = (await db.execute(stmt)).all()
 
     if len(rows) > MAX_NODES_PER_DIRECTION:
@@ -232,6 +250,8 @@ async def get_direction_tree(db: AsyncSession, direction_id: uuid.UUID) -> dict[
             "difficulty": kp.difficulty,
             "parent_id": str(kp.parent_id) if kp.parent_id else None,
             "direction_id": str(kp.direction_id) if kp.direction_id else None,
+            "owner_id": str(kp.owner_id),
+            "visibility": kp.visibility.value,
             "question_count": question_count,
         }
         for kp, question_count in rows
@@ -254,8 +274,8 @@ async def get_direction_tree(db: AsyncSession, direction_id: uuid.UUID) -> dict[
     return build_flow_data(flat_nodes, prereqs)
 
 
-async def create_knowledge_point(db: AsyncSession, data: KnowledgePointCreate) -> KnowledgePoint:
-    kp = KnowledgePoint(**data.model_dump())
+async def create_knowledge_point(db: AsyncSession, data: KnowledgePointCreate, user_id: uuid.UUID) -> KnowledgePoint:
+    kp = KnowledgePoint(**data.model_dump(), owner_id=user_id, visibility=VisibilityScope.PRIVATE)
     db.add(kp)
     await db.commit()
     await db.refresh(kp)
@@ -290,8 +310,16 @@ async def soft_delete_knowledge_point(db: AsyncSession, kp: KnowledgePoint) -> N
     await db.commit()
 
 
-async def get_knowledge_point(db: AsyncSession, kp_id: uuid.UUID) -> KnowledgePoint | None:
-    result = await db.execute(select(KnowledgePoint).where(KnowledgePoint.id == kp_id, KnowledgePoint.deleted_at.is_(None)))
+async def get_knowledge_point(
+    db: AsyncSession,
+    kp_id: uuid.UUID,
+    *,
+    user: User | None = None,
+    is_platform_admin: bool = True,
+) -> KnowledgePoint | None:
+    result = await db.execute(
+        _visible_knowledge_point_query(user=user, is_platform_admin=is_platform_admin).where(KnowledgePoint.id == kp_id)
+    )
     return result.scalar_one_or_none()
 
 

@@ -2,10 +2,12 @@
 
 import uuid
 from datetime import datetime
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.common.data_visibility import VisibilityScope
 from app.questions.models import QuestionType, TagType
 
 
@@ -45,6 +47,8 @@ class KnowledgePointResponse(BaseModel):
     name: str
     parent_id: uuid.UUID | None
     description: str | None
+    owner_id: uuid.UUID
+    visibility: VisibilityScope
     created_at: datetime
 
 
@@ -61,6 +65,8 @@ class QuestionBankResponse(BaseModel):
     id: uuid.UUID
     name: str
     description: str | None
+    owner_id: uuid.UUID
+    visibility: VisibilityScope
     question_count: int = 0
     created_at: datetime
 
@@ -110,6 +116,7 @@ class QuestionResponse(BaseModel):
     usage_count: int
     created_by: uuid.UUID
     created_by_name: str
+    owner_id: uuid.UUID
     question_bank_id: uuid.UUID | None
     question_bank_name: str | None
     tags: list[TagResponse]
@@ -132,6 +139,7 @@ class QuestionResponse(BaseModel):
             usage_count=question.usage_count,
             created_by=question.created_by,
             created_by_name=question.creator.full_name,
+            owner_id=question.owner_id,
             question_bank_id=question.question_bank_id,
             question_bank_name=question.question_bank.name if question.question_bank else None,
             tags=[TagResponse.model_validate(t) for t in question.tags],
@@ -168,6 +176,65 @@ class QuestionImportRecognizeResponse(BaseModel):
     content_text: str
     options: dict[str, str] | None = None
     answer_text: str | None = None
+
+
+class ImportRecognitionMode(str, Enum):
+    TEMPLATE = "template"
+    SMART = "smart"
+
+
+class ImportConfidence(str, Enum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class ImportReviewStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    SKIPPED = "skipped"
+
+
+class QuestionImportDraft(BaseModel):
+    draft_id: str
+    raw_text: str
+    title: str
+    type: QuestionType
+    content_text: str
+    options: dict[str, str] | None = None
+    answer_text: str | None = None
+    analysis: str | None = None
+    difficulty: int = Field(default=3, ge=1, le=5)
+    segment_source: str
+    type_confidence: ImportConfidence
+    boundary_confidence: ImportConfidence
+    issues: list[str] = Field(default_factory=list)
+    review_status: ImportReviewStatus = ImportReviewStatus.PENDING
+    review_required: bool = True
+
+
+class QuestionImportDocumentSummary(BaseModel):
+    total: int
+    high_confidence: int
+    medium_confidence: int
+    low_confidence: int
+    issue_count: int
+    pending_review: int
+    approved: int
+    skipped: int
+
+
+class QuestionImportDocumentRecognizeRequest(BaseModel):
+    file_name: str = Field(min_length=1, max_length=255)
+    raw_text: str = Field(min_length=1, max_length=200000)
+    source_format: str = Field(pattern="^(pdf|docx|md)$")
+    prefer_template: bool = False
+
+
+class QuestionImportDocumentRecognizeResponse(BaseModel):
+    mode: ImportRecognitionMode
+    summary: QuestionImportDocumentSummary
+    drafts: list[QuestionImportDraft]
 
 
 class QuestionBulkCreateRequest(BaseModel):

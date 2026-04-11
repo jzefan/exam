@@ -5,14 +5,15 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser, require_roles, user_has_role
 from app.auth.models import User
 from app.common.pagination import PaginationParams, apply_filters, apply_pagination, get_total_count, parse_filters, parse_pagination
+from app.common.resource_access import can_read_shared_resource, can_write_owned_resource, teacher_visible_resource_filter
 from app.database import get_db
-from app.questions.models import Question
+from app.questions.models import KnowledgePoint, Question
 from app.questions.models import question_knowledge_points, question_tags
 from app.questions.schemas import (
     KnowledgePointCreate,
@@ -21,6 +22,9 @@ from app.questions.schemas import (
     QuestionBankResponse,
     QuestionBulkCreateRequest,
     QuestionBulkCreateResponse,
+    QuestionImportDocumentRecognizeRequest,
+    QuestionImportDocumentRecognizeResponse,
+    QuestionImportDraft,
     QuestionImportRecognizeRequest,
     QuestionImportRecognizeResponse,
     QuestionCreate,
@@ -43,6 +47,9 @@ from app.questions.service import (
     get_question_by_id,
     get_tag_by_id,
     analyze_imported_question,
+    build_import_draft_from_segment,
+    complete_import_draft_with_ai,
+    recognize_question_document,
     recognize_imported_question,
     list_knowledge_points,
     list_question_banks,
@@ -59,6 +66,105 @@ knowledge_points_router = APIRouter()
 question_banks_router = APIRouter()
 
 
+async def _is_question_admin(db: AsyncSession, user: User) -> bool:
+    return await user_has_role(db, user.id, "platform_admin", "school_admin", "admin")
+
+
+async def _ensure_can_write_question_bank(
+    db: AsyncSession,
+    bank_id: uuid.UUID | None,
+    user: User,
+    is_admin: bool,
+) -> None:
+    if bank_id is None:
+        return
+    bank = await get_question_bank_by_id(db, bank_id)
+    if bank is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question bank not found")
+    if not can_read_shared_resource(
+        is_platform_admin=is_admin,
+        current_user_id=user.id,
+        owner_id=bank.owner_id,
+        visibility=bank.visibility,
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question bank not found")
+    if not can_write_owned_resource(
+        is_platform_admin=is_admin,
+        current_user_id=user.id,
+        owner_id=bank.owner_id,
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No permission to modify this question bank")
+
+
+async def _get_visible_knowledge_point_or_404(
+    db: AsyncSession,
+    knowledge_point_id: uuid.UUID,
+    user: User,
+    is_admin: bool,
+) -> KnowledgePoint:
+    stmt = select(KnowledgePoint).where(
+        KnowledgePoint.id == knowledge_point_id,
+        KnowledgePoint.deleted_at.is_(None),
+    )
+    if not is_admin:
+        stmt = stmt.where(teacher_visible_resource_filter(KnowledgePoint, user.id))
+    kp = (await db.execute(stmt)).scalar_one_or_none()
+    if kp is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge point not found")
+    return kp
+
+
+async def _ensure_can_write_knowledge_point(
+    db: AsyncSession,
+    knowledge_point_id: uuid.UUID | None,
+    user: User,
+    is_admin: bool,
+) -> None:
+    if knowledge_point_id is None:
+        return
+    kp = await _get_visible_knowledge_point_or_404(db, knowledge_point_id, user, is_admin)
+    if not can_write_owned_resource(
+        is_platform_admin=is_admin,
+        current_user_id=user.id,
+        owner_id=kp.owner_id,
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No permission to modify this knowledge point")
+
+
+async def _ensure_can_read_knowledge_points(
+    db: AsyncSession,
+    knowledge_point_ids: list[uuid.UUID],
+    user: User,
+    is_admin: bool,
+) -> None:
+    if not knowledge_point_ids:
+        return
+    requested_ids = set(knowledge_point_ids)
+    stmt = select(KnowledgePoint.id).where(
+        KnowledgePoint.id.in_(requested_ids),
+        KnowledgePoint.deleted_at.is_(None),
+    )
+    if not is_admin:
+        stmt = stmt.where(teacher_visible_resource_filter(KnowledgePoint, user.id))
+    visible_ids = set((await db.execute(stmt)).scalars().all())
+    if visible_ids != requested_ids:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge point not found")
+
+
+def _parse_uuid_filter(value: str, field_name: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {field_name}",
+        ) from exc
+
+
+def _parse_uuid_list_filter(value: str, field_name: str) -> list[uuid.UUID]:
+    return [_parse_uuid_filter(item.strip(), field_name) for item in value.split(",") if item.strip()]
+
+
 # --- Questions ---
 
 @questions_router.get("", response_model=list[QuestionResponse])
@@ -67,29 +173,38 @@ async def list_questions(
     response: Response,
     db: Annotated[AsyncSession, Depends(get_db)],
     pagination: Annotated[PaginationParams, Depends(parse_pagination)],
-    _user: CurrentUser,
+    user: CurrentUser,
 ) -> list[QuestionResponse]:
-    from app.questions.service import _question_base_query
+    from app.questions.service import _question_base_query, _question_scope_query
 
-    base_query = select(Question).where(Question.deleted_at.is_(None))
+    is_admin = await _is_question_admin(db, user)
+
+    base_query = _question_scope_query(user=user, is_platform_admin=is_admin)
     filters = parse_filters(request, Question)
 
     # Handle question_bank_id=__none__ as IS NULL filter
     qb_none = False
-    qb_id = filters.get("question_bank_id")
+    qb_id = filters.pop("question_bank_id", None)
+    question_bank_id = None
     if qb_id == "__none__":
-        filters.pop("question_bank_id")
         qb_none = True
         base_query = base_query.where(Question.question_bank_id.is_(None))
+    elif qb_id:
+        question_bank_id = _parse_uuid_filter(qb_id, "question_bank_id")
+        base_query = base_query.where(Question.question_bank_id == question_bank_id)
 
     # Handle tag_id filter via M2M join (supports comma-separated for multi-select)
     tag_id_raw = filters.pop("tag_id", None)
-    tag_ids: list[str] = []
+    tag_ids: list[uuid.UUID] = []
     if tag_id_raw:
-        tag_ids = [v.strip() for v in tag_id_raw.split(",") if v.strip()]
+        tag_ids = _parse_uuid_list_filter(tag_id_raw, "tag_id")
 
     knowledge_point_id_raw = filters.pop("knowledge_point_id", None)
-    knowledge_point_id = uuid.UUID(knowledge_point_id_raw) if knowledge_point_id_raw else None
+    knowledge_point_id = (
+        _parse_uuid_filter(knowledge_point_id_raw, "knowledge_point_id")
+        if knowledge_point_id_raw
+        else None
+    )
 
     if tag_ids:
         base_query = base_query.join(question_tags).where(question_tags.c.tag_id.in_(tag_ids))
@@ -99,13 +214,19 @@ async def list_questions(
         )
 
     filtered_query = apply_filters(base_query, filters, Question)
-
-    total = await get_total_count(db, filtered_query)
+    if tag_ids or knowledge_point_id:
+        count_query = filtered_query.with_only_columns(func.count(func.distinct(Question.id))).order_by(None)
+        total = (await db.execute(count_query)).scalar_one()
+        filtered_query = filtered_query.distinct()
+    else:
+        total = await get_total_count(db, filtered_query)
     response.headers["X-Total-Count"] = str(total)
 
-    full_query = _question_base_query()
+    full_query = _question_base_query(user=user, is_platform_admin=is_admin)
     if qb_none:
         full_query = full_query.where(Question.question_bank_id.is_(None))
+    elif question_bank_id:
+        full_query = full_query.where(Question.question_bank_id == question_bank_id)
     if tag_ids:
         full_query = full_query.join(question_tags).where(question_tags.c.tag_id.in_(tag_ids))
     if knowledge_point_id:
@@ -113,6 +234,8 @@ async def list_questions(
             question_knowledge_points.c.knowledge_point_id == knowledge_point_id
         )
     full_query = apply_filters(full_query, filters, Question)
+    if tag_ids or knowledge_point_id:
+        full_query = full_query.distinct()
     full_query = apply_pagination(full_query, pagination, Question)
 
     result = await db.execute(full_query)
@@ -124,9 +247,10 @@ async def list_questions(
 async def get_question(
     question_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _user: CurrentUser,
+    user: CurrentUser,
 ) -> QuestionResponse:
-    question = await get_question_by_id(db, question_id)
+    is_admin = await _is_question_admin(db, user)
+    question = await get_question_by_id(db, question_id, user=user, is_platform_admin=is_admin)
     if question is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found")
     return QuestionResponse.from_question(question)
@@ -136,8 +260,11 @@ async def get_question(
 async def create_question_endpoint(
     data: QuestionCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, require_roles("admin", "teacher")],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
 ) -> QuestionResponse:
+    is_admin = await _is_question_admin(db, user)
+    await _ensure_can_write_question_bank(db, data.question_bank_id, user, is_admin)
+    await _ensure_can_read_knowledge_points(db, data.knowledge_point_ids, user, is_admin)
     question = await create_question(db, data, user.id)
     return QuestionResponse.from_question(question)
 
@@ -147,11 +274,23 @@ async def update_question_endpoint(
     question_id: uuid.UUID,
     data: QuestionUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _user: Annotated[User, require_roles("admin", "teacher")],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
 ) -> QuestionResponse:
-    question = await get_question_by_id(db, question_id)
+    is_admin = await _is_question_admin(db, user)
+    question = await get_question_by_id(db, question_id, user=user, is_platform_admin=is_admin)
     if question is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found")
+    if not can_write_owned_resource(
+        is_platform_admin=is_admin,
+        current_user_id=user.id,
+        owner_id=question.owner_id,
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No permission to modify this question")
+    update_data = data.model_dump(exclude_unset=True)
+    if "question_bank_id" in update_data:
+        await _ensure_can_write_question_bank(db, data.question_bank_id, user, is_admin)
+    if "knowledge_point_ids" in update_data and data.knowledge_point_ids is not None:
+        await _ensure_can_read_knowledge_points(db, data.knowledge_point_ids, user, is_admin)
     updated = await update_question(db, question, data)
     return QuestionResponse.from_question(updated)
 
@@ -160,11 +299,18 @@ async def update_question_endpoint(
 async def delete_question_endpoint(
     question_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _user: Annotated[User, require_roles("admin", "teacher")],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
 ) -> None:
-    question = await get_question_by_id(db, question_id)
+    is_admin = await _is_question_admin(db, user)
+    question = await get_question_by_id(db, question_id, user=user, is_platform_admin=is_admin)
     if question is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found")
+    if not can_write_owned_resource(
+        is_platform_admin=is_admin,
+        current_user_id=user.id,
+        owner_id=question.owner_id,
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No permission to modify this question")
     await soft_delete_question(db, question)
 
 
@@ -194,12 +340,44 @@ async def recognize_imported_question_endpoint(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"AI 返回格式无效：{exc}") from exc
 
 
+@questions_router.post("/import/document-recognize", response_model=QuestionImportDocumentRecognizeResponse)
+async def document_recognize_import_endpoint(
+    data: QuestionImportDocumentRecognizeRequest,
+    _user: Annotated[User, require_roles("admin", "teacher")],
+) -> QuestionImportDocumentRecognizeResponse:
+    try:
+        return await recognize_question_document(data)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@questions_router.post("/import/re-recognize", response_model=QuestionImportDraft)
+async def re_recognize_import_draft_endpoint(
+    data: QuestionImportRecognizeRequest,
+    _user: Annotated[User, require_roles("admin", "teacher")],
+) -> QuestionImportDraft:
+    draft = build_import_draft_from_segment(data.raw_text, boundary_confidence="low")
+    return await complete_import_draft_with_ai(draft)
+
+
 @questions_router.post("/bulk", response_model=QuestionBulkCreateResponse, status_code=status.HTTP_201_CREATED)
 async def bulk_create_questions_endpoint(
     data: QuestionBulkCreateRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, require_roles("admin", "teacher")],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
 ) -> QuestionBulkCreateResponse:
+    is_admin = await _is_question_admin(db, user)
+    bank_ids = {question.question_bank_id for question in data.questions if question.question_bank_id is not None}
+    for bank_id in bank_ids:
+        await _ensure_can_write_question_bank(db, bank_id, user, is_admin)
+    knowledge_point_ids = {
+        knowledge_point_id
+        for question in data.questions
+        for knowledge_point_id in question.knowledge_point_ids
+    }
+    await _ensure_can_read_knowledge_points(db, list(knowledge_point_ids), user, is_admin)
     created = await bulk_create_questions(db, data.questions, user.id)
     return QuestionBulkCreateResponse(created=created)
 
@@ -315,9 +493,10 @@ async def delete_tag_endpoint(
 @knowledge_points_router.get("", response_model=list[KnowledgePointResponse])
 async def list_knowledge_points_endpoint(
     db: Annotated[AsyncSession, Depends(get_db)],
-    _user: CurrentUser,
+    user: CurrentUser,
 ) -> list[KnowledgePointResponse]:
-    kps = await list_knowledge_points(db)
+    is_admin = await _is_question_admin(db, user)
+    kps = await list_knowledge_points(db, user=user, is_platform_admin=is_admin)
     return [KnowledgePointResponse.model_validate(kp) for kp in kps]
 
 
@@ -325,9 +504,11 @@ async def list_knowledge_points_endpoint(
 async def create_knowledge_point_endpoint(
     data: KnowledgePointCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _user: Annotated[User, require_roles("admin", "teacher")],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
 ) -> KnowledgePointResponse:
-    kp = await create_knowledge_point(db, data)
+    is_admin = await _is_question_admin(db, user)
+    await _ensure_can_write_knowledge_point(db, data.parent_id, user, is_admin)
+    kp = await create_knowledge_point(db, data, user.id)
     return KnowledgePointResponse.model_validate(kp)
 
 
@@ -337,9 +518,10 @@ async def create_knowledge_point_endpoint(
 async def list_question_banks_endpoint(
     response: Response,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _user: CurrentUser,
+    user: CurrentUser,
 ) -> list[QuestionBankResponse]:
-    rows, no_bank_count = await list_question_banks(db)
+    is_admin = await _is_question_admin(db, user)
+    rows, no_bank_count = await list_question_banks(db, user=user, is_platform_admin=is_admin)
     response.headers["X-No-Bank-Count"] = str(no_bank_count)
     return [
         QuestionBankResponse(
@@ -353,9 +535,9 @@ async def list_question_banks_endpoint(
 async def create_question_bank_endpoint(
     data: QuestionBankCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _user: Annotated[User, require_roles("admin", "teacher")],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
 ) -> QuestionBankResponse:
-    bank = await create_question_bank(db, data)
+    bank = await create_question_bank(db, data, user.id)
     return QuestionBankResponse.model_validate(bank)
 
 
@@ -363,9 +545,23 @@ async def create_question_bank_endpoint(
 async def delete_question_bank_endpoint(
     bank_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _user: Annotated[User, require_roles("admin", "teacher")],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
 ) -> None:
+    is_admin = await _is_question_admin(db, user)
     bank = await get_question_bank_by_id(db, bank_id)
     if bank is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question bank not found")
+    if not can_read_shared_resource(
+        is_platform_admin=is_admin,
+        current_user_id=user.id,
+        owner_id=bank.owner_id,
+        visibility=bank.visibility,
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question bank not found")
+    if not can_write_owned_resource(
+        is_platform_admin=is_admin,
+        current_user_id=user.id,
+        owner_id=bank.owner_id,
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No permission to modify this question bank")
     await soft_delete_question_bank(db, bank)

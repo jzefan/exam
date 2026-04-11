@@ -96,7 +96,7 @@ class GradingTask(BaseModel):
     )
 
     source_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    source_business_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    source_business_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="pending", nullable=False)
     question_type: Mapped[str] = mapped_column(String(50), nullable=False)
     question_content: Mapped[str] = mapped_column(Text, nullable=False)

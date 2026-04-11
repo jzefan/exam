@@ -7,6 +7,8 @@ export interface IKnowledgePointDetail {
   difficulty: string | null;
   parent_id: string | null;
   direction_id: string | null;
+  owner_id?: string;
+  visibility?: "private" | "platform";
   question_count: number;
 }
 

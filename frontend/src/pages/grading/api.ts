@@ -40,7 +40,7 @@ export interface GradingInboxResponse {
 export interface GradingQuestionCandidate {
   task_id: string;
   candidate_name: string;
-  candidate_code: string;
+  candidate_code: string | null;
   status: string;
   score: number | null;
   arbitration_required: boolean;
@@ -73,13 +73,16 @@ export interface GradingCandidateModelComment {
 export interface GradingCandidateDetailResponse {
   task_id: string;
   candidate_name: string;
-  candidate_code: string;
+  candidate_code: string | null;
   status: string;
   suggested_score: number | null;
   max_score: number;
   question_type: "short_answer" | "code";
   student_answer_raw: string;
   knowledge_tags: string[];
+  student_feedback?: string | null;
+  teacher_feedback_reply?: string | null;
+  feedback_created_at?: string | null;
   models: GradingCandidateModelComment[];
   follow_ups: Array<{
     prompt: string;
@@ -99,6 +102,11 @@ export interface GradingPromptFollowUpModel {
 export interface GradingPromptFollowUpResponse {
   prompt: string;
   models: GradingPromptFollowUpModel[];
+}
+
+export interface GradingConfirmResponse {
+  status: string;
+  grading_status: "pending_ai" | "ai_scored" | "reviewed";
 }
 
 function getAuthHeaders() {

@@ -48,6 +48,8 @@ export interface IKnowledgePoint {
   name: string;
   parent_id: string | null;
   description: string | null;
+  owner_id?: string;
+  visibility?: "private" | "platform";
   created_at: string;
   direction_id?: string | null;
   tags?: string[];
@@ -59,11 +61,14 @@ export interface IQuestionBank {
   id: string;
   name: string;
   description: string | null;
+  owner_id: string;
+  visibility: "private" | "platform";
   question_count: number;
   created_at: string;
 }
 
 export type ExamStatus = "draft" | "upcoming" | "ongoing" | "completed" | "closed";
+export type ExamGradingStatus = "pending_ai" | "ai_scored" | "reviewed";
 
 export interface IExam {
   id: string;
@@ -82,6 +87,16 @@ export interface IExam {
   total_questions: number;
   total_students: number;
   submitted_count: number;
+  participated?: boolean | null;
+  started_at?: string | null;
+  submitted_at?: string | null;
+  score?: number | null;
+  grading_status?: ExamGradingStatus | null;
+  objective_score?: number | null;
+  subjective_score?: number | null;
+  ai_scored_at?: string | null;
+  reviewed_at?: string | null;
+  owner_id: string;
   created_by: string;
   created_by_name: string;
   created_at: string;
@@ -102,6 +117,7 @@ export interface IExamStudent {
   student_id: string;
   full_name: string | null;
   username: string | null;
+  started_at: string | null;
   submitted_at: string | null;
 }
 
@@ -123,6 +139,107 @@ export interface IExamQuestionForStudent {
   title: string;
   content: Record<string, unknown>;
   options: Record<string, unknown> | null;
+}
+
+export interface ICodeQuestionExample {
+  input: string;
+  output: string;
+  explanation?: string;
+}
+
+export interface ICodeSampleTest {
+  input: string;
+  expected_output: string;
+}
+
+export interface ICodeQuestionContent extends Record<string, unknown> {
+  description?: string;
+  text?: string;
+  function_name?: string;
+  signature?: string;
+  starter_code?: Partial<Record<"python" | "javascript" | "java" | "cpp" | "c" | "go", string>>;
+  examples?: ICodeQuestionExample[];
+  sample_tests?: ICodeSampleTest[];
+  constraints?: string[];
+}
+
+export interface ICodeAnswerContent extends Record<string, unknown> {
+  language?: "python" | "javascript" | "java" | "cpp" | "c" | "go";
+  code?: string;
+  custom_input?: string;
+  last_run_input?: string;
+  last_run_output?: string;
+}
+
+export interface IExamResultQuestionFeedbackDimension {
+  name: string;
+  score: number;
+  max_score: number;
+  comment: string;
+}
+
+export interface IExamResultQuestionFeedback {
+  dimensions?: IExamResultQuestionFeedbackDimension[];
+  deductions?: string[];
+  suggestions?: string[];
+}
+
+export interface IExamResultQuestion {
+  question_id: string;
+  order: number;
+  type: QuestionType;
+  title: string;
+  content: Record<string, unknown>;
+  options: Record<string, unknown> | null;
+  total_score: number;
+  score_awarded: number;
+  is_correct: boolean;
+  answer_content: Record<string, unknown>;
+  standard_answer: Record<string, unknown>;
+  analysis: string | null;
+  feedback: IExamResultQuestionFeedback;
+  appeal_status: string | null;
+  appeal_reason: string | null;
+  appeal_reply: string | null;
+}
+
+export interface IExamResult {
+  exam_id: string;
+  title: string;
+  submitted_at: string | null;
+  total_score: number;
+  score: number | null;
+  grading_status: ExamGradingStatus | null;
+  can_view: boolean;
+  blocked_reason: string | null;
+  questions: IExamResultQuestion[];
+}
+
+export interface ISubmitExamResponse {
+  submitted: boolean;
+  score: number | null;
+  grading_status: ExamGradingStatus;
+}
+
+export interface IStudentNotification {
+  id: string;
+  type: string;
+  title: string;
+  content: string;
+  related_exam_id: string | null;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface IAppealResponse {
+  id: string;
+  exam_id: string;
+  question_id: string;
+  status: string;
+  reason: string;
+  teacher_reply: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface IExamTaking {

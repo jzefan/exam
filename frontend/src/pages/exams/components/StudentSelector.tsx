@@ -60,6 +60,7 @@ export function StudentSelector({
   const [importError, setImportError] = useState<string | null>(null);
   const [manualFeedback, setManualFeedback] = useState<string | null>(null);
   const [manualFeedbackTone, setManualFeedbackTone] = useState<ManualFeedbackTone>("default");
+  const [matchedManualStudentId, setMatchedManualStudentId] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const modeId = useId();
 
@@ -72,6 +73,7 @@ export function StudentSelector({
       student_id: "",
       class_name: "",
     });
+    setMatchedManualStudentId(null);
   };
 
   const setManualMessage = (message: string, tone: ManualFeedbackTone) => {
@@ -122,6 +124,40 @@ export function StudentSelector({
         return username.includes(normalizedSearch) || fullName.includes(normalizedSearch);
       })
     : users;
+
+  useEffect(() => {
+    const fullName = manualForm.full_name.trim();
+    if (!fullName) {
+      setMatchedManualStudentId(null);
+      setManualFeedback(null);
+      return;
+    }
+
+    const matchedStudents = users.filter(
+      (user) => normalizeValue(user.full_name) === normalizeValue(fullName),
+    );
+
+    if (matchedStudents.length === 1) {
+      const matchedStudent = matchedStudents[0];
+      setMatchedManualStudentId(matchedStudent.id);
+      setManualForm((prev) => ({
+        ...prev,
+        phone: matchedStudent.phone ?? matchedStudent.username ?? prev.phone,
+        student_id: matchedStudent.student_id ?? "",
+        class_name: matchedStudent.class_name ?? "",
+      }));
+      setManualMessage(`已匹配到系统中的学生信息：${matchedStudent.full_name}。`, "default");
+      return;
+    }
+
+    setMatchedManualStudentId(null);
+    if (matchedStudents.length > 1) {
+      setManualMessage("找到多名同名学生，请继续输入手机号或班级确认。", "default");
+      return;
+    }
+
+    setManualFeedback(null);
+  }, [manualForm.full_name, users]);
 
   const toggle = (id: string) => {
     if (selectedSet.has(id)) {
@@ -215,7 +251,10 @@ export function StudentSelector({
     }
 
     const existingUser = users.find(
-      (u) => normalizeValue(u.phone ?? "") === normalizeValue(phone) || normalizeValue(u.username) === normalizeValue(phone),
+      (u) =>
+        (matchedManualStudentId ? u.id === matchedManualStudentId : false) ||
+        normalizeValue(u.phone ?? "") === normalizeValue(phone) ||
+        normalizeValue(u.username) === normalizeValue(phone),
     );
     if (existingUser) {
       if (selectedSet.has(existingUser.id)) {

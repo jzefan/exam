@@ -1,3 +1,9 @@
+export interface ExamQuestionFormItem {
+  question_id: string;
+  order: number;
+  score_override: number | null;
+}
+
 export interface ExamFormValues {
   title: string;
   description: string;
@@ -11,7 +17,12 @@ export interface ExamFormValues {
   show_result: boolean;
   notes_template: string;
   question_ids: string[];
+  question_items: ExamQuestionFormItem[];
   student_ids: string[];
+}
+
+interface ValidateExamFormOptions {
+  allowPastStartTime?: boolean;
 }
 
 export type ExamFormErrors = Partial<
@@ -28,7 +39,11 @@ export const DEFAULT_NOTES = `考试注意事项：
 4. 提交后不可修改答案，请仔细检查后再提交
 5. 如遇技术问题，请及时联系监考老师`;
 
-export function validateExamForm(form: ExamFormValues): ExamFormErrors {
+export function validateExamForm(
+  form: ExamFormValues,
+  now: Date = new Date(),
+  options: ValidateExamFormOptions = {},
+): ExamFormErrors {
   const errors: ExamFormErrors = {};
 
   const title = form.title.trim();
@@ -50,9 +65,21 @@ export function validateExamForm(form: ExamFormValues): ExamFormErrors {
     errors.max_switch_count = "允许切屏次数不能小于 0。";
   }
 
+  const start = form.start_time ? new Date(form.start_time).getTime() : NaN;
+  const end = form.end_time ? new Date(form.end_time).getTime() : NaN;
+  const current = now.getTime();
+
+  if (form.start_time && Number.isNaN(start)) {
+    errors.start_time = "请输入有效的开始时间。";
+  } else if (form.start_time && start < current && !options.allowPastStartTime) {
+    errors.start_time = "开始时间不能早于当前时间。";
+  }
+
+  if (form.end_time && Number.isNaN(end)) {
+    errors.end_time = "请输入有效的结束时间。";
+  }
+
   if (form.start_time && form.end_time) {
-    const start = new Date(form.start_time).getTime();
-    const end = new Date(form.end_time).getTime();
     if (Number.isNaN(start) || Number.isNaN(end)) {
       errors.start_time = "请输入有效的开始和结束时间。";
       errors.end_time = "请输入有效的开始和结束时间。";

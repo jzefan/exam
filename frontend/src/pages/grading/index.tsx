@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ChevronUp,
   Filter,
@@ -15,10 +16,13 @@ import { CodeBlock } from "@/components/ui/code-block";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
 import { cn } from "@/lib/utils";
+import type { IQuestion } from "@/types";
 import {
   apiRequest,
   type GradingCandidateDetailResponse,
+  type GradingConfirmResponse,
   type GradingInboxExamGroup,
   type GradingInboxQuestionItem,
   type GradingInboxResponse,
@@ -64,8 +68,48 @@ function formatQuestionSummary(question: GradingQuestionDetailResponse | null) {
   return question.question_content;
 }
 
+function toQuestionPreview(detail: GradingQuestionDetailResponse | null): IQuestion | null {
+  if (!detail) return null;
+  return {
+    id: detail.question_id,
+    type: detail.question_type,
+    title: detail.question_label,
+    content: { text: detail.question_content },
+    options: null,
+    answer: {},
+    analysis: null,
+    difficulty: 3,
+    score: detail.max_score,
+    usage_count: 0,
+    question_bank_id: null,
+    question_bank_name: null,
+    tags: [],
+    knowledge_points: detail.knowledge_tags.map((tag, index) => ({
+      id: `${detail.question_id}-knowledge-${index}`,
+      name: tag,
+      parent_id: null,
+      description: null,
+      created_at: "",
+    })),
+    created_by: "",
+    created_by_name: "",
+    created_at: "",
+    updated_at: "",
+  };
+}
+
 function buildQuestionRef(examId: string | null, questionId: string) {
   return `${examId ?? "standalone"}::${questionId}`;
+}
+
+function getUiLocale(): string {
+  if (typeof document !== "undefined" && document.documentElement.lang) {
+    return document.documentElement.lang;
+  }
+  if (typeof navigator !== "undefined" && navigator.language) {
+    return navigator.language;
+  }
+  return "zh-CN";
 }
 
 export function GradingCenterPage() {
@@ -79,12 +123,13 @@ export function GradingCenterPage() {
   const [manualScore, setManualScore] = useState("");
   const [promptDraft, setPromptDraft] = useState("");
   const [showPromptBox, setShowPromptBox] = useState(false);
-  const [modelFollowUps, setModelFollowUps] = useState<Record<string, { prompt: string; summary: string; process: string[] }>>({});
   const [questionExpanded, setQuestionExpanded] = useState(false);
+  const [showCandidateList, setShowCandidateList] = useState(true);
+  const [candidateTransitionDirection, setCandidateTransitionDirection] = useState<"prev" | "next" | "neutral">("neutral");
   const [loadingInbox, setLoadingInbox] = useState(false);
   const [loadingQuestion, setLoadingQuestion] = useState(false);
   const [loadingCandidate, setLoadingCandidate] = useState(false);
-  const [actionLoading, setActionLoading] = useState<null | "manual" | "run" | "refresh">(null);
+  const [actionLoading, setActionLoading] = useState<null | "manual" | "run" | "refresh" | "confirm">(null);
   const [reportError, setReportError] = useState<string | null>(null);
   const [expandedStages, setExpandedStages] = useState<Record<ExpandedStage, boolean>>({
     primary: true,
@@ -202,10 +247,6 @@ export function GradingCenterPage() {
     void loadCandidate(selectedTaskId);
   }, [selectedTaskId]);
 
-  useEffect(() => {
-    setModelFollowUps({});
-  }, [selectedTaskId]);
-
   const summaryStats = useMemo(() => {
     const exams = inbox?.exams ?? [];
     const examCount = exams.length;
@@ -252,6 +293,7 @@ export function GradingCenterPage() {
 
   const navigateCandidateByOffset = (offset: -1 | 1) => {
     if (!activeCandidate) return;
+    setCandidateTransitionDirection(offset === 1 ? "next" : "prev");
     const ids = sortedCandidates.map((candidate) => candidate.task_id);
     const currentIndex = ids.indexOf(activeCandidate.task_id);
     const nextIndex = currentIndex + offset;
@@ -273,7 +315,7 @@ export function GradingCenterPage() {
     }
   };
 
-  const commitScore = async () => {
+  const finalizeCurrentScore = async () => {
     if (!selectedTaskId || !candidateDetail) return true;
     const scoreValue = Number(manualScore);
     if (Number.isNaN(scoreValue)) return false;
@@ -281,37 +323,41 @@ export function GradingCenterPage() {
     const suggestedScore = candidateDetail.suggested_score;
     const scoreChanged = suggestedScore == null || scoreValue !== suggestedScore;
 
-    if (!scoreChanged) {
-      return true;
-    }
-
-    setActionLoading("manual");
     try {
-      await apiRequest(`/grading/tasks/${selectedTaskId}/manual-score`, {
+      if (scoreChanged) {
+        setActionLoading("manual");
+        await apiRequest(`/grading/tasks/${selectedTaskId}/manual-score`, {
+          method: "POST",
+          body: JSON.stringify({
+            score_total: scoreValue,
+            reason: "教师人工确认",
+          }),
+        });
+      }
+
+      setActionLoading("confirm");
+      await apiRequest<GradingConfirmResponse>(`/grading/tasks/${selectedTaskId}/confirm`, {
         method: "POST",
-        body: JSON.stringify({
-          score_total: scoreValue,
-          reason: "教师人工确认",
-        }),
       });
+
       await refreshCurrentWorkspace();
       return true;
     } catch (error) {
-      setReportError(error instanceof Error ? error.message : "保存分数失败");
+      setReportError(error instanceof Error ? error.message : "确定分数失败");
       setActionLoading(null);
       return false;
     }
   };
 
   const handleConfirmScore = async () => {
-    const confirmed = await commitScore();
+    const confirmed = await finalizeCurrentScore();
     if (confirmed) {
       navigateCandidateByOffset(1);
     }
   };
 
   const handleStepCandidate = async (offset: -1 | 1) => {
-    const confirmed = await commitScore();
+    const confirmed = await finalizeCurrentScore();
     if (confirmed) {
       navigateCandidateByOffset(offset);
     }
@@ -334,7 +380,10 @@ export function GradingCenterPage() {
     if (!selectedTaskId) return;
     setActionLoading("run");
     try {
-      await apiRequest(`/grading/tasks/${selectedTaskId}/run`, { method: "POST" });
+      await apiRequest(`/grading/tasks/${selectedTaskId}/run`, {
+        method: "POST",
+        body: JSON.stringify({ locale: getUiLocale() }),
+      });
       await refreshCurrentWorkspace();
     } catch (error) {
       setReportError(error instanceof Error ? error.message : "重新评分失败");
@@ -348,7 +397,7 @@ export function GradingCenterPage() {
     setReportError(null);
     void apiRequest<GradingPromptFollowUpResponse>(`/grading/tasks/${selectedTaskId}/follow-up`, {
       method: "POST",
-      body: JSON.stringify({ prompt: promptDraft.trim() }),
+      body: JSON.stringify({ prompt: promptDraft.trim(), locale: getUiLocale() }),
     })
       .then(async () => {
         await loadCandidate(selectedTaskId);
@@ -363,6 +412,7 @@ export function GradingCenterPage() {
   };
 
   const questionSummary = formatQuestionSummary(questionDetail);
+  const questionPreview = useMemo(() => toQuestionPreview(questionDetail), [questionDetail]);
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden px-0 py-4">
@@ -400,8 +450,8 @@ export function GradingCenterPage() {
       </div>
 
       <main className="grid min-h-0 flex-1 gap-0 overflow-hidden xl:grid-cols-[360px_minmax(0,1fr)]">
-        <section className="border-r border-border dark:border-white/15">
-          <div className="flex h-full min-h-0 flex-col px-4 pt-6 pb-2">
+        <section className="min-h-0 overflow-hidden border-r border-border dark:border-white/15">
+          <div className="flex h-full min-h-0 flex-col overflow-hidden px-4 pt-6 pb-2">
             <div className="shrink-0 space-y-3 border-b border-border/70 pb-4">
               <h2 className="text-sm font-semibold text-muted-foreground">主观题列表</h2>
               <div className="relative">
@@ -415,7 +465,7 @@ export function GradingCenterPage() {
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto pt-4 pr-1">
+            <div className="grading-sidebar-scroll min-h-0 flex-1 overflow-y-scroll pt-4 pr-2">
               {loadingInbox ? (
                 <div className="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
                   正在加载题目列表...
@@ -524,13 +574,28 @@ export function GradingCenterPage() {
 
               {questionExpanded && questionDetail ? (
                 <div className="rounded-lg border border-border/70 bg-muted/20 p-4">
-                  <p className="text-sm leading-7">{questionDetail.question_content}</p>
+                  {questionPreview ? (
+                    <QuestionPreviewCard
+                      question={questionPreview}
+                      mode="compact"
+                      defaultExpanded
+                      className="border-0 bg-transparent p-0 shadow-none"
+                    />
+                  ) : null}
                 </div>
               ) : null}
             </section>
 
-            <div className="grid min-h-0 flex-1 gap-0 overflow-hidden xl:grid-cols-[300px_minmax(0,1fr)]">
-              <section className="flex min-h-0 flex-col border-r border-border/70 pr-6 dark:border-white/15">
+            <div
+              className={cn(
+                "grid min-h-0 flex-1 gap-0 overflow-hidden",
+                showCandidateList
+                  ? "xl:grid-cols-[300px_minmax(0,1fr)]"
+                  : "xl:grid-cols-[minmax(0,1fr)]",
+              )}
+            >
+              {showCandidateList ? (
+                <section className="flex min-h-0 flex-col border-r border-border/70 pr-6 dark:border-white/15">
                 <div className="pt-6 pb-4">
                   <h3 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">考生列表</h3>
                 </div>
@@ -546,7 +611,10 @@ export function GradingCenterPage() {
                           <TooltipTrigger asChild>
                             <button
                               type="button"
-                              onClick={() => setSelectedTaskId(candidate.task_id)}
+                              onClick={() => {
+                                setCandidateTransitionDirection("neutral");
+                                setSelectedTaskId(candidate.task_id);
+                              }}
                               className={cn(
                                 "group flex h-8 items-center gap-2 rounded-full border px-3 text-left transition-all duration-200",
                                 candidate.task_id === activeCandidate?.task_id
@@ -577,7 +645,9 @@ export function GradingCenterPage() {
                           >
                             <div className="space-y-1 text-xs">
                               <p className="font-semibold">{candidate.candidate_name}</p>
-                              <p className="text-muted-foreground">编号：{candidate.candidate_code}</p>
+                              {candidate.candidate_code ? (
+                                <p className="text-muted-foreground">学号：{candidate.candidate_code}</p>
+                              ) : null}
                               <p className="text-muted-foreground">状态：{candidate.status}</p>
                               <p className="text-muted-foreground">
                                 分数：{candidate.score == null ? "未完成" : candidate.score}
@@ -589,15 +659,72 @@ export function GradingCenterPage() {
                     ))
                   )}
                 </div>
-              </section>
+                </section>
+              ) : null}
 
-              <section className="flex min-h-0 flex-col pl-6">
+              <section className={cn("flex min-h-0 flex-col", showCandidateList ? "pl-6" : "pl-0")}>
+                <div
+                  key={selectedTaskId ?? "empty-candidate"}
+                  className={cn(
+                    "flex min-h-0 flex-1 flex-col",
+                    candidateTransitionDirection === "next" &&
+                      "animate-in fade-in-0 slide-in-from-right-2 duration-200",
+                    candidateTransitionDirection === "prev" &&
+                      "animate-in fade-in-0 slide-in-from-left-2 duration-200",
+                    candidateTransitionDirection === "neutral" &&
+                      "animate-in fade-in-0 duration-150",
+                  )}
+                >
                 <div className="border-b border-border/70 pt-6 pb-5">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3 text-sm text-foreground/80">
                       <span className="font-medium">{candidateDetail?.candidate_name ?? "-"}</span>
-                      <span className="text-muted-foreground/40">/</span>
-                      <span className="text-muted-foreground">{candidateDetail?.candidate_code ?? "-"}</span>
+                      {candidateDetail?.candidate_code ? (
+                        <>
+                          <span className="text-muted-foreground/40">/</span>
+                          <span className="text-muted-foreground">{candidateDetail.candidate_code}</span>
+                        </>
+                      ) : null}
+                      <TooltipProvider delayDuration={150}>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 px-2 text-xs"
+                              onClick={() => setShowCandidateList((current) => !current)}
+                            >
+                              {showCandidateList ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{showCandidateList ? "隐藏考生列表" : "显示考生列表"}</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                      {!showCandidateList ? (
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 px-2 text-xs"
+                            onClick={() => void handleStepCandidate(-1)}
+                            disabled={activeCandidateIndex <= 0}
+                          >
+                            上一个
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 px-2 text-xs"
+                            onClick={() => void handleStepCandidate(1)}
+                            disabled={
+                              activeCandidateIndex < 0 ||
+                              activeCandidateIndex >= sortedCandidates.length - 1
+                            }
+                          >
+                            下一个
+                          </Button>
+                        </div>
+                      ) : null}
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-muted-foreground">建议分数</span>
@@ -627,6 +754,36 @@ export function GradingCenterPage() {
                         )}
                       </div>
                     </section>
+
+                    {candidateDetail?.student_feedback || candidateDetail?.teacher_feedback_reply ? (
+                      <section className="space-y-3">
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">学生反馈</p>
+                        <div className="rounded-xl border border-border/50 bg-muted/10 p-4 shadow-sm">
+                          <div className="flex flex-col gap-3">
+                            {candidateDetail.student_feedback ? (
+                              <p className="text-sm leading-relaxed text-foreground/90">
+                                {candidateDetail.student_feedback}
+                              </p>
+                            ) : null}
+                            {candidateDetail.feedback_created_at ? (
+                              <p className="text-xs text-muted-foreground">
+                                提交时间：{new Date(candidateDetail.feedback_created_at).toLocaleString("zh-CN", {
+                                  month: "numeric",
+                                  day: "numeric",
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })}
+                              </p>
+                            ) : null}
+                            {candidateDetail.teacher_feedback_reply ? (
+                              <div className="rounded-lg border border-border/60 bg-background px-3 py-3 text-sm leading-relaxed text-muted-foreground">
+                                教师回复：{candidateDetail.teacher_feedback_reply}
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      </section>
+                    ) : null}
 
                     <section className="space-y-4">
                       <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">LLM 评分意见</p>
@@ -727,6 +884,7 @@ export function GradingCenterPage() {
                     </section>
                   </div>
                 </div>
+                </div>
               </section>
             </div>
 
@@ -746,10 +904,10 @@ export function GradingCenterPage() {
                 </div>
                 <Button
                   onClick={() => void handleConfirmScore()}
-                  disabled={actionLoading === "manual" || !selectedTaskId}
+                  disabled={(actionLoading === "manual" || actionLoading === "confirm") || !selectedTaskId}
                 >
                   <CheckCircle2 className="h-4 w-4" />
-                  {actionLoading === "manual" ? "提交中..." : "确定分数"}
+                  {actionLoading === "manual" || actionLoading === "confirm" ? "提交中..." : "确定分数"}
                 </Button>
                 <Button
                   variant="outline"

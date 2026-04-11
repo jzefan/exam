@@ -7,6 +7,13 @@ export default defineConfig({
   transformers: [transformerVariantGroup()],
   // Map shadcn/ui CSS variables to utility classes
   rules: [
+    // Radius utilities bound to theme customizer
+    ["rounded-sm", { "border-radius": "max(0px, calc(var(--radius) - 4px))" }],
+    ["rounded-md", { "border-radius": "max(0px, calc(var(--radius) - 2px))" }],
+    ["rounded-lg", { "border-radius": "var(--radius)" }],
+    ["rounded-xl", { "border-radius": "calc(var(--radius) + 4px)" }],
+    ["rounded-2xl", { "border-radius": "calc(var(--radius) + 8px)" }],
+    ["rounded-3xl", { "border-radius": "calc(var(--radius) + 12px)" }],
     // Background utilities
     ["bg-background", { "background-color": "hsl(var(--background))" }],
     ["bg-foreground", { "background-color": "hsl(var(--foreground))" }],

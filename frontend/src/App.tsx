@@ -27,6 +27,7 @@ import { KnowledgeManagementPage } from "./pages/knowledge";
 import { MyExams } from "./pages/student/my-exams";
 import { WrongAnswers } from "./pages/student/wrong-answers";
 import { StudentDashboard } from "./pages/student/dashboard";
+import { ExamResultPage } from "./pages/student/exam-result";
 import { TagList } from "./pages/tags/list";
 import { ExamList } from "./pages/exams/list";
 import { ExamCreate } from "./pages/exams/create";
@@ -41,7 +42,7 @@ import { GradingCenterPage } from "./pages/grading";
 import { GwmxLanding } from "./pages/gwmx/landing";
 import StudentManagementPage from "./pages/students";
 
-import { ENTERPRISE_ROLES, getHomeRoute } from "@/utils/role-routing";
+import { ENTERPRISE_ROLES, getHomeRoute, TEACHER_ROLES } from "@/utils/role-routing";
 
 /** Redirect users to their home route if they don't match the allowed roles */
 function RoleGuard({ allow }: { allow: string[] }) {
@@ -140,6 +141,7 @@ function App() {
               <Route element={<StudentLayout />}>
                 <Route path="/student" element={<StudentDashboard />} />
                 <Route path="/my-exams" element={<MyExams />} />
+                <Route path="/my-exams/:id/result" element={<ExamResultPage />} />
                 <Route path="/wrong-answers" element={<WrongAnswers />} />
               </Route>
             </Route>
@@ -148,33 +150,35 @@ function App() {
             <Route
               element={
                 <Authenticated key="auth" fallback={<CatchAllNavigate to="/login" />}>
-                  <Layout />
+                  <RoleGuard allow={TEACHER_ROLES} />
                 </Authenticated>
               }
             >
-              <Route index element={<HomeRedirect />} />
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/users">
-                <Route index element={<UserList />} />
-                <Route path="create" element={<UserCreate />} />
-                <Route path="edit/:id" element={<UserEdit />} />
+              <Route element={<Layout />}>
+                <Route index element={<HomeRedirect />} />
+                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/users">
+                  <Route index element={<UserList />} />
+                  <Route path="create" element={<UserCreate />} />
+                  <Route path="edit/:id" element={<UserEdit />} />
+                </Route>
+                <Route path="/questions">
+                  <Route index element={<QuestionList />} />
+                  <Route path="create" element={<QuestionCreate />} />
+                  <Route path="import" element={<QuestionImportPage />} />
+                  <Route path="edit/:id" element={<QuestionEdit />} />
+                </Route>
+                <Route path="/exams">
+                  <Route index element={<ExamList />} />
+                  <Route path="create" element={<ExamCreate />} />
+                  <Route path="edit/:id" element={<ExamEdit />} />
+                </Route>
+                <Route path="/tags" element={<TagList />} />
+                <Route path="/knowledge" element={<KnowledgeManagementPage />} />
+                <Route path="/grading" element={<GradingCenterPage />} />
+                <Route path="/grading/analytics" element={<GradingAnalyticsPage />} />
+                <Route path="/students" element={<StudentManagementPage />} />
               </Route>
-              <Route path="/questions">
-                <Route index element={<QuestionList />} />
-                <Route path="create" element={<QuestionCreate />} />
-                <Route path="import" element={<QuestionImportPage />} />
-                <Route path="edit/:id" element={<QuestionEdit />} />
-              </Route>
-              <Route path="/exams">
-                <Route index element={<ExamList />} />
-                <Route path="create" element={<ExamCreate />} />
-                <Route path="edit/:id" element={<ExamEdit />} />
-              </Route>
-              <Route path="/tags" element={<TagList />} />
-              <Route path="/knowledge" element={<KnowledgeManagementPage />} />
-              <Route path="/grading" element={<GradingCenterPage />} />
-              <Route path="/grading/analytics" element={<GradingAnalyticsPage />} />
-              <Route path="/students" element={<StudentManagementPage />} />
             </Route>
 
             {/* GWMX landing page — public */}

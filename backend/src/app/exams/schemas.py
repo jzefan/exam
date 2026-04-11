@@ -58,7 +58,9 @@ class ExamStudentResponse(BaseModel):
     student_id: uuid.UUID
     full_name: str | None = None
     username: str | None = None
+    started_at: datetime | None = None
     submitted_at: datetime | None = None
+    grading_status: str | None = None
 
 
 # ── Exam ──
@@ -77,6 +79,7 @@ class ExamCreate(BaseModel):
     show_result: bool = False
     notes_template: str | None = None
     question_ids: list[uuid.UUID] = Field(default_factory=list)
+    question_items: list[ExamQuestionItem] = Field(default_factory=list)
     student_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
@@ -93,6 +96,7 @@ class ExamUpdate(BaseModel):
     show_result: bool | None = None
     notes_template: str | None = None
     question_ids: list[uuid.UUID] | None = None
+    question_items: list[ExamQuestionItem] | None = None
     student_ids: list[uuid.UUID] | None = None
 
 
@@ -115,6 +119,16 @@ class ExamResponse(BaseModel):
     total_questions: int = 0
     total_students: int = 0
     submitted_count: int = 0
+    participated: bool | None = None
+    started_at: datetime | None = None
+    submitted_at: datetime | None = None
+    grading_status: str | None = None
+    objective_score: float | None = None
+    subjective_score: float | None = None
+    score: float | None = None
+    ai_scored_at: datetime | None = None
+    reviewed_at: datetime | None = None
+    owner_id: uuid.UUID
     created_by: uuid.UUID
     created_by_name: str = ""
     created_at: datetime

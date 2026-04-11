@@ -65,7 +65,8 @@ export const dataProvider: DataProvider = {
   },
 
   update: async ({ resource, id, variables }) => {
-    const { data } = await axiosInstance.put(`${API_URL}/${resource}/${id}`, variables);
+    const method = resource === "exams" ? axiosInstance.patch : axiosInstance.put;
+    const { data } = await method(`${API_URL}/${resource}/${id}`, variables);
     return { data };
   },
 
