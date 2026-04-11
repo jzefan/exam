@@ -156,7 +156,7 @@ export function Dashboard() {
               loading={loading}
               icon={<Users size={22} className="text-emerald-600 dark:text-emerald-400" />}
               color="bg-emerald-50 dark:bg-emerald-950"
-              onClick={() => navigate("/admin/users")}
+              onClick={() => navigate("/users")}
             />
             <StatCard
               title="岗位数"
@@ -217,7 +217,7 @@ export function Dashboard() {
               title="用户管理"
               description="管理平台所有用户与角色"
               icon={<UserCog size={18} />}
-              onClick={() => navigate("/admin/users")}
+              onClick={() => navigate("/users")}
             />
           ) : (
             <QuickAction

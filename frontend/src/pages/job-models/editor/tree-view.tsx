@@ -97,21 +97,19 @@ export function TreeView({
     return (
       <div key={skillId}>
         <div style={{ marginLeft: `${depth * 24}px` }}>
-          <TreeNode
-            id={skillId}
-            type="skill"
-            name={skill.name}
-            level={skill.level}
+        <TreeNode
+          id={skillId}
+          type="skill"
+          name={skill.name}
+          level={skill.level}
             depth={depth}
             isExpanded={isExpanded}
-            childCount={kpCount}
-            onToggleExpand={() => toggleExpanded(skillId)}
-            onSelect={(e) =>
-              handleNodeSelect(skillId, (e as any).ctrlKey || (e as any).metaKey)
-            }
-            onDelete={() => handleNodeDelete(skillId)}
-            onNameChange={(name) => handleNodeNameChange(skillId, name)}
-            onLevelChange={(level) => onNodeLevelChange?.(skillId, level)}
+          childCount={kpCount}
+          onToggleExpand={() => toggleExpanded(skillId)}
+          onSelect={() => handleNodeSelect(skillId)}
+          onDelete={() => handleNodeDelete(skillId)}
+          onNameChange={(name) => handleNodeNameChange(skillId, name)}
+          onLevelChange={(level) => onNodeLevelChange?.(skillId, level)}
             onAddChild={() => { expandNode(skillId); onAddNode?.("kp", skillId) }}
             isDragHandle
           />

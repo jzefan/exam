@@ -1,3 +1,4 @@
+import { usePermissions } from "@refinedev/core";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Plus, Upload, Search, FileSpreadsheet, X, Info, Users, CheckCircle2, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -46,6 +47,7 @@ interface Student {
   is_active: boolean;
   class_id: string | null;
   class_name: string | null;
+  owner_teacher_id: string | null;
 }
 
 interface ImportResult {
@@ -55,6 +57,7 @@ interface ImportResult {
 }
 
 export default function StudentManagementPage() {
+  const { data: role } = usePermissions<string>({});
   const [students, setStudents] = useState<Student[]>([]);
   const [classes, setClasses] = useState<ClassItem[]>([]);
   const [selectedClassId, setSelectedClassId] = useState<string | "all">("all");
@@ -209,6 +212,7 @@ export default function StudentManagementPage() {
       s.phone.includes(searchTerm) ||
       (s.student_id && s.student_id.includes(searchTerm))
   );
+  const showOwnershipColumn = role === "platform_admin";
 
   return (
     <div className="flex h-full min-h-0 gap-0 overflow-hidden">
@@ -294,14 +298,15 @@ export default function StudentManagementPage() {
                   <TableHead>手机号 (账号)</TableHead>
                   <TableHead>学号</TableHead>
                   <TableHead>班级</TableHead>
+                  {showOwnershipColumn && <TableHead>归属</TableHead>}
                   <TableHead className="w-[80px]">状态</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading ? (
-                  <TableRow><TableCell colSpan={5} className="text-center py-12 text-muted-foreground animate-pulse">正在加载...</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={showOwnershipColumn ? 6 : 5} className="text-center py-12 text-muted-foreground animate-pulse">正在加载...</TableCell></TableRow>
                 ) : filteredStudents.length === 0 ? (
-                  <TableRow><TableCell colSpan={5} className="text-center py-12 text-muted-foreground">未找到匹配的学生。</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={showOwnershipColumn ? 6 : 5} className="text-center py-12 text-muted-foreground">未找到匹配的学生。</TableCell></TableRow>
                 ) : (
                   filteredStudents.map((student) => (
                     <TableRow key={student.id}>
@@ -313,6 +318,20 @@ export default function StudentManagementPage() {
                           {student.class_name || "未分配"}
                         </span>
                       </TableCell>
+                      {showOwnershipColumn && (
+                        <TableCell>
+                          <span
+                            className={cn(
+                              "inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[10px] font-medium",
+                              student.owner_teacher_id === null
+                                ? "bg-muted text-muted-foreground"
+                                : "bg-emerald-50 text-emerald-700"
+                            )}
+                          >
+                            {student.owner_teacher_id === null ? "未分配" : "我的学生"}
+                          </span>
+                        </TableCell>
+                      )}
                       <TableCell>
                         <span className={cn("h-2 w-2 rounded-full inline-block", student.is_active ? "bg-emerald-500" : "bg-rose-500")} />
                       </TableCell>

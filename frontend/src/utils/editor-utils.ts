@@ -2,8 +2,7 @@ export type NodeType = "dimension" | "skill" | "kp"
 
 export function getEndpointForNodeType(
   nodeType: NodeType,
-  modelId: string,
-  nodeId: string
+  modelId: string
 ): string {
   const endpoints: Record<NodeType, string> = {
     dimension: `job-models/models/${modelId}/dimensions`,

@@ -7,8 +7,10 @@ from app.auth.dependencies import CurrentUser, user_has_role
 from app.database import get_db
 from app.rbac.schemas import StudentCreate, StudentRead, ClassCreate, ClassResponse, BatchImportResponse
 from app.rbac.service import (
+    create_or_link_student,
     create_student, 
     list_org_students, 
+    list_teacher_classes,
     list_teacher_students,
     get_user_primary_org, 
     create_class, 
@@ -33,27 +35,40 @@ async def is_student_admin(db: AsyncSession, user: CurrentUser) -> bool:
 @router.get("/classes", response_model=list[ClassResponse])
 async def list_classes(
     db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
     org_id: Annotated[uuid.UUID, Depends(get_teacher_org_id)]
 ):
-    classes = await list_org_classes(db, org_id)
+    if await is_student_admin(db, user):
+        classes = await list_org_classes(db, org_id)
+    else:
+        classes = await list_teacher_classes(db, org_id, user.id)
     return [ClassResponse.model_validate(c) for c in classes]
 
 @router.post("/classes", response_model=ClassResponse, status_code=status.HTTP_201_CREATED)
 async def add_class(
     body: ClassCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
     org_id: Annotated[uuid.UUID, Depends(get_teacher_org_id)]
 ):
-    cls = await create_class(db, org_id, body)
+    cls = await create_class(db, org_id, body, created_by=None if await is_student_admin(db, user) else user.id)
     return ClassResponse.model_validate(cls)
 
 @router.delete("/classes/{class_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def remove_class(
     class_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
     _org_id: Annotated[uuid.UUID, Depends(get_teacher_org_id)]
 ):
-    await delete_class(db, class_id)
+    try:
+        await delete_class(
+            db,
+            class_id,
+            allowed_creator_id=None if await is_student_admin(db, user) else user.id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
 # --- Student Routes ---
 
@@ -67,7 +82,7 @@ async def list_students(
     if await is_student_admin(db, user):
         students = await list_org_students(db, org_id, class_id)
     else:
-        students = await list_teacher_students(db, user.id, class_id)
+        students = await list_teacher_students(db, org_id, user.id, class_id)
     result = []
     for s in students:
         item = StudentRead.model_validate(s)
@@ -83,9 +98,15 @@ async def add_student(
     org_id: Annotated[uuid.UUID, Depends(get_teacher_org_id)]
 ):
     try:
-        owner_teacher_id = None if await is_student_admin(db, user) else user.id
-        student = await create_student(db, org_id, body, owner_teacher_id=owner_teacher_id)
+        if await is_student_admin(db, user):
+            student = await create_student(db, org_id, body, owner_teacher_id=None)
+        else:
+            student, linked, created = await create_or_link_student(db, org_id, body, user.id)
+            if not created and not linked:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该学生已在当前教师名下")
         return StudentRead.model_validate(student)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -99,20 +120,18 @@ async def batch_add_students(
     success_count = 0
     failed_count = 0
     errors = []
+    student_admin = await is_student_admin(db, user)
     
     for item in body:
         try:
-            # Check for existing phone to provide better error messages
-            from sqlalchemy import select
-            from app.auth.models import User
-            result = await db.execute(select(User).where(User.phone == item.phone, User.deleted_at.is_(None)))
-            if result.scalar_one_or_none():
-                failed_count += 1
-                errors.append(f"{item.full_name}: 手机号 {item.phone} 已存在")
-                continue
-
-            owner_teacher_id = None if await is_student_admin(db, user) else user.id
-            await create_student(db, org_id, item, owner_teacher_id=owner_teacher_id)
+            if student_admin:
+                await create_student(db, org_id, item, owner_teacher_id=None)
+            else:
+                _student, linked, created = await create_or_link_student(db, org_id, item, user.id)
+                if not created and not linked:
+                    failed_count += 1
+                    errors.append(f"{item.full_name}: 该学生已在当前教师名下")
+                    continue
             success_count += 1
         except Exception as e:
             failed_count += 1

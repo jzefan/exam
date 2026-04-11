@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser
 from app.database import get_db
-from app.rbac.models import UserOrganization, Role
+from app.rbac.models import UserOrganization, Role, TeacherStudent
 from app.rbac.service import get_user_primary_org
 from app.grading.models import GradingTask
 from app.auth.models import User
@@ -68,8 +68,8 @@ async def get_dashboard_stats(
             ))
             stats.pending_grading = pending_res.scalar_one()
 
-        # 2. 统计本机构下的学生总数
-        # 简化查询：直接从 UserOrganization 统计，确保只要关联了 student 角色就计入
+        # 2. 统计学生总数
+        # 教师只看自己名下学生；管理员继续看本机构全部学生。
         student_count_query = (
             select(func.count(UserOrganization.user_id.distinct()))
             .join(Role, Role.id == UserOrganization.role_id)
@@ -77,9 +77,15 @@ async def get_dashboard_stats(
             .where(
                 UserOrganization.org_id == org_id,
                 Role.name == "student",
-                User.deleted_at.is_(None)
+                User.deleted_at.is_(None),
             )
         )
+        if role_name == "teacher":
+            student_count_query = (
+                student_count_query
+                .join(TeacherStudent, TeacherStudent.student_id == User.id)
+                .where(TeacherStudent.teacher_id == user.id)
+            )
         student_res = await db.execute(student_count_query)
         stats.total_students = student_res.scalar_one() or 0
         

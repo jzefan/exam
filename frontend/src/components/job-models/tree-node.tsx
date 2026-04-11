@@ -62,7 +62,6 @@ export function TreeNode({
   level,
   difficulty,
   childCount = 0,
-  depth,
   isExpanded,
   onToggleExpand,
   onSelect,

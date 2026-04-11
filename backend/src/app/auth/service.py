@@ -1,12 +1,12 @@
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import User
 from app.auth.schemas import UserCreate, UserOrgInfo, UserResponse, UserUpdate
 from app.auth.security import hash_password, verify_password
-from app.rbac.models import UserOrganization
+from app.rbac.models import TeacherStudent, UserOrganization
 
 
 async def create_user(db: AsyncSession, data: UserCreate) -> User:
@@ -17,6 +17,7 @@ async def create_user(db: AsyncSession, data: UserCreate) -> User:
         email=data.email,
         password_hash=hash_password(data.password),
         full_name=data.full_name,
+        owner_teacher_id=data.owner_teacher_id,
     )
     db.add(user)
     await db.flush()
@@ -114,6 +115,37 @@ async def build_user_response(db: AsyncSession, user: User) -> UserResponse:
         if m.is_primary:
             primary_org = info
 
+    primary_role_name = primary_org.role_name if primary_org else ""
+    if primary_role_name == "platform_admin":
+        system_domain = "platform"
+    elif primary_role_name in {"teacher", "student"}:
+        system_domain = "exam"
+    else:
+        system_domain = "job_model"
+
+    teacher_rows = (
+        await db.execute(
+            select(User.id, User.full_name)
+            .join(TeacherStudent, TeacherStudent.teacher_id == User.id)
+            .where(TeacherStudent.student_id == user.id, User.deleted_at.is_(None))
+            .order_by(TeacherStudent.created_at, User.full_name)
+        )
+    ).all()
+    teacher_ids = [row[0] for row in teacher_rows]
+    teacher_names = [row[1] for row in teacher_rows]
+    owner_teacher_id = teacher_ids[0] if teacher_ids else user.owner_teacher_id
+    owner_teacher_name = teacher_names[0] if teacher_names else None
+
+    managed_student_count = 0
+    if primary_role_name == "teacher":
+        managed_student_count = (
+            await db.execute(
+                select(func.count(TeacherStudent.student_id.distinct())).where(
+                    TeacherStudent.teacher_id == user.id,
+                )
+            )
+        ).scalar_one()
+
     return UserResponse(
         id=user.id,
         username=user.username,
@@ -122,6 +154,12 @@ async def build_user_response(db: AsyncSession, user: User) -> UserResponse:
         is_active=user.is_active,
         primary_org=primary_org,
         organizations=org_infos,
+        system_domain=system_domain,
+        owner_teacher_id=owner_teacher_id,
+        owner_teacher_name=owner_teacher_name,
+        teacher_ids=teacher_ids,
+        teacher_names=teacher_names,
+        managed_student_count=managed_student_count,
         created_at=user.created_at,
         updated_at=user.updated_at,
     )

@@ -2,7 +2,6 @@ import { Bot, CheckCircle2, RotateCcw, SkipForward } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -12,9 +11,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { RichContent } from "@/components/ui/rich-content";
 import type { QuestionType } from "@/types";
 import type { QuestionImportDraft } from "../import-types";
-import { getReviewStatusLabel } from "../import-utils";
+import { getQuestionTypeLabel, getReviewStatusLabel, importTextToHtml } from "../import-utils";
 
 const typeOptions: Array<{ value: QuestionType; label: string }> = [
   { value: "choice", label: "选择题" },
@@ -51,13 +51,11 @@ export function ImportReviewEditor({
   const optionEntries = Object.entries(draft.options ?? {});
 
   return (
-    <section className="min-h-[560px] rounded-xl border border-border bg-card p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4">
+    <section className="min-h-full rounded-2xl border border-border bg-card p-4 shadow-sm">
+      <div className="sticky top-0 z-10 -mx-4 -mt-4 flex flex-wrap items-center justify-between gap-3 border-b border-border bg-card/95 px-4 py-4 backdrop-blur">
         <div className="flex flex-wrap items-center gap-2">
           <Badge>{getReviewStatusLabel(draft.review_status)}</Badge>
-          <Badge variant="outline">{draft.segment_source}</Badge>
-          <Badge variant="secondary">题型置信度 {draft.type_confidence}</Badge>
-          <Badge variant="secondary">边界置信度 {draft.boundary_confidence}</Badge>
+          <Badge variant="outline">{getQuestionTypeLabel(draft.type)}</Badge>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button type="button" size="sm" variant="outline" disabled={isRecognizing} onClick={onReRecognize}>
@@ -75,8 +73,8 @@ export function ImportReviewEditor({
         </div>
       </div>
 
-      <div className="grid gap-4 py-4 md:grid-cols-[180px_minmax(0,1fr)]">
-        <div className="space-y-2">
+      <div className="py-4">
+        <div className="max-w-[220px] space-y-2">
           <Label>题型</Label>
           <Select value={draft.type} onValueChange={(value) => onChange({ type: value as QuestionType })}>
             <SelectTrigger>
@@ -91,10 +89,6 @@ export function ImportReviewEditor({
             </SelectContent>
           </Select>
         </div>
-        <div className="space-y-2">
-          <Label>标题</Label>
-          <Input value={draft.title} onChange={(event) => onChange({ title: event.target.value })} />
-        </div>
       </div>
 
       <div className="space-y-4">
@@ -105,6 +99,12 @@ export function ImportReviewEditor({
             value={draft.content_text}
             onChange={(event) => onChange({ content_text: event.target.value })}
           />
+          {/<img\s/i.test(draft.content_text) ? (
+            <div className="rounded-lg border border-border bg-muted/20 p-3">
+              <p className="mb-2 text-xs font-medium text-muted-foreground">图片预览</p>
+              <RichContent html={importTextToHtml(draft.content_text)} />
+            </div>
+          ) : null}
         </div>
 
         {draft.type === "choice" ? (

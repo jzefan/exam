@@ -60,7 +60,7 @@ function authHeaders(): HeadersInit {
 }
 
 export function EditorPage() {
-  const { projectId, modelId } = useParams<{ projectId: string; modelId: string }>()
+  const { modelId } = useParams<{ projectId: string; modelId: string }>()
   const navigate = useNavigate()
   const { toast } = useToast()
 

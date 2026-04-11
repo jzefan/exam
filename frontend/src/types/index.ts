@@ -10,6 +10,12 @@ export interface IUser {
   is_active: boolean;
   primary_org: IUserOrgInfo | null;
   organizations: IUserOrgInfo[];
+  system_domain: "platform" | "exam" | "job_model";
+  owner_teacher_id: string | null;
+  owner_teacher_name: string | null;
+  teacher_ids: string[];
+  teacher_names: string[];
+  managed_student_count: number;
   created_at: string;
   updated_at: string;
 }
@@ -229,6 +235,29 @@ export interface IStudentNotification {
   related_exam_id: string | null;
   read_at: string | null;
   created_at: string;
+}
+
+export interface IWrongAnswerFeedback {
+  strengths?: string[];
+  deductions?: string[];
+  suggestions?: string[];
+}
+
+export interface IWrongAnswerDetail {
+  id: string;
+  question_id: string;
+  question_title: string;
+  question_type: string;
+  exam_title: string;
+  wrong_count: number;
+  last_wrong_at: string;
+  tags: string[];
+  mastered: boolean;
+  question_content: Record<string, unknown>;
+  standard_answer: Record<string, unknown>;
+  analysis: string | null;
+  student_answer: Record<string, unknown>;
+  feedback: IWrongAnswerFeedback;
 }
 
 export interface IAppealResponse {

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import axios from "axios";
-import { useOne } from "@refinedev/core";
+import { useOne, useInvalidate } from "@refinedev/core";
 import { ArrowLeft, CheckCircle2, CircleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { IWrongAnswerDetail } from "@/types";
@@ -20,6 +20,7 @@ export function WrongAnswerDetailPage() {
   const locale = getStudentLocale();
   const { id } = useParams<{ id: string }>();
   const [mastered, setMastered] = useState(false);
+  const invalidate = useInvalidate();
 
   const { query } = useOne<IWrongAnswerDetail>({
     resource: "wrong-answers",
@@ -33,6 +34,10 @@ export function WrongAnswerDetailPage() {
     if (!id) return;
     await api.post(`/api/wrong-answers/${id}/mastered`);
     setMastered(true);
+    invalidate({
+      resource: "wrong-answers",
+      invalidates: ["list"],
+    });
   };
 
   if (query.isLoading) {
@@ -121,13 +126,13 @@ export function WrongAnswerDetailPage() {
       <section className="rounded-2xl border border-[#ebe3f4] bg-white/90 p-6">
         <h2 className="text-[16px] font-semibold">{tStudent("wrong_detail_feedback", undefined, locale)}</h2>
         <div className="mt-4 space-y-3">
-          {item.feedback.strengths?.map((line) => (
+          {item.feedback.strengths?.map((line: string) => (
             <div key={line} className="flex items-start gap-2 text-[14px] text-emerald-700">
               <CheckCircle2 size={16} className="mt-0.5 shrink-0" />
               <span>{line}</span>
             </div>
           ))}
-          {item.feedback.deductions?.map((line) => (
+          {item.feedback.deductions?.map((line: string) => (
             <div key={line} className="flex items-start gap-2 text-[14px] text-amber-700">
               <CircleAlert size={16} className="mt-0.5 shrink-0" />
               <span>{line}</span>

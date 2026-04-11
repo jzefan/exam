@@ -1,5 +1,7 @@
-import React, { ReactElement } from 'react'
-import { render, RenderOptions } from '@testing-library/react'
+import React from 'react'
+import { render } from '@testing-library/react'
+import type { ReactElement } from 'react'
+import type { RenderOptions } from '@testing-library/react'
 
 // Mock Refine provider if needed
 const AllTheProviders = ({ children }: { children: React.ReactNode }) => {

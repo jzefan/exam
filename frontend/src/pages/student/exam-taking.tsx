@@ -185,7 +185,7 @@ export function ExamTaking() {
       if (gradingStatus === "pending_ai") {
         setSubmitStatusMessage("主观题已提交，正在等待 AI 评分...");
         setTimeout(() => navigate("/my-exams"), 1500);
-      } else if (gradingStatus === "reviewed") {
+      } else if (gradingStatus === "reviewed" && examData) {
         setSubmitStatusMessage("考试已提交，正在打开考试结果...");
         setTimeout(() => navigate(`/my-exams/${examData.exam_id}/result`), 1200);
       } else {
@@ -606,7 +606,7 @@ export function ExamTaking() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>继续答题</AlertDialogCancel>
-            <AlertDialogAction onClick={handleSubmit}>
+            <AlertDialogAction onClick={() => void handleSubmit()}>
               确认交卷
             </AlertDialogAction>
           </AlertDialogFooter>

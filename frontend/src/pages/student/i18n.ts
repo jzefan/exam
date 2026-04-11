@@ -67,11 +67,15 @@ type StudentMessageKey =
   | "my_exams_completed_at"
   | "my_exams_grading"
   | "wrong_answers_title"
+  | "wrong_answers_tab_to_review"
+  | "wrong_answers_tab_mastered"
   | "wrong_answers_summary"
+  | "wrong_answers_mastered_summary"
   | "wrong_answers_empty"
   | "wrong_answers_empty_desc"
   | "wrong_answers_wrong_times"
   | "wrong_answers_date"
+  | "wrong_answers_mastered_at"
   | "wrong_answers_id"
   | "question_type_choice"
   | "question_type_true_false"
@@ -213,11 +217,15 @@ const STUDENT_DICTIONARY: Record<StudentLocale, Record<StudentMessageKey, string
     my_exams_completed_at: "完成于 {time}",
     my_exams_grading: "阅卷中",
     wrong_answers_title: "错题复习",
+    wrong_answers_tab_to_review: "未掌握",
+    wrong_answers_tab_mastered: "已掌握",
     wrong_answers_summary: "系统已为你自动收录 {count} 处知识盲点，建议定期回顾。",
+    wrong_answers_mastered_summary: "你已掌握 {count} 个薄弱知识点，继续保持。",
     wrong_answers_empty: "暂无错题记录",
     wrong_answers_empty_desc: "恭喜！你在考试中表现优异，继续保持。",
     wrong_answers_wrong_times: "错误 {count} 次",
     wrong_answers_date: "{date}",
+    wrong_answers_mastered_at: "掌握于 {date}",
     wrong_answers_id: "ID: {id}",
     question_type_choice: "选择题",
     question_type_true_false: "判断题",
@@ -358,11 +366,15 @@ const STUDENT_DICTIONARY: Record<StudentLocale, Record<StudentMessageKey, string
     my_exams_completed_at: "Completed at {time}",
     my_exams_grading: "Grading",
     wrong_answers_title: "Wrong Answers",
+    wrong_answers_tab_to_review: "To Review",
+    wrong_answers_tab_mastered: "Mastered",
     wrong_answers_summary: "{count} weak spots have been collected for review.",
+    wrong_answers_mastered_summary: "You've mastered {count} weak points. Keep it up!",
     wrong_answers_empty: "No wrong answers yet",
     wrong_answers_empty_desc: "Nice work. Keep up the strong performance.",
     wrong_answers_wrong_times: "{count} mistakes",
     wrong_answers_date: "{date}",
+    wrong_answers_mastered_at: "Mastered at {date}",
     wrong_answers_id: "ID: {id}",
     question_type_choice: "Choice",
     question_type_true_false: "True/False",

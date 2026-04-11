@@ -18,13 +18,13 @@ import { useEditor } from "./context"
 interface KnowledgePoint {
   id: string
   name: string
-  difficulty?: string
+  difficulty?: string | null
 }
 
 interface Skill {
   id: string
   name: string
-  level?: string
+  level?: string | null
   knowledge_points?: KnowledgePoint[]
 }
 

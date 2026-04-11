@@ -9,7 +9,7 @@ from typing import Any, cast
 from urllib.parse import quote
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import User
@@ -144,13 +144,48 @@ def build_flow_data(nodes: list[dict[str, Any]], prereqs: list[dict[str, str]]) 
     return {"nodes": flow_nodes, "edges": flow_edges}
 
 
-async def list_majors(db: AsyncSession) -> list[Major]:
-    result = await db.execute(select(Major).where(Major.deleted_at.is_(None)).order_by(Major.name))
+async def list_majors(
+    db: AsyncSession,
+    *,
+    user: User | None = None,
+    is_platform_admin: bool = True,
+) -> list[Major]:
+    stmt = select(Major).where(Major.deleted_at.is_(None))
+    if not is_platform_admin and user is not None:
+        stmt = (
+            stmt
+            .join(Direction, Direction.major_id == Major.id)
+            .join(KnowledgePoint, KnowledgePoint.direction_id == Direction.id)
+            .where(
+                Direction.deleted_at.is_(None),
+                teacher_visible_resource_filter(KnowledgePoint, user.id),
+            )
+            .distinct()
+        )
+    result = await db.execute(stmt.order_by(Major.name))
     return list(result.scalars().all())
 
 
-async def get_major(db: AsyncSession, major_id: uuid.UUID) -> Major | None:
-    result = await db.execute(select(Major).where(Major.id == major_id, Major.deleted_at.is_(None)))
+async def get_major(
+    db: AsyncSession,
+    major_id: uuid.UUID,
+    *,
+    user: User | None = None,
+    is_platform_admin: bool = True,
+) -> Major | None:
+    stmt = select(Major).where(Major.id == major_id, Major.deleted_at.is_(None))
+    if not is_platform_admin and user is not None:
+        stmt = (
+            stmt
+            .join(Direction, Direction.major_id == Major.id)
+            .join(KnowledgePoint, KnowledgePoint.direction_id == Direction.id)
+            .where(
+                Direction.deleted_at.is_(None),
+                teacher_visible_resource_filter(KnowledgePoint, user.id),
+            )
+            .distinct()
+        )
+    result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
 
@@ -175,15 +210,41 @@ async def soft_delete_major(db: AsyncSession, major: Major) -> None:
     await db.commit()
 
 
-async def list_directions(db: AsyncSession, major_id: uuid.UUID) -> list[Direction]:
-    result = await db.execute(
-        select(Direction).where(Direction.major_id == major_id, Direction.deleted_at.is_(None)).order_by(Direction.name)
-    )
+async def list_directions(
+    db: AsyncSession,
+    major_id: uuid.UUID,
+    *,
+    user: User | None = None,
+    is_platform_admin: bool = True,
+) -> list[Direction]:
+    stmt = select(Direction).where(Direction.major_id == major_id, Direction.deleted_at.is_(None))
+    if not is_platform_admin and user is not None:
+        stmt = (
+            stmt
+            .join(KnowledgePoint, KnowledgePoint.direction_id == Direction.id)
+            .where(teacher_visible_resource_filter(KnowledgePoint, user.id))
+            .distinct()
+        )
+    result = await db.execute(stmt.order_by(Direction.name))
     return list(result.scalars().all())
 
 
-async def get_direction(db: AsyncSession, direction_id: uuid.UUID) -> Direction | None:
-    result = await db.execute(select(Direction).where(Direction.id == direction_id, Direction.deleted_at.is_(None)))
+async def get_direction(
+    db: AsyncSession,
+    direction_id: uuid.UUID,
+    *,
+    user: User | None = None,
+    is_platform_admin: bool = True,
+) -> Direction | None:
+    stmt = select(Direction).where(Direction.id == direction_id, Direction.deleted_at.is_(None))
+    if not is_platform_admin and user is not None:
+        stmt = (
+            stmt
+            .join(KnowledgePoint, KnowledgePoint.direction_id == Direction.id)
+            .where(teacher_visible_resource_filter(KnowledgePoint, user.id))
+            .distinct()
+        )
+    result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
 

@@ -26,6 +26,7 @@ import { Dashboard } from "./pages/dashboard";
 import { KnowledgeManagementPage } from "./pages/knowledge";
 import { MyExams } from "./pages/student/my-exams";
 import { WrongAnswers } from "./pages/student/wrong-answers";
+import { WrongAnswerDetailPage } from "./pages/student/wrong-answer-detail";
 import { StudentDashboard } from "./pages/student/dashboard";
 import { ExamResultPage } from "./pages/student/exam-result";
 import { TagList } from "./pages/tags/list";
@@ -143,6 +144,7 @@ function App() {
                 <Route path="/my-exams" element={<MyExams />} />
                 <Route path="/my-exams/:id/result" element={<ExamResultPage />} />
                 <Route path="/wrong-answers" element={<WrongAnswers />} />
+                <Route path="/wrong-answers/:id" element={<WrongAnswerDetailPage />} />
               </Route>
             </Route>
 

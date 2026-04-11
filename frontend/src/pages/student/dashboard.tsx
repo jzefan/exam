@@ -46,16 +46,6 @@ interface IMyExam {
   submitted_at: string | null;
 }
 
-function formatDate(iso: string | null): string {
-  const locale = getStudentLocale();
-  if (!iso) return tStudent("common_tbd", undefined, locale);
-  return new Date(iso).toLocaleString(getStudentDateLocale(locale), {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-}
-
 function formatTimeRange(start: string | null, end: string | null): string {
   const locale = getStudentLocale();
   if (!start) return tStudent("common_time_tbd", undefined, locale);

@@ -103,6 +103,64 @@ async def test_teacher_sees_own_and_platform_knowledge_points_only(
 
 
 @pytest.mark.asyncio
+async def test_teacher_only_sees_majors_and_directions_with_visible_knowledge_points(
+    client: AsyncClient, db_session
+) -> None:
+    org = await _create_org_with_teacher_role(db_session)
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-kp-structure",
+        email="teacher-kp-structure@example.com",
+        full_name="Teacher KP Structure",
+    )
+    other_teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-kp-structure-other",
+        email="teacher-kp-structure-other@example.com",
+        full_name="Teacher KP Structure Other",
+    )
+
+    visible_major = Major(name="Visible Major", description=None)
+    hidden_major = Major(name="Hidden Major", description=None)
+    visible_direction = Direction(name="Visible Direction", description=None, major=visible_major)
+    hidden_direction = Direction(name="Hidden Direction", description=None, major=hidden_major)
+    db_session.add_all([visible_major, hidden_major, visible_direction, hidden_direction])
+    await db_session.flush()
+
+    db_session.add_all([
+        KnowledgePoint(
+            name="Visible Knowledge",
+            direction_id=visible_direction.id,
+            owner_id=teacher.id,
+            visibility=VisibilityScope.PRIVATE,
+        ),
+        KnowledgePoint(
+            name="Hidden Knowledge",
+            direction_id=hidden_direction.id,
+            owner_id=other_teacher.id,
+            visibility=VisibilityScope.PRIVATE,
+        ),
+    ])
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    majors_response = await client.get("/api/knowledge/majors")
+    directions_response = await client.get(f"/api/knowledge/majors/{visible_major.id}/directions")
+    hidden_directions_response = await client.get(f"/api/knowledge/majors/{hidden_major.id}/directions")
+    hidden_tree_response = await client.get(f"/api/knowledge/directions/{hidden_direction.id}/tree")
+
+    assert majors_response.status_code == 200
+    assert [item["name"] for item in majors_response.json()] == ["Visible Major"]
+    assert directions_response.status_code == 200
+    assert [item["name"] for item in directions_response.json()] == ["Visible Direction"]
+    assert hidden_directions_response.status_code == 200
+    assert hidden_directions_response.json() == []
+    assert hidden_tree_response.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_teacher_created_knowledge_points_are_owned_and_private(
     client: AsyncClient, db_session
 ) -> None:

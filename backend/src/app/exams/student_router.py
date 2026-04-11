@@ -820,18 +820,25 @@ async def list_wrong_answers(
     user: CurrentUser,
     question_type: Annotated[str | None, Query(alias="question_type")] = None,
     tag: str | None = None,
+    mastered: bool = False,
 ) -> list[WrongAnswerListItem]:
-    result = await db.execute(
+    query = (
         select(StudentQuestionProgress, Question, Exam)
         .join(Question, Question.id == StudentQuestionProgress.question_id)
         .outerjoin(Exam, Exam.id == StudentQuestionProgress.last_exam_id)
         .where(
             StudentQuestionProgress.student_id == user.id,
             StudentQuestionProgress.wrong_count > 0,
-            StudentQuestionProgress.mastered.is_(False),
+            StudentQuestionProgress.mastered.is_(mastered),
         )
-        .order_by(StudentQuestionProgress.last_wrong_at.desc())
     )
+
+    if mastered:
+        query = query.order_by(StudentQuestionProgress.mastered_at.desc())
+    else:
+        query = query.order_by(StudentQuestionProgress.last_wrong_at.desc())
+
+    result = await db.execute(query)
 
     items: list[WrongAnswerListItem] = []
     for progress, question, exam in result.all():
@@ -849,6 +856,7 @@ async def list_wrong_answers(
                 exam_title=exam.title if exam else "历史考试",
                 wrong_count=progress.wrong_count,
                 last_wrong_at=progress.last_wrong_at or progress.updated_at,
+                mastered_at=progress.mastered_at,
                 tags=tag_names,
                 mastered=progress.mastered,
             )

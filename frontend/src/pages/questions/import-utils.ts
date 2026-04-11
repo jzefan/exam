@@ -30,16 +30,25 @@ export async function extractQuestionImportText(file: File): Promise<string> {
   const format = detectQuestionImportFormat(file.name);
 
   if (format === "md") {
-    return file.text();
+    return normalizeMarkdownImages(await file.text());
   }
 
   if (format === "docx") {
     const mammoth = await import("mammoth");
-    const result = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
-    return result.value;
+    const result = await mammoth.convertToHtml(
+      { arrayBuffer: await file.arrayBuffer() },
+      {
+        convertImage: mammoth.images.imgElement(async (image) => {
+          const base64 = await image.readAsBase64String();
+          const url = await uploadImportedImage(base64, image.contentType);
+          return { src: url };
+        }),
+      },
+    );
+    return htmlToImportText(result.value);
   }
 
-  const [{ getDocument, GlobalWorkerOptions }, { default: pdfWorker }] = await Promise.all([
+  const [{ getDocument, GlobalWorkerOptions, OPS }, { default: pdfWorker }] = await Promise.all([
     import("pdfjs-dist"),
     import("pdfjs-dist/build/pdf.worker.min.mjs?url"),
   ]);
@@ -49,9 +58,75 @@ export async function extractQuestionImportText(file: File): Promise<string> {
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
     const text = await page.getTextContent();
-    chunks.push(text.items.map((item) => ("str" in item ? item.str : "")).join(" "));
+    const operatorList = await page.getOperatorList();
+    const hasImage = operatorList.fnArray.some(
+      (fn) => fn === OPS.paintImageXObject || fn === OPS.paintInlineImageXObject,
+    );
+    const pageText = text.items.map((item) => ("str" in item ? item.str : "")).join(" ");
+    chunks.push(`${pageText}${hasImage ? `\n[第 ${pageNumber} 页包含图片，请人工核对原文件]` : ""}`);
   }
   return chunks.join("\n");
+}
+
+async function uploadImportedImage(base64: string, contentType: string): Promise<string> {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  const extension = contentType.split("/")[1] || "png";
+  const file = new File([bytes], `question-import-image.${extension}`, { type: contentType });
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch("/api/uploads/image", {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new Error("图片上传失败，请检查文件后重试。");
+  }
+
+  const data = (await response.json()) as { url?: string };
+  if (!data.url) {
+    throw new Error("图片上传失败，请检查文件后重试。");
+  }
+  return data.url;
+}
+
+function normalizeMarkdownImages(markdown: string): string {
+  return markdown.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt: string, src: string) => {
+    return `<img src="${src.trim()}" alt="${alt.trim()}" />`;
+  });
+}
+
+function htmlToImportText(html: string): string {
+  const document = new DOMParser().parseFromString(html, "text/html");
+  const parts: string[] = [];
+
+  document.body.childNodes.forEach((node) => {
+    if (node instanceof HTMLParagraphElement) {
+      const image = node.querySelector("img");
+      const text = node.textContent?.trim() ?? "";
+      if (text) parts.push(text);
+      if (image?.src) {
+        parts.push(`<img src="${image.getAttribute("src") ?? image.src}" alt="${image.getAttribute("alt") ?? ""}" />`);
+      }
+      return;
+    }
+
+    if (node instanceof HTMLImageElement) {
+      parts.push(`<img src="${node.getAttribute("src") ?? node.src}" alt="${node.getAttribute("alt") ?? ""}" />`);
+      return;
+    }
+
+    const text = node.textContent?.trim();
+    if (text) parts.push(text);
+  });
+
+  return parts.join("\n");
 }
 
 function buildAnswerPayload(type: QuestionType, answerText: string | null) {
@@ -70,10 +145,10 @@ export function buildImportableQuestions(drafts: QuestionImportDraft[], question
     .filter((draft) => draft.review_status === "approved")
     .map((draft) => ({
       type: draft.type,
-      title: draft.title || draft.content_text.replace(/\s+/g, " ").slice(0, 120),
+      title: draft.title || generateImportQuestionTitle(draft.content_text),
       content: {
-        text: draft.content_text,
-        html: `<p>${draft.content_text.replace(/\n/g, "<br />")}</p>`,
+        text: stripHtmlForTitle(draft.content_text),
+        html: importTextToHtml(draft.content_text),
       },
       options: draft.type === "choice" ? draft.options : null,
       answer: buildAnswerPayload(draft.type, draft.answer_text),
@@ -84,6 +159,41 @@ export function buildImportableQuestions(drafts: QuestionImportDraft[], question
       knowledge_point_ids: [],
       question_bank_id: questionBankId,
     }));
+}
+
+export function generateImportQuestionTitle(contentText: string): string {
+  const normalized = stripHtmlForTitle(contentText).replace(/\s+/g, " ").trim();
+  return normalized.slice(0, 120) || "未命名题目";
+}
+
+export function importTextToHtml(contentText: string): string {
+  return contentText
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      if (/^<img\s/i.test(line)) {
+        return line;
+      }
+      return `<p>${escapeHtml(line)}</p>`;
+    })
+    .join("");
+}
+
+function stripHtmlForTitle(value: string): string {
+  return value
+    .replace(/<img\b[^>]*>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .trim();
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 export function buildImportSummary(drafts: QuestionImportDraft[]): QuestionImportDocumentSummary {
@@ -109,6 +219,18 @@ export function getConfidenceLabel(confidence: ImportConfidence): string {
   if (confidence === "high") return "高";
   if (confidence === "medium") return "中";
   return "低";
+}
+
+export function getQuestionTypeLabel(type: QuestionType): string {
+  const labels: Record<QuestionType, string> = {
+    choice: "选择题",
+    true_false: "判断题",
+    fill_in: "填空题",
+    short_answer: "简答题",
+    essay: "论述题",
+    code: "编程题",
+  };
+  return labels[type] ?? type;
 }
 
 export function getImportModeLabel(mode: ImportRecognitionMode | null): string {

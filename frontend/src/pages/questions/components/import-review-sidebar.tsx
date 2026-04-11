@@ -1,10 +1,10 @@
-import { AlertCircle, CheckCircle2, Circle, SkipForward } from "lucide-react";
+import { CheckCircle2, Circle, SkipForward } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { ImportFilter, QuestionImportDraft } from "../import-types";
-import { getConfidenceLabel, getReviewStatusLabel } from "../import-utils";
+import { getQuestionTypeLabel, getReviewStatusLabel } from "../import-utils";
 
 const filterOptions: Array<{ value: ImportFilter; label: string }> = [
   { value: "all", label: "全部" },
@@ -46,7 +46,7 @@ export function ImportReviewSidebar({
   const visibleDrafts = filterImportDrafts(drafts, filter);
 
   return (
-    <aside className="flex min-h-[560px] flex-col rounded-xl border border-border bg-card">
+    <aside className="flex h-full min-h-0 flex-col bg-background">
       <div className="space-y-2 border-b border-border p-3">
         <p className="text-xs font-medium text-muted-foreground">筛选</p>
         <div className="flex flex-wrap gap-1.5">
@@ -64,7 +64,7 @@ export function ImportReviewSidebar({
           ))}
         </div>
       </div>
-      <div className="flex-1 space-y-2 overflow-y-auto p-2">
+      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
         {visibleDrafts.length === 0 ? (
           <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
             没有匹配的题目
@@ -81,7 +81,12 @@ export function ImportReviewSidebar({
               onClick={() => onSelect(draft.draft_id)}
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-semibold text-muted-foreground">#{index + 1}</span>
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <span className="text-xs font-semibold text-muted-foreground">#{index + 1}</span>
+                  <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+                    {getQuestionTypeLabel(draft.type)}
+                  </Badge>
+                </div>
                 <span className="flex items-center gap-1 text-xs text-muted-foreground">
                   {getStatusIcon(draft.review_status)}
                   {getReviewStatusLabel(draft.review_status)}
@@ -90,16 +95,6 @@ export function ImportReviewSidebar({
               <p className="mt-2 line-clamp-2 text-sm font-medium text-foreground">
                 {draft.title || draft.content_text || "未命名题目"}
               </p>
-              <div className="mt-2 flex flex-wrap gap-1">
-                <Badge variant="outline">{draft.type}</Badge>
-                <Badge variant="secondary">置信度 {getConfidenceLabel(draft.type_confidence)}</Badge>
-                {draft.issues.length > 0 ? (
-                  <Badge variant="destructive" className="gap-1">
-                    <AlertCircle size={12} />
-                    {draft.issues.length}
-                  </Badge>
-                ) : null}
-              </div>
             </button>
           ))
         )}

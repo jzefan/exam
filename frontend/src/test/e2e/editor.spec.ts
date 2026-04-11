@@ -318,7 +318,6 @@ test.describe('Editor Responsive Design', () => {
     await page.waitForURL('**/editor')
 
     // Tree panel should be hidden on mobile
-    const treePanel = page.locator('[data-testid="tree-panel"]')
     const isHidden = await page.evaluate(() => {
       const el = document.querySelector('[data-testid="tree-panel"]')
       return el ? window.getComputedStyle(el).display === 'none' : false

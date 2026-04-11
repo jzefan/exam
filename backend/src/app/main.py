@@ -30,6 +30,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.ai_pipeline.models import seed_prompt_templates
     from app.database import async_session
     from app.grading.seed import seed_grading_defaults
+    from app.rbac.service import assign_unowned_students_to_single_teacher
     from app.rbac.seed import seed_permissions, seed_roles
 
     async with async_session() as db:
@@ -37,6 +38,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await seed_roles(db)
         await seed_grading_defaults(db)
         await seed_prompt_templates(db)
+        await assign_unowned_students_to_single_teacher(db)
         await db.commit()
     yield
 

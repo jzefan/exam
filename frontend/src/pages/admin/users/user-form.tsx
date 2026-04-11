@@ -24,18 +24,33 @@ export interface UserFormData {
   password: string
   full_name: string
   roles: string[]
+  teacher_ids: string[]
   is_active: boolean
+}
+
+interface TeacherOption {
+  id: string
+  full_name: string
+  username: string
 }
 
 interface UserFormProps {
   mode: "create" | "edit"
   initialData?: Partial<UserFormData>
+  teacherOptions?: TeacherOption[]
   loading: boolean
   onSubmit: (data: UserFormData) => void
   onCancel: () => void
 }
 
-export function UserForm({ mode, initialData, loading, onSubmit, onCancel }: UserFormProps) {
+export function UserForm({
+  mode,
+  initialData,
+  teacherOptions = [],
+  loading,
+  onSubmit,
+  onCancel,
+}: UserFormProps) {
   const [showPassword, setShowPassword] = useState(false)
   const [form, setForm] = useState<UserFormData>({
     username: initialData?.username ?? "",
@@ -43,19 +58,32 @@ export function UserForm({ mode, initialData, loading, onSubmit, onCancel }: Use
     password: "",
     full_name: initialData?.full_name ?? "",
     roles: initialData?.roles ?? [],
+    teacher_ids: initialData?.teacher_ids ?? [],
     is_active: initialData?.is_active ?? true,
   })
+  const isStudent = form.roles.includes("student")
 
-  const updateField = (field: keyof UserFormData, value: string | string[] | boolean) => {
+  const updateField = (field: keyof UserFormData, value: string | string[] | boolean | null) => {
     setForm((prev) => ({ ...prev, [field]: value }))
   }
 
   const toggleRole = (role: string) => {
+    const nextRoles = form.roles.includes(role)
+      ? form.roles.filter((r) => r !== role)
+      : [...form.roles, role]
     setForm((prev) => ({
       ...prev,
-      roles: prev.roles.includes(role)
-        ? prev.roles.filter((r) => r !== role)
-        : [...prev.roles, role],
+      roles: nextRoles,
+      teacher_ids: nextRoles.includes("student") ? prev.teacher_ids : [],
+    }))
+  }
+
+  const toggleTeacher = (teacherId: string) => {
+    setForm((prev) => ({
+      ...prev,
+      teacher_ids: prev.teacher_ids.includes(teacherId)
+        ? prev.teacher_ids.filter((id) => id !== teacherId)
+        : [...prev.teacher_ids, teacherId],
     }))
   }
 
@@ -130,6 +158,33 @@ export function UserForm({ mode, initialData, loading, onSubmit, onCancel }: Use
               点击选择一个或多个角色，角色决定用户在系统中的访问权限。
             </p>
           </div>
+
+          {isStudent && (
+            <div className="space-y-1.5">
+              <Label>关联教师</Label>
+              <div className="flex flex-wrap gap-2 rounded-md border border-input bg-background p-3">
+                {teacherOptions.map((teacher) => (
+                  <Badge
+                    key={teacher.id}
+                    variant={form.teacher_ids.includes(teacher.id) ? "default" : "outline"}
+                    className={cn(
+                      "cursor-pointer select-none transition-colors px-3 py-1.5 text-sm",
+                      form.teacher_ids.includes(teacher.id) ? "" : "hover:bg-accent",
+                    )}
+                    onClick={() => toggleTeacher(teacher.id)}
+                  >
+                    {teacher.full_name} @{teacher.username}
+                  </Badge>
+                ))}
+                {teacherOptions.length === 0 && (
+                  <p className="text-sm text-muted-foreground">暂无可关联教师</p>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                学生账号可同时关联多个教师；教师之间不会共享彼此创建的考试和成绩数据。
+              </p>
+            </div>
+          )}
 
           <div className="space-y-1.5">
             <Label>姓名</Label>

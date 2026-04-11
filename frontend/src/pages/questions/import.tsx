@@ -1,11 +1,10 @@
 import { useList } from "@refinedev/core";
 import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, FileUp, LoaderCircle, Upload } from "lucide-react";
+import { AlertCircle, ArrowLeft, FileText, FileUp, LoaderCircle, Upload } from "lucide-react";
 
 import type { IQuestionBank } from "@/types";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -19,7 +18,6 @@ import { cn } from "@/lib/utils";
 import { ImportReviewEditor } from "./components/import-review-editor";
 import { ImportReviewSidebar } from "./components/import-review-sidebar";
 import { ImportSummaryBar } from "./components/import-summary-bar";
-import { ImportTemplateHelp } from "./components/import-template-help";
 import type {
   ImportFilter,
   ImportRecognitionMode,
@@ -32,6 +30,7 @@ import {
   detectQuestionImportFormat,
   emptyImportSummary,
   extractQuestionImportText,
+  generateImportQuestionTitle,
 } from "./import-utils";
 
 async function questionApiFetch<T>(url: string, options?: RequestInit): Promise<T> {
@@ -82,6 +81,15 @@ export function QuestionImportPage() {
   );
   const summary = drafts.length > 0 ? buildImportSummary(drafts) : emptyImportSummary;
   const approvedCount = summary.approved;
+  const completionPercent = summary.total > 0 ? Math.round((summary.approved / summary.total) * 100) : 0;
+
+  const selectNextReviewTarget = (currentDraftId: string) => {
+    const nextPending = drafts.find(
+      (draft) => draft.draft_id !== currentDraftId && draft.review_status === "pending",
+    );
+    const nextAny = drafts.find((draft) => draft.draft_id !== currentDraftId);
+    setSelectedDraftId(nextPending?.draft_id ?? nextAny?.draft_id ?? currentDraftId);
+  };
 
   const processImportFile = async (file: File | null | undefined) => {
     if (!file) return;
@@ -188,119 +196,123 @@ export function QuestionImportPage() {
   };
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-base font-bold tracking-tight text-foreground">导入题目</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            支持 PDF、Word(docx)、Markdown，识别后必须人工审核确认再导入。
-          </p>
-        </div>
-        <Button variant="outline" onClick={() => navigate("/questions")} type="button">
-          <ArrowLeft className="h-4 w-4" />
-          返回题目列表
-        </Button>
-      </div>
+    <div className="flex h-full min-h-0 flex-col bg-background">
+      <header className="shrink-0 border-b border-border bg-card">
+        <div className="flex min-h-16 flex-col gap-3 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex min-w-0 items-center gap-3">
+            <Button variant="ghost" size="icon" onClick={() => navigate("/questions")} type="button">
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+            <div className="min-w-0">
+              <h1 className="text-lg font-bold tracking-tight text-foreground">导入题目</h1>
+              <p className="text-sm text-muted-foreground">
+                上传文件后逐题审核，确认一题才导入一题。
+              </p>
+            </div>
+          </div>
 
-      <ImportSummaryBar summary={summary} fileName={sourceFileName} mode={mode} />
-
-      <div className="grid gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
-        <div className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">导入设置</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="question-import-file">上传文件</Label>
-                <Input
-                  ref={fileInputRef}
-                  className="hidden"
-                  id="question-import-file"
-                  accept=".pdf,.docx,.md,.markdown"
-                  onChange={(event) => void handleFileChange(event)}
-                  type="file"
-                />
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  onDragEnter={(event) => {
-                    event.preventDefault();
-                    setIsDragActive(true);
-                  }}
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    setIsDragActive(true);
-                  }}
-                  onDragLeave={(event) => {
-                    event.preventDefault();
-                    const nextTarget = event.relatedTarget;
-                    if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
-                      setIsDragActive(false);
-                    }
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    setIsDragActive(false);
-                    void processImportFile(event.dataTransfer.files?.[0]);
-                  }}
-                  className={cn(
-                    "flex w-full flex-col items-center justify-center rounded-xl border border-dashed px-4 py-7 text-center transition-colors",
-                    isDragActive
-                      ? "border-primary bg-primary/5"
-                      : "border-border bg-muted/20 hover:border-primary/50 hover:bg-muted/35",
-                  )}
-                >
-                  <div className="flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 text-primary">
-                    {loading ? <LoaderCircle className="h-5 w-5 animate-spin" /> : <Upload className="h-5 w-5" />}
-                  </div>
-                  <div className="mt-3 space-y-1">
-                    <p className="text-sm font-medium text-foreground">拖拽文件到这里，或点击上传</p>
-                    <p className="text-xs text-muted-foreground">支持 PDF、Word(docx)、Markdown</p>
-                  </div>
-                </button>
-                <p className="text-xs text-muted-foreground">旧 Word `.doc` 请先另存为 `.docx`。</p>
-              </div>
-
-              <div className="space-y-2">
-                <Label>导入到题库</Label>
-                <Select value={questionBankId} onValueChange={setQuestionBankId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="不指定题库" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">不指定题库</SelectItem>
-                    {banks.map((bank) => (
-                      <SelectItem key={bank.id} value={bank.id}>
-                        {bank.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {parseError && (
-                <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-                  {parseError}
-                </div>
+          <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+            <Input
+              ref={fileInputRef}
+              className="hidden"
+              id="question-import-file"
+              accept=".pdf,.docx,.md,.markdown"
+              onChange={(event) => void handleFileChange(event)}
+              type="file"
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              onDragEnter={(event) => {
+                event.preventDefault();
+                setIsDragActive(true);
+              }}
+              onDragOver={(event) => {
+                event.preventDefault();
+                setIsDragActive(true);
+              }}
+              onDragLeave={(event) => {
+                event.preventDefault();
+                const nextTarget = event.relatedTarget;
+                if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
+                  setIsDragActive(false);
+                }
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                setIsDragActive(false);
+                void processImportFile(event.dataTransfer.files?.[0]);
+              }}
+              className={cn(
+                "flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-medium transition-colors",
+                isDragActive
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border bg-background hover:border-primary/50 hover:bg-muted",
               )}
+            >
+              {loading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+              {sourceFileName ? "重新上传" : "上传文件"}
+            </button>
+
+            <div className="flex items-center gap-2">
+              <Label className="sr-only">导入到题库</Label>
+              <Select value={questionBankId} onValueChange={setQuestionBankId}>
+                <SelectTrigger className="h-10 w-[200px] bg-background">
+                  <SelectValue placeholder="不指定题库" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">不指定题库</SelectItem>
+                  {banks.map((bank) => (
+                    <SelectItem key={bank.id} value={bank.id}>
+                      {bank.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
 
               <Button
                 disabled={drafts.length === 0 || approvedCount === 0 || importing}
                 onClick={() => void importApprovedDrafts()}
                 type="button"
-                className="w-full"
+                className="h-10"
               >
                 {importing ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <FileUp className="h-4 w-4" />}
-                导入已确认题目（{approvedCount}）
+                导入 {approvedCount} 题
               </Button>
-            </CardContent>
-          </Card>
-
-          <ImportTemplateHelp />
+            </div>
+          </div>
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)]">
+        <div className="border-t border-border px-4 py-3">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-center">
+            <ImportSummaryBar summary={summary} fileName={sourceFileName} mode={mode} />
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">审核进度</span>
+                <span className="font-medium text-foreground">{completionPercent}%</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-emerald-500 transition-all"
+                  style={{ width: `${completionPercent}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {parseError && (
+          <div className="border-t border-destructive/20 bg-destructive/10 px-4 py-2 text-sm text-destructive">
+            <div className="flex items-center gap-2">
+              <AlertCircle size={15} />
+              {parseError}
+            </div>
+          </div>
+        )}
+      </header>
+
+      <main className="grid min-h-0 flex-1 bg-muted/20 lg:grid-cols-[360px_minmax(0,1fr)]">
+        <div className="min-h-0 border-r border-border bg-background">
           <ImportReviewSidebar
             drafts={drafts}
             selectedDraftId={selectedDraftId}
@@ -308,6 +320,37 @@ export function QuestionImportPage() {
             onFilterChange={setFilter}
             onSelect={setSelectedDraftId}
           />
+        </div>
+        <div className="min-h-0 overflow-y-auto p-4">
+          {drafts.length === 0 && !loading ? (
+            <section className="flex h-full min-h-[520px] items-center justify-center">
+              <div className="max-w-xl rounded-3xl border border-dashed border-border bg-card p-8 text-center shadow-sm">
+                <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                  <FileText size={24} />
+                </div>
+                <h2 className="mt-5 text-xl font-semibold text-foreground">上传文件后，系统会自动拆题并生成审核清单</h2>
+                <p className="mt-3 text-sm leading-6 text-muted-foreground">
+                  支持 PDF、Word(docx)、Markdown。识别完成后，你只需要从左侧逐题确认，必要时在右侧直接修改内容、答案、解析和难度。
+                </p>
+                <div className="mt-6 flex flex-wrap justify-center gap-2 text-xs text-muted-foreground">
+                  <span className="rounded-full bg-muted px-3 py-1">1. 上传文件</span>
+                  <span className="rounded-full bg-muted px-3 py-1">2. 检查识别结果</span>
+                  <span className="rounded-full bg-muted px-3 py-1">3. 确认后导入</span>
+                </div>
+                <Button className="mt-6" onClick={() => fileInputRef.current?.click()} type="button">
+                  <Upload size={16} />
+                  选择题目文件
+                </Button>
+              </div>
+            </section>
+          ) : loading ? (
+            <section className="flex h-full min-h-[520px] items-center justify-center">
+              <div className="flex items-center gap-3 rounded-2xl border bg-card px-5 py-4 text-sm text-muted-foreground">
+                <LoaderCircle className="h-5 w-5 animate-spin text-primary" />
+                正在识别题目，稍等一下...
+              </div>
+            </section>
+          ) : (
           <ImportReviewEditor
             draft={selectedDraft}
             isRecognizing={recognizingDraftId === selectedDraft?.draft_id}
@@ -316,18 +359,25 @@ export function QuestionImportPage() {
             }}
             onApprove={() => {
               if (selectedDraft) {
-                updateDraft(selectedDraft.draft_id, { review_status: "approved", review_required: false });
+                updateDraft(selectedDraft.draft_id, {
+                  title: generateImportQuestionTitle(selectedDraft.content_text),
+                  review_status: "approved",
+                  review_required: false,
+                });
+                selectNextReviewTarget(selectedDraft.draft_id);
               }
             }}
             onSkip={() => {
               if (selectedDraft) {
                 updateDraft(selectedDraft.draft_id, { review_status: "skipped", review_required: false });
+                selectNextReviewTarget(selectedDraft.draft_id);
               }
             }}
             onReRecognize={() => void reRecognizeSelectedDraft()}
           />
+          )}
         </div>
-      </div>
+      </main>
     </div>
   );
 }

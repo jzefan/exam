@@ -1,6 +1,7 @@
+import { useState } from "react";
 import { useList } from "@refinedev/core";
 import { useNavigate } from "react-router-dom";
-import { BookOpen, ChevronRight, AlertCircle, Calendar, Hash } from "lucide-react";
+import { BookOpen, ChevronRight, AlertCircle, Calendar, Hash, CheckCircle2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -15,12 +16,19 @@ interface IWrongAnswer {
   exam_title: string;
   wrong_count: number;
   last_wrong_at: string;
+  mastered_at: string | null;
+  mastered: boolean;
+  tags: string[];
 }
+
+type TabKey = "to_review" | "mastered";
 
 function WrongAnswerCard({ item }: { item: IWrongAnswer }) {
   const navigate = useNavigate();
   const locale = getStudentLocale();
-  const date = new Date(item.last_wrong_at).toLocaleDateString(getStudentDateLocale(locale), {
+  
+  const displayDate = item.mastered && item.mastered_at ? item.mastered_at : item.last_wrong_at;
+  const dateStr = new Date(displayDate).toLocaleDateString(getStudentDateLocale(locale), {
     month: "numeric",
     day: "numeric",
   });
@@ -33,36 +41,64 @@ function WrongAnswerCard({ item }: { item: IWrongAnswer }) {
 
   return (
     <Card
-      className="group hover:border-primary/30 hover:shadow-xl hover:shadow-primary/5 transition-all duration-300 cursor-pointer rounded-2xl overflow-hidden"
+      className="group hover:border-primary/30 hover:shadow-xl hover:shadow-primary/5 transition-all duration-300 cursor-pointer rounded-2xl border-border/50 bg-card/50 overflow-hidden"
       onClick={() => navigate(`/wrong-answers/${item.id}`)}
     >
       <CardContent className="p-0">
         <div className="p-5 space-y-4">
           <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary" className="text-[10px] font-bold uppercase tracking-wider rounded-md">
-                {getStudentQuestionTypeLabel(item.question_type, locale)}
-              </Badge>
-              <span className="text-[10px] font-bold text-muted-foreground/60 truncate max-w-[120px] uppercase tracking-widest">{item.exam_title}</span>
-            </div>
-            <div className={cn("flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black", severityBg, severityColor)}>
-              <AlertCircle size={10} />
-              {tStudent("wrong_answers_wrong_times", { count: item.wrong_count }, locale)}
-            </div>
+            <Badge variant="secondary" className="text-[10px] font-bold uppercase tracking-wider rounded-md px-2 py-0.5">
+              {getStudentQuestionTypeLabel(item.question_type, locale)}
+            </Badge>
+            
+            {item.mastered ? (
+               <div className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-700 shadow-sm shadow-emerald-200/50">
+                <CheckCircle2 size={10} />
+                {locale === "en" ? "Mastered" : "已掌握"}
+              </div>
+            ) : (
+              <div className={cn("flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black shadow-sm", severityBg, severityColor)}>
+                <AlertCircle size={10} />
+                {tStudent("wrong_answers_wrong_times", { count: item.wrong_count }, locale)}
+              </div>
+            )}
           </div>
 
-          <div className="min-h-[3rem]">
-            <p className="text-sm font-bold text-foreground/90 line-clamp-2 leading-relaxed group-hover:text-primary transition-colors"
+          <div className="min-h-[3.5rem] flex flex-col gap-3">
+            <p className="text-[15px] font-bold text-foreground/90 line-clamp-2 leading-snug group-hover:text-primary transition-colors"
               dangerouslySetInnerHTML={{ __html: item.question_title }}
             />
+            
+            {item.tags && item.tags.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {item.tags.slice(0, 3).map((tag, idx) => (
+                  <span key={idx} className="text-[10px] font-bold text-muted-foreground/40 uppercase tracking-widest bg-muted/30 px-1.5 py-0.5 rounded">
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
 
-          <div className="flex items-center justify-between pt-2 border-t border-border/40">
-            <div className="flex items-center gap-3 text-[10px] font-bold text-muted-foreground/50 uppercase tracking-widest">
-              <span className="flex items-center gap-1"><Calendar size={12} /> {tStudent("wrong_answers_date", { date }, locale)}</span>
-              <span className="flex items-center gap-1"><Hash size={12} /> {tStudent("wrong_answers_id", { id: item.question_id.slice(0, 6) }, locale)}</span>
+          <div className="flex items-center justify-between pt-4 border-t border-border/40">
+            <div className="flex flex-col gap-1.5 min-w-0">
+              <div className="flex items-center gap-2 text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest truncate">
+                <BookOpen size={12} className="shrink-0 opacity-40" />
+                <span className="truncate">{item.exam_title}</span>
+              </div>
+              <div className="flex items-center gap-2 text-[10px] font-bold text-muted-foreground/40 uppercase tracking-widest">
+                <Calendar size={12} className="shrink-0 opacity-40" /> 
+                <span>
+                  {item.mastered 
+                    ? tStudent("wrong_answers_mastered_at", { date: dateStr }, locale)
+                    : tStudent("wrong_answers_date", { date: dateStr }, locale)
+                  }
+                </span>
+              </div>
             </div>
-            <ChevronRight size={14} className="text-muted-foreground/30 group-hover:text-primary group-hover:translate-x-1 transition-all" />
+            <div className="flex size-8 items-center justify-center rounded-full bg-muted/30 group-hover:bg-primary/10 transition-colors">
+              <ChevronRight size={14} className="text-muted-foreground/30 group-hover:text-primary group-hover:translate-x-0.5 transition-all" />
+            </div>
           </div>
         </div>
       </CardContent>
@@ -72,10 +108,19 @@ function WrongAnswerCard({ item }: { item: IWrongAnswer }) {
 
 export function WrongAnswers() {
   const locale = getStudentLocale();
+  const [tab, setTab] = useState<TabKey>("to_review");
+
   const { query } = useList<IWrongAnswer>({
     resource: "wrong-answers",
     pagination: { currentPage: 1, pageSize: 50 },
-    sorters: [{ field: "last_wrong_at", order: "desc" }],
+    sorters: tab === "mastered" ? [{ field: "mastered_at", order: "desc" }] : [{ field: "last_wrong_at", order: "desc" }],
+    filters: [
+      {
+        field: "mastered",
+        operator: "eq",
+        value: tab === "mastered",
+      },
+    ],
   });
 
   const items = query.data?.data ?? [];
@@ -83,9 +128,33 @@ export function WrongAnswers() {
 
   return (
     <div className="space-y-10">
-      <header className="space-y-2">
-        <h1 className="text-lg font-black text-foreground tracking-tight">{tStudent("wrong_answers_title", undefined, locale)}</h1>
-        <p className="text-sm font-medium text-muted-foreground">{tStudent("wrong_answers_summary", { count: items.length }, locale)}</p>
+      <header className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+        <div className="space-y-2">
+          <h1 className="text-lg font-black text-foreground tracking-tight">{tStudent("wrong_answers_title", undefined, locale)}</h1>
+          <p className="text-sm font-medium text-muted-foreground">
+            {tab === "mastered" 
+              ? tStudent("wrong_answers_mastered_summary", { count: items.length }, locale)
+              : tStudent("wrong_answers_summary", { count: items.length }, locale)}
+          </p>
+        </div>
+
+        <div className="flex w-fit shrink-0 rounded-xl bg-muted/50 p-1">
+          {[
+            { key: "to_review" as const, label: tStudent("wrong_answers_tab_to_review", undefined, locale) },
+            { key: "mastered" as const, label: tStudent("wrong_answers_tab_mastered", undefined, locale) }
+          ].map(t => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={cn(
+                "flex items-center gap-2 rounded-lg px-5 py-2 text-sm font-semibold transition-all",
+                tab === t.key ? "bg-background text-primary shadow-sm ring-1 ring-border/50" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
       </header>
 
       {isLoading ? (

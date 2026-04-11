@@ -2,17 +2,14 @@ import { useState, useEffect } from "react";
 import { useList } from "@refinedev/core";
 import { useNavigate } from "react-router-dom";
 import {
-  Clock,
   ArrowRight,
   Timer,
   FileText,
-  MonitorOff,
   ChevronRight,
   Play,
   Calendar,
   Award,
   CheckCircle2,
-  X,
   BookOpen,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -20,7 +17,6 @@ import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
   AlertDialogAction,
-  AlertDialogCancel,
   AlertDialogContent,
   AlertDialogFooter,
   AlertDialogHeader,
@@ -36,6 +32,7 @@ import { getStudentDateLocale, getStudentLocale, tStudent } from "./i18n";
 /* ------------------------------------------------------------------ */
 
 type ExamStatus = "upcoming" | "ongoing" | "completed" | "closed";
+type TabKey = "pending" | "completed";
 
 interface IMyExam {
   id: string;

@@ -88,6 +88,7 @@ class WrongAnswerListItem(BaseModel):
     exam_title: str
     wrong_count: int
     last_wrong_at: datetime
+    mastered_at: datetime | None = None
     tags: list[str] = Field(default_factory=list)
     mastered: bool = False
 

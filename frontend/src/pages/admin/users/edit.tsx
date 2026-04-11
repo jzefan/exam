@@ -1,10 +1,12 @@
 import { useOne, useUpdate } from "@refinedev/core"
+import { useEffect, useState } from "react"
 import { useNavigate, useParams } from "react-router-dom"
 import { ArrowLeft } from "lucide-react"
 import type { IUser } from "../../../types"
 import { getUserRole } from "@/types/rbac"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { UserForm, type UserFormData } from "./user-form"
+import { apiRequest } from "@/pages/grading/api"
 
 export function UserEdit() {
   const { id } = useParams()
@@ -12,12 +14,30 @@ export function UserEdit() {
   const { result: user, query } = useOne<IUser>({ resource: "users", id: id! })
   const { mutate, mutation } = useUpdate()
   const updateLoading = mutation.isPending
+  const [teacherOptions, setTeacherOptions] = useState<Array<{ id: string; full_name: string; username: string }>>([])
+
+  useEffect(() => {
+    void apiRequest<IUser[]>("/users?_start=0&_end=200").then((users) => {
+      setTeacherOptions(
+        users
+          .filter((item) => getUserRole(item) === "teacher")
+          .map((item) => ({
+            id: item.id,
+            full_name: item.full_name,
+            username: item.username,
+          }))
+      )
+    }).catch(() => {
+      setTeacherOptions([])
+    })
+  }, [])
 
   const handleSubmit = (data: UserFormData) => {
     const payload: Record<string, unknown> = {
       email: data.email,
       full_name: data.full_name,
       role_names: data.roles,
+      teacher_ids: data.roles.includes("student") ? data.teacher_ids : [],
       is_active: data.is_active,
     }
     if (data.password) {
@@ -50,6 +70,7 @@ export function UserEdit() {
         email: user.email,
         full_name: user.full_name,
         roles: [getUserRole(user)].filter(Boolean),
+        teacher_ids: user.teacher_ids,
         is_active: user.is_active,
       }
     : {}
@@ -78,6 +99,7 @@ export function UserEdit() {
       <UserForm
         mode="edit"
         initialData={initialData}
+        teacherOptions={teacherOptions}
         loading={updateLoading}
         onSubmit={handleSubmit}
         onCancel={() => navigate(-1)}

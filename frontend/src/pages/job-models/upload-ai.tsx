@@ -1,10 +1,9 @@
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
 import { ArrowLeft, Upload, Loader2, CheckCircle, AlertCircle } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 
@@ -18,7 +17,6 @@ export function JobModelUploadAI() {
   const [projectName, setProjectName] = useState("")
   const [status, setStatus] = useState<UploadStatus>("idle")
   const [progress, setProgress] = useState(0)
-  const [generatedModelId, setGeneratedModelId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -110,7 +108,6 @@ export function JobModelUploadAI() {
 
           if (progressData.status === "completed") {
             setStatus("success")
-            setGeneratedModelId(progressData.model_id)
             toast({
               title: "成功",
               description: "职位模型已生成，跳转到编辑器...",
@@ -145,7 +142,7 @@ export function JobModelUploadAI() {
       setError(err instanceof Error ? err.message : "发生错误")
       toast({
         title: "错误",
-        description: error,
+        description: err instanceof Error ? err.message : "发生错误",
         variant: "destructive",
       })
     }
@@ -301,7 +298,7 @@ export function JobModelUploadAI() {
                     <AlertCircle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
                     <div>
                       <p className="font-medium text-red-900">处理失败</p>
-                      <p className="text-sm text-red-700 mt-1">{error}</p>
+                      <p className="text-sm text-red-700 mt-1">{error ?? undefined}</p>
                     </div>
                   </div>
                 )}

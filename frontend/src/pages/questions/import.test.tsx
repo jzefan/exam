@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { QuestionImportDraft } from "./import-types";
-import { buildImportableQuestions, buildImportSummary } from "./import-utils";
+import { buildImportableQuestions, buildImportSummary, importTextToHtml } from "./import-utils";
 
 const baseDraft: QuestionImportDraft = {
   draft_id: "draft-1",
@@ -49,5 +49,12 @@ describe("question import helpers", () => {
     expect(summary.approved).toBe(1);
     expect(summary.skipped).toBe(1);
     expect(summary.issue_count).toBe(1);
+  });
+
+  it("keeps imported image tags in generated question html", () => {
+    const html = importTextToHtml("观察下图并回答。\n<img src=\"/api/uploads/files/chart.png\" alt=\"图表\" />");
+
+    expect(html).toContain("<p>观察下图并回答。</p>");
+    expect(html).toContain("<img src=\"/api/uploads/files/chart.png\" alt=\"图表\" />");
   });
 });

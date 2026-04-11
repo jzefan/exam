@@ -38,9 +38,16 @@ export function useAutoSave(debounceMs: number = 2000) {
           },
           onError: (error) => {
             setIsSaving(false)
+            const message =
+              typeof error === "object" &&
+              error !== null &&
+              "message" in error &&
+              typeof error.message === "string"
+                ? error.message
+                : "Unknown error"
             toast({
               title: "Save failed",
-              description: (error as Error).message || "Unknown error",
+              description: message,
               variant: "destructive",
             })
           },

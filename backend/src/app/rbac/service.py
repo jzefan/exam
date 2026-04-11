@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import User
@@ -13,6 +13,7 @@ from app.rbac.models import (
     Permission,
     Role,
     RolePermission,
+    TeacherStudent,
     UserOrganization,
 )
 from app.rbac.schemas import (
@@ -28,8 +29,13 @@ from app.rbac.schemas import (
 # --- Class Management ---
 
 
-async def create_class(db: AsyncSession, org_id: uuid.UUID, data: ClassCreate) -> Class:
-    cls = Class(name=data.name, org_id=org_id)
+async def create_class(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    data: ClassCreate,
+    created_by: uuid.UUID | None = None,
+) -> Class:
+    cls = Class(name=data.name, org_id=org_id, created_by=created_by)
     db.add(cls)
     await db.flush()
     await db.refresh(cls)
@@ -43,11 +49,44 @@ async def list_org_classes(db: AsyncSession, org_id: uuid.UUID) -> list[Class]:
     return list(result.scalars().all())
 
 
-async def delete_class(db: AsyncSession, class_id: uuid.UUID) -> None:
+async def list_teacher_classes(db: AsyncSession, org_id: uuid.UUID, teacher_id: uuid.UUID) -> list[Class]:
+    result = await db.execute(
+        select(Class)
+        .outerjoin(User, User.class_id == Class.id)
+        .outerjoin(TeacherStudent, TeacherStudent.student_id == User.id)
+        .outerjoin(UserOrganization, UserOrganization.user_id == User.id)
+        .outerjoin(Role, Role.id == UserOrganization.role_id)
+        .where(
+            Class.org_id == org_id,
+            Class.deleted_at.is_(None),
+            or_(
+                Class.created_by == teacher_id,
+                and_(
+                    TeacherStudent.teacher_id == teacher_id,
+                    Role.name == "student",
+                    User.deleted_at.is_(None),
+                    User.class_id.is_not(None),
+                ),
+            ),
+        )
+        .distinct()
+        .order_by(Class.name)
+    )
+    return list(result.scalars().all())
+
+
+async def delete_class(
+    db: AsyncSession,
+    class_id: uuid.UUID,
+    allowed_creator_id: uuid.UUID | None = None,
+) -> None:
     cls = await db.get(Class, class_id)
-    if cls:
-        await db.delete(cls)
-        await db.flush()
+    if cls is None:
+        return
+    if allowed_creator_id is not None and cls.created_by not in {None, allowed_creator_id}:
+        raise PermissionError("cannot delete a class created by another teacher")
+    await db.delete(cls)
+    await db.flush()
 
 
 # --- Student Management ---
@@ -73,15 +112,18 @@ async def list_org_students(db: AsyncSession, org_id: uuid.UUID, class_id: uuid.
 
 async def list_teacher_students(
     db: AsyncSession,
+    org_id: uuid.UUID,
     teacher_id: uuid.UUID,
     class_id: uuid.UUID | None = None,
 ) -> list[User]:
     query = (
         select(User)
+        .join(TeacherStudent, TeacherStudent.student_id == User.id)
         .join(UserOrganization, UserOrganization.user_id == User.id)
         .join(Role, Role.id == UserOrganization.role_id)
         .where(
-            User.owner_teacher_id == teacher_id,
+            TeacherStudent.teacher_id == teacher_id,
+            UserOrganization.org_id == org_id,
             Role.name == "student",
             User.deleted_at.is_(None),
         )
@@ -89,8 +131,164 @@ async def list_teacher_students(
     if class_id:
         query = query.where(User.class_id == class_id)
 
-    result = await db.execute(query.order_by(User.full_name))
+    result = await db.execute(query.order_by(User.full_name).distinct())
     return list(result.scalars().all())
+
+
+async def ensure_teacher_student_link(
+    db: AsyncSession,
+    teacher_id: uuid.UUID,
+    student_id: uuid.UUID,
+) -> bool:
+    existing = await db.get(
+        TeacherStudent,
+        {"teacher_id": teacher_id, "student_id": student_id},
+    )
+    if existing is not None:
+        return False
+
+    db.add(TeacherStudent(teacher_id=teacher_id, student_id=student_id))
+    await db.flush()
+    return True
+
+
+async def replace_student_teacher_links(
+    db: AsyncSession,
+    student_id: uuid.UUID,
+    teacher_ids: list[uuid.UUID],
+) -> None:
+    existing_links = (
+        await db.execute(
+            select(TeacherStudent).where(TeacherStudent.student_id == student_id)
+        )
+    ).scalars().all()
+    existing_teacher_ids = {link.teacher_id for link in existing_links}
+    next_teacher_ids = list(dict.fromkeys(teacher_ids))
+
+    for link in existing_links:
+        if link.teacher_id not in next_teacher_ids:
+            await db.delete(link)
+
+    for teacher_id in next_teacher_ids:
+        if teacher_id not in existing_teacher_ids:
+            db.add(TeacherStudent(teacher_id=teacher_id, student_id=student_id))
+
+    await db.flush()
+
+
+async def find_existing_student_by_phone(db: AsyncSession, phone: str) -> User | None:
+    result = await db.execute(
+        select(User)
+        .join(UserOrganization, UserOrganization.user_id == User.id)
+        .join(Role, Role.id == UserOrganization.role_id)
+        .where(
+            User.phone == phone,
+            User.deleted_at.is_(None),
+            Role.name == "student",
+        )
+        .distinct()
+    )
+    return result.scalar_one_or_none()
+
+
+async def create_or_link_student(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    data: StudentCreate,
+    teacher_id: uuid.UUID,
+) -> tuple[User, bool, bool]:
+    existing_student = await find_existing_student_by_phone(db, data.phone)
+    if existing_student is None:
+        student = await create_student(db, org_id, data, owner_teacher_id=teacher_id)
+        return student, True, True
+
+    linked = await ensure_teacher_student_link(db, teacher_id, existing_student.id)
+    if existing_student.owner_teacher_id is None:
+        existing_student.owner_teacher_id = teacher_id
+        await db.flush()
+    return existing_student, linked, False
+
+
+async def list_student_teacher_ids(db: AsyncSession, student_id: uuid.UUID) -> list[uuid.UUID]:
+    result = await db.execute(
+        select(TeacherStudent.teacher_id)
+        .where(TeacherStudent.student_id == student_id)
+        .order_by(TeacherStudent.created_at)
+    )
+    return list(result.scalars().all())
+
+
+async def assign_unowned_students_to_single_teacher(db: AsyncSession) -> int:
+    teacher_ids = list(
+        (
+            await db.execute(
+                select(User.id)
+                .join(UserOrganization, UserOrganization.user_id == User.id)
+                .join(Role, Role.id == UserOrganization.role_id)
+                .where(
+                    User.deleted_at.is_(None),
+                    Role.name == "teacher",
+                )
+                .distinct()
+            )
+        ).scalars().all()
+    )
+
+    if len(teacher_ids) != 1:
+        return 0
+
+    sole_teacher_id = teacher_ids[0]
+    unowned_student_count = (
+        await db.execute(
+            select(func.count(User.id))
+            .join(UserOrganization, UserOrganization.user_id == User.id)
+            .join(Role, Role.id == UserOrganization.role_id)
+            .where(
+                User.deleted_at.is_(None),
+                Role.name == "student",
+                User.owner_teacher_id.is_(None),
+            )
+        )
+    ).scalar_one()
+
+    if unowned_student_count == 0:
+        return 0
+
+    students = (
+        await db.execute(
+            select(User)
+            .join(UserOrganization, UserOrganization.user_id == User.id)
+            .join(Role, Role.id == UserOrganization.role_id)
+            .where(
+                User.deleted_at.is_(None),
+                Role.name == "student",
+                User.owner_teacher_id.is_(None),
+            )
+        )
+    ).scalars().all()
+
+    for student in students:
+        student.owner_teacher_id = sole_teacher_id
+        await ensure_teacher_student_link(db, sole_teacher_id, student.id)
+
+    owned_students = (
+        await db.execute(
+            select(User)
+            .join(UserOrganization, UserOrganization.user_id == User.id)
+            .join(Role, Role.id == UserOrganization.role_id)
+            .where(
+                User.deleted_at.is_(None),
+                Role.name == "student",
+                User.owner_teacher_id == sole_teacher_id,
+            )
+        )
+    ).scalars().all()
+
+    for student in owned_students:
+        await ensure_teacher_student_link(db, sole_teacher_id, student.id)
+
+    await db.flush()
+    return len(students)
 
 
 async def create_student(
@@ -133,6 +331,9 @@ async def create_student(
         is_primary=True
     ))
     await db.flush()
+
+    if owner_teacher_id is not None:
+        await ensure_teacher_student_link(db, owner_teacher_id, user.id)
     
     return user
 

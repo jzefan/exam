@@ -55,14 +55,16 @@ async def _get_visible_kp_or_404(
 
 
 @router.get("/majors", response_model=list[MajorResponse])
-async def list_majors(db: DB, _user: CurrentUser) -> list[MajorResponse]:
-    majors = await service.list_majors(db)
+async def list_majors(db: DB, user: CurrentUser) -> list[MajorResponse]:
+    is_admin = await _is_knowledge_admin(db, user)
+    majors = await service.list_majors(db, user=user, is_platform_admin=is_admin)
     return [MajorResponse.model_validate(major) for major in majors]
 
 
 @router.get("/majors/{major_id}", response_model=MajorResponse)
-async def get_major(major_id: uuid.UUID, db: DB, _user: CurrentUser) -> MajorResponse:
-    major = await service.get_major(db, major_id)
+async def get_major(major_id: uuid.UUID, db: DB, user: CurrentUser) -> MajorResponse:
+    is_admin = await _is_knowledge_admin(db, user)
+    major = await service.get_major(db, major_id, user=user, is_platform_admin=is_admin)
     if not major:
         raise HTTPException(status_code=404, detail="Major not found")
     return MajorResponse.model_validate(major)
@@ -92,14 +94,16 @@ async def delete_major(major_id: uuid.UUID, db: DB, _: WriteUser) -> None:
 
 
 @router.get("/majors/{major_id}/directions", response_model=list[DirectionResponse])
-async def list_directions(major_id: uuid.UUID, db: DB, _user: CurrentUser) -> list[DirectionResponse]:
-    directions = await service.list_directions(db, major_id)
+async def list_directions(major_id: uuid.UUID, db: DB, user: CurrentUser) -> list[DirectionResponse]:
+    is_admin = await _is_knowledge_admin(db, user)
+    directions = await service.list_directions(db, major_id, user=user, is_platform_admin=is_admin)
     return [DirectionResponse.model_validate(direction) for direction in directions]
 
 
 @router.get("/directions/{direction_id}", response_model=DirectionResponse)
-async def get_direction(direction_id: uuid.UUID, db: DB, _user: CurrentUser) -> DirectionResponse:
-    direction = await service.get_direction(db, direction_id)
+async def get_direction(direction_id: uuid.UUID, db: DB, user: CurrentUser) -> DirectionResponse:
+    is_admin = await _is_knowledge_admin(db, user)
+    direction = await service.get_direction(db, direction_id, user=user, is_platform_admin=is_admin)
     if not direction:
         raise HTTPException(status_code=404, detail="Direction not found")
     return DirectionResponse.model_validate(direction)
@@ -130,10 +134,10 @@ async def delete_direction(direction_id: uuid.UUID, db: DB, _: WriteUser) -> Non
 
 @router.get("/directions/{direction_id}/tree", response_model=FlowData)
 async def get_tree(direction_id: uuid.UUID, db: DB, user: CurrentUser) -> FlowData:
-    direction = await service.get_direction(db, direction_id)
+    is_admin = await _is_knowledge_admin(db, user)
+    direction = await service.get_direction(db, direction_id, user=user, is_platform_admin=is_admin)
     if not direction:
         raise HTTPException(status_code=404, detail="Direction not found")
-    is_admin = await _is_knowledge_admin(db, user)
     try:
         data = await service.get_direction_tree(db, direction_id, user=user, is_platform_admin=is_admin)
     except ValueError as exc:

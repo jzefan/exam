@@ -1,9 +1,9 @@
 import { useList, useCreate, useDelete, useGetIdentity, useInvalidate, useNavigation, useUpdate } from "@refinedev/core";
 import type { CrudFilter } from "@refinedev/core";
 import type { IQuestion, IQuestionBank, ITag, QuestionType } from "../../types";
-import { Search, BookOpen, Pencil, Trash2, Plus, ChevronDown, ChevronUp, Library, Check, PackageOpen, GraduationCap, SlidersHorizontal, ChevronsDownUp, ChevronsUpDown, Link2, Save, ChevronRight, Lock } from "lucide-react";
+import { Search, BookOpen, Pencil, Trash2, Plus, ChevronDown, ChevronUp, Library, Check, PackageOpen, GraduationCap, SlidersHorizontal, ChevronsDownUp, ChevronsUpDown, Link2, Save, ChevronRight, Lock, Upload } from "lucide-react";
 import { useState, useCallback, useRef, useEffect, type ReactNode } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
@@ -162,6 +162,7 @@ async function knowledgeApiFetch<T>(url: string): Promise<T> {
 
 export function QuestionList() {
   const { data: identity } = useGetIdentity<{ id?: string; primary_org?: { role_name?: string } | null }>();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [current, setCurrent] = useState(1);
   const [filters, setFilters] = useState<CrudFilter[]>([]);
@@ -1038,6 +1039,10 @@ export function QuestionList() {
           <Button className="shrink-0" onClick={() => create("questions")}>
             <Plus size={16} />
             <span className="hidden sm:inline">新建题目</span>
+          </Button>
+          <Button variant="outline" className="shrink-0" onClick={() => navigate("/questions/import")}>
+            <Upload size={16} />
+            <span className="hidden sm:inline">导入题目</span>
           </Button>
         </div>
       </div>

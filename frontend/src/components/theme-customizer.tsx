@@ -1,9 +1,8 @@
 import { useTheme } from "./theme-provider";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Sun, Moon, Monitor, Settings2, Check, RotateCcw, Maximize, AlignCenter } from "lucide-react";
+import { Sun, Moon, Monitor, Settings2, RotateCcw, Maximize, AlignCenter } from "lucide-react";
 import { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 

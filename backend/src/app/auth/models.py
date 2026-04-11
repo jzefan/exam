@@ -23,7 +23,10 @@ class User(BaseModel):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     student_class: Mapped["app.rbac.models.Class | None"] = relationship(
-        "Class", back_populates="students", lazy="joined"
+        "Class",
+        back_populates="students",
+        lazy="joined",
+        foreign_keys=[class_id],
     )
     owner_teacher: Mapped["User | None"] = relationship("User", remote_side="User.id")
 

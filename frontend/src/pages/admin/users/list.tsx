@@ -14,6 +14,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { useEffect, useState } from "react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Card,
   CardContent,
@@ -26,7 +34,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useState } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -56,6 +63,35 @@ const roleBadgeVariant: Record<string, "default" | "secondary" | "outline" | "su
   student: "outline",
 };
 
+const domainLabel: Record<IUser["system_domain"], string> = {
+  platform: "平台",
+  exam: "考试系统",
+  job_model: "岗位模型",
+}
+
+function describeUser(user: IUser): string {
+  const role = getUserRole(user)
+  if (role === "student") {
+    return user.teacher_names.length > 0 ? `关联教师：${user.teacher_names.join("、")}` : "未关联教师"
+  }
+  if (role === "teacher") {
+    return `管理 ${user.managed_student_count} 名学生`
+  }
+  if (role === "platform_admin") {
+    return "平台级账号"
+  }
+  if (user.system_domain === "job_model") {
+    return "岗位模型账号"
+  }
+  return "独立账号"
+}
+
+function scopeLabel(user: IUser): string {
+  if (user.system_domain === "platform") return "平台"
+  if (user.system_domain === "exam") return "独立教师/学生域"
+  return user.primary_org?.org_name || "岗位模型域"
+}
+
 export function UserList() {
   const {
     tableQuery: { data, isLoading },
@@ -74,14 +110,24 @@ export function UserList() {
   const { create, edit } = useNavigation();
   const { mutate: deleteUser } = useDelete();
   const [search, setSearch] = useState("");
+  const [roleFilter, setRoleFilter] = useState<string>("all");
 
   const users = data?.data ?? [];
   const total = data?.total ?? 0;
 
-  const handleSearch = (value: string) => {
-    setSearch(value);
-    setFilters([{ field: "username", operator: "contains", value }]);
-  };
+  useEffect(() => {
+    const filters: Array<{ field: string; operator: "contains" | "eq"; value: string }> = [];
+
+    if (search.trim()) {
+      filters.push({ field: "username", operator: "contains", value: search.trim() });
+    }
+    if (roleFilter !== "all") {
+      filters.push({ field: "role_name", operator: "eq", value: roleFilter });
+    }
+
+    setCurrent(1);
+    setFilters(filters, "replace");
+  }, [roleFilter, search, setCurrent, setFilters]);
 
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
@@ -117,9 +163,22 @@ export function UserList() {
               className="pl-9"
               placeholder="搜索用户..."
               value={search}
-              onChange={(e) => handleSearch(e.target.value)}
+              onChange={(e) => setSearch(e.target.value)}
             />
           </div>
+          <Select value={roleFilter} onValueChange={setRoleFilter}>
+            <SelectTrigger className="w-[180px]">
+              <SelectValue placeholder="全部角色" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">全部角色</SelectItem>
+              {Object.entries(roleLabel).map(([value, label]) => (
+                <SelectItem key={value} value={value}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <div className="text-sm text-muted-foreground">
             共 {total} 位用户
           </div>
@@ -132,6 +191,8 @@ export function UserList() {
                 <TableHead>用户</TableHead>
                 <TableHead>邮箱</TableHead>
                 <TableHead>角色</TableHead>
+                <TableHead>系统域</TableHead>
+                <TableHead>业务归属</TableHead>
                 <TableHead>状态</TableHead>
                 <TableHead className="text-right pr-4">操作</TableHead>
               </TableRow>
@@ -139,14 +200,14 @@ export function UserList() {
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center py-12 text-sm text-muted-foreground">
+                  <TableCell colSpan={7} className="text-center py-12 text-sm text-muted-foreground">
                     <span className="inline-block h-5 w-5 border-2 border-border border-t-foreground rounded-full animate-spin mr-2 align-middle" />
                     加载中...
                   </TableCell>
                 </TableRow>
               ) : users.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center py-12">
+                  <TableCell colSpan={7} className="text-center py-12">
                     <Users size={40} className="mx-auto text-muted-foreground mb-3" />
                     <p className="text-sm text-muted-foreground">暂无用户数据</p>
                   </TableCell>
@@ -184,6 +245,15 @@ export function UserList() {
                         <Badge variant={roleBadgeVariant[getUserRole(user)] ?? "outline"}>
                           {roleLabel[getUserRole(user)] ?? getUserRole(user)}
                         </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <div className="space-y-1">
+                          <Badge variant="outline">{domainLabel[user.system_domain]}</Badge>
+                          <p className="text-xs text-muted-foreground">{scopeLabel(user)}</p>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {describeUser(user)}
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1.5">

@@ -31,10 +31,16 @@ class Class(BaseModel):
     org_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
     )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
     organization: Mapped[Organization] = relationship("Organization", foreign_keys=[org_id])
     students: Mapped[list["app.auth.models.User"]] = relationship(
-        "User", back_populates="student_class", lazy="selectin"
+        "User", back_populates="student_class", lazy="selectin", foreign_keys="User.class_id"
+    )
+    creator: Mapped["app.auth.models.User | None"] = relationship(
+        "User", foreign_keys=[created_by], lazy="joined"
     )
 
 
@@ -102,3 +108,21 @@ class UserOrganization(Base, TimestampMixin):
 
     organization: Mapped[Organization] = relationship("Organization", lazy="joined")
     role: Mapped[Role] = relationship("Role", lazy="joined")
+
+
+class TeacherStudent(Base, TimestampMixin):
+    __tablename__ = "teacher_students"
+
+    teacher_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+
+    teacher: Mapped["app.auth.models.User"] = relationship(
+        "User", foreign_keys=[teacher_id], lazy="joined"
+    )
+    student: Mapped["app.auth.models.User"] = relationship(
+        "User", foreign_keys=[student_id], lazy="joined"
+    )

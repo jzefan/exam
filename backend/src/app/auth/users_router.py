@@ -14,8 +14,28 @@ from app.auth.schemas import UserCreate, UserResponse, UserUpdate
 from app.auth.service import build_user_response, create_user, get_user_by_email, get_user_by_username, update_user
 from app.common.pagination import PaginationParams, apply_filters, apply_pagination, get_total_count, parse_filters, parse_pagination
 from app.database import get_db
+from app.rbac.service import replace_student_teacher_links
 
 router = APIRouter()
+
+
+async def _is_teacher_user(db: AsyncSession, user_id: uuid.UUID) -> bool:
+    from app.rbac.models import Role, UserOrganization
+
+    result = await db.execute(
+        select(Role.name)
+        .join(UserOrganization, UserOrganization.role_id == Role.id)
+        .where(UserOrganization.user_id == user_id)
+    )
+    return "teacher" in {row[0] for row in result.all()}
+
+
+async def _validate_teacher_ids(db: AsyncSession, teacher_ids: list[uuid.UUID]) -> list[uuid.UUID]:
+    unique_teacher_ids = list(dict.fromkeys(teacher_ids))
+    for teacher_id in unique_teacher_ids:
+        if not await _is_teacher_user(db, teacher_id):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="All teacher_ids must belong to teacher users")
+    return unique_teacher_ids
 
 
 @router.get("", response_model=list[UserResponse])
@@ -26,9 +46,24 @@ async def list_users(
     pagination: Annotated[PaginationParams, Depends(parse_pagination)],
     _admin: Annotated[User, require_roles("platform_admin")],
 ) -> list[UserResponse]:
+    from app.rbac.models import Role, UserOrganization
+
     base_query = select(User).where(User.deleted_at.is_(None))
     filters = parse_filters(request, User)
     filtered_query = apply_filters(base_query, filters, User)
+    role_name = request.query_params.get("role_name")
+    if role_name:
+        filtered_query = (
+            filtered_query
+            .join(UserOrganization, UserOrganization.user_id == User.id)
+            .join(Role, Role.id == UserOrganization.role_id)
+            .where(
+                UserOrganization.is_primary.is_(True),
+                Role.name == role_name,
+                Role.deleted_at.is_(None),
+            )
+            .distinct()
+        )
 
     total = await get_total_count(db, filtered_query)
     response.headers["X-Total-Count"] = str(total)
@@ -62,7 +97,19 @@ async def create_user_endpoint(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already exists")
     if await get_user_by_email(db, data.email):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already exists")
+    role_names = data.role_names if data.role_names else [data.role_name]
+    teacher_ids = data.teacher_ids if data.teacher_ids is not None else (
+        [data.owner_teacher_id] if data.owner_teacher_id else []
+    )
+    if "student" not in role_names:
+        data.owner_teacher_id = None
+        teacher_ids = []
+    else:
+        teacher_ids = await _validate_teacher_ids(db, teacher_ids)
+        data.owner_teacher_id = teacher_ids[0] if teacher_ids else None
     user = await create_user(db, data)
+    if "student" in role_names and teacher_ids:
+        await replace_student_teacher_links(db, student_id=user.id, teacher_ids=teacher_ids)
     return await build_user_response(db, user)
 
 
@@ -82,7 +129,10 @@ async def update_user_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     # Update basic fields
-    basic_data = data.model_dump(exclude_unset=True, exclude={"role_names", "password"})
+    basic_data = data.model_dump(
+        exclude_unset=True,
+        exclude={"role_names", "password", "teacher_ids", "owner_teacher_id"},
+    )
     for field, value in basic_data.items():
         setattr(user, field, value)
 
@@ -117,6 +167,21 @@ async def update_user_endpoint(
                         role_id=role.id,
                         is_primary=(i == 0),
                     ))
+
+    effective_role_names = data.role_names if data.role_names is not None else [
+        row.role_name for row in (await build_user_response(db, user)).organizations if row.is_primary
+    ]
+    teacher_ids = data.teacher_ids if data.teacher_ids is not None else (
+        [data.owner_teacher_id] if data.owner_teacher_id else []
+    )
+    if "student" in effective_role_names:
+        teacher_ids = await _validate_teacher_ids(db, teacher_ids)
+        if "teacher_ids" in data.model_fields_set or "owner_teacher_id" in data.model_fields_set:
+            await replace_student_teacher_links(db, student_id=user.id, teacher_ids=teacher_ids)
+            user.owner_teacher_id = teacher_ids[0] if teacher_ids else None
+    else:
+        await replace_student_teacher_links(db, student_id=user.id, teacher_ids=[])
+        user.owner_teacher_id = None
 
     await db.flush()
     await db.refresh(user)

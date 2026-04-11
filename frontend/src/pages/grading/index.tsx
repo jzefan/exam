@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  ArrowUp,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -8,6 +9,7 @@ import {
   Filter,
   RefreshCw,
   Search,
+  X,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -43,6 +45,16 @@ function getModelLogoSrc(modelLabel: string) {
 
 function toShortModelName(modelLabel: string) {
   return modelLabel.split("/")[0]?.trim() || modelLabel;
+}
+
+function buildBaseEvaluationEntry(candidateDetail: GradingCandidateDetailResponse | null) {
+  if (!candidateDetail || candidateDetail.models.length === 0) return null;
+  return {
+    prompt: "初始评估",
+    pending: false,
+    models: candidateDetail.models,
+    system: true,
+  };
 }
 
 function questionTypeLabel(questionType: "short_answer" | "code") {
@@ -122,7 +134,15 @@ export function GradingCenterPage() {
   const [candidateDetail, setCandidateDetail] = useState<GradingCandidateDetailResponse | null>(null);
   const [manualScore, setManualScore] = useState("");
   const [promptDraft, setPromptDraft] = useState("");
-  const [showPromptBox, setShowPromptBox] = useState(false);
+  const [showFollowUpWorkspace, setShowFollowUpWorkspace] = useState(false);
+  const [followUpConversation, setFollowUpConversation] = useState<
+    Array<{
+      prompt: string;
+      pending: boolean;
+      models: GradingPromptFollowUpResponse["models"];
+      system?: boolean;
+    }>
+  >([]);
   const [questionExpanded, setQuestionExpanded] = useState(false);
   const [showCandidateList, setShowCandidateList] = useState(true);
   const [candidateTransitionDirection, setCandidateTransitionDirection] = useState<"prev" | "next" | "neutral">("neutral");
@@ -246,6 +266,13 @@ export function GradingCenterPage() {
     if (!selectedTaskId) return;
     void loadCandidate(selectedTaskId);
   }, [selectedTaskId]);
+
+  useEffect(() => {
+    if (!showFollowUpWorkspace) return;
+    const baseEntry = buildBaseEvaluationEntry(candidateDetail);
+    setFollowUpConversation(baseEntry ? [baseEntry] : []);
+    setPromptDraft("");
+  }, [selectedTaskId, showFollowUpWorkspace, candidateDetail]);
 
   const summaryStats = useMemo(() => {
     const exams = inbox?.exams ?? [];
@@ -376,34 +403,31 @@ export function GradingCenterPage() {
     }
   };
 
-  const handleRerun = async () => {
-    if (!selectedTaskId) return;
-    setActionLoading("run");
-    try {
-      await apiRequest(`/grading/tasks/${selectedTaskId}/run`, {
-        method: "POST",
-        body: JSON.stringify({ locale: getUiLocale() }),
-      });
-      await refreshCurrentWorkspace();
-    } catch (error) {
-      setReportError(error instanceof Error ? error.message : "重新评分失败");
-      setActionLoading(null);
-    }
-  };
-
   const handlePromptFollowUp = () => {
     if (!selectedTaskId || !promptDraft.trim()) return;
+    const nextPrompt = promptDraft.trim();
     setActionLoading("run");
     setReportError(null);
+    setFollowUpConversation((current) => [...current, { prompt: nextPrompt, pending: true, models: [] }]);
     void apiRequest<GradingPromptFollowUpResponse>(`/grading/tasks/${selectedTaskId}/follow-up`, {
       method: "POST",
-      body: JSON.stringify({ prompt: promptDraft.trim(), locale: getUiLocale() }),
+      body: JSON.stringify({ prompt: nextPrompt, locale: getUiLocale() }),
     })
-      .then(async () => {
+      .then(async (response) => {
+        setFollowUpConversation((current) =>
+          current.map((item, index) =>
+            index === current.length - 1 ? { prompt: response.prompt, pending: false, models: response.models } : item,
+          ),
+        );
         await loadCandidate(selectedTaskId);
         setPromptDraft("");
       })
       .catch((error: unknown) => {
+        setFollowUpConversation((current) =>
+          current.map((item, index) =>
+            index === current.length - 1 ? { ...item, pending: false, models: [] } : item,
+          ),
+        );
         setReportError(error instanceof Error ? error.message : "追加 Prompt 复评失败");
       })
       .finally(() => {
@@ -427,29 +451,31 @@ export function GradingCenterPage() {
           </div>
         </div>
       )}
-      <div className="flex flex-col gap-4 border-b border-border/70 px-4 pb-4 xl:flex-row xl:items-start xl:justify-between">
-        <div className="space-y-3">
-          <div>
-            <h1 className="text-base font-bold tracking-tight">阅卷中心</h1>
-            <p className="mt-2 text-sm text-muted-foreground">
-              当前共有 {summaryStats.examCount} 场考试、{summaryStats.questionCount} 道题，
-              待处理 {summaryStats.pendingCount} 份，已完成 {summaryStats.completedCount} 份。
-            </p>
+      {!showFollowUpWorkspace ? (
+        <div className="flex flex-col gap-4 border-b border-border/70 px-4 pb-4 xl:flex-row xl:items-start xl:justify-between">
+          <div className="space-y-3">
+            <div>
+              <h1 className="text-base font-bold tracking-tight">阅卷中心</h1>
+              <p className="mt-2 text-sm text-muted-foreground">
+                当前共有 {summaryStats.examCount} 场考试、{summaryStats.questionCount} 道题，
+                待处理 {summaryStats.pendingCount} 份，已完成 {summaryStats.completedCount} 份。
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" onClick={() => void refreshCurrentWorkspace()}>
+              <RefreshCw className="h-4 w-4" />
+              刷新
+            </Button>
+            <Button variant="outline" onClick={() => navigate("/grading/analytics")}>
+              <Filter className="h-4 w-4" />
+              查看统计
+            </Button>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" onClick={() => void refreshCurrentWorkspace()}>
-            <RefreshCw className="h-4 w-4" />
-            刷新
-          </Button>
-          <Button variant="outline" onClick={() => navigate("/grading/analytics")}>
-            <Filter className="h-4 w-4" />
-            查看统计
-          </Button>
-        </div>
-      </div>
+      ) : null}
 
-      <main className="grid min-h-0 flex-1 gap-0 overflow-hidden xl:grid-cols-[360px_minmax(0,1fr)]">
+      <main className="relative grid min-h-0 flex-1 gap-0 overflow-hidden xl:grid-cols-[360px_minmax(0,1fr)]">
         <section className="min-h-0 overflow-hidden border-r border-border dark:border-white/15">
           <div className="flex h-full min-h-0 flex-col overflow-hidden px-4 pt-6 pb-2">
             <div className="shrink-0 space-y-3 border-b border-border/70 pb-4">
@@ -540,6 +566,210 @@ export function GradingCenterPage() {
             </div>
           </div>
         </section>
+
+        {showFollowUpWorkspace ? (
+          <section className="absolute inset-0 z-30 animate-in fade-in-0 zoom-in-[0.99] duration-300 bg-background">
+            <div className="flex h-full min-h-0 flex-col">
+              <div className="flex items-center justify-between border-b border-border/70 px-6 py-4">
+                <div className="min-w-0 space-y-1">
+                  <p className="truncate text-sm font-medium text-foreground/90">
+                    {candidateDetail?.candidate_name ?? "-"}
+                    {candidateDetail?.candidate_code ? ` ｜ ${candidateDetail.candidate_code}` : ""}
+                    {candidateDetail?.suggested_score != null ? ` ｜ 建议分数 ${candidateDetail.suggested_score}` : ""}
+                  </p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {questionSummary || questionDetail?.question_label || "当前题目"}
+                  </p>
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => setShowFollowUpWorkspace(false)} aria-label="退出 Prompt 复评">
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+
+              <div className="grid min-h-0 flex-1 grid-cols-[320px_minmax(0,1fr)] overflow-hidden">
+                <aside className="flex min-h-0 flex-col border-r border-border/70 bg-muted/10 dark:border-white/15 dark:bg-white/[0.02]">
+                  <div className="border-b border-border/70 px-5 py-4">
+                    <div className="text-sm font-medium">考生列表</div>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto">
+                    {loadingQuestion ? (
+                      <div className="flex h-full items-center justify-center px-4 text-sm text-muted-foreground">
+                        正在加载考生...
+                      </div>
+                    ) : (
+                      <div className="flex flex-col">
+                        {sortedCandidates.map((candidate) => (
+                          <TooltipProvider key={`followup-${candidate.task_id}`} delayDuration={120}>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCandidateTransitionDirection("neutral");
+                                    setSelectedTaskId(candidate.task_id);
+                                  }}
+                                  className={cn(
+                                    "group mx-2 my-1 flex min-h-11 w-auto items-center gap-3 rounded-lg px-3 text-left transition-all duration-200",
+                                    candidate.task_id === activeCandidate?.task_id
+                                      ? "bg-accent text-accent-foreground"
+                                      : "bg-transparent text-muted-foreground hover:bg-accent/70 hover:text-foreground",
+                                  )}
+                                >
+                                  <span
+                                    className={cn(
+                                      "h-2 w-2 shrink-0 rounded-full transition-transform group-hover:scale-125",
+                                      statusDotClass(candidate.status),
+                                      candidate.task_id === activeCandidate?.task_id && "ring-2 ring-primary/20",
+                                    )}
+                                  />
+                                  <div className="min-w-0 flex-1">
+                                    <span
+                                      className={cn(
+                                      "block truncate text-sm",
+                                        candidate.task_id === activeCandidate?.task_id ? "font-medium text-accent-foreground" : "text-foreground/80",
+                                      )}
+                                    >
+                                      {candidate.candidate_name}
+                                    </span>
+                                  </div>
+                                </button>
+                              </TooltipTrigger>
+                              <TooltipContent
+                                side="right"
+                                className="rounded-lg border border-border bg-background px-3 py-2 text-foreground shadow-lg"
+                              >
+                                <div className="space-y-1 text-xs">
+                                  <p className="font-semibold">{candidate.candidate_name}</p>
+                                  {candidate.candidate_code ? (
+                                    <p className="text-muted-foreground">学号：{candidate.candidate_code}</p>
+                                  ) : null}
+                                  <p className="text-muted-foreground">状态：{candidate.status}</p>
+                                </div>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </aside>
+
+                <section className="flex min-h-0 flex-col">
+                  <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+                    {followUpConversation.length > 0 ? (
+                      <div className="space-y-8">
+                        {followUpConversation.map((entry, entryIndex) => (
+                          <div key={`${entry.prompt}-${entryIndex}`} className="space-y-5">
+                            {entry.system ? (
+                              <div className="flex justify-start">
+                                <div className="max-w-3xl rounded-2xl border border-border/70 bg-muted/20 px-5 py-4 text-sm leading-7 text-foreground/80 shadow-sm">
+                                  当前考生既有模型评估
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="flex justify-end">
+                                <div className="max-w-3xl rounded-2xl bg-primary px-5 py-4 text-sm leading-7 text-primary-foreground shadow-sm">
+                                  {entry.prompt}
+                                </div>
+                              </div>
+                            )}
+
+                            <div className="space-y-6">
+                              {(entry.pending ? (candidateDetail?.models ?? []).map((model) => ({
+                                stage: model.stage,
+                                model_label: model.model_label,
+                                score: model.score,
+                                summary: "",
+                                process: [],
+                                risk_flags: [],
+                              })) : entry.models).map((model) => {
+                                const modelLogoSrc = getModelLogoSrc(model.model_label);
+                                return (
+                                  <div key={`${entry.prompt}-${model.stage}`} className="space-y-3 border-b border-border/60 pb-5 last:border-b-0">
+                                    <div className="flex items-center gap-3">
+                                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-background shadow-sm ring-1 ring-border/50">
+                                        {modelLogoSrc ? (
+                                          <img src={modelLogoSrc} alt={model.model_label} className="h-5 w-5 object-contain" />
+                                        ) : (
+                                          <RefreshCw className="h-4 w-4 text-muted-foreground" />
+                                        )}
+                                      </div>
+                                      <div className="flex items-baseline gap-3">
+                                        <p className="text-sm font-semibold">{toShortModelName(model.model_label)}</p>
+                                        {entry.pending ? (
+                                          <span className="text-xs text-muted-foreground">等待回复</span>
+                                        ) : (
+                                          <span className="text-sm text-primary">{model.score}</span>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="space-y-3 pl-11">
+                                      {entry.pending ? (
+                                        <>
+                                          <div className="h-4 w-40 animate-pulse rounded bg-muted" />
+                                          <div className="h-4 w-full animate-pulse rounded bg-muted/80" />
+                                          <div className="h-4 w-5/6 animate-pulse rounded bg-muted/80" />
+                                        </>
+                                      ) : (
+                                        <>
+                                          <p className="text-sm leading-7 text-foreground/85">{model.summary}</p>
+                                          {model.process.length > 0 ? (
+                                            <ul className="space-y-2 text-sm text-muted-foreground">
+                                              {model.process.map((item) => (
+                                                <li key={item} className="flex gap-2">
+                                                  <ChevronRight className="mt-1 h-4 w-4 shrink-0 opacity-50" />
+                                                  <span>{item}</span>
+                                                </li>
+                                              ))}
+                                            </ul>
+                                          ) : null}
+                                        </>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-border/70 bg-muted/10 px-6 text-center text-sm text-muted-foreground">
+                        当前考生还没有复评会话，直接在底部输入 Prompt 开始。
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="border-t border-border/70 bg-background px-6 py-4">
+                    <div className="mx-auto flex max-w-4xl flex-col gap-3">
+                      <Textarea
+                        value={promptDraft}
+                        onChange={(event) => setPromptDraft(event.target.value)}
+                        placeholder="继续追问这道题或这位考生的评分依据、知识点覆盖和边界情况。"
+                        className="min-h-[104px] resize-none rounded-2xl border-border/70 bg-muted/15"
+                      />
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-xs text-muted-foreground">这会分别发送给各模型，并保留为本次复评记录。</p>
+                        <div className="flex items-center gap-2">
+                          <Button variant="outline" onClick={() => setShowFollowUpWorkspace(false)}>
+                            返回评分
+                          </Button>
+                          <Button
+                            onClick={handlePromptFollowUp}
+                            disabled={!promptDraft.trim() || actionLoading === "run" || !selectedTaskId}
+                          >
+                            <ArrowUp className="h-4 w-4" />
+                            发送给各模型
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </section>
+        ) : null}
 
         <section className="flex min-h-[calc(100vh-180px)] flex-col">
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 pt-6 pb-0">
@@ -926,34 +1156,19 @@ export function GradingCenterPage() {
                 >
                   下一个考生
                 </Button>
-                <Button variant="ghost" onClick={() => setShowPromptBox((current) => !current)}>
-                  {showPromptBox ? "关闭 Prompt" : "追加 Prompt 复评"}
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setShowFollowUpWorkspace(true);
+                    const followUpCount = candidateDetail?.follow_ups?.length ?? 0;
+                    setSelectedFollowUpIndex(
+                      followUpCount > 0 ? followUpCount - 1 : null,
+                    );
+                  }}
+                >
+                  追加 Prompt 复评
                 </Button>
               </div>
-
-              {showPromptBox ? (
-                <div className="space-y-3 rounded-lg border border-border/70 bg-muted/20 p-4">
-                  <Textarea
-                    value={promptDraft}
-                    onChange={(event) => setPromptDraft(event.target.value)}
-                    placeholder="补充告诉各模型这次你想重点复查什么。"
-                    className="min-h-[96px]"
-                  />
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      variant="outline"
-                      onClick={handlePromptFollowUp}
-                      disabled={!promptDraft.trim() || actionLoading === "run" || !selectedTaskId}
-                    >
-                      发送给各模型
-                    </Button>
-                    <Button variant="outline" onClick={() => void handleRerun()} disabled={actionLoading === "run" || !selectedTaskId}>
-                      <RefreshCw className="h-4 w-4" />
-                      {actionLoading === "run" ? "评分中..." : "重新评分"}
-                    </Button>
-                  </div>
-                </div>
-              ) : null}
             </section>
           </div>
         </section>

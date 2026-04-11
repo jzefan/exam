@@ -99,6 +99,8 @@ export function Layout() {
   const isAdmin = role === "platform_admin";
   const isKnowledgePage = location.pathname.startsWith("/knowledge");
   const isGradingPage = location.pathname.startsWith("/grading");
+  const isQuestionImportPage = location.pathname === "/questions/import";
+  const isFullScreenPage = isKnowledgePage || isGradingPage || isQuestionImportPage;
 
   return (
     <div
@@ -240,7 +242,7 @@ export function Layout() {
                           新建选择题、填空题、主观题等
                         </NavItem>
                         <NavItem href="/questions/import" title="导入题目" icon={<Upload size={14} />}>
-                          导入 Excel、Word、PDF、TXT 题目
+                          导入 PDF、Word、Markdown 题目
                         </NavItem>
                         <NavItem href="/tags" title="标签管理" icon={<Tags size={14} />}>
                           为题目打标签，方便筛选检索
@@ -281,10 +283,10 @@ export function Layout() {
         </div>
       </header>
 
-      <main className={cn("flex-1", isKnowledgePage || isGradingPage ? "min-h-0 overflow-hidden" : "overflow-y-auto")}>
+      <main className={cn("flex-1", isFullScreenPage ? "min-h-0 overflow-hidden" : "overflow-y-auto")}>
         <div
           className={cn(
-            isKnowledgePage || isGradingPage
+            isFullScreenPage
               ? "h-full min-h-0 w-full px-0 py-0"
               : "mx-auto w-full max-w-screen-xl px-4 py-6 sm:px-6",
           )}
