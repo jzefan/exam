@@ -4,8 +4,9 @@ import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from app.job_models.models import CompetencyDimension, Skill, SkillKnowledgePoint
+from app.job_models.models import CompetencyDimension, JobModel, JobModelVersion, Skill, SkillKnowledgePoint
 
 
 async def reorder_dimensions(
@@ -20,9 +21,12 @@ async def reorder_dimensions(
     Returns: Updated list of dimensions
     """
     result = await db.execute(
-        select(CompetencyDimension).where(CompetencyDimension.model_id == model_id)
+        select(JobModel)
+        .options(selectinload(JobModel.current_version).selectinload(JobModelVersion.dimensions))
+        .where(JobModel.id == model_id)
     )
-    dimensions = result.scalars().all()
+    model = result.scalar_one_or_none()
+    dimensions = list(model.current_version.dimensions if model and model.current_version else [])
 
     for dim in dimensions:
         if dim.id in order_map:

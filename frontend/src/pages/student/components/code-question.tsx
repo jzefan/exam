@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import Editor from "@monaco-editor/react";
+import { renderLatexInHtml } from "@/components/ui/latex-text";
 import { Braces, Play, TerminalSquare } from "lucide-react";
 import type { ICodeAnswerContent, ICodeQuestionContent, IExamQuestionForStudent } from "@/types";
 import {
@@ -161,7 +162,7 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
           <div className="space-y-5 px-5 py-5">
             <div
               className="prose prose-sm max-w-none leading-7 text-[#40374d]"
-              dangerouslySetInnerHTML={{ __html: descriptionHtml }}
+              dangerouslySetInnerHTML={{ __html: renderLatexInHtml(descriptionHtml) }}
             />
 
             {content.signature ? (

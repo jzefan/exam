@@ -115,11 +115,9 @@ function buildQuestionRef(examId: string | null, questionId: string) {
 }
 
 function getUiLocale(): string {
-  if (typeof document !== "undefined" && document.documentElement.lang) {
-    return document.documentElement.lang;
-  }
-  if (typeof navigator !== "undefined" && navigator.language) {
-    return navigator.language;
+  if (typeof document !== "undefined") {
+    const pageLocale = document.documentElement.lang?.trim();
+    if (pageLocale?.toLowerCase().startsWith("en")) return pageLocale;
   }
   return "zh-CN";
 }
@@ -139,7 +137,7 @@ export function GradingCenterPage() {
     Array<{
       prompt: string;
       pending: boolean;
-      models: GradingPromptFollowUpResponse["models"];
+      models: Array<GradingPromptFollowUpResponse["models"][number] & { streamingText?: string }>;
       system?: boolean;
     }>
   >([]);
@@ -150,6 +148,7 @@ export function GradingCenterPage() {
   const [loadingQuestion, setLoadingQuestion] = useState(false);
   const [loadingCandidate, setLoadingCandidate] = useState(false);
   const [actionLoading, setActionLoading] = useState<null | "manual" | "run" | "refresh" | "confirm">(null);
+  const [followUpStreaming, setFollowUpStreaming] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
   const [expandedStages, setExpandedStages] = useState<Record<ExpandedStage, boolean>>({
     primary: true,
@@ -240,6 +239,15 @@ export function GradingCenterPage() {
     if (!firstQuestion) return;
     setSelectedQuestionRef(buildQuestionRef(firstExam.exam_id, firstQuestion.question_id));
   }, [filteredExamGroups, selectedQuestionRef]);
+
+  useEffect(() => {
+    if (filteredExamGroups.length > 0) return;
+    setSelectedQuestionRef(null);
+    setQuestionDetail(null);
+    setSelectedTaskId(null);
+    setCandidateDetail(null);
+    setShowFollowUpWorkspace(false);
+  }, [filteredExamGroups.length]);
 
   useEffect(() => {
     if (!selectedQuestionRef || !inbox) return;
@@ -403,44 +411,141 @@ export function GradingCenterPage() {
     }
   };
 
-  const handlePromptFollowUp = () => {
+  const handlePromptFollowUp = async () => {
     if (!selectedTaskId || !promptDraft.trim()) return;
     const nextPrompt = promptDraft.trim();
-    setActionLoading("run");
+    setFollowUpStreaming(true);
     setReportError(null);
+    setPromptDraft("");
     setFollowUpConversation((current) => [...current, { prompt: nextPrompt, pending: true, models: [] }]);
-    void apiRequest<GradingPromptFollowUpResponse>(`/grading/tasks/${selectedTaskId}/follow-up`, {
-      method: "POST",
-      body: JSON.stringify({ prompt: nextPrompt, locale: getUiLocale() }),
-    })
-      .then(async (response) => {
-        setFollowUpConversation((current) =>
-          current.map((item, index) =>
-            index === current.length - 1 ? { prompt: response.prompt, pending: false, models: response.models } : item,
-          ),
-        );
-        await loadCandidate(selectedTaskId);
-        setPromptDraft("");
-      })
-      .catch((error: unknown) => {
-        setFollowUpConversation((current) =>
-          current.map((item, index) =>
-            index === current.length - 1 ? { ...item, pending: false, models: [] } : item,
-          ),
-        );
-        setReportError(error instanceof Error ? error.message : "追加 Prompt 复评失败");
-      })
-      .finally(() => {
-        setActionLoading(null);
+
+    try {
+      const token = localStorage.getItem("access_token");
+      const response = await fetch(`/api/grading/tasks/${selectedTaskId}/follow-up/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ prompt: nextPrompt, locale: getUiLocale() }),
       });
+      if (!response.ok || !response.body) {
+        throw new Error(await response.text() || `请求失败: ${response.status}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let done = false;
+      while (!done) {
+        const result = await reader.read();
+        done = result.done;
+        buffer += decoder.decode(result.value ?? new Uint8Array(), { stream: !done });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() ?? "";
+        for (const eventText of events) {
+          const dataLine = eventText
+            .split("\n")
+            .find((line) => line.startsWith("data:"));
+          if (!dataLine) continue;
+          const event = JSON.parse(dataLine.replace(/^data:\s*/, "")) as {
+            event: string;
+            stage?: "primary" | "review" | "arbiter";
+            model_label?: string;
+            content?: string;
+            model?: GradingPromptFollowUpResponse["models"][number];
+            message?: string;
+          };
+
+          if (event.event === "model_start" && event.stage && event.model_label) {
+            setFollowUpConversation((current) =>
+              current.map((item, index) =>
+                index === current.length - 1
+                  ? {
+                      ...item,
+                      models: [
+                        ...item.models,
+                        {
+                          stage: event.stage!,
+                          model_label: event.model_label!,
+                          score: 0,
+                          summary: "",
+                          process: [],
+                          risk_flags: [],
+                          streamingText: "",
+                        },
+                      ],
+                    }
+                  : item,
+              ),
+            );
+          }
+
+          if (event.event === "model_delta" && event.stage && event.content) {
+            setFollowUpConversation((current) =>
+              current.map((item, index) =>
+                index === current.length - 1
+                  ? {
+                      ...item,
+                      models: item.models.map((model) =>
+                        model.stage === event.stage
+                          ? { ...model, streamingText: `${model.streamingText ?? ""}${event.content}` }
+                          : model,
+                      ),
+                    }
+                  : item,
+              ),
+            );
+          }
+
+          if (event.event === "model_done" && event.stage && event.model) {
+            setFollowUpConversation((current) =>
+              current.map((item, index) =>
+                index === current.length - 1
+                  ? {
+                      ...item,
+                      models: item.models.map((model) =>
+                        model.stage === event.stage ? event.model! : model,
+                      ),
+                    }
+                  : item,
+              ),
+            );
+          }
+
+          if (event.event === "model_error") {
+            throw new Error(event.message || "模型复评失败");
+          }
+
+          if (event.event === "done") {
+            setFollowUpConversation((current) =>
+              current.map((item, index) =>
+                index === current.length - 1 ? { ...item, pending: false } : item,
+              ),
+            );
+          }
+        }
+      }
+      await loadCandidate(selectedTaskId);
+    } catch (error) {
+      setFollowUpConversation((current) =>
+        current.map((item, index) =>
+          index === current.length - 1 ? { ...item, pending: false } : item,
+        ),
+      );
+      setReportError(error instanceof Error ? error.message : "追加 Prompt 复评失败");
+    } finally {
+      setFollowUpStreaming(false);
+    }
   };
 
   const questionSummary = formatQuestionSummary(questionDetail);
   const questionPreview = useMemo(() => toQuestionPreview(questionDetail), [questionDetail]);
+  const hasVisibleQuestions = filteredExamGroups.length > 0;
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden px-0 py-4">
-      {actionLoading === "run" && (
+      {actionLoading === "run" && !followUpStreaming && (
         <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-background/60 backdrop-blur-[2px]">
           <div className="flex flex-col items-center gap-4 rounded-2xl bg-background px-8 py-10 shadow-2xl border border-border/50">
             <RefreshCw className="h-10 w-10 animate-spin text-primary" />
@@ -567,7 +672,7 @@ export function GradingCenterPage() {
           </div>
         </section>
 
-        {showFollowUpWorkspace ? (
+        {showFollowUpWorkspace && hasVisibleQuestions ? (
           <section className="absolute inset-0 z-30 animate-in fade-in-0 zoom-in-[0.99] duration-300 bg-background">
             <div className="flex h-full min-h-0 flex-col">
               <div className="flex items-center justify-between border-b border-border/70 px-6 py-4">
@@ -675,14 +780,18 @@ export function GradingCenterPage() {
                             )}
 
                             <div className="space-y-6">
-                              {(entry.pending ? (candidateDetail?.models ?? []).map((model) => ({
-                                stage: model.stage,
-                                model_label: model.model_label,
-                                score: model.score,
-                                summary: "",
-                                process: [],
-                                risk_flags: [],
-                              })) : entry.models).map((model) => {
+                              {(entry.pending && entry.models.length === 0
+                                ? (candidateDetail?.models ?? []).map((model) => ({
+                                    stage: model.stage,
+                                    model_label: model.model_label,
+                                    score: model.score,
+                                    summary: "",
+                                    process: [],
+                                    risk_flags: [],
+                                    streamingText: "",
+                                  }))
+                                : entry.models
+                              ).map((model) => {
                                 const modelLogoSrc = getModelLogoSrc(model.model_label);
                                 return (
                                   <div key={`${entry.prompt}-${model.stage}`} className="space-y-3 border-b border-border/60 pb-5 last:border-b-0">
@@ -705,11 +814,17 @@ export function GradingCenterPage() {
                                     </div>
                                     <div className="space-y-3 pl-11">
                                       {entry.pending ? (
-                                        <>
-                                          <div className="h-4 w-40 animate-pulse rounded bg-muted" />
-                                          <div className="h-4 w-full animate-pulse rounded bg-muted/80" />
-                                          <div className="h-4 w-5/6 animate-pulse rounded bg-muted/80" />
-                                        </>
+                                        model.streamingText ? (
+                                          <p className="whitespace-pre-wrap text-sm leading-7 text-foreground/85">
+                                            {model.streamingText}
+                                          </p>
+                                        ) : (
+                                          <>
+                                            <div className="h-4 w-40 animate-pulse rounded bg-muted" />
+                                            <div className="h-4 w-full animate-pulse rounded bg-muted/80" />
+                                            <div className="h-4 w-5/6 animate-pulse rounded bg-muted/80" />
+                                          </>
+                                        )
                                       ) : (
                                         <>
                                           <p className="text-sm leading-7 text-foreground/85">{model.summary}</p>
@@ -756,10 +871,10 @@ export function GradingCenterPage() {
                           </Button>
                           <Button
                             onClick={handlePromptFollowUp}
-                            disabled={!promptDraft.trim() || actionLoading === "run" || !selectedTaskId}
+                            disabled={!promptDraft.trim() || followUpStreaming || !selectedTaskId}
                           >
                             <ArrowUp className="h-4 w-4" />
-                            发送给各模型
+                            {followUpStreaming ? "发送中..." : "发送给各模型"}
                           </Button>
                         </div>
                       </div>
@@ -772,6 +887,19 @@ export function GradingCenterPage() {
         ) : null}
 
         <section className="flex min-h-[calc(100vh-180px)] flex-col">
+          {!hasVisibleQuestions ? (
+            <div className="flex h-full min-h-0 flex-1 items-center justify-center px-8">
+              <div className="max-w-md space-y-3 text-center">
+                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                  <Search className="h-5 w-5" />
+                </div>
+                <h2 className="text-base font-semibold text-foreground">暂无可阅卷题目</h2>
+                <p className="text-sm leading-6 text-muted-foreground">
+                  当前筛选条件下没有主观题或代码题。你可以调整搜索条件，或等待考试提交后再回来查看。
+                </p>
+              </div>
+            </div>
+          ) : (
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 pt-6 pb-0">
             <section className="space-y-4 border-b border-border/70 pb-4">
               <div className="flex items-start justify-between gap-4">
@@ -1160,10 +1288,6 @@ export function GradingCenterPage() {
                   variant="ghost"
                   onClick={() => {
                     setShowFollowUpWorkspace(true);
-                    const followUpCount = candidateDetail?.follow_ups?.length ?? 0;
-                    setSelectedFollowUpIndex(
-                      followUpCount > 0 ? followUpCount - 1 : null,
-                    );
                   }}
                 >
                   追加 Prompt 复评
@@ -1171,6 +1295,7 @@ export function GradingCenterPage() {
               </div>
             </section>
           </div>
+          )}
         </section>
       </main>
     </div>

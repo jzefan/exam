@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { renderLatexInHtml } from "@/components/ui/latex-text";
 import type { IExamQuestionForStudent } from "@/types";
 
 interface Props {
@@ -20,8 +21,9 @@ export function TrueFalseQuestion({ question, answer, onChange }: Props) {
       <div
         className="prose prose-sm dark:prose-invert max-w-none leading-relaxed"
         dangerouslySetInnerHTML={{
-          __html:
+          __html: renderLatexInHtml(
             (question.content as { text?: string }).text ?? question.title,
+          ),
         }}
       />
 

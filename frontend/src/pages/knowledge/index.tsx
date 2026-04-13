@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useGetIdentity } from "@refinedev/core";
 import { type Edge, type Node } from "@xyflow/react";
 import { useNavigate } from "react-router-dom";
@@ -86,12 +86,38 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+function getKnowledgeSubtree(nodes: Node[], edges: Edge[], rootId: string | null) {
+  if (!rootId) {
+    return { nodes: [], edges: [] };
+  }
+
+  const visibleIds = new Set<string>([rootId]);
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    for (const node of nodes) {
+      const data = node.data as IKnowledgePointDetail;
+      if (data.parent_id && visibleIds.has(data.parent_id) && !visibleIds.has(node.id)) {
+        visibleIds.add(node.id);
+        changed = true;
+      }
+    }
+  }
+
+  return {
+    nodes: nodes.filter((node) => visibleIds.has(node.id)),
+    edges: edges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target)),
+  };
+}
+
 export function KnowledgeManagementPage() {
   const navigate = useNavigate();
   const { data: identity } = useGetIdentity<{ id?: string; primary_org?: { role_name?: string } | null }>();
   const [majors, setMajors] = useState<IMajor[]>([]);
   const [directions, setDirections] = useState<IDirection[]>([]);
   const [selectedDirectionId, setSelectedDirectionId] = useState<string | null>(null);
+  const [selectedRootKnowledgeId, setSelectedRootKnowledgeId] = useState<string | null>(null);
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [treeLoading, setTreeLoading] = useState(false);
@@ -153,6 +179,25 @@ export function KnowledgeManagementPage() {
     [directions],
   );
 
+  const rootKnowledgePoints = useMemo(
+    () =>
+      nodes
+        .map((node) => node.data as IKnowledgePointDetail)
+        .filter((node) => !node.parent_id)
+        .sort((a, b) => a.name.localeCompare(b.name, "zh-CN")),
+    [nodes],
+  );
+
+  const visibleFlow = useMemo(
+    () => getKnowledgeSubtree(nodes, edges, selectedRootKnowledgeId),
+    [edges, nodes, selectedRootKnowledgeId],
+  );
+
+  const getRootKnowledgePoints = useCallback(
+    (directionId: string) => (directionId === selectedDirectionId ? rootKnowledgePoints : []),
+    [rootKnowledgePoints, selectedDirectionId],
+  );
+
   const refreshStructure = useCallback(async () => {
     const nextMajors = await apiFetch<IMajor[]>(`${API}/majors`);
     const directionGroups = await Promise.all(
@@ -166,6 +211,7 @@ export function KnowledgeManagementPage() {
         setNodes([]);
         setEdges([]);
         setTreeError(null);
+        setSelectedRootKnowledgeId(null);
         return null;
       }
       return current;
@@ -183,6 +229,12 @@ export function KnowledgeManagementPage() {
       const data = await apiFetch<IFlowData>(`${API}/directions/${directionId}/tree`);
       setNodes(data.nodes as unknown as Node[]);
       setEdges(data.edges as unknown as Edge[]);
+      setSelectedRootKnowledgeId((current) => {
+        if (!current) {
+          return null;
+        }
+        return data.nodes.some((node) => node.id === current) ? current : null;
+      });
       setSelectedNodeId((current) => (current && data.nodes.some((node) => node.id === current) ? current : null));
       setEditingNodeId((current) => (current && data.nodes.some((node) => node.id === current) ? current : null));
     } catch (error) {
@@ -195,10 +247,36 @@ export function KnowledgeManagementPage() {
   const handleSelectDirection = useCallback(
     (directionId: string) => {
       setSelectedDirectionId(directionId);
+      setSelectedRootKnowledgeId(null);
+      setSelectedNodeId(null);
+      setEditingNodeId(null);
       void loadTree(directionId);
     },
     [loadTree],
   );
+
+  const handleSelectRootKnowledge = useCallback(
+    (directionId: string, knowledgeId: string) => {
+      if (selectedDirectionId !== directionId) {
+        setSelectedDirectionId(directionId);
+        void loadTree(directionId);
+      }
+      setSelectedRootKnowledgeId(knowledgeId);
+      setSelectedNodeId(knowledgeId);
+      setEditingNodeId(null);
+    },
+    [loadTree, selectedDirectionId],
+  );
+
+  const handleCreateRootKnowledge = useCallback((direction: IDirection) => {
+    setSelectedDirectionId(direction.id);
+    setSelectedRootKnowledgeId(null);
+    setSelectedNodeId(null);
+    setEditingNodeId(null);
+    setPanelInitial({ directionId: direction.id, parent_id: null });
+    setPanelOpen(true);
+    void loadTree(direction.id);
+  }, [loadTree]);
 
   const handleCreateMajor = useCallback(async () => {
     setFormState({
@@ -291,7 +369,7 @@ export function KnowledgeManagementPage() {
       }
       const parent = nodes.find((item) => item.id === parentId)?.data as IKnowledgePointDetail | undefined;
       if (isReadOnlySharedNode(parent)) {
-        setFeedbackMessage("共享知识点为只读，不能添加子知识点。");
+        setFeedbackMessage("共享知识点为只读，不能添加子知识。");
         return;
       }
       setPanelInitial({ directionId: selectedDirectionId, parent_id: parentId });
@@ -392,7 +470,7 @@ export function KnowledgeManagementPage() {
       if (!selectedDirectionId) {
         return;
       }
-      await apiFetch(`${API}/knowledge-points`, {
+      const created = await apiFetch<{ id: string }>(`${API}/knowledge-points`, {
         method: "POST",
         body: JSON.stringify({
           direction_id: selectedDirectionId,
@@ -403,6 +481,9 @@ export function KnowledgeManagementPage() {
           difficulty: null,
         }),
       });
+      if (!payload.parent_id) {
+        setSelectedRootKnowledgeId(created.id);
+      }
       await loadTree(selectedDirectionId);
     },
     [loadTree, selectedDirectionId],
@@ -631,6 +712,7 @@ export function KnowledgeManagementPage() {
         });
         await refreshStructure();
         setSelectedDirectionId(created.id);
+        setSelectedRootKnowledgeId(null);
         await loadTree(created.id);
       } else {
         await apiFetch(`${API}/directions/${formState.id}`, {
@@ -666,6 +748,7 @@ export function KnowledgeManagementPage() {
         await apiFetch(`${API}/directions/${deleteState.id}`, { method: "DELETE" });
         if (deleteState.isCurrentDirection) {
           setSelectedDirectionId(null);
+          setSelectedRootKnowledgeId(null);
           setNodes([]);
           setEdges([]);
           setTreeError(null);
@@ -697,7 +780,7 @@ export function KnowledgeManagementPage() {
           body: JSON.stringify(data),
         });
       } else {
-        await apiFetch(`${API}/knowledge-points`, {
+        const created = await apiFetch<{ id: string }>(`${API}/knowledge-points`, {
           method: "POST",
           body: JSON.stringify({
             ...data,
@@ -705,6 +788,10 @@ export function KnowledgeManagementPage() {
             parent_id: panelInitial.parent_id ?? null,
           }),
         });
+        if (!panelInitial.parent_id) {
+          setSelectedRootKnowledgeId(created.id);
+          setSelectedNodeId(created.id);
+        }
       }
       if (selectedDirectionId) {
         await loadTree(selectedDirectionId);
@@ -717,15 +804,19 @@ export function KnowledgeManagementPage() {
     <div className="flex h-[calc(100vh-3.5rem)] overflow-hidden">
       <MajorDirectionSidebar
         getDirections={getDirections}
+        getRootKnowledgePoints={getRootKnowledgePoints}
         majors={majors}
         onCreateDirection={handleCreateDirection}
         onCreateMajor={handleCreateMajor}
+        onCreateRootKnowledge={handleCreateRootKnowledge}
         onDeleteDirection={handleDeleteDirection}
         onDeleteMajor={handleDeleteMajor}
         onEditDirection={handleEditDirection}
         onEditMajor={handleEditMajor}
         onSelect={handleSelectDirection}
+        onSelectRootKnowledge={handleSelectRootKnowledge}
         selectedDirectionId={selectedDirectionId}
+        selectedRootKnowledgeId={selectedRootKnowledgeId}
       />
 
       <div className="flex flex-1 flex-col overflow-hidden">
@@ -740,13 +831,20 @@ export function KnowledgeManagementPage() {
             <Button
               className="rounded-full"
               onClick={() => {
-                setPanelInitial({ directionId: selectedDirectionId });
+                if (selectedRootKnowledgeId && isReadOnlySharedNode(getKnowledgeNode(selectedRootKnowledgeId))) {
+                  setFeedbackMessage("共享主知识/技能为只读，不能添加子知识。");
+                  return;
+                }
+                setPanelInitial({
+                  directionId: selectedDirectionId,
+                  parent_id: selectedRootKnowledgeId,
+                });
                 setPanelOpen(true);
               }}
               size="sm"
               type="button"
             >
-              + 添加知识点
+              {selectedRootKnowledgeId ? "+ 添加子知识" : "+ 添加主知识/技能"}
             </Button>
           )}
         </div>
@@ -780,11 +878,37 @@ export function KnowledgeManagementPage() {
           </div>
         )}
 
-        {selectedDirectionId && !treeLoading && !treeError && (
+        {selectedDirectionId && !treeLoading && !treeError && !selectedRootKnowledgeId && (
+          <div className="flex flex-1 items-center justify-center px-6">
+            <div className="max-w-md text-center">
+              <p className="text-xs uppercase tracking-[0.22em] text-stone-400 dark:text-stone-500">
+                主知识/技能
+              </p>
+              <p className="mt-3 text-sm text-stone-600 dark:text-stone-400">
+                {rootKnowledgePoints.length > 0
+                  ? "在左侧选择一个主知识/技能后，右侧会展示它下面的子知识结构。"
+                  : "当前方向还没有主知识/技能，先创建一个主知识/技能，再维护它的子知识。"}
+              </p>
+              <Button
+                className="mt-5 rounded-full"
+                onClick={() => {
+                  setPanelInitial({ directionId: selectedDirectionId, parent_id: null });
+                  setPanelOpen(true);
+                }}
+                size="sm"
+                type="button"
+              >
+                + 添加主知识/技能
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {selectedDirectionId && !treeLoading && !treeError && selectedRootKnowledgeId && (
           <KnowledgeTreeCanvas
             editingNodeId={editingNodeId}
-            initialEdges={edges}
-            initialNodes={nodes}
+            initialEdges={visibleFlow.edges}
+            initialNodes={visibleFlow.nodes}
             onAddChild={handleAddChild}
             onDelete={handleDelete}
             onEdit={handleEdit}

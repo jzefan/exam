@@ -1,182 +1,123 @@
-"""Unit tests for job_models SQLAlchemy models."""
-
-import asyncio
+from datetime import datetime, timezone
 import uuid
+from pathlib import Path
 
-import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy import select
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.dialects.postgresql import JSONB
 
-from app.models import Base
-from app.rbac.models import Organization
 from app.job_models.models import (
     CompetencyDimension,
     JobModel,
-    JobModelProject,
     JobModelTemplate,
-    Skill,
-    SkillKnowledgePoint,
+    JobModelVersion,
+    SourceDocument,
 )
 
-TEST_DATABASE_URL = "sqlite+aiosqlite:///test_job_models.db"
+
+def test_job_model_has_main_entity_fields_and_version_link() -> None:
+    columns = JobModel.__table__.c
+
+    assert "job_role" in columns
+    assert "model_type" in columns
+    assert "job_family" in columns
+    assert "industry_code" in columns
+    assert "industry_name" in columns
+    assert "direction_code" in columns
+    assert "direction_name" in columns
+    assert "status" in columns
+    assert "origin_standard_model_id" in columns
+    assert "org_id" in columns
+    assert "created_by" in columns
+    assert "current_version_id" in columns
+
+    assert "versions" in JobModel.__dict__
+    assert list(columns.current_version_id.foreign_keys)[0].target_fullname == "job_model_versions.id"
+    assert list(columns.origin_standard_model_id.foreign_keys)[0].target_fullname == "job_models.id"
+    assert JobModel.__mapper__.relationships["versions"]._user_defined_foreign_keys == {
+        JobModelVersion.__table__.c.job_model_id
+    }
 
 
-@pytest.fixture(scope="module")
-def event_loop():
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
+def test_job_model_version_is_lean_and_version_scoped() -> None:
+    columns = JobModelVersion.__table__.c
+
+    assert "job_model_id" in columns
+    assert "version" in columns
+    assert "version_note" in columns
+    assert "source_type" in columns
+    assert "raw_content" in columns
+    assert "is_current" in columns
+    assert "created_by" in columns
+    assert "published_at" in columns
+    assert isinstance(columns.raw_content.type.dialect_impl(postgresql.dialect()), JSONB)
+    assert "job_role" not in columns
+    assert "model_type" not in columns
+    assert "job_family" not in columns
+    assert "origin_standard_model_id" not in columns
 
 
-@pytest.fixture(scope="module")
-async def db_engine():
-    engine = create_async_engine(TEST_DATABASE_URL, echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield engine
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-    await engine.dispose()
+def test_competency_dimension_points_to_version() -> None:
+    columns = CompetencyDimension.__table__.c
+
+    assert "model_version_id" in columns
+    assert "model_id" not in columns
+    assert list(columns.model_version_id.foreign_keys)[0].target_fullname == "job_model_versions.id"
+    assert "model_version" in CompetencyDimension.__dict__
 
 
-@pytest.fixture
-async def db_session(db_engine) -> AsyncSession:
-    session_factory = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
-    async with session_factory() as session:
-        yield session
-
-
-@pytest.fixture
-async def org(db_session: AsyncSession) -> Organization:
-    organization = Organization(name="Test Org", type="enterprise", is_active=True)
-    db_session.add(organization)
-    await db_session.flush()
-    return organization
-
-
-@pytest.fixture
-def user_id() -> uuid.UUID:
-    return uuid.uuid4()
-
-
-@pytest.mark.asyncio
-async def test_create_project(db_session: AsyncSession, org: Organization, user_id: uuid.UUID):
-    project = JobModelProject(
-        name="Test Project",
-        industry="Technology",
-        org_id=org.id,
-        created_by=user_id,
+def test_job_model_version_supports_content_metadata() -> None:
+    version = JobModelVersion(
+        id=uuid.uuid4(),
+        job_model_id=uuid.uuid4(),
+        version=2,
+        version_note="Rebased from standard template",
+        source_type="standard_based",
+        raw_content={"dimensions": []},
+        is_current=True,
+        created_by=uuid.uuid4(),
+        published_at=datetime.now(timezone.utc),
     )
-    db_session.add(project)
-    await db_session.flush()
 
-    assert project.id is not None
-    assert project.status == "draft"
-
-
-@pytest.mark.asyncio
-async def test_create_full_hierarchy(db_session: AsyncSession, org: Organization, user_id: uuid.UUID):
-    project = JobModelProject(
-        name="Hierarchy Project",
-        org_id=org.id,
-        created_by=user_id,
-    )
-    db_session.add(project)
-    await db_session.flush()
-
-    job_model = JobModel(
-        project_id=project.id,
-        job_role="Software Engineer",
-    )
-    db_session.add(job_model)
-    await db_session.flush()
-
-    dimension = CompetencyDimension(
-        model_id=job_model.id,
-        name="Technical Skills",
-        sort_order=1,
-    )
-    db_session.add(dimension)
-    await db_session.flush()
-
-    skill = Skill(
-        dimension_id=dimension.id,
-        name="Python Programming",
-        sort_order=1,
-    )
-    db_session.add(skill)
-    await db_session.flush()
-
-    kp = SkillKnowledgePoint(
-        skill_id=skill.id,
-        name="Async/Await",
-        difficulty="中级",
-        sort_order=1,
-    )
-    db_session.add(kp)
-    await db_session.commit()
-
-    result = await db_session.execute(
-        select(SkillKnowledgePoint).where(SkillKnowledgePoint.skill_id == skill.id)
-    )
-    kps = result.scalars().all()
-    assert len(kps) == 1
+    assert version.version == 2
+    assert version.source_type == "standard_based"
+    assert version.raw_content == {"dimensions": []}
+    assert version.created_by is not None
+    assert version.published_at is not None
 
 
-@pytest.mark.asyncio
-async def test_create_template(db_session: AsyncSession, user_id: uuid.UUID):
+def test_source_document_prefers_job_model_attachment() -> None:
+    columns = SourceDocument.__table__.c
+
+    assert "job_model_id" in columns
+    assert "job_model_version_id" in columns
+    assert list(columns.job_model_id.foreign_keys)[0].target_fullname == "job_models.id"
+    assert list(columns.job_model_version_id.foreign_keys)[0].target_fullname == "job_model_versions.id"
+    assert "job_model" in SourceDocument.__dict__
+    assert "job_model_version" in SourceDocument.__dict__
+    assert "source_documents" in JobModel.__dict__
+    assert SourceDocument.__mapper__.relationships["job_model"].mapper.class_ is JobModel
+    assert SourceDocument.__mapper__.relationships["job_model_version"].mapper.class_ is JobModelVersion
+    assert "delete-orphan" not in SourceDocument.__mapper__.relationships["job_model_version"].cascade
+
+
+def test_job_model_template_still_supports_templates() -> None:
     template = JobModelTemplate(
+        id=uuid.uuid4(),
         name="Software Engineer Template",
         industry="Technology",
-        template_data={"dimensions": [], "skills": []},
-        created_by=user_id,
+        template_data={"dimensions": []},
+        created_by=uuid.uuid4(),
     )
-    db_session.add(template)
-    await db_session.flush()
 
     assert template.id is not None
-    assert template.usage_count == 0
+    assert template.template_data == {"dimensions": []}
 
 
-from app.job_models.schemas import (
-    DimensionCreate,
-    JobModelCreate,
-    ProjectCreate,
-    SkillCreate,
-    SkillKnowledgePointCreate,
-    TemplateCreate,
-)
+def test_migration_avoids_duplicate_origin_fk_and_restores_plain_json() -> None:
+    migration = Path("/Users/jzefan/work/proj/exam/backend/alembic/versions/20260413_job_model_deproject.py").read_text()
+    upgrade_text, downgrade_text = migration.split("def downgrade() -> None:")
 
-
-def test_project_create_schema() -> None:
-    data = ProjectCreate(name="Test", industry="IT")
-    assert data.name == "Test"
-    assert data.description is None
-
-
-def test_job_model_create_nested() -> None:
-    data = JobModelCreate(
-        job_role="Engineer",
-        dimensions=[
-            DimensionCreate(
-                name="Tech",
-                skills=[
-                    SkillCreate(
-                        name="Python",
-                        level="L3",
-                        knowledge_points=[
-                            SkillKnowledgePointCreate(name="Decorators"),
-                        ],
-                    ),
-                ],
-            ),
-        ],
-    )
-    assert len(data.dimensions) == 1
-    assert len(data.dimensions[0].skills) == 1
-    assert len(data.dimensions[0].skills[0].knowledge_points) == 1
-
-
-def test_template_create_schema() -> None:
-    data = TemplateCreate(name="Template", template_data={"dimensions": []})
-    assert data.template_data == {"dimensions": []}
+    assert "fk_job_models_origin_standard_model_id_job_models" not in upgrade_text
+    assert "sa.JSON().with_variant(JSONB, \"postgresql\")" not in downgrade_text
+    assert "sa.JSON(), nullable=True" in downgrade_text
+    assert "fk_job_models_origin_standard_model_id_job_models" in downgrade_text

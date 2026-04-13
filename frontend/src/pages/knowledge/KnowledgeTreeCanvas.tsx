@@ -1,8 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   Background,
   Controls,
   ReactFlow,
+  type ReactFlowInstance,
   useEdgesState,
   useNodesState,
   type Edge,
@@ -16,6 +17,39 @@ import { PrerequisiteEdge } from "./PrerequisiteEdge";
 
 const nodeTypes = { knowledgeNode: KnowledgeNode };
 const edgeTypes = { prerequisite: PrerequisiteEdge };
+
+function getFitViewSettings(nodes: Node[]) {
+  const nodeCount = nodes.length;
+  const xPositions = nodes.map((node) => node.position.x);
+  const horizontalSpan = xPositions.length > 0 ? Math.max(...xPositions) - Math.min(...xPositions) : 0;
+  const depthCount = Math.max(1, Math.round(horizontalSpan / 280) + 1);
+
+  if (nodeCount <= 1) {
+    return { minZoom: 1, maxZoom: 1.25, padding: 0.42 };
+  }
+
+  if (nodeCount <= 6) {
+    return { minZoom: 0.82, maxZoom: 1.18, padding: 0.34 };
+  }
+
+  if (nodeCount <= 10) {
+    return { minZoom: 0.72, maxZoom: 1.08, padding: 0.28 };
+  }
+
+  if (nodeCount <= 18) {
+    return {
+      minZoom: depthCount >= 4 ? 0.64 : 0.7,
+      maxZoom: 0.98,
+      padding: 0.2,
+    };
+  }
+
+  return {
+    minZoom: depthCount >= 5 ? 0.56 : 0.62,
+    maxZoom: 0.9,
+    padding: 0.16,
+  };
+}
 
 interface Props {
   initialNodes: Node[];
@@ -54,6 +88,7 @@ export function KnowledgeTreeCanvas({
 }: Props) {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+  const [flowInstance, setFlowInstance] = useState<ReactFlowInstance | null>(null);
 
   useEffect(() => {
     const incomingTargets = new Set(initialEdges.map((edge) => edge.target));
@@ -85,6 +120,22 @@ export function KnowledgeTreeCanvas({
     setEdges(initialEdges);
   }, [initialEdges, setEdges]);
 
+  useEffect(() => {
+    if (!flowInstance || initialNodes.length === 0) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      const settings = getFitViewSettings(initialNodes);
+      void flowInstance.fitView({
+        duration: 320,
+        ...settings,
+      });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [flowInstance, initialNodes]);
+
   const handleNodeClick: NodeMouseHandler = (_, node) => {
     onSelectNode(node.id);
   };
@@ -113,6 +164,7 @@ export function KnowledgeTreeCanvas({
         minZoom={0.3}
         nodeTypes={nodeTypes}
         nodes={nodes}
+        onInit={setFlowInstance}
         onPaneClick={() => onSelectNode(null)}
         onNodeClick={handleNodeClick}
         onNodeDoubleClick={handleNodeDoubleClick}

@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useList } from "@refinedev/core";
 import { useNavigate } from "react-router-dom";
-import { BookOpen, ChevronRight, AlertCircle, Calendar, Hash, CheckCircle2 } from "lucide-react";
+import { BookOpen, ChevronRight, AlertCircle, Calendar, CheckCircle2 } from "lucide-react";
+import { renderLatexInHtml } from "@/components/ui/latex-text";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -66,7 +67,7 @@ function WrongAnswerCard({ item }: { item: IWrongAnswer }) {
 
           <div className="min-h-[3.5rem] flex flex-col gap-3">
             <p className="text-[15px] font-bold text-foreground/90 line-clamp-2 leading-snug group-hover:text-primary transition-colors"
-              dangerouslySetInnerHTML={{ __html: item.question_title }}
+              dangerouslySetInnerHTML={{ __html: renderLatexInHtml(item.question_title) }}
             />
             
             {item.tags && item.tags.length > 0 && (

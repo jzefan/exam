@@ -79,9 +79,32 @@ describe("StudentSelector", () => {
       await screen.findByText((_, element) => element?.textContent === "已选 2 名考生"),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /清空选择/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /移除考生 张三/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /移除考生 李四/i })).toBeInTheDocument();
+    expect(screen.getByText("张三、李四")).toBeInTheDocument();
     expect(screen.queryByText("已选考生")).not.toBeInTheDocument();
+  });
+
+  it("supports selecting students by class and across classes", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const view = render(<StudentSelector selectedIds={[]} onChange={onChange} />);
+
+    await user.click(await screen.findByRole("button", { name: "一班" }));
+    expect(onChange).toHaveBeenLastCalledWith(["student-1"]);
+
+    onChange.mockClear();
+    view.rerender(<StudentSelector selectedIds={["student-1"]} onChange={onChange} />);
+    await user.click(await screen.findByRole("button", { name: "二班" }));
+    expect(onChange).toHaveBeenLastCalledWith(["student-1", "student-2"]);
+  });
+
+  it("supports selecting all students in the current visible list", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<StudentSelector selectedIds={[]} onChange={onChange} />);
+
+    await user.click(await screen.findByRole("button", { name: /全选当前列表/i }));
+
+    expect(onChange).toHaveBeenLastCalledWith(["student-1", "student-2"]);
   });
 
   it("shows manual add fields for name, phone, optional student id, and class", async () => {

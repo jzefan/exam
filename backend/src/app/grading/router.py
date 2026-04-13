@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser, user_has_role
@@ -32,6 +35,7 @@ from app.grading.service import (
     get_grading_inbox,
     get_grading_question_candidates,
     run_grading_prompt_follow_up,
+    stream_grading_prompt_follow_up,
     list_grading_tasks,
     run_grading_task_with_role_binding,
 )
@@ -126,6 +130,29 @@ async def run_grading_prompt_follow_up_endpoint(
             )
         )
     )
+
+
+@router.post("/tasks/{task_id}/follow-up/stream")
+async def stream_grading_prompt_follow_up_endpoint(
+    task_id: str,
+    payload: GradingPromptFollowUpCreate,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    is_admin = await _is_grading_admin(db, user)
+
+    async def event_stream():
+        async for event in stream_grading_prompt_follow_up(
+            db,
+            task_id,
+            payload.prompt,
+            payload.locale,
+            current_user_id=user.id,
+            is_platform_admin=is_admin,
+        ):
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @router.get("/tasks", response_model=list[GradingTaskListItemRead])

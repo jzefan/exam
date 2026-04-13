@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.ai_pipeline.pipeline import DocumentProcessingPipeline, PipelineStatus
-from app.job_models.models import JobModel, JobModelProject, SourceDocument
+from app.job_models.models import CompetencyDimension, JobModel, JobModelVersion, Skill, SkillKnowledgePoint, SourceDocument
 from app.models import Base
 from app.rbac.models import Organization
 
@@ -49,21 +49,34 @@ async def org(db_session: AsyncSession) -> Organization:
 
 
 @pytest.fixture
-async def project(db_session: AsyncSession, org: Organization) -> JobModelProject:
-    proj = JobModelProject(
-        name="Test Project",
+async def job_model(db_session: AsyncSession, org: Organization) -> JobModel:
+    model = JobModel(
         org_id=org.id,
+        job_role="Existing Job Model",
         created_by=None,
     )
-    db_session.add(proj)
+    db_session.add(model)
     await db_session.flush()
-    return proj
+
+    version = JobModelVersion(
+        job_model_id=model.id,
+        version=1,
+        is_current=True,
+        source_type="manual",
+    )
+    db_session.add(version)
+    await db_session.flush()
+    model.current_version_id = version.id
+    model.current_version = version
+    await db_session.flush()
+    return model
 
 
 @pytest.fixture
-async def source_doc(db_session: AsyncSession, project: JobModelProject) -> SourceDocument:
+async def source_doc(db_session: AsyncSession, job_model: JobModel) -> SourceDocument:
     doc = SourceDocument(
-        project_id=project.id,
+        job_model_id=job_model.id,
+        job_model_version_id=job_model.current_version_id,
         file_name="test.pdf",
         file_path="/tmp/test.pdf",
         file_type="pdf",
@@ -115,7 +128,7 @@ async def test_pipeline_status_tracking() -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_document_success(db_session: AsyncSession, source_doc: SourceDocument, project: JobModelProject) -> None:
+async def test_process_document_success(db_session: AsyncSession, source_doc: SourceDocument, job_model: JobModel) -> None:
     """Test successful full pipeline execution with mocked services."""
     graded_output = {
         "job_role": "Software Engineer",
@@ -164,13 +177,13 @@ async def test_process_document_success(db_session: AsyncSession, source_doc: So
     result = await pipeline.process_document(
         document_id=source_doc.id,
         upload_file=upload_file,
-        project_id=project.id,
+        job_model_id=job_model.id,
         user_id=uuid.uuid4(),
     )
 
     assert isinstance(result, JobModel)
     assert result.job_role == "Software Engineer"
-    assert result.source_type == "ai_generated"
+    assert result.current_version_id is not None
 
     status = PipelineStatus.get_job(source_doc.id)
     assert status is not None
@@ -205,7 +218,7 @@ async def test_process_document_extraction_error() -> None:
         await pipeline.process_document(
             document_id=doc_id,
             upload_file=upload_file,
-            project_id=uuid.uuid4(),
+            job_model_id=uuid.uuid4(),
             user_id=uuid.uuid4(),
         )
 
@@ -216,7 +229,7 @@ async def test_process_document_extraction_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_job_model_from_llm_output(db_session: AsyncSession, project: JobModelProject) -> None:
+async def test_create_job_model_from_llm_output(db_session: AsyncSession, job_model: JobModel) -> None:
     """Test _create_job_model_from_llm_output builds correct hierarchy."""
     graded_data = {
         "job_role": "Data Analyst",
@@ -255,20 +268,26 @@ async def test_create_job_model_from_llm_output(db_session: AsyncSession, projec
         db=db_session,
     )
 
-    model = await pipeline._create_job_model_from_llm_output(project.id, graded_data, matched_data)
+    model = await pipeline._create_job_model_from_llm_output(
+        job_model.id,
+        uuid.uuid4(),
+        graded_data,
+        matched_data,
+    )
 
     assert isinstance(model, JobModel)
     assert model.job_role == "Data Analyst"
-    assert model.source_type == "ai_generated"
-    assert model.project_id == project.id
+    assert model.id == job_model.id
+    assert model.current_version is not None
+    assert model.current_version.source_type == "ai_generated"
+    assert model.current_version.version == 2
 
-    # Verify dimensions were created (loaded via refresh in service)
     from sqlalchemy import select
-    from sqlalchemy.orm import selectinload
-    from app.job_models.models import CompetencyDimension, Skill, SkillKnowledgePoint
 
     result = await db_session.execute(
-        select(CompetencyDimension).where(CompetencyDimension.model_id == model.id)
+        select(CompetencyDimension).where(
+            CompetencyDimension.model_version_id == model.current_version_id
+        )
     )
     dims = result.scalars().all()
     assert len(dims) == 1

@@ -3,7 +3,7 @@
 import enum
 import uuid
 
-from sqlalchemy import JSON, Column, Enum, Float, ForeignKey, Integer, String, Table, Text, Uuid
+from sqlalchemy import JSON, Column, Enum, Float, ForeignKey, Integer, String, Table, Text, UniqueConstraint, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -89,3 +89,17 @@ class Question(OwnerMixin, BaseModel):
     knowledge_points: Mapped[list[KnowledgePoint]] = relationship(
         secondary=question_knowledge_points, back_populates="questions", lazy="selectin"
     )
+
+
+class UserKnowledgePointUsage(BaseModel):
+    __tablename__ = "user_knowledge_point_usage"
+    __table_args__ = (UniqueConstraint("user_id", "knowledge_point_id", name="uq_user_kp_usage_user_kp"),)
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    knowledge_point_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("knowledge_points.id", ondelete="CASCADE"), nullable=False
+    )
+    use_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+
+    user: Mapped["User"] = relationship("User")  # type: ignore[name-defined]
+    knowledge_point: Mapped[KnowledgePoint] = relationship("KnowledgePoint")

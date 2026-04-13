@@ -376,7 +376,20 @@ difficulty_reason: 给出难度建议的理由
 _VALID_QUESTION_TYPES = {"choice", "true_false", "fill_in", "short_answer", "essay", "code"}
 
 
-_TEMPLATE_PREFIXES = ("题型：", "题目内容：", "答案：", "分析：", "解析：", "难度：")
+_TEMPLATE_PREFIXES = (
+    "题型：",
+    "题目内容：",
+    "答案：",
+    "分析：",
+    "解析：",
+    "难度：",
+    "[题型]",
+    "[题目内容]",
+    "[答案]",
+    "[分析]",
+    "[解析]",
+    "[难度]",
+)
 _QUESTION_START_PATTERNS = [
     re.compile(r"^\s*(\d+[\.．\)）]|[\(\（]\d+[\)）]|\[\d+\]|【\d+】|\d+、)\s*"),
     re.compile(r"^\s*([一二三四五六七八九十]+[、\.．])\s*"),
@@ -483,10 +496,53 @@ def _normalize_difficulty(value: str | None) -> int:
         "困难": 5,
         "很难": 5,
     }
+    template_labels = {
+        "很容易": 1,
+        "容易": 2,
+        "一般": 3,
+        "困难": 4,
+        "很难": 5,
+    }
+    for label, difficulty in template_labels.items():
+        if label in value:
+            return difficulty
     for label, difficulty in labels.items():
         if label in value:
             return difficulty
     return 3
+
+
+def _parse_template_field_line(line: str) -> tuple[str, str] | None:
+    normalized = line.strip()
+    bracket_match = re.match(r"^\[(题型|题目内容|答案|参考答案|分析|解析|难度)\]\s*(.*)$", normalized)
+    if bracket_match:
+        return bracket_match.group(1), bracket_match.group(2).strip()
+    colon_match = re.match(r"^(题型|题目内容|答案|参考答案|分析|解析|难度)[:：]\s*(.*)$", normalized)
+    if colon_match:
+        return colon_match.group(1), colon_match.group(2).strip()
+    return None
+
+
+def _split_template_blocks(raw_text: str) -> list[list[str]]:
+    lines = [line.rstrip() for line in raw_text.replace("\r\n", "\n").split("\n")]
+    blocks: list[list[str]] = []
+    current: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        field = _parse_template_field_line(stripped)
+        starts_new_question = bool(field and field[0] == "题型" and current)
+        if starts_new_question:
+            blocks.append(current)
+            current = [stripped]
+            continue
+        current.append(stripped)
+
+    if current:
+        blocks.append(current)
+    return blocks
 
 
 def _detect_question_type(raw_text: str, options: dict[str, str], answer_text: str) -> tuple[str, str]:
@@ -505,6 +561,15 @@ def _detect_question_type(raw_text: str, options: dict[str, str], answer_text: s
     if len(options) >= 2:
         return "choice", "medium"
     return "short_answer", "medium"
+
+
+def _is_standalone_question_type_line(line: str) -> bool:
+    return bool(
+        re.fullmatch(
+            r"(单选题|单选|多选题|多选|选择题|判断题|判断|填空题|填空|简答题|简答|编程题|编程|论述题|论述)",
+            line.strip(),
+        )
+    )
 
 
 def build_import_draft_from_segment(
@@ -531,6 +596,8 @@ def build_import_draft_from_segment(
             analysis = analysis_match.group(2).strip()
         elif difficulty_match:
             difficulty_text = difficulty_match.group(2).strip()
+        elif _is_standalone_question_type_line(line):
+            continue
         elif not option_match:
             content_lines.append(_strip_question_start_prefix(line))
 
@@ -566,20 +633,25 @@ def build_import_draft_from_segment(
 
 
 def parse_template_document(raw_text: str) -> list[QuestionImportDraft]:
-    blocks = [block.strip() for block in re.split(r"\n\s*(?:---+)?\s*\n", raw_text.replace("\r\n", "\n")) if block.strip()]
     drafts: list[QuestionImportDraft] = []
-    for block in blocks:
+    for block_lines in _split_template_blocks(raw_text):
         fields: dict[str, str] = {}
-        for line in block.splitlines():
-            match = re.match(r"^(题型|题目内容|答案|参考答案|分析|解析|难度)[:：]\s*(.*)$", line.strip())
-            if match:
-                fields[match.group(1)] = match.group(2).strip()
+        content_lines: list[str] = []
+        for line in block_lines:
+            field = _parse_template_field_line(line)
+            if field:
+                fields[field[0]] = field[1]
+            else:
+                content_lines.append(line)
         if not fields:
             continue
+        content_text = fields.get("题目内容", "")
+        if content_lines:
+            content_text = "\n".join(part for part in [content_text, *content_lines] if part).strip()
         text = "\n".join(
             [
                 fields.get("题型", ""),
-                fields.get("题目内容", ""),
+                content_text,
                 f"答案：{fields.get('答案') or fields.get('参考答案') or ''}",
                 f"解析：{fields.get('分析') or fields.get('解析') or ''}",
                 f"难度：{fields.get('难度') or '3'}",
@@ -728,3 +800,26 @@ async def bulk_create_questions(
     for data in questions:
         await create_question(db, data, user_id)
     return len(questions)
+
+
+async def get_or_create_ai_question_bank(
+    db: AsyncSession, user_id: uuid.UUID
+) -> uuid.UUID:
+    """Get or create the 'AI题库' question bank for the user."""
+    result = await db.execute(
+        select(QuestionBank).where(
+            QuestionBank.name == "AI题库", QuestionBank.owner_id == user_id
+        )
+    )
+    bank = result.scalar_one_or_none()
+    if bank:
+        return bank.id
+    bank = QuestionBank(
+        name="AI题库",
+        description="AI自动生成的题目",
+        owner_id=user_id,
+        visibility=VisibilityScope.PRIVATE,
+    )
+    db.add(bank)
+    await db.flush()
+    return bank.id

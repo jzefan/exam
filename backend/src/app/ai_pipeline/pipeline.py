@@ -7,18 +7,18 @@ from typing import Optional
 from fastapi import UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.ai_pipeline.extraction import DocumentExtractor
 from app.ai_pipeline.llm_service import LLMPipeline
 from app.ai_pipeline.vector_search import VectorSearchService
-from app.job_models.models import JobModel, SourceDocument
+from app.job_models.models import CompetencyDimension, JobModel, JobModelVersion, Skill, SourceDocument
 from app.job_models.schemas import (
     DimensionCreate,
-    JobModelCreate,
     SkillCreate,
     SkillKnowledgePointCreate,
 )
-from app.job_models.service import create_job_model
+from app.job_models.service import create_dimension
 
 
 class PipelineStatus:
@@ -90,7 +90,7 @@ class DocumentProcessingPipeline:
         self,
         document_id: uuid.UUID,
         upload_file: UploadFile,
-        project_id: uuid.UUID,
+        job_model_id: uuid.UUID,
         user_id: uuid.UUID,
     ) -> JobModel:
         """
@@ -100,7 +100,7 @@ class DocumentProcessingPipeline:
         Args:
             document_id: UUID of SourceDocument
             upload_file: Uploaded file
-            project_id: JobModelProject ID
+            job_model_id: Target JobModel ID
             user_id: User who uploaded
 
         Returns: Created JobModel
@@ -141,7 +141,12 @@ class DocumentProcessingPipeline:
 
             # Step 4: Create JobModel
             PipelineStatus.update_job(document_id, "model_creation", 95)
-            model = await self._create_job_model_from_llm_output(project_id, graded, matched)
+            model = await self._create_job_model_from_llm_output(
+                job_model_id,
+                user_id,
+                graded,
+                matched,
+            )
 
             PipelineStatus.update_job(
                 document_id,
@@ -176,13 +181,31 @@ class DocumentProcessingPipeline:
         return [s for s in skills if s]
 
     async def _create_job_model_from_llm_output(
-        self, project_id: uuid.UUID, graded_data: dict, matched_data: dict
+        self,
+        job_model_id: uuid.UUID,
+        user_id: uuid.UUID,
+        graded_data: dict,
+        matched_data: dict,
     ) -> JobModel:
         """
-        Convert LLM output into JobModel structure and save to DB.
+        Convert LLM output into a new JobModel version and save to DB.
 
-        Maps graded_data.competency_dimensions → JobModel.dimensions → skills → knowledge_points
+        Maps graded_data.competency_dimensions -> JobModelVersion.dimensions -> skills -> knowledge_points
         """
+        del matched_data
+
+        result = await self.db.execute(
+            select(JobModel)
+            .options(selectinload(JobModel.current_version))
+            .where(
+                JobModel.id == job_model_id,
+                JobModel.deleted_at.is_(None),
+            )
+        )
+        model = result.scalar_one_or_none()
+        if model is None:
+            raise ValueError("Job model not found")
+
         dimensions_data = graded_data.get("competency_dimensions", [])
 
         dimensions = []
@@ -217,11 +240,44 @@ class DocumentProcessingPipeline:
                 )
             )
 
-        model_data = JobModelCreate(
-            job_role=graded_data.get("job_role", "Unknown Role"),
-            dimensions=dimensions,
-            source_type="ai_generated",
-            version_note="Auto-generated from document via AI pipeline",
-        )
+        current_version_number = model.current_version.version if model.current_version else 0
+        if model.current_version is not None:
+            model.current_version.is_current = False
 
-        return await create_job_model(self.db, project_id, model_data)
+        model.job_role = graded_data.get("job_role", model.job_role)
+
+        new_version = JobModelVersion(
+            job_model_id=model.id,
+            version=current_version_number + 1,
+            version_note="Auto-generated from document via AI pipeline",
+            is_current=True,
+            source_type="ai_generated",
+            raw_content={
+                "job_role": model.job_role,
+                "dimensions": [dim.model_dump() for dim in dimensions],
+            },
+            created_by=user_id,
+            published_at=datetime.now(timezone.utc),
+        )
+        self.db.add(new_version)
+        await self.db.flush()
+
+        for dim_data in dimensions:
+            await create_dimension(self.db, new_version.id, dim_data)
+
+        model.current_version_id = new_version.id
+        model.current_version = new_version
+        await self.db.flush()
+        refreshed = await self.db.execute(
+            select(JobModel)
+            .options(
+                selectinload(JobModel.current_version)
+                .selectinload(JobModelVersion.dimensions)
+                .selectinload(CompetencyDimension.skills)
+                .selectinload(Skill.knowledge_points)
+            )
+            .where(JobModel.id == model.id)
+        )
+        loaded = refreshed.scalar_one_or_none()
+
+        return loaded or model

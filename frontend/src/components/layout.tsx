@@ -17,19 +17,22 @@ import {
 } from "lucide-react";
 import {
   NavigationMenu,
-  NavigationMenuContent,
   NavigationMenuItem,
   NavigationMenuLink,
   NavigationMenuList,
-  NavigationMenuTrigger,
   navigationMenuTriggerStyle,
 } from "@/components/ui/navigation-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
 import { UserDropdown } from "./user-dropdown";
 import { ThemeCustomizer } from "./theme-customizer";
 import { useTheme } from "./theme-provider";
 import { cn } from "@/lib/utils";
-import React from "react";
+import React, { useState } from "react";
 import { canAccessJobModels } from "@/utils/role-routing";
 
 /* ------------------------------------------------------------------ */
@@ -42,24 +45,32 @@ function NavItem({
   icon,
   children,
   className,
+  onNavigate,
 }: {
   href: string;
   title: string;
   icon?: React.ReactNode;
   children?: React.ReactNode;
   className?: string;
+  onNavigate?: () => void;
 }) {
   const navigate = useNavigate();
+
+  const handleNavigate = () => {
+    onNavigate?.();
+    navigate(href);
+  };
+
   return (
     <li>
       <div
         role="link"
         tabIndex={0}
-        onClick={() => navigate(href)}
+        onClick={handleNavigate}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            navigate(href);
+            handleNavigate();
           }
         }}
         className={cn(
@@ -101,6 +112,8 @@ export function Layout() {
   const isGradingPage = location.pathname.startsWith("/grading");
   const isQuestionImportPage = location.pathname === "/questions/import";
   const isFullScreenPage = isKnowledgePage || isGradingPage || isQuestionImportPage;
+  const [examMenuOpen, setExamMenuOpen] = useState(false);
+  const [questionMenuOpen, setQuestionMenuOpen] = useState(false);
 
   return (
     <div
@@ -177,25 +190,33 @@ export function Layout() {
                 {/* ---- 考试管理 (教师、管理员) ---- */}
                 {(isTeacher || isAdmin) && (
                   <NavigationMenuItem className="relative">
-                    <NavigationMenuTrigger
-                      className={cn(isActive("/exams") ? "bg-accent/50 text-accent-foreground" : "")}
-                    >
-                      <ClipboardList size={16} className="mr-1.5" />
-                      考试管理
-                    </NavigationMenuTrigger>
-                    <NavigationMenuContent className="absolute left-0 top-full z-50 mt-1.5 w-auto overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-lg">
-                      <ul className="grid w-[400px] gap-1 p-2 md:w-[440px] md:grid-cols-2">
-                        <NavItem href="/exams" title="考试列表" icon={<ListChecks size={14} />}>
-                          查看所有考试及状态
-                        </NavItem>
-                        <NavItem href="/exams/create" title="创建考试" icon={<FilePlus size={14} />}>
-                          新建考试、组卷、设置时间
-                        </NavItem>
-                        <NavItem href="/exams/submissions" title="提交记录" icon={<Send size={14} />}>
-                          查看考生答卷与提交状态
-                        </NavItem>
-                      </ul>
-                    </NavigationMenuContent>
+                    <DropdownMenu open={examMenuOpen} onOpenChange={setExamMenuOpen}>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          className={cn(
+                            navigationMenuTriggerStyle(),
+                            isActive("/exams") ? "bg-accent/50 text-accent-foreground" : "",
+                          )}
+                        >
+                          <ClipboardList size={16} className="mr-1.5" />
+                          考试管理
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" className="mt-1.5 w-[440px] rounded-md border border-border p-2 shadow-lg">
+                        <ul className="grid gap-1 md:grid-cols-2">
+                          <NavItem href="/exams" title="考试列表" icon={<ListChecks size={14} />} onNavigate={() => setExamMenuOpen(false)}>
+                            查看所有考试及状态
+                          </NavItem>
+                          <NavItem href="/exams/create" title="创建考试" icon={<FilePlus size={14} />} onNavigate={() => setExamMenuOpen(false)}>
+                            新建考试、组卷、设置时间
+                          </NavItem>
+                          <NavItem href="/exams/students" title="考试考生" icon={<Send size={14} />} onNavigate={() => setExamMenuOpen(false)}>
+                            查看各场考试下的考生列表
+                          </NavItem>
+                        </ul>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </NavigationMenuItem>
                 )}
 
@@ -221,37 +242,43 @@ export function Layout() {
                 {/* ---- 题库管理 (教师、管理员) ---- */}
                 {(isTeacher || isAdmin) && (
                   <NavigationMenuItem className="relative">
-                    <NavigationMenuTrigger
-                      className={cn(
-                        isActive("/questions") ||
-                          isActive("/tags") ||
-                          isActive("/knowledge")
-                          ? "bg-accent/50 text-accent-foreground"
-                          : "",
-                      )}
-                    >
-                      <BookOpen size={16} className="mr-1.5" />
-                      题库管理
-                    </NavigationMenuTrigger>
-                    <NavigationMenuContent className="absolute left-0 top-full z-50 mt-1.5 w-auto overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-lg">
-                      <ul className="grid w-[400px] gap-1 p-2 md:w-[440px] md:grid-cols-2">
-                        <NavItem href="/questions" title="题目列表" icon={<ListChecks size={14} />}>
-                          浏览和管理所有题目
-                        </NavItem>
-                        <NavItem href="/questions/create" title="创建题目" icon={<FilePlus size={14} />}>
-                          新建选择题、填空题、主观题等
-                        </NavItem>
-                        <NavItem href="/questions/import" title="导入题目" icon={<Upload size={14} />}>
-                          导入 PDF、Word、Markdown 题目
-                        </NavItem>
-                        <NavItem href="/tags" title="标签管理" icon={<Tags size={14} />}>
-                          为题目打标签，方便筛选检索
-                        </NavItem>
-                        <NavItem href="/knowledge" title="知识点管理" icon={<Network size={14} />}>
-                          可视化知识树，前置依赖管理
-                        </NavItem>
-                      </ul>
-                    </NavigationMenuContent>
+                    <DropdownMenu open={questionMenuOpen} onOpenChange={setQuestionMenuOpen}>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          className={cn(
+                            navigationMenuTriggerStyle(),
+                            isActive("/questions") ||
+                              isActive("/tags") ||
+                              isActive("/knowledge")
+                              ? "bg-accent/50 text-accent-foreground"
+                              : "",
+                          )}
+                        >
+                          <BookOpen size={16} className="mr-1.5" />
+                          题库管理
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" className="mt-1.5 w-[440px] rounded-md border border-border p-2 shadow-lg">
+                        <ul className="grid gap-1 md:grid-cols-2">
+                          <NavItem href="/questions" title="题目列表" icon={<ListChecks size={14} />} onNavigate={() => setQuestionMenuOpen(false)}>
+                            浏览和管理所有题目
+                          </NavItem>
+                          <NavItem href="/questions/create" title="创建题目" icon={<FilePlus size={14} />} onNavigate={() => setQuestionMenuOpen(false)}>
+                            新建选择题、填空题、主观题等
+                          </NavItem>
+                          <NavItem href="/questions/import" title="导入题目" icon={<Upload size={14} />} onNavigate={() => setQuestionMenuOpen(false)}>
+                            导入 PDF、Word、Markdown 题目
+                          </NavItem>
+                          <NavItem href="/tags" title="标签管理" icon={<Tags size={14} />} onNavigate={() => setQuestionMenuOpen(false)}>
+                            为题目打标签，方便筛选检索
+                          </NavItem>
+                          <NavItem href="/knowledge" title="知识点管理" icon={<Network size={14} />} onNavigate={() => setQuestionMenuOpen(false)}>
+                            可视化知识树，前置依赖管理
+                          </NavItem>
+                        </ul>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </NavigationMenuItem>
                 )}
 

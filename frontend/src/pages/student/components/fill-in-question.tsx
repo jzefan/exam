@@ -1,3 +1,4 @@
+import { renderLatexInHtml } from "@/components/ui/latex-text";
 import type { IExamQuestionForStudent } from "@/types";
 
 interface Props {
@@ -26,7 +27,7 @@ export function FillInQuestion({ question, answer, onChange }: Props) {
       <div
         className="prose prose-sm dark:prose-invert max-w-none leading-relaxed"
         dangerouslySetInnerHTML={{
-          __html: content.text ?? question.title,
+          __html: renderLatexInHtml(content.text ?? question.title),
         }}
       />
 

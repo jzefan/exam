@@ -1,69 +1,68 @@
-import { useState, useRef, useEffect, type CSSProperties } from "react";
+import { useState } from "react";
 import { cn } from "@/lib/utils";
-
-const MAX_WIDTH = 600;
-const MAX_HEIGHT = 400;
+import { renderLatexInHtml } from "@/components/ui/latex-text";
 
 function ExpandableImage({ src, alt }: { src: string; alt?: string }) {
   const [expanded, setExpanded] = useState(false);
-  const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null);
-  const imgRef = useRef<HTMLImageElement>(null);
-
-  useEffect(() => {
-    // Reset expanded state when src changes
-    setExpanded(false);
-  }, [src]);
-
-  const handleLoad = () => {
-    const img = imgRef.current;
-    if (!img) return;
-    setNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
-  };
-
-  const computeStyle = (): CSSProperties => {
-    if (!naturalSize) {
-      return { maxWidth: MAX_WIDTH, maxHeight: MAX_HEIGHT, objectFit: "contain" as const };
-    }
-
-    if (expanded) {
-      // Show at natural size, no max constraints
-      return { width: naturalSize.w, height: "auto" };
-    }
-
-    // Constrained: fit within MAX_WIDTH x MAX_HEIGHT, but don't upscale
-    const w = Math.min(naturalSize.w, MAX_WIDTH);
-    const scale = w / naturalSize.w;
-    const h = naturalSize.h * scale;
-
-    if (h > MAX_HEIGHT) {
-      const hScale = MAX_HEIGHT / naturalSize.h;
-      return {
-        width: naturalSize.w * hScale,
-        height: MAX_HEIGHT,
-      };
-    }
-
-    return { width: w, height: h };
-  };
-
-  const isConstrained =
-    naturalSize !== null &&
-    (naturalSize.w > MAX_WIDTH || naturalSize.h > MAX_HEIGHT);
+  const imageAlt = alt || "题目图片";
 
   return (
-    <img
-      ref={imgRef}
-      src={src}
-      alt={alt ?? ""}
-      onLoad={handleLoad}
-      onClick={isConstrained ? () => setExpanded((prev) => !prev) : undefined}
-      className={cn(
-        "rounded my-1 block transition-all duration-200",
-        isConstrained && "cursor-pointer hover:opacity-90",
+    <>
+      <button
+        type="button"
+        aria-label={`预览图片：${imageAlt}`}
+        onClick={() => setExpanded(true)}
+        className="my-2 block max-w-full overflow-hidden rounded-lg border border-border bg-muted/20 p-1 text-left transition-colors hover:border-primary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <img
+          src={src}
+          alt={imageAlt}
+          className="block max-h-80 max-w-full rounded object-contain"
+          loading="lazy"
+        />
+      </button>
+
+      {expanded && (
+        <div
+          role="dialog"
+          aria-label="图片预览"
+          aria-modal="true"
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-black/70 p-4"
+          onClick={() => setExpanded(false)}
+        >
+          <button
+            type="button"
+            aria-label="关闭图片预览"
+            className="absolute right-4 top-4 rounded-full bg-white/90 px-3 py-1.5 text-sm font-medium text-slate-900 shadow-sm hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+            onClick={() => setExpanded(false)}
+          >
+            关闭
+          </button>
+          <img
+            src={src}
+            alt={imageAlt}
+            className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          />
+        </div>
       )}
-      style={computeStyle()}
-    />
+    </>
   );
+}
+
+function parseImageTag(segment: string): { src: string; alt?: string } | null {
+  if (typeof window === "undefined" || !/^<img\s/i.test(segment)) return null;
+
+  const template = document.createElement("template");
+  template.innerHTML = segment.trim();
+  const image = template.content.querySelector("img");
+  const src = image?.getAttribute("src");
+
+  if (!src) return null;
+  return {
+    src,
+    alt: image?.getAttribute("alt") ?? undefined,
+  };
 }
 
 /**
@@ -77,15 +76,18 @@ export function RichContent({
   html: string;
   className?: string;
 }) {
-  // Split HTML into segments: img tags vs everything else
-  const segments = html.split(/(<img\s[^>]*?>)/gi);
+  // Pre-process LaTeX in the HTML
+  const processed = renderLatexInHtml(html);
 
-  if (segments.length === 1 && !/<img\s/i.test(html)) {
+  // Split HTML into segments: img tags vs everything else
+  const segments = processed.split(/(<img\s[^>]*?>)/gi);
+
+  if (segments.length === 1 && !/<img\s/i.test(processed)) {
     // No images — render as plain HTML
     return (
       <div
         className={cn("prose prose-sm max-w-none", className)}
-        dangerouslySetInnerHTML={{ __html: html }}
+        dangerouslySetInnerHTML={{ __html: processed }}
       />
     );
   }
@@ -93,18 +95,9 @@ export function RichContent({
   return (
     <div className={cn("prose prose-sm max-w-none", className)}>
       {segments.map((segment, i) => {
-        const imgMatch = segment.match(
-          /^<img\s[^>]*?src=["']([^"']+)["'][^>]*?(?:alt=["']([^"']*)["'])?[^>]*?>$/i,
-        );
-        if (imgMatch) {
-          return <ExpandableImage key={i} src={imgMatch[1]} alt={imgMatch[2]} />;
-        }
-        // Also try alt before src
-        const imgMatch2 = segment.match(
-          /^<img\s[^>]*?alt=["']([^"']*)["'][^>]*?src=["']([^"']+)["'][^>]*?>$/i,
-        );
-        if (imgMatch2) {
-          return <ExpandableImage key={i} src={imgMatch2[2]} alt={imgMatch2[1]} />;
+        const image = parseImageTag(segment);
+        if (image) {
+          return <ExpandableImage key={i} src={image.src} alt={image.alt} />;
         }
         if (!segment) return null;
         return (

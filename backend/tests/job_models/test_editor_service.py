@@ -12,7 +12,7 @@ from app.rbac.models import Organization
 from app.job_models.models import (
     CompetencyDimension,
     JobModel,
-    JobModelProject,
+    JobModelVersion,
     Skill,
     SkillKnowledgePoint,
 )
@@ -51,27 +51,32 @@ async def db_session(db_engine) -> AsyncSession:
 
 @pytest.fixture
 async def base_data(db_session: AsyncSession):
-    """Create a project + model for use in tests."""
+    """Create a job model + current version for use in tests."""
     org = Organization(name="Editor Test Org", type="enterprise", is_active=True)
     db_session.add(org)
     await db_session.flush()
 
-    project = JobModelProject(
-        name="Editor Test Project",
-        org_id=org.id,
-        created_by=uuid.uuid4(),
-    )
-    db_session.add(project)
-    await db_session.flush()
-
     model = JobModel(
-        project_id=project.id,
+        org_id=org.id,
         job_role="Software Engineer",
+        created_by=uuid.uuid4(),
     )
     db_session.add(model)
     await db_session.flush()
 
-    return {"org": org, "project": project, "model": model}
+    version = JobModelVersion(
+        job_model_id=model.id,
+        version=1,
+        is_current=True,
+        source_type="manual",
+    )
+    db_session.add(version)
+    await db_session.flush()
+    model.current_version_id = version.id
+    model.current_version = version
+    await db_session.flush()
+
+    return {"org": org, "model": model, "version": version}
 
 
 @pytest.mark.asyncio
@@ -79,9 +84,10 @@ async def test_reorder_dimensions(db_session: AsyncSession, base_data: dict):
     """Create dimensions, reorder, verify sort_order."""
     model = base_data["model"]
 
-    dim_a = CompetencyDimension(model_id=model.id, name="Dim A", sort_order=0)
-    dim_b = CompetencyDimension(model_id=model.id, name="Dim B", sort_order=1)
-    dim_c = CompetencyDimension(model_id=model.id, name="Dim C", sort_order=2)
+    version = base_data["version"]
+    dim_a = CompetencyDimension(model_version_id=version.id, name="Dim A", sort_order=0)
+    dim_b = CompetencyDimension(model_version_id=version.id, name="Dim B", sort_order=1)
+    dim_c = CompetencyDimension(model_version_id=version.id, name="Dim C", sort_order=2)
     db_session.add_all([dim_a, dim_b, dim_c])
     await db_session.flush()
 
@@ -100,8 +106,9 @@ async def test_move_skill_to_dimension(db_session: AsyncSession, base_data: dict
     """Create skill in dim A, move to dim B, verify dimension_id."""
     model = base_data["model"]
 
-    dim_a = CompetencyDimension(model_id=model.id, name="Source Dim", sort_order=0)
-    dim_b = CompetencyDimension(model_id=model.id, name="Target Dim", sort_order=1)
+    version = base_data["version"]
+    dim_a = CompetencyDimension(model_version_id=version.id, name="Source Dim", sort_order=0)
+    dim_b = CompetencyDimension(model_version_id=version.id, name="Target Dim", sort_order=1)
     db_session.add_all([dim_a, dim_b])
     await db_session.flush()
 
@@ -121,7 +128,8 @@ async def test_bulk_set_skill_level(db_session: AsyncSession, base_data: dict):
     """Create skills, bulk set to 'L3', verify all have level='L3'."""
     model = base_data["model"]
 
-    dim = CompetencyDimension(model_id=model.id, name="Bulk Level Dim", sort_order=0)
+    version = base_data["version"]
+    dim = CompetencyDimension(model_version_id=version.id, name="Bulk Level Dim", sort_order=0)
     db_session.add(dim)
     await db_session.flush()
 
@@ -147,7 +155,8 @@ async def test_bulk_set_kp_difficulty(db_session: AsyncSession, base_data: dict)
     """Create KPs, bulk set difficulty, verify all updated."""
     model = base_data["model"]
 
-    dim = CompetencyDimension(model_id=model.id, name="Bulk Diff Dim", sort_order=0)
+    version = base_data["version"]
+    dim = CompetencyDimension(model_version_id=version.id, name="Bulk Diff Dim", sort_order=0)
     db_session.add(dim)
     await db_session.flush()
 

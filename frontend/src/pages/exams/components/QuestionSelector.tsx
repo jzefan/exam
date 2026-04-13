@@ -13,7 +13,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
-import { getQuestionTitle } from "@/components/questions/question-preview-utils";
+import { getQuestionContentHtml, getQuestionTitle } from "@/components/questions/question-preview-utils";
+import { LatexText } from "@/components/ui/latex-text";
+import { RichContent } from "@/components/ui/rich-content";
 import type { IQuestion, IQuestionBank } from "@/types";
 
 const ALL_BANKS = "__all_banks__";
@@ -149,6 +151,7 @@ export function QuestionSelector({
             const isSelected = selectedSet.has(q.id);
             const t = typeLabels[q.type] ?? { label: q.type, className: "" };
             const questionText = getQuestionTitle(q);
+            const questionHtml = getQuestionContentHtml(q);
             return (
               <Tooltip key={q.id}>
                 <TooltipTrigger asChild>
@@ -173,9 +176,18 @@ export function QuestionSelector({
                     <Badge variant="outline" className={`text-xs shrink-0 ${t.className}`}>
                       {t.label}
                     </Badge>
-                    <span className={`text-sm truncate flex-1 ${isSelected ? "text-primary font-medium" : "text-foreground"}`}>
-                      {questionText}
-                    </span>
+                    <div className={`min-w-0 flex-1 text-sm ${isSelected ? "text-primary font-medium" : "text-foreground"}`}>
+                      {questionHtml ? (
+                        <RichContent
+                          html={questionHtml}
+                          className="line-clamp-1 break-all [&_.katex-display]:my-0 [&_.katex-display]:inline-block [&_*]:!text-inherit"
+                        />
+                      ) : (
+                        <span className="block truncate">
+                          <LatexText>{questionText}</LatexText>
+                        </span>
+                      )}
+                    </div>
                     <span className="text-xs shrink-0 text-muted-foreground">
                       {q.score}分 · 难度{q.difficulty}
                     </span>

@@ -19,9 +19,6 @@ from app.job_models.schemas import (
     LearningResourceCreate,
     LearningResourceResponse,
     LearningResourceUpdate,
-    ProjectCreate,
-    ProjectResponse,
-    ProjectUpdate,
     SkillCreate,
     SkillKnowledgePointCreate,
     SkillKnowledgePointResponse,
@@ -41,141 +38,48 @@ from app.job_models.editor_service import (
     reorder_skills,
 )
 from app.job_models.service import (
+    create_enterprise_model_from_standard,
     create_dimension,
     create_job_model,
     create_knowledge_point,
-    create_project,
     create_skill,
     create_template,
     delete_dimension,
+    delete_job_model,
     delete_knowledge_point,
-    delete_project,
     delete_skill,
     get_job_model_by_id,
-    get_project_by_id,
     get_template_by_id,
     list_all_job_models,
-    list_job_models,
-    list_projects,
     list_templates,
     publish_new_version,
+    recommend_standard_model,
     save_model_as_template,
     update_dimension,
     update_job_model,
     update_knowledge_point,
-    update_project,
     update_skill,
     update_template,
 )
 from app.rbac.dependencies import CurrentOrgId
 from pydantic import BaseModel
-
-project_router = APIRouter()
 model_router = APIRouter()
 template_router = APIRouter()
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 
 
-# --- Project Routes ---
-
-
-@project_router.get("", response_model=list[ProjectResponse])
-async def list_all_projects(
-    db: DbSession,
-    _user: CurrentUser,
-    org_id: CurrentOrgId,
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=200),
-) -> list[ProjectResponse]:
-    projects, _ = await list_projects(db, org_id=org_id, skip=skip, limit=limit)
-    return [ProjectResponse.model_validate(p) for p in projects]
-
-
-@project_router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
-async def create_new_project(
-    body: ProjectCreate,
+@model_router.post("", response_model=JobModelResponse, status_code=status.HTTP_201_CREATED)
+async def create_model(
+    body: JobModelCreate,
     db: DbSession,
     user: CurrentUser,
     org_id: CurrentOrgId,
-) -> ProjectResponse:
-    project = await create_project(db, body, org_id=org_id, user_id=user.id)
-    await db.commit()
-    return ProjectResponse.model_validate(project)
-
-
-@project_router.get("/{project_id}", response_model=ProjectResponse)
-async def get_project(
-    project_id: uuid.UUID,
-    db: DbSession,
-    _user: CurrentUser,
-) -> ProjectResponse:
-    project = await get_project_by_id(db, project_id)
-    if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    return ProjectResponse.model_validate(project)
-
-
-@project_router.patch("/{project_id}", response_model=ProjectResponse)
-async def update_existing_project(
-    project_id: uuid.UUID,
-    body: ProjectUpdate,
-    db: DbSession,
-    _user: CurrentUser,
-) -> ProjectResponse:
-    project = await get_project_by_id(db, project_id)
-    if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    updated = await update_project(db, project, body)
-    await db.commit()
-    return ProjectResponse.model_validate(updated)
-
-
-@project_router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_existing_project(
-    project_id: uuid.UUID,
-    db: DbSession,
-    _user: CurrentUser,
-) -> Response:
-    project = await get_project_by_id(db, project_id)
-    if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    await delete_project(db, project)
-    await db.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-@project_router.get("/{project_id}/models", response_model=list[JobModelSummary])
-async def list_project_models(
-    project_id: uuid.UUID,
-    db: DbSession,
-    _user: CurrentUser,
-) -> list[JobModelSummary]:
-    project = await get_project_by_id(db, project_id)
-    if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    models = await list_job_models(db, project_id)
-    return [JobModelSummary.model_validate(m) for m in models]
-
-
-@project_router.post("/{project_id}/models", response_model=JobModelResponse, status_code=status.HTTP_201_CREATED)
-async def create_project_model(
-    project_id: uuid.UUID,
-    body: JobModelCreate,
-    db: DbSession,
-    _user: CurrentUser,
 ) -> JobModelResponse:
-    project = await get_project_by_id(db, project_id)
-    if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    model = await create_job_model(db, project_id, body)
+    model = await create_job_model(db, org_id, user.id, body)
     await db.commit()
-    # Reload with full hierarchy
     loaded = await get_job_model_by_id(db, model.id)
     return JobModelResponse.model_validate(loaded)
-
-
-# --- Model Routes ---
 
 
 @model_router.get("")
@@ -185,17 +89,51 @@ async def list_all_models(
     org_id: CurrentOrgId,
     _start: int = Query(0, ge=0),
     _end: int = Query(50, ge=1),
+    model_type: str | None = Query(None),
     response: Response = None,
-):
+) -> list[JobModelSummary]:
     """List all job models in the organization."""
     skip = _start
     limit = _end - _start if _end > _start else 50
-    models, total = await list_all_job_models(db, org_id=org_id, skip=skip, limit=limit)
+    models, total = await list_all_job_models(
+        db,
+        org_id=org_id,
+        skip=skip,
+        limit=limit,
+        model_type=model_type,
+    )
 
     # Set total count header for pagination
     response.headers["X-Total-Count"] = str(total)
 
     return [JobModelSummary.model_validate(m) for m in models]
+
+
+@model_router.delete("/{model_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_model(
+    model_id: uuid.UUID,
+    db: DbSession,
+    _user: CurrentUser,
+) -> Response:
+    model = await get_job_model_by_id(db, model_id)
+    if model is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
+    await delete_job_model(db, model)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@model_router.post("/recommend-standard", response_model=JobModelSummary)
+async def recommend_standard(
+    body: RecommendStandardRequest,
+    db: DbSession,
+    _user: CurrentUser,
+    org_id: CurrentOrgId,
+) -> JobModelSummary:
+    model = await recommend_standard_model(db, body.job_text, org_id)
+    if model is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No standard model matched")
+    return JobModelSummary.model_validate(model)
 
 
 class BilibiliSearchResult(BaseModel):
@@ -206,6 +144,20 @@ class BilibiliSearchResult(BaseModel):
     duration: str
     pic: str
     description: str
+
+
+class RecommendStandardRequest(BaseModel):
+    job_text: str
+
+
+class EnterpriseCopyCreate(BaseModel):
+    enterprise_name: str
+    version_note: str | None = None
+
+
+class EnterpriseCopyResponse(BaseModel):
+    job_model_id: uuid.UUID
+    version_id: uuid.UUID
 
 
 @model_router.get("/bilibili-cover")
@@ -289,6 +241,33 @@ async def search_bilibili_videos(
         return results
 
 
+@model_router.post("/{model_id}/create-enterprise-copy", response_model=EnterpriseCopyResponse, status_code=status.HTTP_201_CREATED)
+async def create_enterprise_copy(
+    model_id: uuid.UUID,
+    body: EnterpriseCopyCreate,
+    db: DbSession,
+    user: CurrentUser,
+    org_id: CurrentOrgId,
+) -> EnterpriseCopyResponse:
+    standard = await get_job_model_by_id(db, model_id)
+    if standard is None or standard.model_type != "standard":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Standard model not found")
+
+    created_model, created_version = await create_enterprise_model_from_standard(
+        db,
+        standard,
+        enterprise_name=body.enterprise_name,
+        org_id=org_id,
+        user_id=user.id,
+        version_note=body.version_note,
+    )
+    await db.commit()
+    return EnterpriseCopyResponse(
+        job_model_id=created_model.id,
+        version_id=created_version.id,
+    )
+
+
 @model_router.get("/{model_id}", response_model=JobModelResponse)
 async def get_model_detail(
     model_id: uuid.UUID,
@@ -356,9 +335,9 @@ async def add_dimension(
     _user: CurrentUser,
 ) -> DimensionResponse:
     model = await get_job_model_by_id(db, model_id)
-    if model is None:
+    if model is None or model.current_version is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
-    dim = await create_dimension(db, model_id, body)
+    dim = await create_dimension(db, model.current_version.id, body)
     await db.commit()
     # Reload with skills
     from sqlalchemy import select
@@ -751,7 +730,7 @@ async def create_node_resource(
     body: LearningResourceCreate,
     db: DbSession,
     user: CurrentUser,
-    node_type: str = Query(..., regex="^(dimension|skill|kp)$"),
+    node_type: str = Query(..., pattern="^(dimension|skill|kp)$"),
 ) -> LearningResourceResponse:
     """Create a learning resource (link or video URL) for a node."""
     resource = LearningResource(
@@ -903,5 +882,3 @@ async def preview_resource_html(
         raise HTTPException(status_code=500, detail="文档转换超时")
 
     return Response(content=html_content, media_type="text/html; charset=utf-8")
-
-

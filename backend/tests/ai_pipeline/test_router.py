@@ -9,7 +9,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai_pipeline.pipeline import PipelineStatus
-from app.job_models.models import JobModelProject
+from app.job_models.models import JobModel, JobModelVersion
 from app.rbac.models import Organization
 
 
@@ -22,36 +22,41 @@ async def org(db_session: AsyncSession) -> Organization:
 
 
 @pytest.fixture
-async def project(db_session: AsyncSession, org: Organization, admin_token: str) -> JobModelProject:
-    # We need the admin user's org_id to match. Get user org from admin_token.
-    # Instead, create project with org from conftest admin fixture.
-    # Query the org created by admin_token fixture.
+async def job_model(db_session: AsyncSession, org: Organization, admin_token: str) -> JobModel:
     from sqlalchemy import select
     from app.rbac.models import UserOrganization
 
     result = await db_session.execute(select(UserOrganization).limit(1))
     user_org = result.scalar_one_or_none()
 
-    if user_org is None:
-        proj = JobModelProject(name="Test Project", org_id=org.id, created_by=None)
-    else:
-        proj = JobModelProject(name="Test Project", org_id=user_org.org_id, created_by=None)
-
-    db_session.add(proj)
+    owner_org_id = org.id if user_org is None else user_org.org_id
+    model = JobModel(job_role="Test Job Model", org_id=owner_org_id, created_by=None)
+    db_session.add(model)
     await db_session.flush()
+
+    version = JobModelVersion(
+        job_model_id=model.id,
+        version=1,
+        is_current=True,
+        source_type="manual",
+    )
+    db_session.add(version)
+    await db_session.flush()
+    model.current_version_id = version.id
+    model.current_version = version
     await db_session.commit()
-    return proj
+    return model
 
 
 @pytest.mark.asyncio
-async def test_upload_document_success(admin_client: AsyncClient, project: JobModelProject) -> None:
-    """POST /upload with valid file + project_id returns 202 with document_id."""
+async def test_upload_document_success(admin_client: AsyncClient, job_model: JobModel) -> None:
+    """POST /upload with valid file + job_model_id returns 202 with document_id."""
     test_file_content = b"Job Title: Software Engineer\nRequirements: Python, FastAPI"
 
     with patch("app.ai_pipeline.router.process_document_background"):
         resp = await admin_client.post(
             "/api/ai-pipeline/documents/upload",
-            params={"project_id": str(project.id)},
+            params={"job_model_id": str(job_model.id)},
             files={"file": ("test.txt", BytesIO(test_file_content), "text/plain")},
         )
 
@@ -65,29 +70,29 @@ async def test_upload_document_success(admin_client: AsyncClient, project: JobMo
 
 
 @pytest.mark.asyncio
-async def test_upload_document_no_file(admin_client: AsyncClient, project: JobModelProject) -> None:
+async def test_upload_document_no_file(admin_client: AsyncClient, job_model: JobModel) -> None:
     """POST /upload without file returns 422 (missing required field)."""
     resp = await admin_client.post(
         "/api/ai-pipeline/documents/upload",
-        params={"project_id": str(project.id)},
+        params={"job_model_id": str(job_model.id)},
     )
     assert resp.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_upload_document_project_not_found(admin_client: AsyncClient) -> None:
-    """POST /upload with invalid project_id returns 404."""
+async def test_upload_document_job_model_not_found(admin_client: AsyncClient) -> None:
+    """POST /upload with invalid job_model_id returns 404."""
     test_file_content = b"Some JD content"
-    non_existent_project_id = uuid.uuid4()
+    non_existent_job_model_id = uuid.uuid4()
 
     resp = await admin_client.post(
         "/api/ai-pipeline/documents/upload",
-        params={"project_id": str(non_existent_project_id)},
+        params={"job_model_id": str(non_existent_job_model_id)},
         files={"file": ("test.txt", BytesIO(test_file_content), "text/plain")},
     )
 
     assert resp.status_code == 404
-    assert "Project not found" in resp.json()["detail"]
+    assert "Job model not found" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio

@@ -50,7 +50,7 @@ export function GradingAnalyticsPage() {
         <h1 className="text-base font-bold text-foreground tracking-tight">阅卷统计</h1>
         <Button variant="ghost" size="sm" onClick={() => navigate("/grading")}>
           <ArrowLeft className="h-4 w-4" />
-          返回收件箱
+          返回
         </Button>
       </div>
 

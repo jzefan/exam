@@ -1,11 +1,14 @@
 type JobModelLike = {
   id: string
-  project_id: string
+  current_version_id?: string | null
   job_role?: string
-  version?: number
-  version_note?: string | null
-  is_current?: boolean
-  source_type?: string
+  current_version?: {
+    id: string
+    version?: number
+    version_note?: string | null
+    is_current?: boolean
+    source_type?: string
+  } | null
   created_at?: string
   updated_at?: string
 }

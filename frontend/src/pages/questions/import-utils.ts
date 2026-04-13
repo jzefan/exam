@@ -26,6 +26,36 @@ export function detectQuestionImportFormat(fileName: string): "pdf" | "docx" | "
   throw new Error("暂不支持该文件格式，请上传 PDF、Word(docx) 或 Markdown 文件。");
 }
 
+export function buildStandardImportTemplate(): string {
+  return `# 题目导入标准模板
+
+请严格按照以下格式填写题目，题目之间保留一个空行。
+
+难度映射：
+- 很容易 = 1
+- 容易 = 2
+- 一般 = 3
+- 困难 = 4
+- 很难 = 5
+
+[题型] 选择题
+题目内容：我国首都是哪里？
+A. 北京
+B. 上海
+C. 广州
+D. 深圳
+[答案] A
+[解析] 北京是中国首都。
+[难度] 容易
+
+[题型] 简答题
+题目内容：请简述数据库事务的 ACID 特性。
+[答案] 原子性、一致性、隔离性、持久性。
+[解析] ACID 是数据库事务的四个核心特性。
+[难度] 一般
+`;
+}
+
 export async function extractQuestionImportText(file: File): Promise<string> {
   const format = detectQuestionImportFormat(file.name);
 
@@ -140,9 +170,21 @@ function buildAnswerPayload(type: QuestionType, answerText: string | null) {
   return { points: text.split(/\n+/).map((item) => item.trim()).filter(Boolean) };
 }
 
+export function isMissingAnswerIssue(issue: string): boolean {
+  return /未识别到答案|缺少答案|缺答案/.test(issue);
+}
+
+export function getBlockingImportIssues(draft: QuestionImportDraft): string[] {
+  return draft.issues.filter((issue) => !isMissingAnswerIssue(issue));
+}
+
+export function hasBlockingImportIssues(draft: QuestionImportDraft): boolean {
+  return getBlockingImportIssues(draft).length > 0;
+}
+
 export function buildImportableQuestions(drafts: QuestionImportDraft[], questionBankId: string | null) {
   return drafts
-    .filter((draft) => draft.review_status === "approved")
+    .filter((draft) => draft.review_status === "approved" && !hasBlockingImportIssues(draft))
     .map((draft) => ({
       type: draft.type,
       title: draft.title || generateImportQuestionTitle(draft.content_text),
@@ -213,6 +255,59 @@ export function buildImportSummary(drafts: QuestionImportDraft[]): QuestionImpor
     approved: drafts.filter((draft) => draft.review_status === "approved").length,
     skipped: drafts.filter((draft) => draft.review_status === "skipped").length,
   };
+}
+
+export function getNextDraftIdAfterRemoval(
+  drafts: QuestionImportDraft[],
+  removedDraftId: string,
+  selectedDraftId: string | null,
+): string | null {
+  if (selectedDraftId !== removedDraftId) return selectedDraftId;
+
+  const removedIndex = drafts.findIndex((draft) => draft.draft_id === removedDraftId);
+  const remainingDrafts = drafts.filter((draft) => draft.draft_id !== removedDraftId);
+  if (remainingDrafts.length === 0) return null;
+
+  return remainingDrafts[Math.min(removedIndex, remainingDrafts.length - 1)]?.draft_id ?? null;
+}
+
+export function getDraftPreviewText(draft: QuestionImportDraft): string {
+  return draft.content_text?.trim() || draft.title?.trim() || "未命名题目";
+}
+
+export function canApproveAllDrafts(drafts: QuestionImportDraft[]): boolean {
+  const pendingDrafts = drafts.filter((draft) => draft.review_status === "pending");
+  return pendingDrafts.length > 0 && pendingDrafts.every((draft) => !hasBlockingImportIssues(draft));
+}
+
+export function approveAllPendingDrafts(drafts: QuestionImportDraft[]): QuestionImportDraft[] {
+  return drafts.map((draft) => {
+    if (draft.review_status !== "pending") return draft;
+    return {
+      ...draft,
+      title: generateImportQuestionTitle(draft.content_text),
+      review_status: "approved",
+      review_required: false,
+    };
+  });
+}
+
+export function applySourceDraftEdits(
+  drafts: QuestionImportDraft[],
+  edits: Record<string, string>,
+): QuestionImportDraft[] {
+  return drafts.map((draft) => {
+    const nextRawText = edits[draft.draft_id];
+    if (nextRawText == null || nextRawText === draft.raw_text) return draft;
+
+    return {
+      ...draft,
+      raw_text: nextRawText,
+      content_text: nextRawText,
+      review_status: "pending",
+      review_required: true,
+    };
+  });
 }
 
 export function getConfidenceLabel(confidence: ImportConfidence): string {

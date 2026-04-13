@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
+import { LatexText, renderLatexInHtml } from "@/components/ui/latex-text";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Brain, ChevronDown, ChevronRight, CircleAlert, List, PanelLeft, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -167,7 +168,7 @@ export function ExamResultPage() {
         {promptHtml ? (
           <div
             className="text-[15px] leading-7 text-foreground [&_p]:m-0 [&_p+*]:mt-3"
-            dangerouslySetInnerHTML={{ __html: promptHtml }}
+            dangerouslySetInnerHTML={{ __html: renderLatexInHtml(promptHtml) }}
           />
         ) : null}
         {question.type === "choice" && options.length > 0 ? (
@@ -177,7 +178,7 @@ export function ExamResultPage() {
                 <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-background text-[12px] font-semibold text-muted-foreground">
                   {key}
                 </span>
-                <span className="pt-1 text-[14px] leading-6 text-foreground">{String(value)}</span>
+                <span className="pt-1 text-[14px] leading-6 text-foreground"><LatexText>{String(value)}</LatexText></span>
               </div>
             ))}
           </div>
@@ -249,14 +250,14 @@ export function ExamResultPage() {
                 </div>
               ) : (
                 <p className="mt-2 text-[14px] leading-6 text-muted-foreground">
-                  {renderAnswerSummary(question.answer_content)}
+                  <LatexText>{renderAnswerSummary(question.answer_content)}</LatexText>
                 </p>
               )}
             </div>
             <div className="rounded-xl bg-muted/35 p-4">
               <p className="text-[14px] font-medium text-foreground">{tStudent("result_standard_answer", undefined, locale)}</p>
               <p className="mt-2 text-[14px] leading-6 text-muted-foreground">
-                {renderStandardAnswer(question.standard_answer)}
+                <LatexText>{renderStandardAnswer(question.standard_answer)}</LatexText>
               </p>
             </div>
           </div>
@@ -278,7 +279,7 @@ export function ExamResultPage() {
                           {dimension.score} / {dimension.max_score}
                         </span>
                       </div>
-                      <p className="mt-2 text-[14px] leading-6 text-muted-foreground">{dimension.comment}</p>
+                      <p className="mt-2 text-[14px] leading-6 text-muted-foreground"><LatexText>{dimension.comment}</LatexText></p>
                     </div>
                   ))}
                 </div>

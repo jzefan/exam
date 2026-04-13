@@ -58,7 +58,55 @@ describe("QuestionSelector", () => {
     await waitFor(() => {
       expect(screen.getAllByText("下面关于 TCP 三次握手的说法，正确的是？").length).toBeGreaterThan(1);
     });
-    expect(screen.getByText("A. 客户端发送 SYN")).toBeInTheDocument();
-    expect(screen.getByText(/答案：A/)).toBeInTheDocument();
+    expect(
+      screen.getAllByText((_, element) => element?.textContent === "A. 客户端发送 SYN").length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText((_, element) => element?.textContent === "答案：A").length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("renders latex content in the manual selection list row", async () => {
+    useListMock.mockImplementation(({ resource }: { resource: string }) => {
+      if (resource === "question-banks") {
+        return { query: { data: { data: [] }, isLoading: false } };
+      }
+
+      return {
+        query: {
+          data: {
+            data: [
+              {
+                id: "question-latex",
+                type: "fill_in",
+                title: "latex-title",
+                content: { text: "求解方程 $x^2 + 1 = 0$ 的复数根。" },
+                options: null,
+                answer: { correct: ["i", "-i"] },
+                analysis: null,
+                difficulty: 3,
+                score: 5,
+                usage_count: 0,
+                question_bank_id: "bank-1",
+                question_bank_name: "数学",
+                tags: [],
+                knowledge_points: [],
+                created_by: "user-1",
+                created_by_name: "Teacher",
+                created_at: "2026-04-01T00:00:00Z",
+                updated_at: "2026-04-01T00:00:00Z",
+              },
+            ],
+            total: 1,
+          },
+          isLoading: false,
+        },
+      };
+    });
+
+    render(<QuestionSelector onChange={vi.fn()} selectedIds={[]} />);
+
+    const rowButton = await screen.findByRole("button", { name: /求解方程/i });
+    expect(rowButton.querySelector(".katex")).not.toBeNull();
   });
 });

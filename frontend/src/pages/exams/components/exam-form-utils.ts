@@ -23,6 +23,7 @@ export interface ExamFormValues {
 
 interface ValidateExamFormOptions {
   allowPastStartTime?: boolean;
+  startTimeGraceMinutes?: number;
 }
 
 export type ExamFormErrors = Partial<
@@ -68,10 +69,15 @@ export function validateExamForm(
   const start = form.start_time ? new Date(form.start_time).getTime() : NaN;
   const end = form.end_time ? new Date(form.end_time).getTime() : NaN;
   const current = now.getTime();
+  const startTimeGraceMs = Math.max(0, options.startTimeGraceMinutes ?? 0) * 60_000;
 
   if (form.start_time && Number.isNaN(start)) {
     errors.start_time = "请输入有效的开始时间。";
-  } else if (form.start_time && start < current && !options.allowPastStartTime) {
+  } else if (
+    form.start_time &&
+    start < current - startTimeGraceMs &&
+    !options.allowPastStartTime
+  ) {
     errors.start_time = "开始时间不能早于当前时间。";
   }
 

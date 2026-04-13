@@ -7,7 +7,7 @@ import os
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, AsyncIterator
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -359,7 +359,11 @@ def _resolve_prompt_locale(task_language: str | None, override_locale: str | Non
     normalized = preferred.lower()
     if normalized.startswith("en"):
         return preferred, "Respond in English."
-    return preferred, "默认使用简体中文回复；如果输入里有英文术语，可保留必要术语原文。"
+    return preferred, (
+        "必须使用简体中文回复所有评分意见、复评解释、扣分原因和改进建议；"
+        "即使题目、代码、Prompt 或浏览器语言包含英文，也不要整体改用英文。"
+        "只有专有名词、代码标识符、API 名称等必要术语可以保留英文原文。"
+    )
 
 
 def evaluate_arbitration(primary_result: dict[str, Any], review_result: dict[str, Any]) -> tuple[bool, str | None]:
@@ -714,29 +718,47 @@ async def get_grading_candidate_detail(
         key=lambda snapshot: SNAPSHOT_TYPE_ORDER.get(snapshot.snapshot_type, 99),
     )
     
-    # Follow-up results grouped by prompt
-    follow_up_snapshots = [s for s in task.snapshots if s.snapshot_type == "follow_up"]
-    follow_ups_by_prompt: dict[str, list[dict[str, Any]]] = {}
-    
-    for s in follow_up_snapshots:
-        prompt = s.evidence_summary.get("prompt", "Follow-up")
-        model_results = follow_ups_by_prompt.setdefault(prompt, [])
-        
+    # Follow-up results grouped by review round, not by prompt text.
+    follow_up_snapshots = sorted(
+        [s for s in task.snapshots if s.snapshot_type == "follow_up"],
+        key=lambda snapshot: (snapshot.created_at, str(snapshot.id)),
+    )
+    follow_up_rounds: list[dict[str, Any]] = []
+    current_round: dict[str, Any] | None = None
+    current_round_stage_count = 0
+    for snapshot in follow_up_snapshots:
+        prompt = snapshot.evidence_summary.get("prompt", "Follow-up")
+        stage = snapshot.evidence_summary.get("stage", "primary")
         process = [
-            *s.deduction_reasons,
-            *s.strengths,
-            *s.improvement_suggestions,
-            *format_evidence_summary(s.evidence_summary),
+            *snapshot.deduction_reasons,
+            *snapshot.strengths,
+            *snapshot.improvement_suggestions,
+            *format_evidence_summary(snapshot.evidence_summary),
         ]
-        
-        model_results.append({
-            "stage": s.evidence_summary.get("stage", "primary"),
-            "model_label": snapshot_model_labels.get(s.evidence_summary.get("stage"), "Follow-up"),
-            "score": s.score_total,
-            "summary": "；".join(s.deduction_reasons) or "已完成复评",
-            "process": process,
-            "risk_flags": s.risk_flags,
-        })
+        if (
+            current_round is None
+            or current_round_stage_count >= 3
+            or current_round["prompt"] != prompt
+        ):
+            current_round = {
+                "prompt": prompt,
+                "created_at": snapshot.created_at.isoformat(),
+                "models": [],
+            }
+            follow_up_rounds.append(current_round)
+            current_round_stage_count = 0
+
+        current_round["models"].append(
+            {
+                "stage": stage,
+                "model_label": snapshot_model_labels.get(stage, "Follow-up"),
+                "score": snapshot.score_total,
+                "summary": "；".join(snapshot.deduction_reasons) or "已完成复评",
+                "process": process,
+                "risk_flags": snapshot.risk_flags,
+            }
+        )
+        current_round_stage_count += 1
 
     models = []
     for snapshot in snapshots:
@@ -771,10 +793,7 @@ async def get_grading_candidate_detail(
         "teacher_feedback_reply": feedback["teacher_feedback_reply"] if feedback else None,
         "feedback_created_at": feedback["feedback_created_at"] if feedback else None,
         "models": models,
-        "follow_ups": [
-            {"prompt": prompt, "models": results}
-            for prompt, results in follow_ups_by_prompt.items()
-        ]
+        "follow_ups": follow_up_rounds,
     }
 
 
@@ -807,12 +826,6 @@ async def run_grading_prompt_follow_up(
         is_platform_admin=is_platform_admin,
     )
 
-    # Handle replacement logic: remove previous follow-ups with the same prompt
-    for s in list(task.snapshots):
-        if s.snapshot_type == "follow_up" and s.evidence_summary.get("prompt") == teacher_prompt:
-            await db.delete(s)
-    await db.flush()
-
     binding = await _load_role_binding(db, task.role_binding_version)
     context = _build_grading_context(task)
 
@@ -829,7 +842,6 @@ async def run_grading_prompt_follow_up(
 
     models: list[dict[str, Any]] = []
     for stage, role_name, model_config in providers:
-        print(f"DEBUG: Starting follow-up for stage: {stage} using model: {model_config.display_name}")
         provider = _build_provider_for_model(model_config)
         previous_snapshot = latest_snapshots.get(stage)
         previous_result = None
@@ -853,10 +865,8 @@ async def run_grading_prompt_follow_up(
         )
         try:
             result = await provider.score(system_prompt, user_prompt)
-            print(f"DEBUG: Completed follow-up for stage: {stage}. Score: {result.score_total}")
         except Exception as e:
-            print(f"DEBUG: Error in follow-up for stage: {stage}: {type(e).__name__}: {str(e)}")
-            continue
+            raise RuntimeError(f"{model_config.display_name} 复评失败: {e}") from e
         
         # Persist as follow_up snapshot
         snapshot = GradingResultSnapshot(
@@ -898,6 +908,121 @@ async def run_grading_prompt_follow_up(
     await db.flush()
 
     return {"prompt": teacher_prompt, "models": models}
+
+
+async def stream_grading_prompt_follow_up(
+    db: AsyncSession,
+    task_id: str,
+    teacher_prompt: str,
+    locale: str | None = None,
+    *,
+    current_user_id: uuid.UUID | None = None,
+    is_platform_admin: bool = True,
+) -> AsyncIterator[dict[str, Any]]:
+    result = await db.execute(
+        select(GradingTask)
+        .options(
+            selectinload(GradingTask.snapshots).selectinload(GradingResultSnapshot.model_config),
+            selectinload(GradingTask.latest_primary_snapshot),
+            selectinload(GradingTask.latest_review_snapshot),
+            selectinload(GradingTask.latest_arbitration_snapshot),
+        )
+        .where(GradingTask.id == uuid.UUID(task_id))
+    )
+    task = result.scalar_one_or_none()
+    if task is None:
+        raise ValueError("grading task not found")
+    await _ensure_task_access(
+        db,
+        task,
+        current_user_id=current_user_id,
+        is_platform_admin=is_platform_admin,
+    )
+
+    binding = await _load_role_binding(db, task.role_binding_version)
+    context = _build_grading_context(task)
+    providers = [
+        ("primary", "primary grader", binding.grader_model),
+        ("review", "review grader", binding.reviewer_model),
+        ("arbiter", "arbiter", binding.arbiter_model),
+    ]
+    latest_snapshots = {
+        "primary": task.latest_primary_snapshot,
+        "review": task.latest_review_snapshot,
+        "arbiter": task.latest_arbitration_snapshot,
+    }
+
+    yield {"event": "prompt_start", "prompt": teacher_prompt}
+    for stage, role_name, model_config in providers:
+        model_label = f"{model_config.display_name} / {model_config.model_name}"
+        yield {"event": "model_start", "stage": stage, "model_label": model_label}
+        provider = _build_provider_for_model(model_config)
+        previous_snapshot = latest_snapshots.get(stage)
+        previous_result = None
+        if previous_snapshot is not None:
+            previous_result = {
+                "score_total": previous_snapshot.score_total,
+                "dimension_scores": previous_snapshot.dimension_scores,
+                "deduction_reasons": previous_snapshot.deduction_reasons,
+                "strengths": previous_snapshot.strengths,
+                "improvement_suggestions": previous_snapshot.improvement_suggestions,
+                "evidence_summary": previous_snapshot.evidence_summary,
+                "risk_flags": previous_snapshot.risk_flags,
+            }
+        system_prompt, user_prompt = _build_follow_up_prompt_pair(
+            task,
+            context,
+            role_name,
+            teacher_prompt,
+            previous_result,
+            locale,
+        )
+        raw_text = ""
+        try:
+            async for chunk in provider.stream_text(system_prompt, user_prompt):
+                raw_text += chunk
+                yield {"event": "model_delta", "stage": stage, "content": chunk}
+            provider_result = provider.parse_response({"choices": [{"message": {"content": raw_text}}]})
+        except Exception as exc:
+            yield {"event": "model_error", "stage": stage, "model_label": model_label, "message": str(exc)}
+            raise
+
+        snapshot = GradingResultSnapshot(
+            task_id=task.id,
+            snapshot_type="follow_up",
+            score_total=provider_result.score_total,
+            dimension_scores=provider_result.dimension_scores,
+            deduction_reasons=provider_result.deduction_reasons,
+            strengths=provider_result.strengths,
+            improvement_suggestions=provider_result.improvement_suggestions,
+            evidence_summary={
+                **provider_result.evidence_summary,
+                "prompt": teacher_prompt,
+                "stage": stage,
+            },
+            risk_flags=provider_result.risk_flags,
+            role_binding_version=task.role_binding_version,
+            created_by="teacher",
+        )
+        db.add(snapshot)
+        await db.flush()
+        yield {
+            "event": "model_done",
+            "stage": stage,
+            "model": _result_to_comment_payload(provider_result, stage, model_label),
+        }
+
+    db.add(
+        GradingAuditEvent(
+            task_id=task.id,
+            event_type="grading.follow_up_completed",
+            event_payload={"prompt": teacher_prompt, "stream": True},
+            operator_type="user",
+            operator_id="teacher",
+        )
+    )
+    await db.flush()
+    yield {"event": "done", "prompt": teacher_prompt}
 
 
 async def create_manual_score_override(
@@ -1697,6 +1822,34 @@ async def run_grading_task(
         )
         await db.flush()
         return {"status": task.status, "arbitration_required": False, "reason": reason}
+
+    if arbiter_provider is not None:
+        arbiter_system_prompt, arbiter_user_prompt = _build_arbiter_prompt_pair(
+            task,
+            context,
+            primary_result,
+            review_result,
+            "no_conflict_model_output",
+            locale,
+        )
+        arbiter_result = await arbiter_provider.score(arbiter_system_prompt, arbiter_user_prompt)
+        arbiter_snapshot = _result_to_snapshot(task, arbiter_result, "arbiter")
+        db.add(arbiter_snapshot)
+        await db.flush()
+        task.latest_arbitration_snapshot = arbiter_snapshot
+        db.add(
+            GradingAuditEvent(
+                task_id=task.id,
+                event_type="grading.arbiter_completed",
+                event_payload={
+                    "snapshot_id": str(arbiter_snapshot.id),
+                    "reason": "no_conflict_model_output",
+                    "required": False,
+                },
+                operator_type="system",
+                operator_id="system",
+            )
+        )
 
     final_snapshot = _build_final_snapshot(task, primary_result, review_result)
     db.add(final_snapshot)

@@ -37,6 +37,7 @@ export function NodeDetailPanel({ open, initial, onSave, onClose }: Props) {
   const [difficulty, setDifficulty] = useState<Difficulty | "">("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const nodeLabel = initial.parent_id ? "子知识" : "主知识/技能";
 
   useEffect(() => {
     if (open) {
@@ -77,8 +78,8 @@ export function NodeDetailPanel({ open, initial, onSave, onClose }: Props) {
     <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>{initial.id ? "编辑知识点" : "新建知识点"}</DialogTitle>
-          <DialogDescription>填写知识点名称、描述、标签和难度信息。</DialogDescription>
+          <DialogTitle>{initial.id ? `编辑${nodeLabel}` : `新建${nodeLabel}`}</DialogTitle>
+          <DialogDescription>填写{nodeLabel}名称、描述、标签和难度信息。</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">

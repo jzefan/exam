@@ -13,9 +13,9 @@ from app.exams.student_router import router as student_exams_router
 from app.exams.student_router import wrong_answers_router
 from app.grading.router import router as grading_router
 from app.learning.router import router as knowledge_router
+from app.questions.ai_generate import ai_generate_router
 from app.questions.router import knowledge_points_router, question_banks_router, questions_router, tags_router
 from app.job_models.router import model_router as job_model_router
-from app.job_models.router import project_router as job_project_router
 from app.job_models.router import template_router as job_template_router
 from app.rbac.router import org_router, permission_router, role_router
 from app.rbac.students_router import router as students_router
@@ -72,10 +72,10 @@ app.include_router(permission_router, prefix="/api/permissions", tags=["permissi
 app.include_router(students_router, prefix="/api/rbac/students", tags=["students"])
 app.include_router(grading_router, prefix="/api/grading", tags=["grading"])
 app.include_router(analytics_router, prefix="/api/analytics", tags=["analytics"])
-app.include_router(job_project_router, prefix="/api/job-models/projects", tags=["job-model-projects"])
 app.include_router(job_model_router, prefix="/api/job-models/models", tags=["job-models"])
 app.include_router(job_template_router, prefix="/api/job-models/templates", tags=["job-model-templates"])
 app.include_router(ai_pipeline_router, prefix="/api/ai-pipeline", tags=["ai-pipeline"])
+app.include_router(ai_generate_router, prefix="/api/questions/ai-generate", tags=["ai-generate"])
 
 
 @app.get("/api/health")

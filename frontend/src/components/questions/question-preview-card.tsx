@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import type { IQuestion } from "@/types";
 import { Badge } from "@/components/ui/badge";
 import { CodeBlock } from "@/components/ui/code-block";
+import { LatexText } from "@/components/ui/latex-text";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { RichContent } from "@/components/ui/rich-content";
 import {
@@ -22,7 +23,7 @@ import {
 function RenderTextWithCode({ text, language }: { text: string; language?: string }) {
   const parts = text.split(/(```[\s\S]*?```)/g);
   if (parts.length === 1) {
-    return <>{text}</>;
+    return <LatexText>{text}</LatexText>;
   }
 
   return (
@@ -34,7 +35,7 @@ function RenderTextWithCode({ text, language }: { text: string; language?: strin
           const code = fenceMatch[2].trim();
           return <CodeBlock key={index} code={code} language={codeLanguage} />;
         }
-        return part ? <span key={index}>{part}</span> : null;
+        return part ? <LatexText key={index}>{part}</LatexText> : null;
       })}
     </>
   );
@@ -73,7 +74,7 @@ function renderOptions(question: IQuestion) {
     <div className={cn("mt-2", layoutClass)}>
       {entries.map(([key, value]) => (
         <span key={key} className="text-sm text-muted-foreground">
-          {key}. {value}
+          {key}. <LatexText>{value}</LatexText>
         </span>
       ))}
     </div>
@@ -135,7 +136,7 @@ export function QuestionPreviewCard({
             {html ? (
               <RichContent html={html} className="flex-1 text-sm leading-relaxed text-foreground" />
             ) : (
-              <p className="flex-1 text-sm leading-relaxed text-foreground">{getQuestionTitle(question)}</p>
+              <p className="flex-1 text-sm leading-relaxed text-foreground"><LatexText>{getQuestionTitle(question)}</LatexText></p>
             )}
             {(trailing || !hideTypeBadge) && (
               <div className="ml-2 flex flex-shrink-0 items-center gap-2">
@@ -164,7 +165,7 @@ export function QuestionPreviewCard({
           {!hideAnswer && answerText !== "" ? (
             <p className="mt-2 text-sm text-muted-foreground">
               {question.type === "short_answer" || question.type === "essay" ? "答案要点：" : "答案："}
-              {answerText}
+              <LatexText>{answerText}</LatexText>
             </p>
           ) : null}
 

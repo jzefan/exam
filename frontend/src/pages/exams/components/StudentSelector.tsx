@@ -45,6 +45,7 @@ export function StudentSelector({
 }) {
   const [mode, setMode] = useState<Mode>("select");
   const [search, setSearch] = useState("");
+  const [selectedClassFilter, setSelectedClassFilter] = useState<string>("__all__");
   const [users, setUsers] = useState<StudentRecord[]>([]);
   const [classes, setClasses] = useState<ClassItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -113,17 +114,33 @@ export function StudentSelector({
   }, []);
 
   const normalizedSearch = search.trim().toLowerCase();
+  const classFilteredUsers =
+    selectedClassFilter === "__all__"
+      ? users
+      : selectedClassFilter === "__unassigned__"
+        ? users.filter((user) => !user.class_id)
+        : users.filter((user) => user.class_id === selectedClassFilter);
   const hasMatchingClass = classes.some(
     (item) => normalizeValue(item.name) === normalizeValue(manualForm.class_name),
   );
   const manualClassSelectValue = hasMatchingClass ? manualForm.class_name : "__custom__";
   const visibleUsers = normalizedSearch
-    ? users.filter((u) => {
+    ? classFilteredUsers.filter((u) => {
         const username = u.username.toLowerCase();
         const fullName = u.full_name.toLowerCase();
         return username.includes(normalizedSearch) || fullName.includes(normalizedSearch);
       })
-    : users;
+    : classFilteredUsers;
+  const visibleUserIds = visibleUsers.map((user) => user.id);
+  const allVisibleSelected =
+    visibleUserIds.length > 0 && visibleUserIds.every((id) => selectedSet.has(id));
+  const selectedStudentSummary = selectedIds
+    .map((id) => {
+      const user = users.find((item) => item.id === id);
+      return user?.full_name ?? user?.username ?? id.slice(0, 8);
+    })
+    .join("、");
+  const unassignedCount = users.filter((user) => !user.class_id).length;
 
   useEffect(() => {
     const fullName = manualForm.full_name.trim();
@@ -165,6 +182,30 @@ export function StudentSelector({
     } else {
       onChange([...selectedIds, id]);
     }
+  };
+
+  const toggleVisibleUsers = () => {
+    if (visibleUserIds.length === 0) return;
+    if (allVisibleSelected) {
+      onChange(selectedIds.filter((id) => !visibleUserIds.includes(id)));
+      return;
+    }
+    onChange([...new Set([...selectedIds, ...visibleUserIds])]);
+  };
+
+  const toggleClassStudents = (classId: string | "__unassigned__") => {
+    const classStudentIds = users
+      .filter((user) => (classId === "__unassigned__" ? !user.class_id : user.class_id === classId))
+      .map((user) => user.id);
+    if (classStudentIds.length === 0) return;
+
+    const alreadySelected = classStudentIds.every((id) => selectedSet.has(id));
+    if (alreadySelected) {
+      onChange(selectedIds.filter((id) => !classStudentIds.includes(id)));
+      return;
+    }
+
+    onChange([...new Set([...selectedIds, ...classStudentIds])]);
   };
 
   const handleFileImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -327,32 +368,12 @@ export function StudentSelector({
         </div>
 
         {selectedIds.length > 0 ? (
-          <div className="flex flex-wrap gap-1.5">
-            {selectedIds.slice(0, 20).map((id) => {
-              const user = users.find((u) => u.id === id);
-              return (
-                <span
-                  key={id}
-                  className="inline-flex items-center gap-1 rounded-md bg-background px-2 py-1 text-xs text-foreground shadow-sm"
-                >
-                  {user?.full_name ?? user?.username ?? id.slice(0, 8)}
-                  <button
-                    type="button"
-                    aria-label={`移除考生 ${user?.full_name ?? user?.username ?? id.slice(0, 8)}`}
-                    className="text-muted-foreground transition-colors hover:text-foreground"
-                    onClick={() => toggle(id)}
-                  >
-                    <X size={12} />
-                  </button>
-                </span>
-              );
-            })}
-            {selectedIds.length > 20 ? (
-              <span className="py-1 text-xs text-muted-foreground">
-                ...还有 {selectedIds.length - 20} 人
-              </span>
-            ) : null}
-          </div>
+          <p
+            className="truncate text-xs text-muted-foreground"
+            title={selectedStudentSummary}
+          >
+            {selectedStudentSummary}
+          </p>
         ) : (
           <p className="text-xs text-muted-foreground">还没有选择考生，可以从列表、Excel 或手动添加。</p>
         )}
@@ -393,6 +414,79 @@ export function StudentSelector({
           aria-labelledby={`${modeId}-select-tab`}
           className="space-y-3"
         >
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/20 px-3 py-3">
+            <Select value={selectedClassFilter} onValueChange={setSelectedClassFilter}>
+              <SelectTrigger aria-label="班级筛选" className="h-8 w-[180px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">全部班级</SelectItem>
+                {classes.map((item) => (
+                  <SelectItem key={item.id} value={item.id}>
+                    {item.name}
+                  </SelectItem>
+                ))}
+                <SelectItem value="__unassigned__">未分班学生</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <Button type="button" variant="outline" size="sm" onClick={toggleVisibleUsers}>
+              {allVisibleSelected ? "取消当前列表" : "全选当前列表"}
+            </Button>
+
+            {selectedClassFilter !== "__all__" && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() =>
+                  toggleClassStudents(
+                    selectedClassFilter === "__unassigned__" ? "__unassigned__" : selectedClassFilter,
+                  )
+                }
+              >
+                {selectedClassFilter === "__unassigned__" ? "切换未分班学生" : "切换当前班级"}
+              </Button>
+            )}
+          </div>
+
+          {classes.length > 0 || unassignedCount > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {classes.map((item) => {
+                const classStudentIds = users
+                  .filter((user) => user.class_id === item.id)
+                  .map((user) => user.id);
+                const classSelected =
+                  classStudentIds.length > 0 && classStudentIds.every((id) => selectedSet.has(id));
+                return (
+                  <Button
+                    key={item.id}
+                    type="button"
+                    variant={classSelected ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => toggleClassStudents(item.id)}
+                  >
+                    {item.name}
+                  </Button>
+                );
+              })}
+              {unassignedCount > 0 && (
+                <Button
+                  type="button"
+                  variant={
+                    users.filter((user) => !user.class_id).every((user) => selectedSet.has(user.id))
+                      ? "default"
+                      : "outline"
+                  }
+                  size="sm"
+                  onClick={() => toggleClassStudents("__unassigned__")}
+                >
+                  未分班
+                </Button>
+              )}
+            </div>
+          ) : null}
+
           <div className="relative">
             <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <Input

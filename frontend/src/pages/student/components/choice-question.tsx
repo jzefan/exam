@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { renderLatexInHtml } from "@/components/ui/latex-text";
 import type { IExamQuestionForStudent } from "@/types";
 
 interface Props {
@@ -39,8 +40,9 @@ export function ChoiceQuestion({ question, answer, onChange }: Props) {
         <div
           className="prose prose-sm dark:prose-invert max-w-none leading-relaxed flex-1"
           dangerouslySetInnerHTML={{
-            __html:
+            __html: renderLatexInHtml(
               (question.content as { text?: string }).text ?? question.title,
+            ),
           }}
         />
         {isMulti && (
@@ -82,9 +84,8 @@ export function ChoiceQuestion({ question, answer, onChange }: Props) {
                   "pt-0.5 text-sm leading-relaxed",
                   isSelected ? "text-secondary-foreground" : "text-foreground/70",
                 )}
-              >
-                {text}
-              </span>
+                dangerouslySetInnerHTML={{ __html: renderLatexInHtml(text) }}
+              />
             </button>
           );
         })}

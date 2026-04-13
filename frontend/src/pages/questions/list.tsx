@@ -1,7 +1,7 @@
 import { useList, useCreate, useDelete, useGetIdentity, useInvalidate, useNavigation, useUpdate } from "@refinedev/core";
 import type { CrudFilter } from "@refinedev/core";
 import type { IQuestion, IQuestionBank, ITag, QuestionType } from "../../types";
-import { Search, BookOpen, Pencil, Trash2, Plus, ChevronDown, ChevronUp, Library, Check, PackageOpen, GraduationCap, SlidersHorizontal, ChevronsDownUp, ChevronsUpDown, Link2, Save, ChevronRight, Lock, Upload } from "lucide-react";
+import { Search, BookOpen, Pencil, Trash2, Plus, ChevronDown, ChevronUp, Library, Check, PackageOpen, GraduationCap, SlidersHorizontal, ChevronsDownUp, ChevronsUpDown, Link2, Save, ChevronRight, Lock, Upload, Sparkles } from "lucide-react";
 import { useState, useCallback, useRef, useEffect, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -1043,6 +1043,10 @@ export function QuestionList() {
           <Button variant="outline" className="shrink-0" onClick={() => navigate("/questions/import")}>
             <Upload size={16} />
             <span className="hidden sm:inline">导入题目</span>
+          </Button>
+          <Button variant="outline" className="shrink-0" onClick={() => navigate("/questions/ai-generate")}>
+            <Sparkles size={16} />
+            <span className="hidden sm:inline">AI 生成</span>
           </Button>
         </div>
       </div>

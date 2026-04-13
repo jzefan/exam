@@ -31,6 +31,7 @@ type KnowledgeNodeData = IKnowledgePointDetail & {
 export const KnowledgeNode = memo(({ data }: NodeProps) => {
   const kp = data as unknown as KnowledgeNodeData;
   const difficultyStyle = kp.difficulty ? DIFFICULTY_COLORS[kp.difficulty as Difficulty] : null;
+  const isRootKnowledge = !kp.parent_id;
 
   return (
     <ContextMenu>
@@ -74,7 +75,7 @@ export const KnowledgeNode = memo(({ data }: NodeProps) => {
             <p className="truncate text-[12px] font-semibold leading-tight text-stone-900 dark:text-stone-100">{kp.name}</p>
           )}
 
-          {kp.description && (
+          {kp.description && !isRootKnowledge && (
             <p className="mt-0.5 truncate text-[10px] text-stone-500/80 dark:text-stone-500/80">{kp.description}</p>
           )}
 
@@ -109,7 +110,7 @@ export const KnowledgeNode = memo(({ data }: NodeProps) => {
       <ContextMenuContent className="w-auto min-w-0">
         <ContextMenuItem inset onSelect={() => kp.onAddChild(kp.id)}>
           <PlusCircle className="mr-2 h-3.5 w-3.5" />
-          添加子知识点
+          添加子知识
         </ContextMenuItem>
         <ContextMenuItem inset onSelect={() => kp.onSetPrerequisite(kp.id)}>
           <GitBranchPlus className="mr-2 h-3.5 w-3.5" />

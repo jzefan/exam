@@ -22,6 +22,7 @@ import { QuestionList } from "./pages/questions/list";
 import { QuestionCreate } from "./pages/questions/create";
 import { QuestionEdit } from "./pages/questions/edit";
 import { QuestionImportPage } from "./pages/questions/import";
+import { AIGeneratePage } from "./pages/questions/ai-generate";
 import { Dashboard } from "./pages/dashboard";
 import { KnowledgeManagementPage } from "./pages/knowledge";
 import { MyExams } from "./pages/student/my-exams";
@@ -33,10 +34,13 @@ import { TagList } from "./pages/tags/list";
 import { ExamList } from "./pages/exams/list";
 import { ExamCreate } from "./pages/exams/create";
 import { ExamEdit } from "./pages/exams/edit";
+import { ExamStudentsPage } from "./pages/exams/students";
 import { ExamTaking } from "./pages/student/exam-taking";
 import { EditorPage } from "./pages/job-models/editor"
 import { JobModelList } from "./pages/job-models/list"
 import { JobModelCreate } from "./pages/job-models/create"
+import { JobModelFastCreate } from "./pages/job-models/fast-create";
+import { StandardLibraryPage } from "./pages/job-models/standard-library";
 import { JobModelUploadAI } from "./pages/job-models/upload-ai";
 import { GradingAnalyticsPage } from "./pages/grading/analytics";
 import { GradingCenterPage } from "./pages/grading";
@@ -168,12 +172,14 @@ function App() {
                   <Route index element={<QuestionList />} />
                   <Route path="create" element={<QuestionCreate />} />
                   <Route path="import" element={<QuestionImportPage />} />
+                  <Route path="ai-generate" element={<AIGeneratePage />} />
                   <Route path="edit/:id" element={<QuestionEdit />} />
                 </Route>
                 <Route path="/exams">
                   <Route index element={<ExamList />} />
                   <Route path="create" element={<ExamCreate />} />
                   <Route path="edit/:id" element={<ExamEdit />} />
+                  <Route path="students" element={<ExamStudentsPage />} />
                 </Route>
                 <Route path="/tags" element={<TagList />} />
                 <Route path="/knowledge" element={<KnowledgeManagementPage />} />
@@ -196,14 +202,16 @@ function App() {
             >
               <Route element={<Layout />}>
                 <Route path="/gwmx/job-models" element={<JobModelList />} />
+                <Route path="/gwmx/job-models/standard-library" element={<StandardLibraryPage />} />
                 <Route path="/gwmx/job-models/create" element={<JobModelCreate />} />
+                <Route path="/gwmx/job-models/fast-create" element={<JobModelFastCreate />} />
                 <Route path="/gwmx/job-models/upload-ai" element={<JobModelUploadAI />} />
               </Route>
             </Route>
 
             {/* Job model editor — full-screen, no Layout wrapper */}
             <Route
-              path="/gwmx/job-models/:projectId/models/:modelId/editor"
+              path="/gwmx/job-models/:jobModelId/versions/:versionId/editor"
               element={
                 <Authenticated key="editor" fallback={<CatchAllNavigate to="/login" />}>
                   <RoleGuard allow={ENTERPRISE_ROLES} />

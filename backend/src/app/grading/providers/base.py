@@ -6,7 +6,7 @@ import json
 from json import JSONDecodeError
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, AsyncIterator, Protocol, runtime_checkable
 
 import httpx
 
@@ -292,3 +292,50 @@ class BaseGradingProvider(ABC):
         payload = self.build_payload(system_prompt, user_prompt)
         response_payload = await self._request_completion(payload)
         return self.parse_response(response_payload)
+
+    async def stream_text(self, system_prompt: str, user_prompt: str) -> AsyncIterator[str]:
+        if not self.api_key:
+            raise ValueError(f"{self.provider_name} provider API key is not configured")
+
+        payload = self.build_payload(system_prompt, user_prompt)
+        payload["stream"] = True
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream(
+                "POST",
+                f"{self.base_url}/chat/completions",
+                json=payload,
+                headers=headers,
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line.removeprefix("data:").strip()
+                    if not data or data == "[DONE]":
+                        continue
+                    try:
+                        parsed = json.loads(data)
+                    except JSONDecodeError:
+                        continue
+                    choices = parsed.get("choices")
+                    if not isinstance(choices, list) or not choices:
+                        continue
+                    first_choice = choices[0]
+                    if not isinstance(first_choice, dict):
+                        continue
+                    delta = first_choice.get("delta")
+                    content = delta.get("content") if isinstance(delta, dict) else None
+                    if isinstance(content, list):
+                        text = "\n".join(
+                            str(item.get("text", ""))
+                            for item in content
+                            if isinstance(item, dict) and item.get("type") in {None, "text"}
+                        )
+                        if text:
+                            yield text
+                    elif isinstance(content, str) and content:
+                        yield content

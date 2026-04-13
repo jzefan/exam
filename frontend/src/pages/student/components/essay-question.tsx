@@ -1,4 +1,5 @@
 import { RichTextEditor } from "@/components/ui/rich-text-editor";
+import { renderLatexInHtml } from "@/components/ui/latex-text";
 import { Paperclip, X, FileIcon } from "lucide-react";
 import type { IExamQuestionForStudent } from "@/types";
 
@@ -50,8 +51,9 @@ export function EssayQuestion({ question, answer, onChange }: Props) {
       <div
         className="prose prose-sm dark:prose-invert max-w-none leading-relaxed"
         dangerouslySetInnerHTML={{
-          __html:
+          __html: renderLatexInHtml(
             (question.content as { text?: string }).text ?? question.title,
+          ),
         }}
       />
 

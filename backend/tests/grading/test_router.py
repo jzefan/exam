@@ -1001,3 +1001,57 @@ async def test_grading_prompt_follow_up_endpoint_returns_model_comments(
     assert "Preferred locale: en-US" in captured_prompts["qwen"]
     assert "Max score: 10" in captured_prompts["qwen"]
     assert 'Knowledge tags: ["接口设计", "幂等性"]' in captured_prompts["qwen"]
+
+
+@pytest.mark.asyncio
+async def test_grading_prompt_follow_up_keeps_multiple_history_rounds(
+    admin_client,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _seed_role_binding_v1(db_session)
+    monkeypatch.setenv("EXAM_QWEN_API_KEY", "qwen-secret")
+    monkeypatch.setenv("EXAM_DEEPSEEK_API_KEY", "deepseek-secret")
+    monkeypatch.setenv("EXAM_OPENROUTER_API_KEY", "openrouter-secret")
+
+    async def fake_request_completion(self, payload):
+        return {
+            "choices": [
+                {"message": {"content": '{"score_total": 8, "dimension_scores": {"coverage": 8}, "deduction_reasons": ["补充说明"], "strengths": ["方向正确"], "improvement_suggestions": ["再给例子"], "evidence_summary": {"focus": ["history"]}, "risk_flags": []}'}}
+            ]
+        }
+
+    monkeypatch.setattr(
+        "app.grading.providers.base.BaseGradingProvider._request_completion",
+        fake_request_completion,
+    )
+
+    create_response = await admin_client.post(
+        "/api/grading/tasks",
+        json={
+            "source_type": "exam_submission",
+            "source_business_id": "exam-java-midterm:essay-q3:A-102",
+            "question_type": "short_answer",
+            "question_content": "什么是幂等性？",
+            "max_score": 10,
+            "knowledge_tags": ["接口设计", "幂等性"],
+            "student_answer_raw": "同一个请求重复执行多次，结果保持一致。",
+            "standard_answers": [{"summary": "重复执行结果一致"}],
+            "rubric_definition": {"dimensions": [{"key": "coverage", "weight": 0.5}]},
+            "role_binding_version": 1,
+        },
+    )
+    task_id = create_response.json()["id"]
+
+    for _ in range(2):
+        response = await admin_client.post(
+            f"/api/grading/tasks/{task_id}/follow-up",
+            json={"prompt": "请再次确认是否覆盖副作用边界", "locale": "zh-CN"},
+        )
+        assert response.status_code == 200
+
+    detail_response = await admin_client.get(f"/api/grading/inbox/tasks/{task_id}")
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.json()
+    matching = [item for item in detail_payload["follow_ups"] if item["prompt"] == "请再次确认是否覆盖副作用边界"]
+    assert len(matching) == 2

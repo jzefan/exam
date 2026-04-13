@@ -330,7 +330,7 @@ async def analyze_imported_question_endpoint(
 @questions_router.post("/import/recognize", response_model=QuestionImportRecognizeResponse)
 async def recognize_imported_question_endpoint(
     data: QuestionImportRecognizeRequest,
-    _user: Annotated[User, require_roles("admin", "teacher")],
+    _user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
 ) -> QuestionImportRecognizeResponse:
     try:
         return await recognize_imported_question(data.raw_text)
@@ -343,7 +343,7 @@ async def recognize_imported_question_endpoint(
 @questions_router.post("/import/document-recognize", response_model=QuestionImportDocumentRecognizeResponse)
 async def document_recognize_import_endpoint(
     data: QuestionImportDocumentRecognizeRequest,
-    _user: Annotated[User, require_roles("admin", "teacher")],
+    _user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
 ) -> QuestionImportDocumentRecognizeResponse:
     try:
         return await recognize_question_document(data)
@@ -356,7 +356,7 @@ async def document_recognize_import_endpoint(
 @questions_router.post("/import/re-recognize", response_model=QuestionImportDraft)
 async def re_recognize_import_draft_endpoint(
     data: QuestionImportRecognizeRequest,
-    _user: Annotated[User, require_roles("admin", "teacher")],
+    _user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
 ) -> QuestionImportDraft:
     draft = build_import_draft_from_segment(data.raw_text, boundary_confidence="low")
     return await complete_import_draft_with_ai(draft)

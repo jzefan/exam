@@ -9,8 +9,7 @@ from pydantic import BaseModel, Field
 ResourceTypeEnum = Literal["video", "document", "link"]
 NodeTypeEnum = Literal["dimension", "skill", "kp"]
 ResourceSourceEnum = Literal["manual", "bilibili", "upload"]
-ProjectStatusEnum = Literal["draft", "generating", "review", "published", "archived"]
-SourceTypeEnum = Literal["ai_generated", "manual", "template"]
+SourceTypeEnum = Literal["ai_generated", "manual", "standard_based", "template"]
 SkillLevelEnum = Literal["L1", "L2", "L3", "L4", "L5"]
 DifficultyEnum = Literal["入门", "初级", "中级", "高级", "困难"]
 MatchTypeEnum = Literal["auto", "manual"]
@@ -96,7 +95,7 @@ class DimensionResponse(BaseModel):
     model_config = {"from_attributes": True}
 
     id: uuid.UUID
-    model_id: uuid.UUID
+    model_version_id: uuid.UUID
     name: str
     description: str | None
     sort_order: int
@@ -111,6 +110,12 @@ class JobModelCreate(BaseModel):
     job_role: str = Field(max_length=200)
     version_note: str | None = None
     source_type: SourceTypeEnum = "manual"
+    model_type: str = "standard"
+    status: str = "draft"
+    job_family: str | None = Field(default=None, max_length=100)
+    industry_name: str | None = Field(default=None, max_length=100)
+    direction_name: str | None = Field(default=None, max_length=100)
+    origin_standard_model_id: uuid.UUID | None = None
     dimensions: list[DimensionCreate] = Field(default_factory=list)
 
 
@@ -119,17 +124,43 @@ class JobModelUpdate(BaseModel):
     version_note: str | None = None
 
 
-class JobModelResponse(BaseModel):
+class JobModelVersionSummary(BaseModel):
     model_config = {"from_attributes": True}
 
     id: uuid.UUID
-    project_id: uuid.UUID
-    job_role: str
+    job_model_id: uuid.UUID
     version: int
     version_note: str | None
     is_current: bool
     source_type: str
+    created_by: uuid.UUID | None
+    published_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class JobModelVersionResponse(JobModelVersionSummary):
+    raw_content: dict | None
     dimensions: list[DimensionResponse] = Field(default_factory=list)
+
+
+class JobModelResponse(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: uuid.UUID
+    current_version_id: uuid.UUID | None
+    job_role: str
+    model_type: str
+    status: str
+    job_family: str | None
+    industry_code: str | None
+    industry_name: str | None
+    direction_code: str | None
+    direction_name: str | None
+    origin_standard_model_id: uuid.UUID | None
+    org_id: uuid.UUID
+    created_by: uuid.UUID | None
+    current_version: JobModelVersionResponse | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -138,41 +169,19 @@ class JobModelSummary(BaseModel):
     model_config = {"from_attributes": True}
 
     id: uuid.UUID
-    project_id: uuid.UUID
+    current_version_id: uuid.UUID | None
     job_role: str
-    version: int
-    version_note: str | None
-    is_current: bool
-    source_type: str
-    created_at: datetime
-    updated_at: datetime
-
-
-# Project schemas
-
-class ProjectCreate(BaseModel):
-    name: str = Field(max_length=200)
-    industry: str | None = Field(default=None, max_length=100)
-    description: str | None = None
-
-
-class ProjectUpdate(BaseModel):
-    name: str | None = Field(default=None, max_length=200)
-    industry: str | None = Field(default=None, max_length=100)
-    description: str | None = None
-    status: ProjectStatusEnum | None = None
-
-
-class ProjectResponse(BaseModel):
-    model_config = {"from_attributes": True}
-
-    id: uuid.UUID
-    name: str
-    industry: str | None
-    description: str | None
+    model_type: str
+    status: str
+    job_family: str | None
+    industry_code: str | None
+    industry_name: str | None
+    direction_code: str | None
+    direction_name: str | None
+    origin_standard_model_id: uuid.UUID | None
     org_id: uuid.UUID
     created_by: uuid.UUID | None
-    status: str
+    current_version: JobModelVersionSummary | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -183,7 +192,7 @@ class SourceDocumentResponse(BaseModel):
     model_config = {"from_attributes": True}
 
     id: uuid.UUID
-    project_id: uuid.UUID
+    job_model_id: uuid.UUID
     file_name: str
     file_type: str
     uploaded_by: uuid.UUID | None

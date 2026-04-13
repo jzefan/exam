@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import axios from "axios";
+import { LatexText, renderLatexInHtml } from "@/components/ui/latex-text";
 import { useOne, useInvalidate } from "@refinedev/core";
 import { ArrowLeft, CheckCircle2, CircleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -86,12 +87,12 @@ export function WrongAnswerDetailPage() {
         </div>
         <h1
           className="text-[16px] font-semibold leading-7 text-foreground"
-          dangerouslySetInnerHTML={{ __html: item.question_title }}
+          dangerouslySetInnerHTML={{ __html: renderLatexInHtml(item.question_title) }}
         />
         <div
           className="prose prose-sm max-w-none text-[14px] leading-6"
           dangerouslySetInnerHTML={{
-            __html: (item.question_content.text as string | undefined) ?? item.question_title,
+            __html: renderLatexInHtml((item.question_content.text as string | undefined) ?? item.question_title),
           }}
         />
       </section>
@@ -110,7 +111,7 @@ export function WrongAnswerDetailPage() {
             </div>
           ) : (
             <p className="mt-3 text-[14px] leading-6 text-muted-foreground">
-              {renderAnswerSummary(item.student_answer)}
+              <LatexText>{renderAnswerSummary(item.student_answer)}</LatexText>
             </p>
           )}
         </section>
@@ -118,7 +119,7 @@ export function WrongAnswerDetailPage() {
         <section className="rounded-2xl border border-[#ebe3f4] bg-white/90 p-6">
           <h2 className="text-[16px] font-semibold">{tStudent("wrong_detail_standard_answer", undefined, locale)}</h2>
           <p className="mt-3 text-[14px] leading-6 text-muted-foreground">
-            {renderStandardAnswer(item.standard_answer)}
+            <LatexText>{renderStandardAnswer(item.standard_answer)}</LatexText>
           </p>
         </section>
       </div>

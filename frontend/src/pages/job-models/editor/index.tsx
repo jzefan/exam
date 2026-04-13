@@ -14,7 +14,7 @@ import { Toaster } from "@/components/ui/toaster"
 
 interface ModelData {
   id: string
-  project_id: string
+  version_id: string
   job_role: string
   version: number
   version_note: string | null
@@ -60,7 +60,7 @@ function authHeaders(): HeadersInit {
 }
 
 export function EditorPage() {
-  const { modelId } = useParams<{ projectId: string; modelId: string }>()
+  const { jobModelId, versionId } = useParams<{ jobModelId: string; versionId: string }>()
   const navigate = useNavigate()
   const { toast } = useToast()
 
@@ -105,12 +105,33 @@ export function EditorPage() {
   // Fetch model data
   const fetchModel = useCallback(async () => {
     try {
-      const res = await fetch(`/api/job-models/models/${modelId}`, {
+      const res = await fetch(`/api/job-models/models/${jobModelId}`, {
         headers: authHeaders(),
       })
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-      const data: ModelData = await res.json()
-      setModel(data)
+      const data = await res.json() as {
+        id: string
+        job_role: string
+        current_version_id?: string | null
+        current_version?: {
+          id: string
+          version: number
+          version_note: string | null
+          is_current: boolean
+          source_type: string
+          dimensions: ModelData["dimensions"]
+        } | null
+      }
+      setModel({
+        id: data.id,
+        version_id: data.current_version?.id ?? data.current_version_id ?? versionId ?? "",
+        job_role: data.job_role,
+        version: data.current_version?.version ?? 1,
+        version_note: data.current_version?.version_note ?? null,
+        is_current: data.current_version?.is_current ?? true,
+        source_type: data.current_version?.source_type ?? "manual",
+        dimensions: data.current_version?.dimensions ?? [],
+      })
     } catch (err) {
       console.error("Failed to load model:", err)
       toast({
@@ -121,7 +142,7 @@ export function EditorPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [modelId, toast])
+  }, [jobModelId, toast, versionId])
 
   useEffect(() => {
     fetchModel()
@@ -231,7 +252,7 @@ export function EditorPage() {
       let body: Record<string, unknown> = {}
 
       if (type === "dimension") {
-        endpoint = `/api/job-models/models/${modelId}/dimensions`
+        endpoint = `/api/job-models/models/${jobModelId}/dimensions`
         body = { name: "新维度", sort_order: model?.dimensions.length ?? 0 }
       } else if (type === "skill" && parentId) {
         endpoint = `/api/job-models/models/dimensions/${parentId}/skills`
@@ -263,7 +284,7 @@ export function EditorPage() {
         toast({ title: "创建失败", description: (err as Error).message, variant: "destructive" })
       }
     },
-    [modelId, model, fetchModel, toast]
+    [jobModelId, model, fetchModel, toast]
   )
 
   const handleSave = useCallback(async () => {
@@ -272,9 +293,9 @@ export function EditorPage() {
   }, [])
 
   const handlePublish = useCallback(async () => {
-    if (!modelId) return
+    if (!jobModelId) return
     try {
-      const res = await fetch(`/api/job-models/models/${modelId}/publish`, {
+      const res = await fetch(`/api/job-models/models/${jobModelId}/publish`, {
         method: "POST",
         headers: authHeaders(),
         body: JSON.stringify({ version_note: "" }),
@@ -289,10 +310,10 @@ export function EditorPage() {
         variant: "destructive",
       })
     }
-  }, [modelId, navigate, toast])
+  }, [jobModelId, navigate, toast])
 
   const contextValue: EditorContextType = {
-    modelId: modelId ?? "",
+    modelId: jobModelId ?? "",
     viewMode,
     setViewMode,
     selectedNodeId,

@@ -23,13 +23,27 @@ function createForm(overrides: Partial<ExamFormValues> = {}): ExamFormValues {
 }
 
 describe("validateExamForm", () => {
-  it("rejects a start time in the past", () => {
+  it("allows a start time that is only a few minutes behind the current time", () => {
     const errors = validateExamForm(
       createForm({
-        start_time: "2026-04-08T09:00",
+        start_time: "2026-04-08T09:55",
         end_time: "2026-04-08T11:00",
       }),
       new Date("2026-04-08T10:00:00"),
+      { startTimeGraceMinutes: 10 },
+    );
+
+    expect(errors.start_time).toBeUndefined();
+  });
+
+  it("rejects a start time that exceeds the grace window", () => {
+    const errors = validateExamForm(
+      createForm({
+        start_time: "2026-04-08T09:49",
+        end_time: "2026-04-08T11:00",
+      }),
+      new Date("2026-04-08T10:00:00"),
+      { startTimeGraceMinutes: 10 },
     );
 
     expect(errors.start_time).toBe("开始时间不能早于当前时间。");

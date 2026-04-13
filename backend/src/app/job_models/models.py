@@ -1,43 +1,66 @@
 """Job competency model SQLAlchemy models."""
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, JSON, String, Text, Uuid
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models import Base, BaseModel, TimestampMixin
 
 
-class JobModelProject(BaseModel):
-    __tablename__ = "job_model_projects"
+class JobModel(BaseModel):
+    __tablename__ = "job_models"
 
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
-    industry: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    job_role: Mapped[str] = mapped_column(String(200), nullable=False)
+    model_type: Mapped[str] = mapped_column(String(20), default="standard", nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)
+    job_family: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    industry_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    industry_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    direction_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    direction_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    origin_standard_model_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("job_models.id", ondelete="SET NULL"), nullable=True
+    )
     org_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
     )
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)
-
-    models: Mapped[list["JobModel"]] = relationship(
-        "JobModel", back_populates="project", cascade="all, delete-orphan"
+    # `current_version_id` always points at `job_model_versions.id`.
+    # `versions` must stay keyed by `job_model_id` only to avoid drifting joins.
+    current_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("job_model_versions.id", ondelete="SET NULL"), nullable=True
     )
-    documents: Mapped[list["SourceDocument"]] = relationship(
-        "SourceDocument", back_populates="project", cascade="all, delete-orphan"
+    current_version: Mapped["JobModelVersion | None"] = relationship(
+        "JobModelVersion",
+        foreign_keys=[current_version_id],
+        post_update=True,
+    )
+    versions: Mapped[list["JobModelVersion"]] = relationship(
+        "JobModelVersion",
+        foreign_keys="JobModelVersion.job_model_id",
+        back_populates="job_model",
+        cascade="all, delete-orphan",
+        order_by="JobModelVersion.version",
+    )
+    source_documents: Mapped[list["SourceDocument"]] = relationship(
+        "SourceDocument",
+        back_populates="job_model",
+        cascade="all, delete-orphan",
+        foreign_keys="SourceDocument.job_model_id",
     )
 
 
-class JobModel(BaseModel):
-    __tablename__ = "job_models"
+class JobModelVersion(BaseModel):
+    __tablename__ = "job_model_versions"
 
-    project_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("job_model_projects.id", ondelete="CASCADE"), nullable=False
+    job_model_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("job_models.id", ondelete="CASCADE"), nullable=False
     )
-    job_role: Mapped[str] = mapped_column(String(200), nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     version_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_current: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -45,27 +68,40 @@ class JobModel(BaseModel):
     raw_content: Mapped[dict | None] = mapped_column(
         JSON().with_variant(JSONB, "postgresql"), nullable=True
     )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    project: Mapped[JobModelProject] = relationship("JobModelProject", back_populates="models")
+    job_model: Mapped[JobModel] = relationship(
+        "JobModel", back_populates="versions", foreign_keys=[job_model_id]
+    )
     dimensions: Mapped[list["CompetencyDimension"]] = relationship(
         "CompetencyDimension",
-        back_populates="model",
+        back_populates="model_version",
         cascade="all, delete-orphan",
         order_by="CompetencyDimension.sort_order",
+    )
+    source_documents: Mapped[list["SourceDocument"]] = relationship(
+        "SourceDocument",
+        back_populates="job_model_version",
+        foreign_keys="SourceDocument.job_model_version_id",
     )
 
 
 class CompetencyDimension(BaseModel):
     __tablename__ = "competency_dimensions"
 
-    model_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("job_models.id", ondelete="CASCADE"), nullable=False
+    model_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("job_model_versions.id", ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
-    model: Mapped[JobModel] = relationship("JobModel", back_populates="dimensions")
+    model_version: Mapped[JobModelVersion] = relationship(
+        "JobModelVersion", back_populates="dimensions"
+    )
     skills: Mapped[list["Skill"]] = relationship(
         "Skill",
         back_populates="dimension",
@@ -83,6 +119,10 @@ class Skill(BaseModel):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     level: Mapped[str | None] = mapped_column(String(10), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    item_source: Mapped[str] = mapped_column(String(30), default="standard", nullable=False)
+    change_type: Mapped[str] = mapped_column(String(20), default="none", nullable=False)
+    evidence_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     dimension: Mapped[CompetencyDimension] = relationship("CompetencyDimension", back_populates="skills")
@@ -103,6 +143,10 @@ class SkillKnowledgePoint(BaseModel):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     teaching_suggestion: Mapped[str | None] = mapped_column(Text, nullable=True)
     difficulty: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    item_source: Mapped[str] = mapped_column(String(30), default="standard", nullable=False)
+    change_type: Mapped[str] = mapped_column(String(20), default="none", nullable=False)
+    evidence_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     skill: Mapped[Skill] = relationship("Skill", back_populates="knowledge_points")
@@ -150,8 +194,11 @@ class SkillKpMapping(Base, TimestampMixin):
 class SourceDocument(BaseModel):
     __tablename__ = "source_documents"
 
-    project_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("job_model_projects.id", ondelete="CASCADE"), nullable=False
+    job_model_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("job_models.id", ondelete="CASCADE"), nullable=False
+    )
+    job_model_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("job_model_versions.id", ondelete="SET NULL"), nullable=True
     )
     file_name: Mapped[str] = mapped_column(String(500), nullable=False)
     file_path: Mapped[str] = mapped_column(String(1000), nullable=False)
@@ -161,7 +208,16 @@ class SourceDocument(BaseModel):
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
-    project: Mapped[JobModelProject] = relationship("JobModelProject", back_populates="documents")
+    job_model: Mapped[JobModel] = relationship(
+        "JobModel",
+        back_populates="source_documents",
+        foreign_keys=[job_model_id],
+    )
+    job_model_version: Mapped[JobModelVersion | None] = relationship(
+        "JobModelVersion",
+        back_populates="source_documents",
+        foreign_keys=[job_model_version_id],
+    )
 
 
 class JobModelTemplate(BaseModel):

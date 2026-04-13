@@ -41,8 +41,6 @@ export function JobModelCreate() {
   const [isLoading, setIsLoading] = useState(false)
 
   const [formData, setFormData] = useState({
-    projectName: "",
-    projectDescription: "",
     industry: "科技",
     jobRole: "",
     versionNote: "",
@@ -53,30 +51,17 @@ export function JobModelCreate() {
     setIsLoading(true)
 
     try {
-      // Step 1: Create project
-      const projRes = await fetch("/api/job-models/projects", {
-        method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify({
-          name: formData.projectName,
-          description: formData.projectDescription || null,
-          industry: formData.industry,
-        }),
-      })
-      if (!projRes.ok) {
-        const err = await projRes.json().catch(() => ({}))
-        throw new Error(err.detail || `创建项目失败 (${projRes.status})`)
-      }
-      const project = await projRes.json()
-
-      // Step 2: Create model under the project
-      const modelRes = await fetch(`/api/job-models/projects/${project.id}/models`, {
+      const modelRes = await fetch("/api/job-models/models", {
         method: "POST",
         headers: authHeaders(),
         body: JSON.stringify({
           job_role: formData.jobRole,
           version_note: formData.versionNote || null,
           source_type: "manual",
+          model_type: "standard",
+          status: "draft",
+          industry_name: formData.industry,
+          dimensions: [],
         }),
       })
       if (!modelRes.ok) {
@@ -84,9 +69,12 @@ export function JobModelCreate() {
         throw new Error(err.detail || `创建模型失败 (${modelRes.status})`)
       }
       const model = await modelRes.json()
+      if (!model.current_version_id) {
+        throw new Error("模型创建成功，但没有返回当前版本")
+      }
 
       toast({ title: "创建成功", description: "正在跳转到编辑页面..." })
-      navigate(`/job-models/${project.id}/models/${model.id}/editor`)
+      navigate(`/gwmx/job-models/${model.id}/versions/${model.current_version_id}/editor`)
     } catch (err) {
       toast({
         title: "创建失败",
@@ -101,7 +89,10 @@ export function JobModelCreate() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-base font-bold text-foreground tracking-tight">创建职位能力模型</h1>
+        <div>
+          <h1 className="text-base font-bold text-foreground tracking-tight">创建标准岗位模型</h1>
+          <p className="mt-1 text-xs text-muted-foreground">标准创建模式 · 直接创建岗位模型与初始版本</p>
+        </div>
         <button
           onClick={() => navigate("/gwmx/job-models")}
           className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors shrink-0"
@@ -114,41 +105,8 @@ export function JobModelCreate() {
         <CardHeader></CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Project Section */}
             <div className="space-y-4 pb-6 border-b">
-              <h3 className="font-semibold text-gray-900">项目信息</h3>
-
-              <div>
-                <Label htmlFor="projectName" className="text-sm font-medium">
-                  项目名称 *
-                </Label>
-                <Input
-                  id="projectName"
-                  placeholder="例如：2024年技术部门招聘"
-                  value={formData.projectName}
-                  onChange={(e) =>
-                    setFormData({ ...formData, projectName: e.target.value })
-                  }
-                  required
-                  className="mt-2"
-                />
-              </div>
-
-              <div>
-                <Label htmlFor="projectDescription" className="text-sm font-medium">
-                  项目描述
-                </Label>
-                <Textarea
-                  id="projectDescription"
-                  placeholder="项目的背景和目标..."
-                  value={formData.projectDescription}
-                  onChange={(e) =>
-                    setFormData({ ...formData, projectDescription: e.target.value })
-                  }
-                  className="mt-2 min-h-24"
-                />
-              </div>
-
+              <h3 className="font-semibold text-gray-900">岗位模型信息</h3>
               <div>
                 <Label htmlFor="industry" className="text-sm font-medium">
                   行业 *

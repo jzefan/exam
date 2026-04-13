@@ -128,7 +128,7 @@ async def test_run_grading_task_creates_primary_review_and_final_snapshots(db_se
     assert '"max_score": 10' in primary_provider.calls[0][1]
     assert '"knowledge_tags": ["接口设计", "幂等性"]' in primary_provider.calls[0][1]
     assert "0 to max_score" in primary_provider.calls[0][0]
-    assert "默认使用简体中文回复" in primary_provider.calls[0][0]
+    assert "必须使用简体中文回复" in primary_provider.calls[0][0]
 
     refreshed_task = await db_session.get(GradingTask, task.id)
     assert refreshed_task is not None
@@ -155,6 +155,95 @@ async def test_run_grading_task_creates_primary_review_and_final_snapshots(db_se
         "grading.review_completed",
         "grading.finalized",
     }
+
+
+@pytest.mark.asyncio
+async def test_run_grading_task_calls_arbiter_provider_for_model_output_even_without_conflict(
+    db_session: AsyncSession,
+) -> None:
+    await _create_role_binding_stack(db_session)
+
+    task = GradingTask(
+        source_type="single_debug",
+        question_type="short_answer",
+        question_content="什么是幂等性",
+        max_score=10,
+        knowledge_tags=["接口设计", "幂等性"],
+        student_answer_raw="重复执行结果一致",
+        standard_answers=[{"summary": "同一请求多次执行结果一致"}],
+        rubric_definition={"dimensions": [{"key": "coverage", "weight": 0.5}]},
+        role_binding_version=1,
+        status="pending",
+    )
+    db_session.add(task)
+    await db_session.flush()
+
+    primary_provider = FakeProvider(
+        GradingProviderResult(
+            raw_content={"provider": "primary"},
+            score_total=8.0,
+            dimension_scores={"coverage": 8.0},
+            deduction_reasons=["表达略简略"],
+            strengths=["概念正确"],
+            improvement_suggestions=["补充例子"],
+            evidence_summary={},
+            risk_flags=[],
+            provider_key="qwen-direct",
+            provider_name="qwen",
+            model_name="qwen-plus",
+            metadata={},
+        )
+    )
+    review_provider = FakeProvider(
+        GradingProviderResult(
+            raw_content={"provider": "review"},
+            score_total=8.2,
+            dimension_scores={"coverage": 8.2},
+            deduction_reasons=["可以更完整"],
+            strengths=["答案方向正确"],
+            improvement_suggestions=["补充副作用说明"],
+            evidence_summary={},
+            risk_flags=[],
+            provider_key="deepseek-direct",
+            provider_name="deepseek",
+            model_name="deepseek-chat",
+            metadata={},
+        )
+    )
+    arbiter_provider = FakeProvider(
+        GradingProviderResult(
+            raw_content={"provider": "arbiter"},
+            score_total=8.1,
+            dimension_scores={"coverage": 8.1},
+            deduction_reasons=["综合看可采用原分"],
+            strengths=["两轮评分一致"],
+            improvement_suggestions=["无需额外仲裁"],
+            evidence_summary={"review_mode": "no_conflict_model_output"},
+            risk_flags=[],
+            provider_key="openrouter-arbiter",
+            provider_name="openrouter",
+            model_name="anthropic/claude-sonnet-4.6",
+            metadata={},
+        )
+    )
+
+    result = await run_grading_task(db_session, str(task.id), primary_provider, review_provider, arbiter_provider)
+    await db_session.commit()
+
+    assert result["status"] == "completed"
+    assert result["arbitration_required"] is False
+    assert result["reason"] is None
+    assert arbiter_provider.calls
+    assert "Arbitration reason: no_conflict_model_output" in arbiter_provider.calls[0][1]
+
+    snapshots_result = await db_session.execute(
+        select(GradingResultSnapshot).where(GradingResultSnapshot.task_id == task.id)
+    )
+    snapshots = list(snapshots_result.scalars().all())
+    assert {snapshot.snapshot_type for snapshot in snapshots} == {"primary", "review", "arbiter", "final"}
+
+    final_snapshot = next(snapshot for snapshot in snapshots if snapshot.snapshot_type == "final")
+    assert final_snapshot.score_total == 8.1
 
 
 @pytest.mark.asyncio

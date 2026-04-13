@@ -12,11 +12,11 @@ from app.auth.schemas import UserCreate
 from app.auth.security import create_access_token
 from app.auth.service import create_user
 from app.database import get_db
+from app.job_models.schemas import JobModelCreate
+from app.job_models.service import create_job_model
 from app.main import app
 from app.models import Base
 from app.rbac.models import Organization, Role, UserOrganization
-from app.job_models.schemas import ProjectCreate
-from app.job_models.service import create_project
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///test_job_models_service.db"
 ROUTER_TEST_DATABASE_URL = "sqlite+aiosqlite:///test_job_models_router.db"
@@ -61,12 +61,19 @@ def user_id() -> uuid.UUID:
 
 
 @pytest.fixture
-async def project(db_session: AsyncSession, org: Organization, user_id: uuid.UUID):
-    return await create_project(
+async def job_model(db_session: AsyncSession, org: Organization, user_id: uuid.UUID):
+    return await create_job_model(
         db_session,
-        ProjectCreate(name="Test Project", industry="Technology"),
         org_id=org.id,
         user_id=user_id,
+        data=JobModelCreate(
+            job_role="Test Job Model",
+            model_type="standard",
+            status="draft",
+            industry_name="Technology",
+            direction_name="General",
+            dimensions=[],
+        ),
     )
 
 

@@ -220,6 +220,7 @@ class GradingInboxCandidateDetailRead(BaseModel):
     teacher_feedback_reply: str | None = None
     feedback_created_at: str | None = None
     models: list[GradingInboxModelCommentRead] = Field(default_factory=list)
+    follow_ups: list[GradingPromptFollowUpHistoryRead] = Field(default_factory=list)
 
 
 class GradingPromptFollowUpCreate(BaseModel):
@@ -238,4 +239,10 @@ class GradingPromptFollowUpModelRead(BaseModel):
 
 class GradingPromptFollowUpRead(BaseModel):
     prompt: str
+    models: list[GradingPromptFollowUpModelRead] = Field(default_factory=list)
+
+
+class GradingPromptFollowUpHistoryRead(BaseModel):
+    prompt: str
+    created_at: str | None = None
     models: list[GradingPromptFollowUpModelRead] = Field(default_factory=list)
