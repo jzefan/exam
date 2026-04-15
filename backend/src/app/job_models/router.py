@@ -69,6 +69,30 @@ template_router = APIRouter()
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 
 
+class BilibiliSearchResult(BaseModel):
+    bvid: str
+    title: str
+    author: str
+    play: int
+    duration: str
+    pic: str
+    description: str
+
+
+class RecommendStandardRequest(BaseModel):
+    job_text: str
+
+
+class EnterpriseCopyCreate(BaseModel):
+    enterprise_name: str
+    version_note: str | None = None
+
+
+class EnterpriseCopyResponse(BaseModel):
+    job_model_id: uuid.UUID
+    version_id: uuid.UUID
+
+
 @model_router.post("", response_model=JobModelResponse, status_code=status.HTTP_201_CREATED)
 async def create_model(
     body: JobModelCreate,
@@ -134,30 +158,6 @@ async def recommend_standard(
     if model is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No standard model matched")
     return JobModelSummary.model_validate(model)
-
-
-class BilibiliSearchResult(BaseModel):
-    bvid: str
-    title: str
-    author: str
-    play: int
-    duration: str
-    pic: str
-    description: str
-
-
-class RecommendStandardRequest(BaseModel):
-    job_text: str
-
-
-class EnterpriseCopyCreate(BaseModel):
-    enterprise_name: str
-    version_note: str | None = None
-
-
-class EnterpriseCopyResponse(BaseModel):
-    job_model_id: uuid.UUID
-    version_id: uuid.UUID
 
 
 @model_router.get("/bilibili-cover")
