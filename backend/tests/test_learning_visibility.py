@@ -15,7 +15,8 @@ from app.rbac.models import Organization, Role
 async def _create_org_with_teacher_role(db_session):
     org = Organization(name="Learning Visibility School", type="school", is_active=True)
     teacher_role = Role(name="teacher", display_name="Teacher", is_system=True)
-    db_session.add_all([org, teacher_role])
+    platform_admin_role = Role(name="platform_admin", display_name="Platform Admin", is_system=True)
+    db_session.add_all([org, teacher_role, platform_admin_role])
     await db_session.flush()
     return org
 
@@ -29,6 +30,20 @@ async def _create_teacher(db_session, org_id, *, username: str, email: str, full
             password="teacherpass123",
             full_name=full_name,
             role_name="teacher",
+            org_id=org_id,
+        ),
+    )
+
+
+async def _create_platform_admin(db_session, org_id, *, username: str, email: str, full_name: str) -> User:
+    return await create_user(
+        db_session,
+        UserCreate(
+            username=username,
+            email=email,
+            password="platformpass123",
+            full_name=full_name,
+            role_name="platform_admin",
             org_id=org_id,
         ),
     )
@@ -161,6 +176,61 @@ async def test_teacher_only_sees_majors_and_directions_with_visible_knowledge_po
 
 
 @pytest.mark.asyncio
+async def test_platform_admin_cannot_see_other_users_private_learning_structure(
+    client: AsyncClient, db_session
+) -> None:
+    org = await _create_org_with_teacher_role(db_session)
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-private-structure",
+        email="teacher-private-structure@example.com",
+        full_name="Teacher Private Structure",
+    )
+    platform_admin = await _create_platform_admin(
+        db_session,
+        org.id,
+        username="platform-admin-private-structure",
+        email="platform-admin-private-structure@example.com",
+        full_name="Platform Admin Private Structure",
+    )
+
+    private_major = Major(name="Teacher Private Major", description=None)
+    private_direction = Direction(name="Teacher Private Direction", description=None, major=private_major)
+    public_major = Major(name="Public Major", description=None)
+    public_direction = Direction(name="Public Direction", description=None, major=public_major)
+    db_session.add_all([private_major, private_direction, public_major, public_direction])
+    await db_session.flush()
+
+    db_session.add_all([
+        KnowledgePoint(
+            name="Teacher Private Root",
+            direction_id=private_direction.id,
+            owner_id=teacher.id,
+            visibility=VisibilityScope.PRIVATE,
+        ),
+        KnowledgePoint(
+            name="Public Root",
+            direction_id=public_direction.id,
+            owner_id=platform_admin.id,
+            visibility=VisibilityScope.PLATFORM,
+        ),
+    ])
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(platform_admin.id, '')}"})
+    majors_response = await client.get("/api/knowledge/majors")
+    private_directions_response = await client.get(f"/api/knowledge/majors/{private_major.id}/directions")
+    private_tree_response = await client.get(f"/api/knowledge/directions/{private_direction.id}/tree")
+
+    assert majors_response.status_code == 200
+    assert [item["name"] for item in majors_response.json()] == ["Public Major"]
+    assert private_directions_response.status_code == 200
+    assert private_directions_response.json() == []
+    assert private_tree_response.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_teacher_created_knowledge_points_are_owned_and_private(
     client: AsyncClient, db_session
 ) -> None:
@@ -253,21 +323,28 @@ async def test_teacher_cannot_modify_other_teachers_knowledge_points(
     )
     create_child_under_shared = await client.post(
         "/api/knowledge/knowledge-points",
-        json={"direction_id": str(direction_id), "name": "Forbidden Child", "parent_id": str(shared_id)},
+        json={"direction_id": str(direction_id), "name": "Personal Child", "parent_id": str(shared_id)},
     )
 
     assert update_shared.status_code == 403
     assert delete_shared.status_code == 403
     assert update_hidden.status_code == 404
-    assert create_child_under_shared.status_code == 403
+    assert create_child_under_shared.status_code == 201
+    assert create_child_under_shared.json()["owner_id"] == str(teacher.id)
+    assert create_child_under_shared.json()["visibility"] == "private"
 
     refreshed_shared = await db_session.scalar(select(KnowledgePoint).where(KnowledgePoint.id == shared_id))
     refreshed_hidden = await db_session.scalar(select(KnowledgePoint).where(KnowledgePoint.id == hidden_id))
+    created_child = await db_session.scalar(select(KnowledgePoint).where(KnowledgePoint.name == "Personal Child"))
     assert refreshed_shared is not None
     assert refreshed_shared.name == "Readonly Shared Knowledge"
     assert refreshed_shared.deleted_at is None
     assert refreshed_hidden is not None
     assert refreshed_hidden.name == "Invisible Private Knowledge"
+    assert created_child is not None
+    assert created_child.parent_id == shared_id
+    assert created_child.owner_id == teacher.id
+    assert created_child.visibility == VisibilityScope.PRIVATE
 
 
 @pytest.mark.asyncio

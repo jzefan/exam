@@ -8,13 +8,23 @@ from app.auth.schemas import UserCreate, UserOrgInfo, UserResponse, UserUpdate
 from app.auth.security import hash_password, verify_password
 from app.rbac.models import TeacherStudent, UserOrganization
 
+OPTIONAL_EMAIL_DOMAIN = "optional.local"
+
+
+def _build_optional_email(username: str) -> str:
+    return f"optional+{username}.{uuid.uuid4().hex[:12]}@{OPTIONAL_EMAIL_DOMAIN}"
+
+
+def _display_email(email: str) -> str:
+    return "" if email.endswith(f"@{OPTIONAL_EMAIL_DOMAIN}") else email
+
 
 async def create_user(db: AsyncSession, data: UserCreate) -> User:
     from app.rbac.models import Organization, Role
 
     user = User(
         username=data.username,
-        email=data.email,
+        email=data.email or _build_optional_email(data.username),
         password_hash=hash_password(data.password),
         full_name=data.full_name,
         owner_teacher_id=data.owner_teacher_id,
@@ -149,7 +159,7 @@ async def build_user_response(db: AsyncSession, user: User) -> UserResponse:
     return UserResponse(
         id=user.id,
         username=user.username,
-        email=user.email,
+        email=_display_email(user.email),
         full_name=user.full_name,
         is_active=user.is_active,
         primary_org=primary_org,

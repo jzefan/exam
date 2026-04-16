@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, FileText, Sparkles, Files } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Copy, FileText, Sparkles, Files } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import type { ImportRecognitionMode, QuestionImportDocumentSummary } from "../import-types";
@@ -8,10 +8,12 @@ export function ImportSummaryBar({
   summary,
   fileName,
   mode,
+  duplicatesRemoved = 0,
 }: {
   summary: QuestionImportDocumentSummary;
   fileName: string;
   mode: ImportRecognitionMode | null;
+  duplicatesRemoved?: number;
 }) {
   return (
     <div className="space-y-4">
@@ -44,6 +46,15 @@ export function ImportSummaryBar({
             </p>
             <p className="text-sm font-black text-slate-900">{summary.total} <span className="text-[10px] text-slate-400">题</span></p>
          </div>
+         {duplicatesRemoved > 0 && (
+           <div className="p-3 rounded-2xl bg-orange-50 border border-orange-100 col-span-2">
+              <p className="text-[10px] font-black text-orange-400 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                <Copy size={10} className="text-orange-400" />
+                已去重
+              </p>
+              <p className="text-sm font-black text-orange-600">{duplicatesRemoved} <span className="text-[10px] text-orange-400">题</span></p>
+           </div>
+         )}
       </div>
 
       <div className="flex items-center gap-2 p-1.5 bg-slate-50 rounded-[20px] border border-slate-100">

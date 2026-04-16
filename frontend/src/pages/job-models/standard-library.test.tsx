@@ -74,7 +74,7 @@ describe("job model library entry points", () => {
     ).toBeInTheDocument()
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        "/api/job-models/models?_start=0&_end=50&model_type=standard",
+        "/api/job-models/models?_start=0&_end=200&model_type=standard",
         expect.any(Object),
       ),
     )
@@ -92,7 +92,7 @@ describe("job model library entry points", () => {
     )
 
     expect(await screen.findByText("还没有标准岗位模型")).toBeInTheDocument()
-    expect(screen.getByText("先通过“创建标准岗位模型”或标准岗位 seed 脚本写入真实数据。")).toBeInTheDocument()
+    expect(screen.getByText("先通过\"创建标准岗位模型\"或标准岗位 seed 脚本写入真实数据。")).toBeInTheDocument()
   })
 
   it("navigates to the existing editor route when clicking detail on a real standard model", async () => {

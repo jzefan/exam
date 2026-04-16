@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { LogOut, Users, NotebookPen } from "lucide-react";
+import { LogOut, Users, NotebookPen, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -60,6 +60,13 @@ export function UserDropdown({
           </DropdownMenuItem>
         )}
         {canManageUsers(role ?? "") && <DropdownMenuSeparator />}
+        {role !== "student" && (
+          <DropdownMenuItem onClick={() => navigate("/settings/model")}>
+            <Settings size={14} className="mr-2" />
+            模型设置
+          </DropdownMenuItem>
+        )}
+        {role !== "student" && <DropdownMenuSeparator />}
         {role === "student" && (
           <DropdownMenuItem onClick={() => navigate("/wrong-answers")}>
             <NotebookPen size={14} />

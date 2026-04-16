@@ -1,0 +1,110 @@
+{
+  "metadata": {
+    "source": "T/MIITEC 013-2023《集成电路产业人才岗位能力要求》",
+    "industry": "集成电路产业",
+    "version_note": "来源：T/MIITEC 013-2023",
+    "model_type": "standard"
+  },
+  "models": [
+    {
+      "job_role": "先进封装制程工艺工程师",
+      "direction_name": "封装",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "先进封装基础", "level": "L3", "knowledge_points": ["微电子、半导体物理、材料", "先进封装技术规范", "封装材料检验和异常处理"]}]},
+        {"name": "技术技能", "skills": [{"name": "先进封装工艺技能", "level": "L3", "knowledge_points": ["先进封装工艺技术", "设备参数调整优化", "数据统计与异常分析"]}]},
+        {"name": "工程实践", "skills": [{"name": "先进封装实践", "level": "L3", "knowledge_points": ["封装过程问题解决", "生产管理经验"]}]},
+        {"name": "综合能力", "skills": [{"name": "综合素养", "level": "L3", "knowledge_points": ["先进封装行业认知", "创新意识和学习能力", "团队协作和沟通能力"]}]}
+      ]
+    },
+    {
+      "job_role": "先进封装设备工程师",
+      "direction_name": "封装",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "先进封装设备基础", "level": "L3", "knowledge_points": ["机械制造自动化、机电一体化", "先进封装设备结构和原理", "设备性能和参数"]}]},
+        {"name": "技术技能", "skills": [{"name": "设备维护技能", "level": "L3", "knowledge_points": ["设备故障判断和处理", "设备维护文件撰写", "数据收集和分析"]}]},
+        {"name": "工程实践", "skills": [{"name": "设备工程实践", "level": "L3", "knowledge_points": ["设备制程识别和转产", "设备异常处理和故障定位", "设备稳定性维护"]}]},
+        {"name": "综合能力", "skills": [{"name": "综合素养", "level": "L3", "knowledge_points": ["先进封装行业认知", "创新思维和学习能力", "团队协作和沟通能力"]}]}
+      ]
+    },
+    {
+      "job_role": "先进封装研发工程师",
+      "direction_name": "封装",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "先进封装研发基础", "level": "L3", "knowledge_points": ["材料、物理、化学、微电子", "先进封装前后道工序", "SPC系统和数据要素", "机台验证流程和标准"]}]},
+        {"name": "技术技能", "skills": [{"name": "研发技能", "level": "L3", "knowledge_points": ["FMEA、Control plan、BOM撰写", "SOP和OCAP文件撰写", "产品导入和程式建立", "异常问题处理"]}]},
+        {"name": "工程实践", "skills": [{"name": "研发实践", "level": "L3", "knowledge_points": ["新产品开发和验证", "新材料导入和优化", "新设备评估和验证"]}]},
+        {"name": "综合能力", "skills": [{"name": "综合素养", "level": "L3", "knowledge_points": ["先进封装行业认知", "创新意识和学习能力", "团队协作和沟通能力"]}]}
+      ]
+    },
+    {
+      "job_role": "封装制程工艺工程师",
+      "direction_name": "封装",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "封装工艺基础", "level": "L3", "knowledge_points": ["微电子、半导体物理、材料", "封装工艺流程和规范", "封装材料特性和选用", "封装设备原理"]}]},
+        {"name": "技术技能", "skills": [{"name": "封装工艺技能", "level": "L3", "knowledge_points": ["机台参数设置", "设备故障判断和参数优化", "可靠性和失效风险分析", "数据统计和分析"]}]},
+        {"name": "工程实践", "skills": [{"name": "封装工艺实践", "level": "L3", "knowledge_points": ["封装设备运行参数维护", "生产问题解决", "关键工艺参数分析"]}]},
+        {"name": "综合能力", "skills": [{"name": "综合素养", "level": "L3", "knowledge_points": ["封装行业认知", "创新意识和学习能力", "团队协作和沟通能力"]}]}
+      ]
+    },
+    {
+      "job_role": "封装设备工程师",
+      "direction_name": "封装",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "封装设备基础", "level": "L3", "knowledge_points": ["机械制造自动化、机电一体化", "封装设备结构和原理", "设备性能和参数"]}]},
+        {"name": "技术技能", "skills": [{"name": "封装设备技能", "level": "L3", "knowledge_points": ["设备配件耗材管理", "新设备引入和参数调试", "设备维护和保养", "作业指导书编写"]}]},
+        {"name": "工程实践", "skills": [{"name": "封装设备实践", "level": "L3", "knowledge_points": ["设备转产和安装调试", "故障定位和分析", "设备稳定性维护"]}]},
+        {"name": "综合能力", "skills": [{"name": "综合素养", "level": "L3", "knowledge_points": ["封装行业认知", "创新意识和学习能力", "团队协作和沟通能力"]}]}
+      ]
+    },
+    {
+      "job_role": "封装研发工程师",
+      "direction_name": "封装",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "封装研发基础", "level": "L3", "knowledge_points": ["材料、物理、化学、微电子", "封装工序工艺原理", "产品验证和实验设计", "封装设计规则"]}]},
+        {"name": "技术技能", "skills": [{"name": "封装研发技能", "level": "L3", "knowledge_points": ["FMEA、Control plan撰写", "JMP/Minitab数据分析", "封装设计软件使用", "新产品参数设定和验证"]}]},
+        {"name": "工程实践", "skills": [{"name": "封装研发实践", "level": "L3", "knowledge_points": ["新产品开发和验证", "新材料导入和优化", "质量工具和统计分析"]}]},
+        {"name": "综合能力", "skills": [{"name": "综合素养", "level": "L3", "knowledge_points": ["封装行业认知", "创新意识和学习能力", "团队协作和沟通能力"]}]}
+      ]
+    },
+    {
+      "job_role": "ATE工程师",
+      "direction_name": "测试",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "ATE测试基础", "level": "L3", "knowledge_points": ["半导体测试原理", "数字/模拟芯片测试方法", "VerilogHDL硬件描述语言", "FT及CP测试流程"]}]},
+        {"name": "技术技能", "skills": [{"name": "ATE测试技能", "level": "L3", "knowledge_points": ["电路板焊接和验证", "EDA设计和PCB layout", "ATE测试方案制定", "探针卡和接口选型"]}]},
+        {"name": "工程实践", "skills": [{"name": "ATE测试实践", "level": "L3", "knowledge_points": ["测试故障定位和解决", "SoC芯片量产ATE测试", "测试文档编写"]}]},
+        {"name": "综合能力", "skills": [{"name": "综合素养", "level": "L3", "knowledge_points": ["半导体测试行业认知", "创新思维和学习能力", "团队协作和沟通能力"]}]}
+      ]
+    },
+    {
+      "job_role": "晶圆测试工程师",
+      "direction_name": "测试",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "晶圆测试基础", "level": "L3", "knowledge_points": ["晶圆测试原理", "测试设备和仪器", "CP测试流程", "数字/模拟芯片测试方法"]}]},
+        {"name": "技术技能", "skills": [{"name": "晶圆测试技能", "level": "L3", "knowledge_points": ["晶圆测试方案设计", "Probecard设计制造", "Pattern文件编写", "测试程序开发和自动化"]}]},
+        {"name": "工程实践", "skills": [{"name": "晶圆测试实践", "level": "L3", "knowledge_points": ["测试程序开发和量产导入", "测试覆盖率提升", "芯片测试规范制定"]}]},
+        {"name": "综合能力", "skills": [{"name": "综合素养", "level": "L3", "knowledge_points": ["半导体测试行业认知", "创新意识和学习能力", "团队协作和沟通能力"]}]}
+      ]
+    },
+    {
+      "job_role": "成品测试工程师",
+      "direction_name": "测试",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "成品测试基础", "level": "L3", "knowledge_points": ["成品测试原理", "测试设备和仪器", "FT测试流程", "分选机原理和操作"]}]},
+        {"name": "技术技能", "skills": [{"name": "成品测试技能", "level": "L3", "knowledge_points": ["成品测试方案设计", "Load Board、Socket设计", "测试程序开发", "失效样品分析"]}]},
+        {"name": "工程实践", "skills": [{"name": "成品测试实践", "level": "L3", "knowledge_points": ["测试程序开发和量产导入", "测试覆盖率提升", "测试规范和硬件设计"]}]},
+        {"name": "综合能力", "skills": [{"name": "综合素养", "level": "L3", "knowledge_points": ["半导体测试行业认知", "创新意识和学习能力", "团队协作和沟通能力"]}]}
+      ]
+    },
+    {
+      "job_role": "测试设备工程师",
+      "direction_name": "测试",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "测试设备基础", "level": "L3", "knowledge_points": ["测试设备原理和操作规范", "测试系统结构和工作原理", "IC测试方法和标准", "电子元器件性能指标"]}]},
+        {"name": "技术技能", "skills": [{"name": "测试设备技能", "level": "L3", "knowledge_points": ["示波器、逻辑分析仪使用", "ATE测试软件操作", "电子元器件焊接和检测", "设备维护保养和故障排查"]}]},
+        {"name": "工程实践", "skills": [{"name": "测试设备实践", "level": "L3", "knowledge_points": ["设备维修和故障诊断", "设备校准和验证", "设备数据分析和报告"]}]},
+        {"name": "综合能力", "skills": [{"name": "综合素养", "level": "L3", "knowledge_points": ["半导体测试行业认知", "创新意识和学习能力", "团队协作和沟通能力"]}]}
+      ]
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 import userEvent from "@testing-library/user-event";
+import { fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 import { render, screen, waitFor } from "@/test/test-utils";
@@ -138,6 +139,7 @@ function createInitialValues(): ExamFormValues {
     max_switch_count: 2,
     show_result: false,
     notes_template: DEFAULT_NOTES,
+    question_mode: "manual",
     question_ids: ["question-1"],
     question_items: [{ question_id: "question-1", order: 0, score_override: 100 }],
     student_ids: ["student-1"],
@@ -147,6 +149,15 @@ function createInitialValues(): ExamFormValues {
 describe("ExamWizardForm", () => {
   beforeEach(() => {
     apiRequestMock.mockReset();
+    apiRequestMock.mockImplementation((path: string) => {
+      if (path === "/knowledge/majors") {
+        return Promise.resolve([]);
+      }
+      if (path === "/questions/ai-generate/frequent-knowledge-points") {
+        return Promise.resolve({ recent: [], frequent: [] });
+      }
+      return Promise.reject(new Error(`Unexpected API call: ${path}`));
+    });
     vi.stubGlobal("fetch", vi.fn());
     useGetIdentityMock.mockReturnValue({ data: { id: "teacher-1" } });
     useListMock.mockImplementation(({ resource, filters }: { resource: string; filters?: Array<{ field: string; value: unknown }> }) => {
@@ -209,6 +220,78 @@ describe("ExamWizardForm", () => {
     expect(screen.getByRole("button", { name: "保存修改" })).toBeEnabled();
   });
 
+  it("restores AI question mode in edit mode when the exam was created by AI", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ExamWizardForm
+        mode="edit"
+        initialValues={{
+          ...createInitialValues(),
+          question_mode: "ai",
+          question_ids: ["ai-question-1"],
+          question_items: [{ question_id: "ai-question-1", order: 0, score_override: 10 }],
+        }}
+        isPending={false}
+        submitError={null}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+
+    expect(screen.getByText("AI出题设置")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /AI出题/i })).toHaveClass("border-primary");
+  });
+
+  it("shows previously generated AI questions when editing an AI exam", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ExamWizardForm
+        mode="edit"
+        initialValues={{
+          ...createInitialValues(),
+          question_mode: "ai",
+          question_ids: ["ai-question-1"],
+          question_items: [{ question_id: "ai-question-1", order: 0, score_override: 10 }],
+        }}
+        isPending={false}
+        submitError={null}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+
+    expect(screen.getByText("AI 生成选择题")).toBeInTheDocument();
+    expect(screen.getByText("下面哪个选项正确？")).toBeInTheDocument();
+    expect(screen.getByText("解析内容")).toBeInTheDocument();
+  });
+
+  it("infers AI question mode for legacy exams whose questions all come from AI题库", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ExamWizardForm
+        mode="edit"
+        initialValues={{
+          ...createInitialValues(),
+          question_mode: null,
+          question_ids: ["ai-question-1"],
+          question_items: [{ question_id: "ai-question-1", order: 0, score_override: 10 }],
+        }}
+        isPending={false}
+        submitError={null}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+
+    expect(screen.getByText("AI出题设置")).toBeInTheDocument();
+  });
+
   it("does not block step one progression on auto-calculated total score", async () => {
     const user = userEvent.setup();
 
@@ -236,6 +319,68 @@ describe("ExamWizardForm", () => {
     });
   });
 
+  it("moves from step 3 to step 4 instead of submitting in create mode", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+
+    render(
+      <ExamWizardForm
+        mode="create"
+        initialValues={{
+          ...createInitialValues(),
+          start_time: "2026-04-20T10:00",
+          end_time: "2026-04-20T12:00",
+        }}
+        isPending={false}
+        submitError={null}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+
+    expect(screen.getByText("第 3 步：选择考试考生")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /跳过并继续|下一步/ })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /跳过并继续|下一步/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText("第 4 步：考试设置")).toBeInTheDocument();
+    });
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("guards against accidental form submit before the last step in create mode", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+
+    const { container } = render(
+      <ExamWizardForm
+        mode="create"
+        initialValues={{
+          ...createInitialValues(),
+          start_time: "2026-04-20T10:00",
+          end_time: "2026-04-20T12:00",
+        }}
+        isPending={false}
+        submitError={null}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByText("第 3 步：选择考试考生")).toBeInTheDocument();
+
+    fireEvent.submit(container.querySelector("form")!);
+
+    await waitFor(() => {
+      expect(screen.getByText("第 4 步：考试设置")).toBeInTheDocument();
+    });
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it("generates AI questions and adds selected ones to the current exam", async () => {
     const user = userEvent.setup();
     const generatedEvent = {
@@ -261,6 +406,12 @@ describe("ExamWizardForm", () => {
       body: stream,
     } as Response);
     apiRequestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/knowledge/majors") {
+        return Promise.resolve([]);
+      }
+      if (path === "/questions/ai-generate/frequent-knowledge-points") {
+        return Promise.resolve({ recent: [], frequent: [] });
+      }
       if (path === "/question-banks") {
         return Promise.resolve([{ id: "ai-bank-1", name: "AI题库" }]);
       }

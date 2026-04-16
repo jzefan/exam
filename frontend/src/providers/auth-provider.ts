@@ -60,13 +60,15 @@ export const authProvider: AuthProvider = {
     return { error };
   },
 
-  register: async ({ username, email, password, full_name }: Record<string, string>) => {
+  register: async ({ username, email, password, full_name, role_name }: Record<string, string>) => {
     try {
+      const normalizedEmail = email?.trim();
       await axios.post(`${API_URL}/auth/register`, {
         username,
-        email,
+        email: normalizedEmail ? normalizedEmail : null,
         password,
         full_name,
+        role_name: role_name || "student",
       });
       return { success: true, redirectTo: "/login" };
     } catch {

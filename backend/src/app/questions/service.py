@@ -17,7 +17,9 @@ from app.common.resource_access import teacher_owned_resource_filter, teacher_vi
 from app.config import settings
 from app.questions.models import KnowledgePoint, Question, QuestionBank, Tag, question_tags
 from app.questions.schemas import (
+    ImportConfidence,
     ImportRecognitionMode,
+    QuestionImportAnalysisMode,
     ImportReviewStatus,
     ImportedQuestionDraft,
     KnowledgePointCreate,
@@ -26,6 +28,7 @@ from app.questions.schemas import (
     QuestionImportDocumentRecognizeResponse,
     QuestionImportDocumentSummary,
     QuestionImportDraft,
+    QuestionImportImageInput,
     QuestionImportRecognizeResponse,
     QuestionCreate,
     QuestionImportAnalyzeResponse,
@@ -404,6 +407,12 @@ class SegmentedBlock:
     boundary_confidence: str = "high"
 
 
+@dataclass(slots=True)
+class SegmentedParagraphBlock:
+    text: str
+    kind: str = "paragraph"
+
+
 def detect_import_template_mode(raw_text: str) -> str:
     """Detect whether document text looks like the supported field template."""
     lines = [line.strip() for line in raw_text.replace("\r\n", "\n").split("\n") if line.strip()]
@@ -412,7 +421,15 @@ def detect_import_template_mode(raw_text: str) -> str:
         for line in lines[:30]
         if any(line.startswith(prefix) for prefix in _TEMPLATE_PREFIXES)
     )
-    return ImportRecognitionMode.TEMPLATE.value if prefix_hits >= 3 else ImportRecognitionMode.SMART.value
+    has_question_header = any(
+        re.match(r"^(?:\[(题型|题目内容)\]|(题型|题目内容)[:：])", line)
+        for line in lines[:50]
+    )
+    return (
+        ImportRecognitionMode.TEMPLATE.value
+        if has_question_header and prefix_hits >= 3
+        else ImportRecognitionMode.SMART.value
+    )
 
 
 def _is_question_start(line: str) -> tuple[bool, str]:
@@ -426,35 +443,171 @@ def _is_attachment_line(line: str) -> bool:
     return bool(
         re.match(r"^([A-H])[\.．、\)]\s*(.+)$", line, re.IGNORECASE)
         or re.match(r"^(答案|参考答案|解析|分析|难度|难易度)[:：]", line)
+        or re.match(r"^\[(答案|参考答案|解析|分析|难度)\]\s*", line)
         or line.startswith("```")
+        or re.match(r"^\[IMAGE:[^\]]+\]$", line)
     )
 
 
-def segment_question_document(raw_text: str) -> list[SegmentedBlock]:
-    """Segment non-template text into candidate question blocks."""
-    lines = [line.rstrip() for line in raw_text.replace("\r\n", "\n").split("\n")]
-    blocks: list[SegmentedBlock] = []
+def _is_question_tail_marker(line: str) -> bool:
+    normalized = line.strip()
+    return bool(
+        re.match(r"^\[?(答案|参考答案|解析|分析|难度|预计时间|预期时间)\]\s*", normalized)
+        or re.match(r"^\[?(答案|参考答案|解析|分析|难度|预计时间|预期时间)[:：]", normalized)
+    )
+
+
+def _get_tail_field_type(line: str) -> str | None:
+    normalized = line.strip()
+    match = re.match(r"^\[?(答案|参考答案|解析|分析|难度|预计时间|预期时间)(?:\]|[:：])?", normalized)
+    if not match:
+        return None
+    label = match.group(1)
+    if label in {"答案", "参考答案"}:
+        return "answer"
+    if label in {"解析", "分析"}:
+        return "analysis"
+    if label == "难度":
+        return "difficulty"
+    if label in {"预计时间", "预期时间"}:
+        return "time"
+    return None
+
+
+def _split_block_when_question_restarts(block_text: str) -> list[str]:
+    lines = [line.strip() for line in block_text.splitlines() if line.strip()]
+    if not lines:
+        return []
+
+    chunks: list[list[str]] = []
     current: list[str] = []
-    current_confidence = "high"
+    seen_tail_marker = False
+
+    for line in lines:
+        is_start, _confidence = _is_question_start(line)
+        should_split = (
+            bool(current)
+            and seen_tail_marker
+            and is_start
+            and not _is_attachment_line(line)
+        )
+        if should_split:
+            chunks.append(current)
+            current = [line]
+            seen_tail_marker = False
+            continue
+
+        current.append(line)
+        if _is_question_tail_marker(line):
+            seen_tail_marker = True
+
+    if current:
+        chunks.append(current)
+
+    return ["\n".join(chunk).strip() for chunk in chunks if any(part.strip() for part in chunk)]
+
+
+def _split_document_into_blocks(raw_text: str) -> list[SegmentedParagraphBlock]:
+    lines = [line.rstrip() for line in raw_text.replace("\r\n", "\n").split("\n")]
+    blocks: list[SegmentedParagraphBlock] = []
+    current: list[str] = []
+
+    def flush_current() -> None:
+        if not current:
+            return
+        text = "\n".join(part for part in current if part.strip()).strip()
+        current.clear()
+        if text:
+            blocks.append(SegmentedParagraphBlock(text=text))
 
     for line in lines:
         stripped = line.strip()
         if not stripped:
-            if current:
-                current.append("")
+            flush_current()
             continue
+        if stripped.startswith("```") or re.match(r"^\[IMAGE:[^\]]+\]$", stripped) or _parse_template_field_line(stripped):
+            flush_current()
+            kind = "field" if _parse_template_field_line(stripped) else "image" if stripped.startswith("[IMAGE:") else "code"
+            blocks.append(SegmentedParagraphBlock(text=stripped, kind=kind))
+            continue
+        current.append(stripped)
 
-        is_start, confidence = _is_question_start(stripped)
-        if is_start and current and not _is_attachment_line(stripped):
-            text = "\n".join(part for part in current if part.strip()).strip()
-            if text:
-                blocks.append(SegmentedBlock(raw_text=text, boundary_confidence=current_confidence))
-            current = [stripped]
-            current_confidence = confidence
-        else:
-            if not current:
-                current_confidence = confidence if is_start else "low"
-            current.append(stripped)
+    flush_current()
+    return blocks
+
+
+def _block_has_question_tail_marker(block_text: str) -> bool:
+    return any(_is_question_tail_marker(line) for line in block_text.splitlines() if line.strip())
+
+
+def _get_last_tail_field_type(block_text: str) -> str | None:
+    detected: str | None = None
+    for line in block_text.splitlines():
+        field_type = _get_tail_field_type(line)
+        if field_type:
+            detected = field_type
+    return detected
+
+
+def _is_explicit_typed_question_start(line: str) -> bool:
+    stripped = _strip_question_start_prefix(line)
+    return bool(
+        re.match(
+            r"^\[?(单选题|单选|多选题|多选|选择题|判断题|判断|填空题|填空|简答题|简答|编程题|编程|论述题|论述)\]?",
+            stripped,
+        )
+    )
+
+
+def _block_looks_like_question_candidate(block_text: str) -> bool:
+    lines = [line.strip() for line in block_text.splitlines() if line.strip()]
+    return bool(_is_explicit_typed_question_start(block_text) or len(_extract_options(lines)) >= 2)
+
+
+def segment_question_document(raw_text: str) -> list[SegmentedBlock]:
+    """Segment non-template text into candidate question blocks."""
+    paragraph_blocks = _split_document_into_blocks(raw_text)
+    blocks: list[SegmentedBlock] = []
+    current: list[str] = []
+    current_confidence = "high"
+    current_has_tail_marker = False
+    current_tail_field_type: str | None = None
+
+    for block in paragraph_blocks:
+        sub_blocks = _split_block_when_question_restarts(block.text)
+        if not sub_blocks:
+            sub_blocks = [block.text]
+
+        for sub_block in sub_blocks:
+            stripped = sub_block.strip()
+            is_start, confidence = _is_question_start(stripped)
+            is_answer_or_analysis_continuation = (
+                current_tail_field_type in {"answer", "analysis"}
+                and is_start
+                and not _is_explicit_typed_question_start(stripped)
+                and not _block_looks_like_question_candidate(stripped)
+            )
+            should_start_new = (
+                is_start
+                and current
+                and not _is_attachment_line(stripped)
+                and not is_answer_or_analysis_continuation
+                and (current_has_tail_marker or _is_explicit_typed_question_start(stripped))
+            )
+            if should_start_new:
+                text = "\n".join(part for part in current if part.strip()).strip()
+                if text:
+                    blocks.append(SegmentedBlock(raw_text=text, boundary_confidence=current_confidence))
+                current = [stripped]
+                current_confidence = confidence
+                current_has_tail_marker = _block_has_question_tail_marker(stripped)
+                current_tail_field_type = _get_last_tail_field_type(stripped)
+            else:
+                if not current:
+                    current_confidence = confidence if is_start else "low"
+                current.append(stripped)
+                current_has_tail_marker = current_has_tail_marker or _block_has_question_tail_marker(stripped)
+                current_tail_field_type = _get_last_tail_field_type(stripped) or current_tail_field_type
 
     if current:
         text = "\n".join(part for part in current if part.strip()).strip()
@@ -577,6 +730,8 @@ def build_import_draft_from_segment(
     *,
     segment_source: str = "rule",
     boundary_confidence: str = "high",
+    images: list[QuestionImportImageInput] | None = None,
+    comparison_flags: list[str] | None = None,
 ) -> QuestionImportDraft:
     lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
     options = _extract_options(lines)
@@ -586,16 +741,16 @@ def build_import_draft_from_segment(
     content_lines: list[str] = []
 
     for line in lines:
-        answer_match = re.match(r"^(答案|参考答案|answer)[:：]?\s*(.+)$", line, re.IGNORECASE)
-        analysis_match = re.match(r"^(解析|分析|analysis)[:：]\s*(.+)$", line, re.IGNORECASE)
-        difficulty_match = re.match(r"^(难度|难易度|difficulty)[:：]\s*(.+)$", line, re.IGNORECASE)
+        answer_match = re.match(r"^(?:\[(答案|参考答案)\]|(答案|参考答案|answer))[:：]?\s*(.+)$", line, re.IGNORECASE)
+        analysis_match = re.match(r"^(?:\[(解析|分析)\]|(解析|分析|analysis))[:：]?\s*(.+)$", line, re.IGNORECASE)
+        difficulty_match = re.match(r"^(?:\[(难度|难易度)\]|(难度|难易度|difficulty))[:：]?\s*(.+)$", line, re.IGNORECASE)
         option_match = re.match(r"^([A-H])[\.．、\)]\s*(.+)$", line, re.IGNORECASE)
         if answer_match:
-            answer_text = answer_match.group(2).strip()
+            answer_text = answer_match.group(3).strip()
         elif analysis_match:
-            analysis = analysis_match.group(2).strip()
+            analysis = analysis_match.group(3).strip()
         elif difficulty_match:
-            difficulty_text = difficulty_match.group(2).strip()
+            difficulty_text = difficulty_match.group(3).strip()
         elif _is_standalone_question_type_line(line):
             continue
         elif not option_match:
@@ -627,6 +782,8 @@ def build_import_draft_from_segment(
         type_confidence=type_confidence,  # type: ignore[arg-type]
         boundary_confidence=boundary_confidence,  # type: ignore[arg-type]
         issues=issues,
+        images=list(images or []),
+        comparison_flags=list(comparison_flags or []),
         review_status=ImportReviewStatus.PENDING,
         review_required=True,
     )
@@ -666,6 +823,36 @@ def parse_template_document(raw_text: str) -> list[QuestionImportDraft]:
     return drafts
 
 
+def _collect_segment_images(raw_text: str, images: list[QuestionImportImageInput]) -> list[QuestionImportImageInput]:
+    image_ids = re.findall(r"\[IMAGE:([^\]]+)\]", raw_text)
+    if not image_ids:
+        return []
+    index = {image.image_id: image for image in images}
+    return [index[image_id] for image_id in image_ids if image_id in index]
+
+
+def _build_rule_based_drafts(payload: QuestionImportDocumentRecognizeRequest, mode: str) -> list[QuestionImportDraft]:
+    if mode == ImportRecognitionMode.TEMPLATE.value:
+        drafts = parse_template_document(payload.raw_text)
+    else:
+        drafts = [
+            build_import_draft_from_segment(
+                segment.raw_text,
+                segment_source=segment.segment_source,
+                boundary_confidence=segment.boundary_confidence,
+                images=_collect_segment_images(segment.raw_text, payload.images),
+            )
+            for segment in segment_question_document(payload.raw_text)
+        ]
+
+    if payload.images and mode == ImportRecognitionMode.TEMPLATE.value:
+        return [
+            draft.model_copy(update={"images": _collect_segment_images(draft.raw_text, payload.images)})
+            for draft in drafts
+        ]
+    return drafts
+
+
 def _needs_ai_completion(draft: QuestionImportDraft) -> bool:
     return (
         draft.boundary_confidence.value == "low"
@@ -699,11 +886,171 @@ async def complete_import_draft_with_ai(draft: QuestionImportDraft) -> QuestionI
     return merged
 
 
+def _build_document_ai_prompt(raw_text: str, images: list[QuestionImportImageInput]) -> str:
+    image_lines = "\n".join(
+        f"- {image.image_id}: {image.url} (order={image.order}, page={image.page or 'unknown'}, alt={image.alt or ''})"
+        for image in images
+    )
+    return f"""
+你是一名中文题库导入助手。请分析整份导入文档，并只输出合法 JSON。
+
+要求：
+1. 你会收到整份题目文本与图片列表。
+2. 必须按题目拆分 questions 数组。
+3. 每道题输出 type、content_text、options、answer_text、analysis、difficulty、raw_text、images。
+4. answer_text 没有时返回空字符串，不要臆造。
+5. difficulty 必须是 1 到 5 的整数。
+6. images 字段填写与题目相关的 image_id 数组。
+7. 不要输出解释、Markdown 或代码块。
+
+图片列表：
+{image_lines or "无"}
+
+原始文本：
+{raw_text}
+"""
+
+
+def _validate_ai_document_questions(data: dict) -> list[dict]:
+    questions = data.get("questions")
+    if not isinstance(questions, list) or not questions:
+        raise RuntimeError("AI 分析结果格式异常，请重试")
+    validated: list[dict] = []
+    for item in questions:
+        if not isinstance(item, dict):
+            raise RuntimeError("AI 分析结果格式异常，请重试")
+        raw_type = str(item.get("type", "")).strip()
+        if raw_type not in _VALID_QUESTION_TYPES:
+            raise RuntimeError("AI 分析结果格式异常，请重试")
+        difficulty = item.get("difficulty", 3)
+        try:
+            safe_difficulty = max(1, min(5, int(difficulty)))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("AI 分析结果格式异常，请重试") from exc
+        validated.append(
+            {
+                "type": raw_type,
+                "content_text": str(item.get("content_text", "")).strip(),
+                "options": item.get("options") if isinstance(item.get("options"), dict) else None,
+                "answer_text": str(item.get("answer_text", "")).strip(),
+                "analysis": str(item.get("analysis", "")).strip(),
+                "difficulty": safe_difficulty,
+                "raw_text": str(item.get("raw_text", "")).strip(),
+                "images": item.get("images") if isinstance(item.get("images"), list) else [],
+            }
+        )
+    return validated
+
+
+def _build_ai_import_draft(
+    question: dict,
+    images: list[QuestionImportImageInput],
+) -> QuestionImportDraft:
+    image_index = {image.image_id: image for image in images}
+    linked_images = [image_index[image_id] for image_id in question["images"] if image_id in image_index]
+    answer_text = question["answer_text"] or None
+    issues: list[str] = []
+    if not question["content_text"]:
+        issues.append("题目内容为空")
+    if question["type"] == "choice" and len(question["options"] or {}) < 2:
+        issues.append("选择题选项不完整")
+    if not answer_text:
+        issues.append("未识别到答案")
+    return QuestionImportDraft(
+        draft_id=str(uuid.uuid4()),
+        raw_text=question["raw_text"] or question["content_text"],
+        title=(question["content_text"] or question["raw_text"]).replace("\n", " ")[:120],
+        type=question["type"],
+        content_text=question["content_text"],
+        options={str(key): str(value).strip() for key, value in (question["options"] or {}).items()} or None,
+        answer_text=answer_text,
+        analysis=question["analysis"] or None,
+        difficulty=question["difficulty"],
+        segment_source="ai_full",
+        type_confidence="high",
+        boundary_confidence="medium",
+        issues=issues,
+        images=linked_images,
+        comparison_flags=[],
+        review_status=ImportReviewStatus.PENDING,
+        review_required=True,
+    )
+
+
+def merge_ai_and_rule_recognition(
+    ai_drafts: list[QuestionImportDraft],
+    baseline: list[QuestionImportDraft],
+) -> list[QuestionImportDraft]:
+    comparison_flags: list[str] = []
+    baseline_count = len(baseline)
+    ai_count = len(ai_drafts)
+    if baseline_count != ai_count:
+        comparison_flags.append("count_mismatch")
+
+    merged: list[QuestionImportDraft] = []
+    for index, draft in enumerate(ai_drafts):
+        baseline_draft = baseline[index] if index < baseline_count else None
+        next_flags = list(comparison_flags)
+        next_issues = list(draft.issues)
+        if baseline_draft and baseline_draft.type != draft.type:
+            next_flags.append("type_mismatch")
+        if "count_mismatch" in next_flags and "AI识别题目数量与规则识别不一致" not in next_issues:
+            next_issues.append("AI识别题目数量与规则识别不一致")
+        merged.append(
+            draft.model_copy(
+                update={
+                    "segment_source": "ai_full+rule",
+                    "comparison_flags": next_flags,
+                    "issues": next_issues,
+                    "boundary_confidence": ImportConfidence.MEDIUM if next_flags else draft.boundary_confidence,
+                }
+            )
+        )
+    return merged
+
+
+async def recognize_question_document_with_ai(
+    payload: QuestionImportDocumentRecognizeRequest,
+    baseline: list[QuestionImportDraft],
+) -> list[QuestionImportDraft]:
+    prompt = _build_document_ai_prompt(payload.raw_text, payload.images)
+    data = await _request_deepseek_json(prompt)
+    questions = _validate_ai_document_questions(data)
+    ai_drafts = [_build_ai_import_draft(question, payload.images) for question in questions]
+    return merge_ai_and_rule_recognition(ai_drafts, baseline)
+
+
+def _draft_dedup_key(draft: QuestionImportDraft) -> str:
+    """Build a dedup key from normalized content_text + sorted options."""
+    text = " ".join(draft.content_text.split()).strip().lower()
+    if draft.options:
+        opts = "|".join(f"{k}={' '.join(v.split()).strip().lower()}" for k, v in sorted(draft.options.items()))
+        return f"{text}||{opts}"
+    return text
+
+
+def deduplicate_drafts(
+    drafts: list[QuestionImportDraft],
+) -> tuple[list[QuestionImportDraft], int]:
+    """Remove duplicate drafts based on content_text + options. Returns (unique_drafts, removed_count)."""
+    seen: set[str] = set()
+    unique: list[QuestionImportDraft] = []
+    for draft in drafts:
+        key = _draft_dedup_key(draft)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(draft)
+    return unique, len(drafts) - len(unique)
+
+
 def build_import_document_summary(
     drafts: list[QuestionImportDraft],
+    duplicates_removed: int = 0,
 ) -> QuestionImportDocumentSummary:
     return QuestionImportDocumentSummary(
         total=len(drafts),
+        duplicates_removed=duplicates_removed,
         high_confidence=sum(
             1
             for draft in drafts
@@ -734,23 +1081,16 @@ async def recognize_question_document(
         if payload.prefer_template
         else detect_import_template_mode(payload.raw_text)
     )
-    drafts = (
-        parse_template_document(payload.raw_text)
-        if mode == ImportRecognitionMode.TEMPLATE.value
-        else [
-            build_import_draft_from_segment(
-                segment.raw_text,
-                segment_source=segment.segment_source,
-                boundary_confidence=segment.boundary_confidence,
-            )
-            for segment in segment_question_document(payload.raw_text)
-        ]
-    )
-    completed = [await complete_import_draft_with_ai(draft) for draft in drafts]
+    drafts = _build_rule_based_drafts(payload, mode)
+    if payload.analysis_mode == QuestionImportAnalysisMode.AI_FULL:
+        completed = await recognize_question_document_with_ai(payload, drafts)
+    else:
+        completed = [await complete_import_draft_with_ai(draft) for draft in drafts]
+    unique_drafts, duplicates_removed = deduplicate_drafts(completed)
     return QuestionImportDocumentRecognizeResponse(
         mode=mode,  # type: ignore[arg-type]
-        summary=build_import_document_summary(completed),
-        drafts=completed,
+        summary=build_import_document_summary(unique_drafts, duplicates_removed),
+        drafts=unique_drafts,
     )
 
 

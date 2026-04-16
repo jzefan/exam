@@ -3,12 +3,14 @@ import type {
   ImportConfidence,
   ImportRecognitionMode,
   ImportReviewStatus,
+  QuestionImportImageInput,
   QuestionImportDocumentSummary,
   QuestionImportDraft,
 } from "./import-types";
 
 export const emptyImportSummary: QuestionImportDocumentSummary = {
   total: 0,
+  duplicates_removed: 0,
   high_confidence: 0,
   medium_confidence: 0,
   low_confidence: 0,
@@ -56,26 +58,42 @@ D. 深圳
 `;
 }
 
-export async function extractQuestionImportText(file: File): Promise<string> {
+export async function extractQuestionImportPayload(file: File): Promise<{
+  rawText: string;
+  sourceFormat: "pdf" | "docx" | "md";
+  images: QuestionImportImageInput[];
+}> {
   const format = detectQuestionImportFormat(file.name);
 
   if (format === "md") {
-    return normalizeMarkdownImages(await file.text());
+    const normalized = normalizeMarkdownImages(await readFileAsText(file));
+    return {
+      rawText: normalized.html,
+      sourceFormat: format,
+      images: normalized.images,
+    };
   }
 
   if (format === "docx") {
     const mammoth = await import("mammoth");
+    const images: QuestionImportImageInput[] = [];
     const result = await mammoth.convertToHtml(
       { arrayBuffer: await file.arrayBuffer() },
       {
         convertImage: mammoth.images.imgElement(async (image) => {
           const base64 = await image.readAsBase64String();
           const url = await uploadImportedImage(base64, image.contentType);
-          return { src: url };
+          const imageId = `image-${images.length + 1}`;
+          images.push({ image_id: imageId, url, order: images.length + 1, alt: "" });
+          return { src: url, "data-image-id": imageId };
         }),
       },
     );
-    return htmlToImportText(result.value);
+    return {
+      rawText: htmlToImportText(result.value, images),
+      sourceFormat: format,
+      images,
+    };
   }
 
   const [{ getDocument, GlobalWorkerOptions, OPS }, { default: pdfWorker }] = await Promise.all([
@@ -85,6 +103,7 @@ export async function extractQuestionImportText(file: File): Promise<string> {
   GlobalWorkerOptions.workerSrc = pdfWorker;
   const pdf = await getDocument({ data: await file.arrayBuffer() }).promise;
   const chunks: string[] = [];
+  const images: QuestionImportImageInput[] = [];
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
     const text = await page.getTextContent();
@@ -93,9 +112,46 @@ export async function extractQuestionImportText(file: File): Promise<string> {
       (fn) => fn === OPS.paintImageXObject || fn === OPS.paintInlineImageXObject,
     );
     const pageText = text.items.map((item) => ("str" in item ? item.str : "")).join(" ");
-    chunks.push(`${pageText}${hasImage ? `\n[第 ${pageNumber} 页包含图片，请人工核对原文件]` : ""}`);
+    if (hasImage) {
+      const imageId = `image-${images.length + 1}`;
+      images.push({
+        image_id: imageId,
+        url: `pdf-page-image://${pageNumber}`,
+        order: images.length + 1,
+        page: pageNumber,
+        alt: `第 ${pageNumber} 页图片`,
+      });
+      chunks.push(`${pageText}\n[IMAGE:${imageId}]`);
+    } else {
+      chunks.push(pageText);
+    }
   }
-  return chunks.join("\n");
+  return {
+    rawText: chunks.join("\n"),
+    sourceFormat: format,
+    images,
+  };
+}
+
+export async function extractQuestionImportText(file: File): Promise<string> {
+  const payload = await extractQuestionImportPayload(file);
+  return payload.rawText;
+}
+
+async function readFileAsText(file: File): Promise<string> {
+  if (typeof file.text === "function") {
+    return file.text();
+  }
+  if (typeof file.arrayBuffer === "function") {
+    const buffer = await file.arrayBuffer();
+    return new TextDecoder().decode(buffer);
+  }
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+    reader.onerror = () => reject(new Error("文件读取失败"));
+    reader.readAsText(file);
+  });
 }
 
 async function uploadImportedImage(base64: string, contentType: string): Promise<string> {
@@ -126,37 +182,140 @@ async function uploadImportedImage(base64: string, contentType: string): Promise
   return data.url;
 }
 
-function normalizeMarkdownImages(markdown: string): string {
-  return markdown.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt: string, src: string) => {
-    return `<img src="${src.trim()}" alt="${alt.trim()}" />`;
+function normalizeMarkdownImages(markdown: string): { html: string; images: QuestionImportImageInput[] } {
+  const images: QuestionImportImageInput[] = [];
+  const html = markdown.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt: string, src: string) => {
+    const imageId = `image-${images.length + 1}`;
+    images.push({
+      image_id: imageId,
+      url: src.trim(),
+      order: images.length + 1,
+      alt: alt.trim(),
+    });
+    return `<img src="${src.trim()}" alt="${alt.trim()}" data-image-id="${imageId}" />`;
   });
+  return { html, images };
 }
 
-function htmlToImportText(html: string): string {
+type ImportTextBlock = {
+  text: string;
+  separate?: boolean;
+};
+
+function collectInlineParts(
+  node: ChildNode,
+  imageIndex: Map<string, QuestionImportImageInput>,
+): ImportTextBlock[] {
+  if (node instanceof Text) {
+    const text = node.textContent?.replace(/\s+/g, " ").trim() ?? "";
+    return text ? [{ text }] : [];
+  }
+
+  if (node instanceof HTMLImageElement) {
+    const imageId = node.getAttribute("data-image-id") ?? `image-${imageIndex.size + 1}`;
+    if (!imageIndex.has(imageId)) {
+      imageIndex.set(imageId, {
+        image_id: imageId,
+        url: node.getAttribute("src") ?? node.src,
+        order: imageIndex.size + 1,
+        alt: node.getAttribute("alt") ?? "",
+      });
+    }
+    return [
+      {
+        text: `<img src="${node.getAttribute("src") ?? node.src}" alt="${node.getAttribute("alt") ?? ""}" data-image-id="${imageId}" />`,
+        separate: true,
+      },
+    ];
+  }
+
+  if (node instanceof HTMLElement) {
+    return Array.from(node.childNodes).flatMap((child) => collectInlineParts(child, imageIndex));
+  }
+
+  return [];
+}
+
+function appendMergedInlineText(
+  target: string[],
+  parts: ImportTextBlock[],
+) {
+  const textParts = parts.filter((part) => !part.separate).map((part) => part.text.trim()).filter(Boolean);
+  if (textParts.length > 0) {
+    target.push(textParts.join(" "));
+  }
+  for (const imagePart of parts.filter((part) => part.separate)) {
+    target.push(imagePart.text);
+  }
+}
+
+export function htmlToImportText(html: string, images: QuestionImportImageInput[] = []): string {
   const document = new DOMParser().parseFromString(html, "text/html");
   const parts: string[] = [];
+  const imageIndex = new Map(images.map((image) => [image.image_id, image]));
 
-  document.body.childNodes.forEach((node) => {
-    if (node instanceof HTMLParagraphElement) {
-      const image = node.querySelector("img");
-      const text = node.textContent?.trim() ?? "";
-      if (text) parts.push(text);
-      if (image?.src) {
-        parts.push(`<img src="${image.getAttribute("src") ?? image.src}" alt="${image.getAttribute("alt") ?? ""}" />`);
-      }
+  const visitNode = (node: ChildNode) => {
+    if (node instanceof HTMLParagraphElement || /^H[1-6]$/.test(node.nodeName)) {
+      appendMergedInlineText(parts, collectInlineParts(node, imageIndex));
+      parts.push("");
+      return;
+    }
+
+    if (node instanceof HTMLOListElement) {
+      Array.from(node.children).forEach((child) => {
+        if (child instanceof HTMLLIElement) {
+          const lineParts: string[] = [];
+          appendMergedInlineText(lineParts, collectInlineParts(child, imageIndex));
+          if (lineParts[0]) {
+            parts.push(`- ${lineParts[0]}`);
+          }
+          for (const extra of lineParts.slice(1)) {
+            parts.push(extra);
+          }
+        }
+      });
+      parts.push("");
+      return;
+    }
+
+    if (node instanceof HTMLUListElement) {
+      Array.from(node.children).forEach((child) => {
+        if (child instanceof HTMLLIElement) {
+          const lineParts: string[] = [];
+          appendMergedInlineText(lineParts, collectInlineParts(child, imageIndex));
+          if (lineParts[0]) {
+            parts.push(`- ${lineParts[0]}`);
+          }
+          for (const extra of lineParts.slice(1)) {
+            parts.push(extra);
+          }
+        }
+      });
+      parts.push("");
       return;
     }
 
     if (node instanceof HTMLImageElement) {
-      parts.push(`<img src="${node.getAttribute("src") ?? node.src}" alt="${node.getAttribute("alt") ?? ""}" />`);
+      appendMergedInlineText(parts, collectInlineParts(node, imageIndex));
+      parts.push("");
       return;
     }
 
-    const text = node.textContent?.trim();
-    if (text) parts.push(text);
-  });
+    if (node instanceof HTMLElement) {
+      Array.from(node.childNodes).forEach(visitNode);
+      if (node instanceof HTMLDivElement || node instanceof HTMLTableElement) {
+        parts.push("");
+      }
+      return;
+    }
+  };
 
-  return parts.join("\n");
+  Array.from(document.body.childNodes).forEach(visitNode);
+
+  return parts
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function buildAnswerPayload(type: QuestionType, answerText: string | null) {
@@ -241,6 +400,7 @@ function escapeHtml(value: string): string {
 export function buildImportSummary(drafts: QuestionImportDraft[]): QuestionImportDocumentSummary {
   return {
     total: drafts.length,
+    duplicates_removed: 0,
     high_confidence: drafts.filter(
       (draft) => draft.type_confidence === "high" && draft.boundary_confidence === "high",
     ).length,

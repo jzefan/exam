@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 
 ExamStatus = Literal["draft", "upcoming", "ongoing", "completed", "closed"]
+ExamQuestionMode = Literal["manual", "auto", "ai"]
 
 
 # ── Position ──
@@ -78,6 +79,7 @@ class ExamCreate(BaseModel):
     max_switch_count: int = Field(default=0, ge=0)
     show_result: bool = False
     notes_template: str | None = None
+    question_mode: ExamQuestionMode | None = None
     question_ids: list[uuid.UUID] = Field(default_factory=list)
     question_items: list[ExamQuestionItem] = Field(default_factory=list)
     student_ids: list[uuid.UUID] = Field(default_factory=list)
@@ -95,6 +97,7 @@ class ExamUpdate(BaseModel):
     max_switch_count: int | None = Field(default=None, ge=0)
     show_result: bool | None = None
     notes_template: str | None = None
+    question_mode: ExamQuestionMode | None = None
     question_ids: list[uuid.UUID] | None = None
     question_items: list[ExamQuestionItem] | None = None
     student_ids: list[uuid.UUID] | None = None
@@ -116,6 +119,7 @@ class ExamResponse(BaseModel):
     max_switch_count: int
     show_result: bool
     notes_template: str | None
+    question_mode: ExamQuestionMode | None = None
     total_questions: int = 0
     total_students: int = 0
     submitted_count: int = 0

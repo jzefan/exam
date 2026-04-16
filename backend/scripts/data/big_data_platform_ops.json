@@ -1,0 +1,91 @@
+{
+  "metadata": {
+    "source": "T/MIITEC 006-2025《大数据产业人才岗位能力要求》",
+    "industry": "大数据产业",
+    "version_note": "来源：T/MIITEC 006-2025",
+    "model_type": "standard"
+  },
+  "models": [
+    {
+      "job_role": "大数据解决方案工程师",
+      "direction_name": "实施运维",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "解决方案设计", "level": "L3", "knowledge_points": ["大数据安全政策法规", "硬件选型和组网架构", "批流一体、湖仓一体方案"]}]},
+        {"name": "技术技能", "skills": [{"name": "方案实施", "level": "L3", "knowledge_points": ["IT基础架构设计", "Hadoop、Spark、Flink", "数据治理工具(Atlas、Ranger)"]}]},
+        {"name": "工程实践", "skills": [{"name": "项目实施", "level": "L3", "knowledge_points": ["行业项目售前支持", "解决方案规划设计", "技术方案书撰写"]}]}
+      ]
+    },
+    {
+      "job_role": "数据实施工程师",
+      "direction_name": "实施运维",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "项目实施", "level": "L3", "knowledge_points": ["大数据平台基础知识", "项目实施阶段和内容", "项目生命周期"]}]},
+        {"name": "技术技能", "skills": [{"name": "实施技能", "level": "L3", "knowledge_points": ["Linux和WindowsServer", "Hadoop生态组件", "系统部署和培训"]}]},
+        {"name": "工程实践", "skills": [{"name": "项目部署", "level": "L3", "knowledge_points": ["大数据项目部署", "系统上线与验收"]}]}
+      ]
+    },
+    {
+      "job_role": "大数据运维工程师",
+      "direction_name": "实施运维",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "运维理论", "level": "L3", "knowledge_points": ["计算机硬件和网络", "大数据平台构架", "自动化运维方法"]}]},
+        {"name": "技术技能", "skills": [{"name": "运维技能", "level": "L3", "knowledge_points": ["系统安装部署", "Python、Shell脚本", "Puppet、Zabbix"]}]},
+        {"name": "工程实践", "skills": [{"name": "运维实施", "level": "L3", "knowledge_points": ["自动化运维工具使用", "系统问题发现与处置", "运维管理"]}]}
+      ]
+    },
+    {
+      "job_role": "数据平台架构师",
+      "direction_name": "平台建设",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "平台架构", "level": "L4", "knowledge_points": ["大数据平台生态体系", "数据治理理论", "分布式系统理论"]}]},
+        {"name": "技术技能", "skills": [{"name": "架构技能", "level": "L4", "knowledge_points": ["Hadoop、Spark、Flink", "Prometheus、Grafana", "Java、Scala、Python"]}]},
+        {"name": "工程实践", "skills": [{"name": "平台建设", "level": "L4", "knowledge_points": ["企业级平台架构设计", "数据治理经验"]}]}
+      ]
+    },
+    {
+      "job_role": "数据平台开发工程师",
+      "direction_name": "平台建设",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "平台开发", "level": "L3", "knowledge_points": ["程序设计基本知识", "计算机科学基础", "数据仓库理论"]}]},
+        {"name": "技术技能", "skills": [{"name": "开发技能", "level": "L3", "knowledge_points": ["Java、Scala、Python", "SpringBoot、SpringCloud", "Hadoop、Spark、Flink"]}]},
+        {"name": "工程实践", "skills": [{"name": "平台开发实践", "level": "L3", "knowledge_points": ["企业级平台应用开发", "高性能应用设计"]}]}
+      ]
+    },
+    {
+      "job_role": "数据平台运维工程师",
+      "direction_name": "平台建设",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "平台运维", "level": "L3", "knowledge_points": ["Linux操作系统原理", "计算机网络知识", "ITSS服务流程"]}]},
+        {"name": "技术技能", "skills": [{"name": "运维技能", "level": "L3", "knowledge_points": ["Linux运维管理", "Docker、Kubernetes", "HDFS、Hive、HBase"]}]},
+        {"name": "工程实践", "skills": [{"name": "运维实践", "level": "L3", "knowledge_points": ["平台运维经验", "自动化运维"]}]}
+      ]
+    },
+    {
+      "job_role": "网络舆情数据分析师",
+      "direction_name": "舆情分析",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "舆情分析理论", "level": "L3", "knowledge_points": ["舆情监测理论", "数据分析方法", "传播学基础"]}]},
+        {"name": "技术技能", "skills": [{"name": "舆情分析工具", "level": "L3", "knowledge_points": ["舆情监测平台", "数据分析工具", "可视化工具"]}]},
+        {"name": "工程实践", "skills": [{"name": "舆情分析实践", "level": "L3", "knowledge_points": ["舆情监测", "舆情分析报告", "应急响应"]}]}
+      ]
+    },
+    {
+      "job_role": "网络舆情风险管理师",
+      "direction_name": "舆情分析",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "风险管理", "level": "L3", "knowledge_points": ["舆情风险理论", "危机管理", "风险评估方法"]}]},
+        {"name": "技术技能", "skills": [{"name": "风险管理工具", "level": "L3", "knowledge_points": ["风险监测系统", "预警平台", "应急管理系统"]}]},
+        {"name": "工程实践", "skills": [{"name": "风险管理实践", "level": "L3", "knowledge_points": ["风险识别", "危机处置", "应急预案制定"]}]}
+      ]
+    },
+    {
+      "job_role": "AI舆情算法工程师",
+      "direction_name": "舆情分析",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "AI算法", "level": "L3", "knowledge_points": ["自然语言处理", "情感分析算法", "深度学习模型"]}]},
+        {"name": "技术技能", "skills": [{"name": "算法开发", "level": "L3", "knowledge_points": ["TensorFlow、PyTorch", "NLP工具库", "舆情算法模型"]}]},
+        {"name": "工程实践", "skills": [{"name": "算法应用", "level": "L3", "knowledge_points": ["舆情算法研发", "模型训练和优化", "算法部署"]}]}
+      ]
+    }
+  ]
+}

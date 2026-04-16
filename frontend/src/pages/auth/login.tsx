@@ -1,5 +1,6 @@
 import { useLogin } from "@refinedev/core";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { GraduationCap, Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -83,6 +84,13 @@ export function LoginPage() {
             )}
           </Button>
         </form>
+
+        <p className="mt-5 text-center text-sm text-muted-foreground">
+          没有账号？{" "}
+          <Link to="/register" className="font-medium text-primary hover:underline">
+            注册
+          </Link>
+        </p>
       </div>
     </div>
   );

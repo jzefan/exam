@@ -1,0 +1,588 @@
+{
+  "metadata": {
+    "source": "T/MIITEC 001-2023《人工智能产业人才岗位能力要求》",
+    "industry": "人工智能产业",
+    "version_note": "来源：T/MIITEC 001-2023《人工智能产业人才岗位能力要求》",
+    "model_type": "standard"
+  },
+  "models": [
+    {
+      "job_role": "智能芯片架构设计工程师",
+      "direction_name": "智能芯片",
+      "job_family": "智能芯片",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "具备通用处理器设计基础",
+              "level": "L3",
+              "knowledge_points": [
+                "具备通用处理器设计基础，掌握集成电路前端设计流程、集成电路逻辑设计、低功耗设计\n流程、异构SoC芯片设计流程中的一项或多项流程"
+              ]
+            },
+            {
+              "name": "具备机器学习和深度学习基础",
+              "level": "L3",
+              "knowledge_points": [
+                "具备机器学习和深度学习基础。掌握一项或多项智能算法，如图像、语音、自然语言理解\n等智能处理算法"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "具备扎实的编程基础",
+              "level": "L3",
+              "knowledge_points": [
+                "具备扎实的编程基础，熟练掌握Verilog编程技能"
+              ]
+            },
+            {
+              "name": "熟练掌握Python、Bash、Tcl、Perl等编程语言",
+              "level": "L3",
+              "knowledge_points": [
+                "熟练掌握Python、Bash、Tcl、Perl等编程语言"
+              ]
+            },
+            {
+              "name": "精通深度学习算法",
+              "level": "L3",
+              "knowledge_points": [
+                "精通深度学习算法，如CNN、RNN、LSTM等"
+              ]
+            },
+            {
+              "name": "熟悉各种主流开源深度学习框架",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉各种主流开源深度学习框架"
+              ]
+            },
+            {
+              "name": "精通SystemC、GEM5、TLM、LISA、SystemVerilog等至少一项能力",
+              "level": "L3",
+              "knowledge_points": [
+                "精通SystemC、GEM5、TLM、LISA、SystemVerilog等至少一项能力"
+              ]
+            },
+            {
+              "name": "熟悉虚拟原型设计工具",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉虚拟原型设计工具，如SynopsysPlatformArchitect、CadenceVirtualPlatform、Mentor\nVirtualPrototype等"
+              ]
+            },
+            {
+              "name": "熟悉UNIX、Linux操作环境",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉UNIX、Linux操作环境，熟悉vi、vim常用操作"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "T/MIITEC001-2023\n12",
+              "level": "L3",
+              "knowledge_points": [
+                "T/MIITEC001-2023\n12"
+              ]
+            },
+            {
+              "name": "熟悉异构SoC芯片设计流程",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉异构SoC芯片设计流程，有复杂芯片开发经验"
+              ]
+            },
+            {
+              "name": "具备一定的项目经验",
+              "level": "L3",
+              "knowledge_points": [
+                "具备一定的项目经验，能够与算法人员配合，完成智能芯片的规格设计以及结构设计"
+              ]
+            },
+            {
+              "name": "具备异构平台开发和调优经验",
+              "level": "L3",
+              "knowledge_points": [
+                "具备异构平台开发和调优经验，能够在各类硬件平台如CPU、GPU、DSP上进行深度学习\n相关算法设计"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "精通深度学习算法、处理器设计、系统建模等",
+              "level": "L3",
+              "knowledge_points": [
+                "精通深度学习算法、处理器设计、系统建模等，了解智能芯片领域应用业务需求"
+              ]
+            },
+            {
+              "name": "具备良好的沟通能力",
+              "level": "L3",
+              "knowledge_points": [
+                "具备良好的沟通能力，能够对客户在图像、语音、自然语言理解等智能处理算法方面的需\n求进行识别与分析。"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "智能芯片逻辑设计工程师",
+      "direction_name": "智能芯片",
+      "job_family": "智能芯片",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "具备扎实的计算机体系结构基础",
+              "level": "L3",
+              "knowledge_points": [
+                "具备扎实的计算机体系结构基础"
+              ]
+            },
+            {
+              "name": "理解常用深度学习算法原理、实现流程",
+              "level": "L3",
+              "knowledge_points": [
+                "理解常用深度学习算法原理、实现流程"
+              ]
+            },
+            {
+              "name": "熟悉常用片内总线协议",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉常用片内总线协议，例如AMBA、ACE、AXI、APB"
+              ]
+            },
+            {
+              "name": "熟悉PCIE、DDR、Ethernet、片间通讯等接口协议",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉PCIE、DDR、Ethernet、片间通讯等接口协议"
+              ]
+            },
+            {
+              "name": "具备大规模集成电路研究开发基础",
+              "level": "L3",
+              "knowledge_points": [
+                "具备大规模集成电路研究开发基础，包括半导体物理、工艺原理和器件理论，理解器件工\n作原理和应用"
+              ]
+            },
+            {
+              "name": "具备模块级逻辑设计相关知识",
+              "level": "L3",
+              "knowledge_points": [
+                "具备模块级逻辑设计相关知识，包括IP集成、模块设计、子系统仿真"
+              ]
+            },
+            {
+              "name": "熟悉芯片级逻辑设计相关知识",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉芯片级逻辑设计相关知识，包括时钟、复位、低功耗、总线、芯片总体集成"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "熟练掌握Verilog编程技能",
+              "level": "L3",
+              "knowledge_points": [
+                "熟练掌握Verilog编程技能"
+              ]
+            },
+            {
+              "name": "熟悉芯片级时钟",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉芯片级时钟，复位模块的设计，掌握低功耗设计方法和流程"
+              ]
+            },
+            {
+              "name": "熟悉UNIX、Linux操作环境",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉UNIX、Linux操作环境，熟悉vi、vim常用操作"
+              ]
+            },
+            {
+              "name": "掌握Perl、Python、Makefile等脚本语言",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握Perl、Python、Makefile等脚本语言"
+              ]
+            },
+            {
+              "name": "具备业界标准EDA工具使用能力",
+              "level": "L3",
+              "knowledge_points": [
+                "具备业界标准EDA工具使用能力，熟悉Lint、CDC、Synthesis、STA、Poweranalysis"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "具备完整的集成电路逻辑设计能力",
+              "level": "L3",
+              "knowledge_points": [
+                "具备完整的集成电路逻辑设计能力，能够根据规格设计完成智能芯片的逻辑设计开发工作"
+              ]
+            },
+            {
+              "name": "能够与验证人员配合完成模块级和芯片级的验证工作",
+              "level": "L3",
+              "knowledge_points": [
+                "能够与验证人员配合完成模块级和芯片级的验证工作"
+              ]
+            },
+            {
+              "name": "能够与物理设计人员配合完成智能芯片的逻辑设计",
+              "level": "L3",
+              "knowledge_points": [
+                "能够与物理设计人员配合完成智能芯片的逻辑设计，完成芯片级平面布局制定和时序收敛"
+              ]
+            },
+            {
+              "name": "具备PCIE、DDR、Ethernet、片间通讯等高速接口的集成、设计及调试经验",
+              "level": "L3",
+              "knowledge_points": [
+                "具备PCIE、DDR、Ethernet、片间通讯等高速接口的集成、设计及调试经验"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "理解智能芯片的实现原理",
+              "level": "L3",
+              "knowledge_points": [
+                "理解智能芯片的实现原理，智能计算模块实现的功能、性能要求"
+              ]
+            },
+            {
+              "name": "熟悉异构SoC芯片设计流程",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉异构SoC芯片设计流程，具备SoC芯片的逻辑设计能力，能够与验证和物理设计等团队\n进行协作。"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "智能芯片验证工程师",
+      "direction_name": "智能芯片",
+      "job_family": "智能芯片",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "具备SoC芯片设计基础",
+              "level": "L3",
+              "knowledge_points": [
+                "具备SoC芯片设计基础，了解芯片验证流程"
+              ]
+            },
+            {
+              "name": "具备扎实的调试检错能力",
+              "level": "L3",
+              "knowledge_points": [
+                "具备扎实的调试检错能力，能够快速解决芯片验证中的关键难题，按时完成指标、计划并\n保证质量"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "掌握SystemVerilog和OVM、UVM、VMM验证方法",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握SystemVerilog和OVM、UVM、VMM验证方法，能够搭建芯片、模块级UVM验证环\n境"
+              ]
+            },
+            {
+              "name": "熟悉常用脚本语言",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉常用脚本语言，如Shell、Perl、Python、Tcl、Makefile"
+              ]
+            },
+            {
+              "name": "熟悉常用EDA工具",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉常用EDA工具，如Verdi、VCS、NC"
+              ]
+            },
+            {
+              "name": "熟悉C语言编程技术",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉C语言编程技术，熟悉Linux系统"
+              ]
+            },
+            {
+              "name": "熟练使用FPGA验证环境",
+              "level": "L3",
+              "knowledge_points": [
+                "熟练使用FPGA验证环境"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "具有丰富的SoC集成验证经验",
+              "level": "L3",
+              "knowledge_points": [
+                "具有丰富的SoC集成验证经验，并能成功实现流片"
+              ]
+            },
+            {
+              "name": "具有丰富的嵌入式调试经验",
+              "level": "L3",
+              "knowledge_points": [
+                "具有丰富的嵌入式调试经验"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "理解智能芯片的功能定义、详细规格要求",
+              "level": "L3",
+              "knowledge_points": [
+                "理解智能芯片的功能定义、详细规格要求"
+              ]
+            },
+            {
+              "name": "具备复杂数字IP的验证能力",
+              "level": "L3",
+              "knowledge_points": [
+                "具备复杂数字IP的验证能力"
+              ]
+            },
+            {
+              "name": "能够与设计人员共同制定验证规格和测试计划",
+              "level": "L3",
+              "knowledge_points": [
+                "能够与设计人员共同制定验证规格和测试计划，并搭建基于UVM的验证平台"
+              ]
+            },
+            {
+              "name": "能够执行验证计划、编写测试用例、开展递归测试、完成问题的调试和修复",
+              "level": "L3",
+              "knowledge_points": [
+                "能够执行验证计划、编写测试用例、开展递归测试、完成问题的调试和修复"
+              ]
+            },
+            {
+              "name": "能够实现覆盖率收敛",
+              "level": "L3",
+              "knowledge_points": [
+                "能够实现覆盖率收敛，完成signoff前的交叉验证"
+              ]
+            },
+            {
+              "name": "能够进行智能芯片的功能和性能验证",
+              "level": "L3",
+              "knowledge_points": [
+                "能够进行智能芯片的功能和性能验证",
+                "T/MIITEC001-2023\n14"
+              ]
+            },
+            {
+              "name": "能够参与系统架构设计,搭建芯片级和模块级验证和测试环境",
+              "level": "L3",
+              "knowledge_points": [
+                "能够参与系统架构设计,搭建芯片级和模块级验证和测试环境。"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "软件系统开发工程师",
+      "direction_name": "智能芯片",
+      "job_family": "智能芯片",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "具备深度学习算法和框架基础",
+              "level": "L3",
+              "knowledge_points": [
+                "具备深度学习算法和框架基础"
+              ]
+            },
+            {
+              "name": "熟悉常见的图像、语音、自然语言理解智能处理算法",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉常见的图像、语音、自然语言理解智能处理算法"
+              ]
+            },
+            {
+              "name": "具备编程语言及编译器设计基础",
+              "level": "L3",
+              "knowledge_points": [
+                "具备编程语言及编译器设计基础"
+              ]
+            },
+            {
+              "name": "熟悉ARM、X86系统架构及Linux内核",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉ARM、X86系统架构及Linux内核"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "具备扎实的编程开发基础",
+              "level": "L3",
+              "knowledge_points": [
+                "具备扎实的编程开发基础，熟练掌握C/C++、Python等编程语言"
+              ]
+            },
+            {
+              "name": "熟悉Linux系统开发环境",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉Linux系统开发环境，熟悉Linux、Window等操作系统架构"
+              ]
+            },
+            {
+              "name": "熟悉LinuxShell、Valgrind、GDB等常用调试工具",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉LinuxShell、Valgrind、GDB等常用调试工具"
+              ]
+            },
+            {
+              "name": "熟悉Caffe、TensorFlow、PyTorch等主流的深度学习框架",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉Caffe、TensorFlow、PyTorch等主流的深度学习框架"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "能够与芯片设计团队共同定义智能芯片计算架构和算法",
+              "level": "L3",
+              "knowledge_points": [
+                "能够与芯片设计团队共同定义智能芯片计算架构和算法，具有良好的合作与沟通能力"
+              ]
+            },
+            {
+              "name": "能够改进工具链各个组件和性能分析工具",
+              "level": "L3",
+              "knowledge_points": [
+                "能够改进工具链各个组件和性能分析工具"
+              ]
+            },
+            {
+              "name": "具备设计和改进异构并行计算和编译架构的能力",
+              "level": "L3",
+              "knowledge_points": [
+                "具备设计和改进异构并行计算和编译架构的能力"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "能够设计基于智能芯片的大规模机器学习平台架构",
+              "level": "L3",
+              "knowledge_points": [
+                "能够设计基于智能芯片的大规模机器学习平台架构"
+              ]
+            },
+            {
+              "name": "熟悉智能芯片高性能计算库编程模型实现",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉智能芯片高性能计算库编程模型实现"
+              ]
+            },
+            {
+              "name": "能够进行智能芯片的系统软件架构设计与实现",
+              "level": "L3",
+              "knowledge_points": [
+                "能够进行智能芯片的系统软件架构设计与实现"
+              ]
+            },
+            {
+              "name": "能够进行智能芯片编程语言与编译器设计与实现",
+              "level": "L3",
+              "knowledge_points": [
+                "能够进行智能芯片编程语言与编译器设计与实现"
+              ]
+            },
+            {
+              "name": "能够进行人工智能芯片编译工具链开发与维护",
+              "level": "L3",
+              "knowledge_points": [
+                "能够进行人工智能芯片编译工具链开发与维护"
+              ]
+            },
+            {
+              "name": "能够设计和改进编译优化算法",
+              "level": "L3",
+              "knowledge_points": [
+                "能够设计和改进编译优化算法，提升编译器优化效能"
+              ]
+            },
+            {
+              "name": "能够提供定制化解决方案",
+              "level": "L3",
+              "knowledge_points": [
+                "能够提供定制化解决方案。"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

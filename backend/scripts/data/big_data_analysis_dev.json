@@ -1,0 +1,82 @@
+{
+  "metadata": {
+    "source": "T/MIITEC 006-2025《大数据产业人才岗位能力要求》",
+    "industry": "大数据产业",
+    "version_note": "来源：T/MIITEC 006-2025",
+    "model_type": "standard"
+  },
+  "models": [
+    {
+      "job_role": "数据算法工程师",
+      "direction_name": "数据分析",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "算法基础", "level": "L3", "knowledge_points": ["数据结构与算法", "概率论、数理统计", "机器学习和深度学习模型"]}]},
+        {"name": "技术技能", "skills": [{"name": "深度学习框架", "level": "L3", "knowledge_points": ["TensorFlow、PyTorch、MXNet", "算法设计和调优", "Hadoop生态组件"]}]},
+        {"name": "工程实践", "skills": [{"name": "算法研发", "level": "L3", "knowledge_points": ["大数据算法分析研发", "算法优化"]}]}
+      ]
+    },
+    {
+      "job_role": "数据挖掘工程师",
+      "direction_name": "数据分析",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "数据挖掘算法", "level": "L3", "knowledge_points": ["分类算法、聚类算法", "回归算法、关联分析", "深度神经网络"]}]},
+        {"name": "技术技能", "skills": [{"name": "数据挖掘工具", "level": "L3", "knowledge_points": ["Pandas、Numpy、Scikit-learn", "SparkSQL、SparkMLlib", "Tensorflow、PyTorch"]}]},
+        {"name": "工程实践", "skills": [{"name": "工程应用", "level": "L3", "knowledge_points": ["性能优化", "安全隐私", "分析报告撰写"]}]}
+      ]
+    },
+    {
+      "job_role": "数据分析工程师",
+      "direction_name": "数据分析",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "数据分析基础", "level": "L3", "knowledge_points": ["统计学、应用数学", "数据结构、数据库", "数据建模、数据挖掘"]}]},
+        {"name": "技术技能", "skills": [{"name": "分析工具", "level": "L3", "knowledge_points": ["SAS、SPSS、HiveSQL", "Java、Python、Scala", "Hadoop、Spark、Flink"]}]},
+        {"name": "工程实践", "skills": [{"name": "数据分析项目", "level": "L3", "knowledge_points": ["业务场景数据分析", "大数据项目分析", "分析环境搭建"]}]}
+      ]
+    },
+    {
+      "job_role": "数据可视化工程师",
+      "direction_name": "数据分析",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "可视化理论", "level": "L3", "knowledge_points": ["数据可视化基本流程", "OLAP方法", "商业场景数据分析"]}]},
+        {"name": "技术技能", "skills": [{"name": "可视化技术", "level": "L3", "knowledge_points": ["Echarts、Highcharts、D3.js", "Vue.js、jQuery", "Java、Python"]}]},
+        {"name": "工程实践", "skills": [{"name": "可视化应用", "level": "L3", "knowledge_points": ["业务需求分析", "数据可视化技术应用"]}]}
+      ]
+    },
+    {
+      "job_role": "大数据架构师",
+      "direction_name": "产品开发",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "大数据架构", "level": "L4", "knowledge_points": ["大数据技术体系", "架构设计规范", "大数据标准体系"]}]},
+        {"name": "技术技能", "skills": [{"name": "架构设计", "level": "L4", "knowledge_points": ["ToGAF架构方法", "分布式技术", "微服务架构"]}]},
+        {"name": "工程实践", "skills": [{"name": "架构实施", "level": "L4", "knowledge_points": ["高并发架构设计", "大数据产品架构开发"]}]}
+      ]
+    },
+    {
+      "job_role": "数据开发工程师",
+      "direction_name": "产品开发",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "大数据开发", "level": "L3", "knowledge_points": ["大数据生命周期管理", "Hadoop生态圈", "分布式计算框架"]}]},
+        {"name": "技术技能", "skills": [{"name": "开发技能", "level": "L3", "knowledge_points": ["MapReduce、Flink、Spark", "HDFS、HBase、Hive", "Flume、Kafka、Sqoop"]}]},
+        {"name": "工程实践", "skills": [{"name": "开发实践", "level": "L3", "knowledge_points": ["大数据应用开发", "性能优化"]}]}
+      ]
+    },
+    {
+      "job_role": "数据测试工程师",
+      "direction_name": "产品开发",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "测试理论", "level": "L3", "knowledge_points": ["测试方案编写", "测试模型和方法", "数据质量保证"]}]},
+        {"name": "技术技能", "skills": [{"name": "测试技能", "level": "L3", "knowledge_points": ["测试环境搭建", "测试用例编写", "自动化测试框架"]}]},
+        {"name": "工程实践", "skills": [{"name": "测试实施", "level": "L3", "knowledge_points": ["大数据测试环境搭建", "用例编写和执行", "测试报告编写"]}]}
+      ]
+    },
+    {
+      "job_role": "大数据产品经理",
+      "direction_name": "产品开发",
+      "dimensions": [
+        {"name": "专业知识", "skills": [{"name": "产品管理", "level": "L3", "knowledge_points": ["产品生命周期管理", "大数据产品技术环境", "敏捷开发方法"]}]},
+        {"name": "技术技能", "skills": [{"name": "产品设计", "level": "L3", "knowledge_points": ["XMind、Axure、Visio", "需求分析和产品策划", "Hadoop、Spark、Storm"]}]},
+        {"name": "工程实践", "skills": [{"name": "产品实施", "level": "L3", "knowledge_points": ["产品设计经验", "需求调研和分析"]}]}
+      ]
+    }
+  ]
+}

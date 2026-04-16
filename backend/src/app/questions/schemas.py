@@ -183,6 +183,11 @@ class ImportRecognitionMode(str, Enum):
     SMART = "smart"
 
 
+class QuestionImportAnalysisMode(str, Enum):
+    FAST = "fast"
+    AI_FULL = "ai_full"
+
+
 class ImportConfidence(str, Enum):
     HIGH = "high"
     MEDIUM = "medium"
@@ -193,6 +198,14 @@ class ImportReviewStatus(str, Enum):
     PENDING = "pending"
     APPROVED = "approved"
     SKIPPED = "skipped"
+
+
+class QuestionImportImageInput(BaseModel):
+    image_id: str = Field(min_length=1, max_length=100)
+    url: str = Field(min_length=1, max_length=2048)
+    order: int = Field(ge=0)
+    page: int | None = Field(default=None, ge=1)
+    alt: str | None = Field(default=None, max_length=255)
 
 
 class QuestionImportDraft(BaseModel):
@@ -209,12 +222,15 @@ class QuestionImportDraft(BaseModel):
     type_confidence: ImportConfidence
     boundary_confidence: ImportConfidence
     issues: list[str] = Field(default_factory=list)
+    images: list[QuestionImportImageInput] = Field(default_factory=list)
+    comparison_flags: list[str] = Field(default_factory=list)
     review_status: ImportReviewStatus = ImportReviewStatus.PENDING
     review_required: bool = True
 
 
 class QuestionImportDocumentSummary(BaseModel):
     total: int
+    duplicates_removed: int = 0
     high_confidence: int
     medium_confidence: int
     low_confidence: int
@@ -229,6 +245,8 @@ class QuestionImportDocumentRecognizeRequest(BaseModel):
     raw_text: str = Field(min_length=1, max_length=200000)
     source_format: str = Field(pattern="^(pdf|docx|md)$")
     prefer_template: bool = False
+    analysis_mode: QuestionImportAnalysisMode = QuestionImportAnalysisMode.FAST
+    images: list[QuestionImportImageInput] = Field(default_factory=list, max_length=200)
 
 
 class QuestionImportDocumentRecognizeResponse(BaseModel):

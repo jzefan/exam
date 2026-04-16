@@ -1,0 +1,549 @@
+{
+  "metadata": {
+    "source": "T/MIITEC 001-2023《人工智能产业人才岗位能力要求》",
+    "industry": "人工智能产业",
+    "version_note": "来源：T/MIITEC 001-2023《人工智能产业人才岗位能力要求》",
+    "model_type": "standard"
+  },
+  "models": [
+    {
+      "job_role": "物联网架构师",
+      "direction_name": "物联网",
+      "job_family": "物联网",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "计算机基础",
+              "level": "L4",
+              "knowledge_points": [
+                "物联网感知层、网络层、平台层、应用层开发知识",
+                "通信与电子信息基础",
+                "通信原理基础知识",
+                "自组网络通信协议"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "软件开发",
+              "level": "L4",
+              "knowledge_points": [
+                "C/C++、Java、Python、PHP、JS等语言开发",
+                "Linux和Android开发环境",
+                "C/C++嵌入式编程",
+                "协议开发与调试"
+              ]
+            },
+            {
+              "name": "通信架构",
+              "level": "L4",
+              "knowledge_points": [
+                "Apache Netty通信架构",
+                "M2M通信原理",
+                "Apache ActiveMQ消息系统"
+              ]
+            },
+            {
+              "name": "数据库",
+              "level": "L4",
+              "knowledge_points": [
+                "MySQL、ES、MongoDB、HBase、Redis、InfoGrid",
+                "分布式数据库存储策略"
+              ]
+            },
+            {
+              "name": "大数据平台",
+              "level": "L3",
+              "knowledge_points": [
+                "Hadoop、Spark、Mahout、Storm"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "项目经验",
+              "level": "L4",
+              "knowledge_points": [
+                "嵌入式开发经验",
+                "网络建设经验",
+                "物联网平台开发经验",
+                "智能硬件开发经验"
+              ]
+            },
+            {
+              "name": "架构设计",
+              "level": "L4",
+              "knowledge_points": [
+                "平台技术架构设计",
+                "通信架构设计",
+                "数据存储架构设计",
+                "安全架构设计"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "行业应用",
+              "level": "L4",
+              "knowledge_points": [
+                "智慧城市应用场景",
+                "智慧社区应用场景",
+                "智慧能源应用场景",
+                "智能家居应用场景"
+              ]
+            },
+            {
+              "name": "标准规范",
+              "level": "L3",
+              "knowledge_points": [
+                "物联网各层技术规范",
+                "应用标准"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "物联网算法工程师",
+      "direction_name": "物联网",
+      "job_family": "物联网",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "计算机基础",
+              "level": "L3",
+              "knowledge_points": [
+                "物联网各层开发经验",
+                "数据结构与算法基础",
+                "算法优化策略"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "编程语言",
+              "level": "L3",
+              "knowledge_points": [
+                "C/C++、Java、Python",
+                "Linux开发环境"
+              ]
+            },
+            {
+              "name": "深度学习",
+              "level": "L3",
+              "knowledge_points": [
+                "TensorFlow、torch",
+                "预测、运筹优化、机器学习"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "系统设计",
+              "level": "L3",
+              "knowledge_points": [
+                "嵌入式系统研发",
+                "复杂系统设计与架构",
+                "性能优化"
+              ]
+            },
+            {
+              "name": "算法实现",
+              "level": "L3",
+              "knowledge_points": [
+                "算法模型选择与实现",
+                "产品需求理解",
+                "算法解决方案"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "需求分析",
+              "level": "L3",
+              "knowledge_points": [
+                "物联网应用场景分析",
+                "算法研究",
+                "策略优化与建模"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "智能终端开发工程师",
+      "direction_name": "物联网",
+      "job_family": "物联网",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "通信基础",
+              "level": "L3",
+              "knowledge_points": [
+                "通信与电子信息",
+                "通信原理",
+                "计算机技术",
+                "网络知识"
+              ]
+            },
+            {
+              "name": "智能终端",
+              "level": "L3",
+              "knowledge_points": [
+                "硬件设计研发",
+                "嵌入式安全",
+                "安卓固件开发",
+                "嵌入式网络协议"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "嵌入式开发",
+              "level": "L3",
+              "knowledge_points": [
+                "ARM、Linux、安卓系统优化",
+                "C/C++嵌入式编程",
+                "协议开发与调试"
+              ]
+            },
+            {
+              "name": "无线通信",
+              "level": "L3",
+              "knowledge_points": [
+                "Zigbee、WIFI",
+                "802.11/802.16/802.15无线开发",
+                "Linux内核驱动编写"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "项目经验",
+              "level": "L3",
+              "knowledge_points": [
+                "嵌入式系统开发",
+                "传感器信号处理",
+                "音视频信号处理",
+                "边缘计算",
+                "工业互联网、车联网、智能家居开发"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "应用实践",
+              "level": "L3",
+              "knowledge_points": [
+                "智慧城市、社区、能源、家居、安防、工业应用",
+                "设备管理、连接管理",
+                "应用支持、业务分析"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "IoT平台软件应用开发工程师",
+      "direction_name": "物联网",
+      "job_family": "物联网",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "通信基础",
+              "level": "L3",
+              "knowledge_points": [
+                "通信与电子信息",
+                "通信原理",
+                "网络知识"
+              ]
+            },
+            {
+              "name": "IoT平台",
+              "level": "L3",
+              "knowledge_points": [
+                "IoT连接",
+                "IoT平台开发",
+                "平台前端开发",
+                "数据与运营",
+                "IoT平台通信开发",
+                "IoT平台应用服务",
+                "IoT平台架构",
+                "IoT平台安全"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "开发语言",
+              "level": "L3",
+              "knowledge_points": [
+                "Java、PHP、JS"
+              ]
+            },
+            {
+              "name": "数据库",
+              "level": "L3",
+              "knowledge_points": [
+                "Hadoop、Hive、Storm、Spark",
+                "NoSql、MongoDB、Redis"
+              ]
+            },
+            {
+              "name": "云平台",
+              "level": "L3",
+              "knowledge_points": [
+                "云计算平台架构",
+                "微服务模块设计",
+                "REST接口设计",
+                "Cloud Foundry等PaaS平台"
+              ]
+            },
+            {
+              "name": "系统设计",
+              "level": "L3",
+              "knowledge_points": [
+                "分布式计算",
+                "网络系统设计",
+                "数据库设计",
+                "大规模存储系统"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "平台开发",
+              "level": "L3",
+              "knowledge_points": [
+                "应用开发工具",
+                "API接口",
+                "交互界面",
+                "应用部署与管理"
+              ]
+            },
+            {
+              "name": "项目经验",
+              "level": "L3",
+              "knowledge_points": [
+                "传感器处理",
+                "音视频信号处理",
+                "边缘计算",
+                "平台间通信开发",
+                "工业互联网、车联网、云计算、智能家居、安防项目"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "应用实践",
+              "level": "L3",
+              "knowledge_points": [
+                "智慧城市、社区、能源、家居、安防、工业应用",
+                "设备管理、连接管理",
+                "应用支持、业务分析"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "物联网实施工程师",
+      "direction_name": "物联网",
+      "job_family": "物联网",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "物联网技术",
+              "level": "L2",
+              "knowledge_points": [
+                "RFID、传感、自动控制、无线传输",
+                "网络结构、网络设备",
+                "IP/TCP协议"
+              ]
+            },
+            {
+              "name": "智能化弱电",
+              "level": "L2",
+              "knowledge_points": [
+                "综合布线",
+                "视频监控",
+                "机房",
+                "弱电及安防子系统设计部署"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "系统安装调试",
+              "level": "L2",
+              "knowledge_points": [
+                "物联网软硬件系统安装调试",
+                "以太网安装调试"
+              ]
+            },
+            {
+              "name": "系统运维",
+              "level": "L2",
+              "knowledge_points": [
+                "Linux、Windows Server操作系统",
+                "系统运维"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "项目实施",
+              "level": "L2",
+              "knowledge_points": [
+                "工业互联网、车联网、云计算、智能家居、安防项目实施"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "应用实践",
+              "level": "L2",
+              "knowledge_points": [
+                "智慧城市、社区、能源、家居、安防、工业应用"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "物联网运维工程师",
+      "direction_name": "物联网",
+      "job_family": "物联网",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "通信基础",
+              "level": "L2",
+              "knowledge_points": [
+                "通信与电子信息",
+                "通信原理",
+                "网络知识"
+              ]
+            },
+            {
+              "name": "计算机基础",
+              "level": "L2",
+              "knowledge_points": [
+                "数据库",
+                "缓存方案",
+                "负载均衡"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "系统运维",
+              "level": "L3",
+              "knowledge_points": [
+                "Linux操作系统规模化部署、管理",
+                "主流云环境配置、部署、监控",
+                "监控、预警、日志工具"
+              ]
+            },
+            {
+              "name": "编程语言",
+              "level": "L2",
+              "knowledge_points": [
+                "Shell、Python、Java"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "运维经验",
+              "level": "L2",
+              "knowledge_points": [
+                "工业互联网、车联网、云计算、智能家居、安防项目运维"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "应用实践",
+              "level": "L2",
+              "knowledge_points": [
+                "智慧城市、社区、能源、家居、安防、工业应用"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

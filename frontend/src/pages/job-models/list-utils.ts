@@ -2,6 +2,8 @@ type JobModelLike = {
   id: string
   current_version_id?: string | null
   job_role?: string
+  industry_name?: string | null
+  direction_name?: string | null
   current_version?: {
     id: string
     version?: number

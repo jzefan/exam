@@ -25,12 +25,18 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/hooks/use-toast";
 import type { IQuestion } from "@/types";
 import { KnowledgeTreeCanvas } from "./KnowledgeTreeCanvas";
 import { MajorDirectionSidebar } from "./MajorDirectionSidebar";
 import { NodeDetailPanel } from "./NodeDetailPanel";
 import { PrerequisiteSelectModal } from "./PrerequisiteSelectModal";
 import { RelatedResourcesDialog, type LearningMaterial } from "./RelatedResourcesDialog";
+import {
+  getReadOnlyDirectionFeedback,
+  getReadOnlyKnowledgeFeedback,
+  getReadOnlyMajorFeedback,
+} from "./access-messages";
 import type {
   AIRecommendationModel,
   IDirection,
@@ -113,6 +119,7 @@ function getKnowledgeSubtree(nodes: Node[], edges: Edge[], rootId: string | null
 
 export function KnowledgeManagementPage() {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const { data: identity } = useGetIdentity<{ id?: string; primary_org?: { role_name?: string } | null }>();
   const [majors, setMajors] = useState<IMajor[]>([]);
   const [directions, setDirections] = useState<IDirection[]>([]);
@@ -157,6 +164,17 @@ export function KnowledgeManagementPage() {
           !canManageSharedResources,
       ),
     [canManageSharedResources, identity?.id],
+  );
+
+  const notifyReadOnly = useCallback(
+    (description: string) => {
+      toast({
+        title: "当前内容为公共只读",
+        description,
+        variant: "destructive",
+      });
+    },
+    [toast],
   );
 
   useEffect(() => {
@@ -290,6 +308,10 @@ export function KnowledgeManagementPage() {
 
   const handleEditMajor = useCallback(
     (major: IMajor) => {
+      if (!canManageSharedResources) {
+        notifyReadOnly(getReadOnlyMajorFeedback());
+        return;
+      }
       setFormState({
         open: true,
         kind: "major",
@@ -299,11 +321,15 @@ export function KnowledgeManagementPage() {
         description: major.description ?? "",
       });
     },
-    [],
+    [canManageSharedResources, notifyReadOnly],
   );
 
   const handleDeleteMajor = useCallback(
     (major: IMajor) => {
+      if (!canManageSharedResources) {
+        notifyReadOnly(getReadOnlyMajorFeedback());
+        return;
+      }
       const majorDirections = directions.filter((direction) => direction.major_id === major.id);
       setDeleteState({
         open: true,
@@ -316,7 +342,7 @@ export function KnowledgeManagementPage() {
             : "删除后该专业将不可恢复。",
       });
     },
-    [directions],
+    [canManageSharedResources, directions, notifyReadOnly],
   );
 
   const handleCreateDirection = useCallback(
@@ -335,6 +361,10 @@ export function KnowledgeManagementPage() {
 
   const handleEditDirection = useCallback(
     (direction: IDirection) => {
+      if (!canManageSharedResources) {
+        notifyReadOnly(getReadOnlyDirectionFeedback());
+        return;
+      }
       setFormState({
         open: true,
         kind: "direction",
@@ -345,11 +375,15 @@ export function KnowledgeManagementPage() {
         description: direction.description ?? "",
       });
     },
-    [],
+    [canManageSharedResources, notifyReadOnly],
   );
 
   const handleDeleteDirection = useCallback(
     (direction: IDirection) => {
+      if (!canManageSharedResources) {
+        notifyReadOnly(getReadOnlyDirectionFeedback());
+        return;
+      }
       setDeleteState({
         open: true,
         kind: "direction",
@@ -359,7 +393,7 @@ export function KnowledgeManagementPage() {
         isCurrentDirection: selectedDirectionId === direction.id,
       });
     },
-    [selectedDirectionId],
+    [canManageSharedResources, notifyReadOnly, selectedDirectionId],
   );
 
   const handleAddChild = useCallback(
@@ -367,26 +401,21 @@ export function KnowledgeManagementPage() {
       if (!selectedDirectionId) {
         return;
       }
-      const parent = nodes.find((item) => item.id === parentId)?.data as IKnowledgePointDetail | undefined;
-      if (isReadOnlySharedNode(parent)) {
-        setFeedbackMessage("共享知识点为只读，不能添加子知识。");
-        return;
-      }
       setPanelInitial({ directionId: selectedDirectionId, parent_id: parentId });
       setPanelOpen(true);
     },
-    [isReadOnlySharedNode, nodes, selectedDirectionId],
+    [selectedDirectionId],
   );
 
   const handleSetPrerequisite = useCallback((nodeId: string) => {
     const node = nodes.find((item) => item.id === nodeId)?.data as IKnowledgePointDetail | undefined;
     if (isReadOnlySharedNode(node)) {
-      setFeedbackMessage("共享知识点为只读，不能设置前置知识点。");
+      notifyReadOnly(getReadOnlyKnowledgeFeedback(node));
       return;
     }
     setPrereqTargetId(nodeId);
     setPrereqModalOpen(true);
-  }, [isReadOnlySharedNode, nodes]);
+  }, [isReadOnlySharedNode, nodes, notifyReadOnly]);
 
   const handlePrereqSelect = useCallback(
     async (fromId: string) => {
@@ -411,7 +440,7 @@ export function KnowledgeManagementPage() {
         return;
       }
       if (isReadOnlySharedNode(node.data as unknown as IKnowledgePointDetail)) {
-        setFeedbackMessage("共享知识点为只读，不能编辑。");
+        notifyReadOnly(getReadOnlyKnowledgeFeedback(node.data as unknown as IKnowledgePointDetail));
         return;
       }
       setPanelInitial({
@@ -421,14 +450,14 @@ export function KnowledgeManagementPage() {
       });
       setPanelOpen(true);
     },
-    [isReadOnlySharedNode, nodes, selectedDirectionId],
+    [isReadOnlySharedNode, nodes, notifyReadOnly, selectedDirectionId],
   );
 
   const handleDelete = useCallback(
     async (nodeId: string, name: string) => {
       const node = nodes.find((item) => item.id === nodeId)?.data as IKnowledgePointDetail | undefined;
       if (isReadOnlySharedNode(node)) {
-        setFeedbackMessage("共享知识点为只读，不能删除。");
+        notifyReadOnly(getReadOnlyKnowledgeFeedback(node));
         return;
       }
       const childCount = nodes.filter((node) => (node.data as unknown as IKnowledgePointDetail).parent_id === nodeId).length;
@@ -441,7 +470,7 @@ export function KnowledgeManagementPage() {
           childCount > 0 ? `删除后会同时移除 ${childCount} 个子知识点。` : "删除后该知识点将不可恢复。",
       });
     },
-    [isReadOnlySharedNode, nodes],
+    [isReadOnlySharedNode, nodes, notifyReadOnly],
   );
 
   const getKnowledgeNode = useCallback(
@@ -496,14 +525,14 @@ export function KnowledgeManagementPage() {
         return;
       }
       if (isReadOnlySharedNode(node)) {
-        setFeedbackMessage("共享知识点为只读，不能重命名。");
+        notifyReadOnly(getReadOnlyKnowledgeFeedback(node));
         return;
       }
       setSelectedNodeId(nodeId);
       setEditingNodeId(nodeId);
       setRenameDraft(node.name);
     },
-    [getKnowledgeNode, isReadOnlySharedNode],
+    [getKnowledgeNode, isReadOnlySharedNode, notifyReadOnly],
   );
 
   const handleRenameSubmit = useCallback(async () => {
@@ -517,7 +546,7 @@ export function KnowledgeManagementPage() {
     }
     if (isReadOnlySharedNode(getKnowledgeNode(editingNodeId))) {
       setEditingNodeId(null);
-      setFeedbackMessage("共享知识点为只读，不能重命名。");
+      notifyReadOnly(getReadOnlyKnowledgeFeedback(getKnowledgeNode(editingNodeId)));
       return;
     }
     await apiFetch(`${API}/knowledge-points/${editingNodeId}`, {
@@ -528,7 +557,7 @@ export function KnowledgeManagementPage() {
     if (selectedDirectionId) {
       await loadTree(selectedDirectionId);
     }
-  }, [editingNodeId, getKnowledgeNode, isReadOnlySharedNode, loadTree, renameDraft, selectedDirectionId]);
+  }, [editingNodeId, getKnowledgeNode, isReadOnlySharedNode, loadTree, notifyReadOnly, renameDraft, selectedDirectionId]);
 
   const handleRenameCancel = useCallback(() => {
     setEditingNodeId(null);
@@ -772,7 +801,7 @@ export function KnowledgeManagementPage() {
     async (data: Partial<IKnowledgePointDetail>) => {
       if (panelInitial.id) {
         if (isReadOnlySharedNode(panelInitial as IKnowledgePointDetail)) {
-          setFeedbackMessage("共享知识点为只读，不能保存。");
+          setFeedbackMessage(getReadOnlyKnowledgeFeedback(panelInitial as IKnowledgePointDetail));
           return;
         }
         await apiFetch(`${API}/knowledge-points/${panelInitial.id}`, {
@@ -831,10 +860,6 @@ export function KnowledgeManagementPage() {
             <Button
               className="rounded-full"
               onClick={() => {
-                if (selectedRootKnowledgeId && isReadOnlySharedNode(getKnowledgeNode(selectedRootKnowledgeId))) {
-                  setFeedbackMessage("共享主知识/技能为只读，不能添加子知识。");
-                  return;
-                }
                 setPanelInitial({
                   directionId: selectedDirectionId,
                   parent_id: selectedRootKnowledgeId,

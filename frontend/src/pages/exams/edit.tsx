@@ -35,6 +35,7 @@ function toExamForm(exam: ExamDetail): ExamFormValues {
     max_switch_count: exam.max_switch_count ?? 0,
     show_result: exam.show_result ?? false,
     notes_template: exam.notes_template || "",
+    question_mode: exam.question_mode ?? null,
     question_ids: exam.questions.map((q) => q.question_id),
     question_items: exam.questions.map((q, index) => ({
       question_id: q.question_id,
@@ -69,6 +70,7 @@ function ExamEditForm({ id, exam }: { id: string; exam: ExamDetail }) {
           end_time: values.end_time || null,
           notes_template: values.notes_template || null,
           position_id: values.position_id || null,
+          question_mode: values.question_mode,
           question_items: values.question_items,
         },
       },

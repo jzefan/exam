@@ -16,11 +16,13 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { useToast } from "@/hooks/use-toast";
 import { ImportReviewEditor } from "./components/import-review-editor";
 import { ImportReviewSidebar } from "./components/import-review-sidebar";
 import { ImportSourceEditor } from "./components/import-source-editor";
 import type {
   ImportFilter,
+  QuestionImportImageInput,
   QuestionImportDocumentRecognizeResponse,
   QuestionImportDraft,
 } from "./import-types";
@@ -31,9 +33,8 @@ import {
   buildStandardImportTemplate,
   buildImportSummary,
   canApproveAllDrafts,
-  detectQuestionImportFormat,
   emptyImportSummary,
-  extractQuestionImportText,
+  extractQuestionImportPayload,
   generateImportQuestionTitle,
   getNextDraftIdAfterRemoval,
   hasBlockingImportIssues,
@@ -62,19 +63,27 @@ const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024;
 
 export function QuestionImportPage() {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [drafts, setDrafts] = useState<QuestionImportDraft[]>([]);
   const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
   const [sourceFileName, setSourceFileName] = useState("");
   const [loading, setLoading] = useState(false);
+  const [isAnalyzingDocument, setIsAnalyzingDocument] = useState(false);
   const [recognizingDraftId, setRecognizingDraftId] = useState<string | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [questionBankId, setQuestionBankId] = useState<string>("__none__");
   const [isDragActive, setIsDragActive] = useState(false);
   const [filter, setFilter] = useState<ImportFilter>("pending");
+  const [duplicatesRemoved, setDuplicatesRemoved] = useState(0);
   const [mode, setMode] = useState<"review" | "source-edit">("review");
   const [sourceEdits, setSourceEdits] = useState<Record<string, string>>({});
+  const [sourceImportPayload, setSourceImportPayload] = useState<{
+    rawText: string;
+    sourceFormat: "pdf" | "docx" | "md";
+    images: QuestionImportImageInput[];
+  } | null>(null);
 
   const { query: banksQuery } = useList<IQuestionBank>({
     resource: "question-banks",
@@ -99,7 +108,9 @@ export function QuestionImportPage() {
     setSelectedDraftId(nextPending?.draft_id ?? nextAny?.draft_id ?? currentDraftId);
   };
 
-  const processImportFile = async (file: File | null | undefined) => {
+  const processImportFile = async (
+    file: File | null | undefined,
+  ) => {
     if (!file) return;
     if (file.size > MAX_FILE_SIZE_BYTES) {
       setParseError(`文件过大（${(file.size / 1024 / 1024).toFixed(1)} MB），请上传 20 MB 以内的文件。`);
@@ -109,20 +120,26 @@ export function QuestionImportPage() {
     setLoading(true);
     setParseError(null);
     try {
-      const sourceFormat = detectQuestionImportFormat(file.name);
-      const rawText = await extractQuestionImportText(file);
+      const payload = await extractQuestionImportPayload(file);
+      setSourceImportPayload(payload);
       const response = await questionApiFetch<QuestionImportDocumentRecognizeResponse>(
         "/api/questions/import/document-recognize",
         {
           method: "POST",
           body: JSON.stringify({
             file_name: file.name,
-            raw_text: rawText,
-            source_format: sourceFormat,
+            raw_text: payload.rawText,
+            source_format: payload.sourceFormat,
+            analysis_mode: "fast",
+            images: payload.images,
           }),
         },
       );
       setDrafts(response.drafts);
+      setDuplicatesRemoved(response.summary.duplicates_removed);
+      if (response.summary.duplicates_removed > 0) {
+        toast({ title: `已自动去除 ${response.summary.duplicates_removed} 道重复题目` });
+      }
       setSourceEdits(Object.fromEntries(response.drafts.map((draft) => [draft.draft_id, draft.raw_text])));
       setSelectedDraftId(response.drafts[0]?.draft_id ?? null);
       setSourceFileName(file.name);
@@ -131,6 +148,8 @@ export function QuestionImportPage() {
     } catch (error) {
       setParseError(error instanceof Error ? error.message : "文件解析失败");
       setDrafts([]);
+      setDuplicatesRemoved(0);
+      setSourceImportPayload(null);
       setSourceEdits({});
       setSelectedDraftId(null);
     } finally {
@@ -198,6 +217,38 @@ export function QuestionImportPage() {
       setParseError(error instanceof Error ? error.message : "AI 补全失败");
     } finally {
       setRecognizingDraftId(null);
+    }
+  };
+
+  const analyzeWholeImportedDocument = async () => {
+    if (!sourceImportPayload || !sourceFileName) return;
+    setIsAnalyzingDocument(true);
+    setParseError(null);
+    try {
+      const response = await questionApiFetch<QuestionImportDocumentRecognizeResponse>(
+        "/api/questions/import/document-recognize",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            file_name: sourceFileName,
+            raw_text: sourceImportPayload.rawText,
+            source_format: sourceImportPayload.sourceFormat,
+            analysis_mode: "ai_full",
+            images: sourceImportPayload.images,
+          }),
+        },
+      );
+      setDrafts(response.drafts);
+      setDuplicatesRemoved(response.summary.duplicates_removed);
+      if (response.summary.duplicates_removed > 0) {
+        toast({ title: `已自动去除 ${response.summary.duplicates_removed} 道重复题目` });
+      }
+      setSourceEdits(Object.fromEntries(response.drafts.map((draft) => [draft.draft_id, draft.raw_text])));
+      setSelectedDraftId((current) => response.drafts.find((draft) => draft.draft_id === current)?.draft_id ?? response.drafts[0]?.draft_id ?? null);
+    } catch (error) {
+      setParseError(error instanceof Error ? error.message : "AI 分析失败");
+    } finally {
+      setIsAnalyzingDocument(false);
     }
   };
 
@@ -288,6 +339,12 @@ export function QuestionImportPage() {
                     <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">总数</span>
                     <span className="text-base font-black leading-none text-slate-900">{summary.total}</span>
                   </div>
+                  {duplicatesRemoved > 0 && (
+                    <div className="flex items-baseline gap-1">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">去重</span>
+                      <span className="text-base font-black leading-none text-orange-500">{duplicatesRemoved}</span>
+                    </div>
+                  )}
                   <div className="flex items-baseline gap-1">
                     <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">待核对</span>
                     <span className="text-base font-black leading-none text-amber-500">{summary.pending_review}</span>
@@ -379,7 +436,7 @@ export function QuestionImportPage() {
                     setIsDragActive(false);
                   }
                 }}
-                onDrop={(e) => {
+                  onDrop={(e) => {
                   e.preventDefault();
                   setIsDragActive(false);
                   void processImportFile(e.dataTransfer.files?.[0]);
@@ -387,6 +444,7 @@ export function QuestionImportPage() {
               >
                 <input
                   ref={fileInputRef}
+                  data-testid="question-import-file-input"
                   className="hidden"
                   accept=".pdf,.docx,.md,.markdown"
                   onChange={(e) => void handleFileChange(e)}
@@ -455,10 +513,22 @@ export function QuestionImportPage() {
                </div>
             </aside>
             <section className="min-h-0 min-w-0 flex-1 overflow-y-auto bg-slate-50/40 p-4 lg:p-6">
-               <div className="mx-auto w-full max-w-[1320px]">
+               <div className="relative mx-auto w-full max-w-[1320px]">
+                {isAnalyzingDocument && (
+                  <div className="absolute inset-0 z-20 flex items-center justify-center rounded-3xl bg-white/95">
+                    <div className="flex flex-col items-center gap-3 rounded-3xl border border-slate-200 bg-white px-8 py-7 shadow-xl">
+                      <LoaderCircle className="h-8 w-8 animate-spin text-primary" />
+                      <div className="text-center">
+                        <p className="text-base font-bold text-slate-900">AI 正在分析整份导入内容</p>
+                        <p className="mt-1 text-sm text-slate-500">正在理解题目结构与图片内容，请稍候</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
                 <ImportReviewEditor
                     draft={selectedDraft}
                     isRecognizing={recognizingDraftId === selectedDraft?.draft_id}
+                    isAnalyzingDocument={isAnalyzingDocument}
                     canApproveAll={allowApproveAll}
                     onChange={(patch) => {
                       if (selectedDraft) updateDraft(selectedDraft.draft_id, patch);
@@ -485,6 +555,7 @@ export function QuestionImportPage() {
                       setDrafts((current) => approveAllPendingDrafts(current));
                     }}
 	                    onReRecognize={() => void reRecognizeSelectedDraft()}
+                    onAnalyzeDocument={() => void analyzeWholeImportedDocument()}
 	                    onEditSource={openSourceEditor}
 	                  />
                </div>

@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@/test/test-utils";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { QuestionImportDraft } from "./import-types";
+import { QuestionImportPage } from "./import";
 import {
   applySourceDraftEdits,
   approveAllPendingDrafts,
@@ -8,12 +10,34 @@ import {
   buildImportableQuestions,
   buildImportSummary,
   canApproveAllDrafts,
+  extractQuestionImportPayload,
   getBlockingImportIssues,
   getDraftPreviewText,
   getNextDraftIdAfterRemoval,
   hasBlockingImportIssues,
+  htmlToImportText,
   importTextToHtml,
 } from "./import-utils";
+
+const navigateMock = vi.fn();
+const useListMock = vi.fn(() => ({ query: { data: { data: [] } } }));
+const fetchMock = vi.fn();
+
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
+  return {
+    ...actual,
+    useNavigate: () => navigateMock,
+  };
+});
+
+vi.mock("@refinedev/core", async () => {
+  const actual = await vi.importActual<typeof import("@refinedev/core")>("@refinedev/core");
+  return {
+    ...actual,
+    useList: () => useListMock(),
+  };
+});
 
 const baseDraft: QuestionImportDraft = {
   draft_id: "draft-1",
@@ -32,6 +56,21 @@ const baseDraft: QuestionImportDraft = {
   review_status: "pending",
   review_required: true,
 };
+
+function mockJsonResponse(body: unknown, ok = true): Response {
+  return {
+    ok,
+    json: async () => body,
+  } as Response;
+}
+
+beforeEach(() => {
+  navigateMock.mockReset();
+  useListMock.mockClear();
+  fetchMock.mockReset();
+  localStorage.clear();
+  vi.stubGlobal("fetch", fetchMock);
+});
 
 describe("question import helpers", () => {
   it("only builds bulk import payloads from human-approved drafts", () => {
@@ -189,5 +228,155 @@ describe("question import helpers", () => {
     expect(template).toContain("[答案] A");
     expect(template).toContain("[解析] 北京是中国首都。");
     expect(template).toContain("[难度] 一般");
+  });
+
+  it("extracts markdown image metadata for ai-full analysis payloads", async () => {
+    const file = new File(["题干\n![图1](https://example.com/a.png)"], "questions.md", { type: "text/markdown" });
+
+    const payload = await extractQuestionImportPayload(file);
+
+    expect(payload.sourceFormat).toBe("md");
+    expect(payload.rawText).toContain('<img src="https://example.com/a.png" alt="图1" data-image-id="image-1" />');
+    expect(payload.images).toEqual([
+      {
+        image_id: "image-1",
+        url: "https://example.com/a.png",
+        order: 1,
+        alt: "图1",
+      },
+    ]);
+  });
+
+  it("preserves docx paragraph and ordered-list boundaries so multiple questions stay separable", () => {
+    const html = `
+      <p>1. 请提交今日课堂作业：</p>
+      <ol>
+        <li>提交 PDM 截图；</li>
+        <li>提交 MySQL 脚本截图；</li>
+      </ol>
+      <p>要求写出截图标题，截图清晰。</p>
+      <p>[答案]</p>
+      <p>[难度] 简单</p>
+      <p>[预计时间]</p>
+      <p>2. 请提交今日课堂作业：</p>
+      <ol>
+        <li>提交功能模块图；</li>
+        <li>提交概念数据模型 E-R 图；</li>
+      </ol>
+      <p>[答案]</p>
+      <p>[难度] 简单</p>
+    `;
+
+    const text = htmlToImportText(html);
+
+    expect(text).toContain("1. 请提交今日课堂作业：");
+    expect(text).toContain("- 提交 PDM 截图；");
+    expect(text).toContain("- 提交 MySQL 脚本截图；");
+    expect(text).toContain("\n\n2. 请提交今日课堂作业：");
+    expect(text).not.toContain("提交 PDM 截图；提交 MySQL 脚本截图；");
+  });
+});
+
+describe("QuestionImportPage", () => {
+  it("keeps the upload screen focused on file selection", () => {
+    render(<QuestionImportPage />);
+
+    expect(screen.getByRole("button", { name: "选择本地文件" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "快速识别" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "AI 一键分析整个文件" })).not.toBeInTheDocument();
+  });
+
+  it("shows ai-full loading text while analyzing from the review screen", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJsonResponse({
+          mode: "smart",
+          summary: {
+            total: 1,
+            high_confidence: 0,
+            medium_confidence: 1,
+            low_confidence: 0,
+            issue_count: 0,
+            pending_review: 1,
+            approved: 0,
+            skipped: 0,
+          },
+          drafts: [{ ...baseDraft }],
+        }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            setTimeout(
+              () =>
+                resolve(
+                  mockJsonResponse({
+                    mode: "smart",
+                    summary: {
+                      total: 1,
+                      high_confidence: 0,
+                      medium_confidence: 1,
+                      low_confidence: 0,
+                      issue_count: 0,
+                      pending_review: 1,
+                      approved: 0,
+                      skipped: 0,
+                    },
+                    drafts: [{ ...baseDraft, segment_source: "ai_full+rule" }],
+                  }),
+                ),
+              20,
+            );
+          }),
+      );
+
+    render(<QuestionImportPage />);
+
+    const file = new File(["1. 单选题 示例\nA. 选项A\nB. 选项B\n答案：A"], "questions.md", { type: "text/markdown" });
+    fireEvent.change(screen.getByTestId("question-import-file-input"), {
+      target: { files: [file] },
+    });
+
+    expect(await screen.findByText("核对导入内容")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "AI 一键分析" }));
+
+    expect(await screen.findByText("AI 正在分析整份导入内容")).toBeInTheDocument();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("stops loading immediately when review-screen ai analysis fails", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJsonResponse({
+          mode: "smart",
+          summary: {
+            total: 1,
+            high_confidence: 0,
+            medium_confidence: 1,
+            low_confidence: 0,
+            issue_count: 0,
+            pending_review: 1,
+            approved: 0,
+            skipped: 0,
+          },
+          drafts: [{ ...baseDraft }],
+        }),
+      )
+      .mockResolvedValueOnce(mockJsonResponse({ detail: "AI 分析结果格式异常，请重试" }, false));
+
+    render(<QuestionImportPage />);
+
+    const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
+    fireEvent.change(screen.getByTestId("question-import-file-input"), {
+      target: { files: [file] },
+    });
+
+    expect(await screen.findByText("核对导入内容")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "AI 一键分析" }));
+
+    expect(await screen.findByText("AI 分析结果格式异常，请重试")).toBeInTheDocument();
+    expect(screen.queryByText("AI 正在分析整份导入内容")).not.toBeInTheDocument();
   });
 });

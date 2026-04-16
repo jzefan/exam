@@ -6,7 +6,7 @@ from pydantic import BaseModel, EmailStr
 
 class UserCreate(BaseModel):
     username: str
-    email: EmailStr
+    email: EmailStr | None = None
     password: str
     full_name: str
     org_id: uuid.UUID | None = None

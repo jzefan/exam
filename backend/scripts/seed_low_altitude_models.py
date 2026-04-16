@@ -1,0 +1,1453 @@
+"""Seed script: inserts 24 low-altitude industry standard job models.
+
+Source: T/MIITEC 032-2025《低空产业人才岗位能力要求》
+"""
+
+import asyncio
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from sqlalchemy import select
+
+from app.auth import models as auth_models  # noqa: F401
+from app.database import async_session
+from app.job_models.models import (
+    CompetencyDimension,
+    JobModel,
+    JobModelVersion,
+    Skill,
+    SkillKnowledgePoint,
+)
+from app.rbac.models import Organization
+
+INDUSTRY = "低空产业"
+VERSION_NOTE = "来源：T/MIITEC 032-2025《低空产业人才岗位能力要求》"
+
+STANDARD_MODELS = [
+    # ── 战略规划类 ──────────────────────────────────────────
+    {
+        "job_role": "战略规划师",
+        "direction_name": "战略规划类",
+        "job_family": "战略规划",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {
+                        "name": "产业经济与战略分析",
+                        "level": "L4",
+                        "knowledge_points": [
+                            "产业经济学、区域规划、竞争战略理论",
+                            "低空产业市场潜力与商业模式分析",
+                        ],
+                    },
+                    {
+                        "name": "政策法规",
+                        "level": "L3",
+                        "knowledge_points": [
+                            "全球及国内低空产业政策法规",
+                            "空域管理法规",
+                            "适航认证法规",
+                            "无人机监管条例",
+                        ],
+                    },
+                    {
+                        "name": "产业链认知",
+                        "level": "L4",
+                        "knowledge_points": [
+                            "低空产业链关键环节（研发制造、运营服务、基础设施、数据应用）",
+                            "产业发展趋势分析",
+                        ],
+                    },
+                    {
+                        "name": "低空交通管理体系",
+                        "level": "L3",
+                        "knowledge_points": [
+                            "UTM/UAM体系架构",
+                            "ASTM、ISO等国际标准",
+                        ],
+                    },
+                    {
+                        "name": "科技创新管理",
+                        "level": "L3",
+                        "knowledge_points": [
+                            "技术成熟度评估",
+                            "技术路线图制定",
+                        ],
+                    },
+                    {
+                        "name": "融合应用",
+                        "level": "L3",
+                        "knowledge_points": [
+                            "智慧城市中低空应用融合逻辑",
+                            "综合交通体系中低空应用融合逻辑",
+                        ],
+                    },
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {
+                        "name": "数据分析",
+                        "level": "L3",
+                        "knowledge_points": [
+                            "Python/R/SQL数据分析",
+                            "飞行轨迹数据处理",
+                            "空域利用率分析",
+                        ],
+                    },
+                    {
+                        "name": "空域规划仿真",
+                        "level": "L3",
+                        "knowledge_points": [
+                            "GIS地理信息系统（ArcGIS）",
+                            "三维建模工具（Cesium）",
+                        ],
+                    },
+                    {
+                        "name": "市场调研",
+                        "level": "L3",
+                        "knowledge_points": [
+                            "可行性研究方法",
+                            "量化分析报告输出",
+                        ],
+                    },
+                    {
+                        "name": "关键技术理解",
+                        "level": "L3",
+                        "knowledge_points": [
+                            "无人机/eVTOL动力系统",
+                            "导航通信技术",
+                            "自主避障技术及发展瓶颈",
+                        ],
+                    },
+                    {
+                        "name": "通信网络技术",
+                        "level": "L2",
+                        "knowledge_points": [
+                            "低空通信网络（5G、卫星链路、AeroMACS）",
+                            "数字化空管技术",
+                        ],
+                    },
+                    {
+                        "name": "技术评估",
+                        "level": "L3",
+                        "knowledge_points": [
+                            "技术专利与科研文献解读",
+                            "技术商业化路径评估",
+                        ],
+                    },
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {
+                        "name": "项目规划经验",
+                        "level": "L4",
+                        "knowledge_points": [
+                            "低空产业园区/试验区规划",
+                            "物流/巡检/城市空中交通等应用场景规划",
+                        ],
+                    },
+                    {
+                        "name": "跨学科协作",
+                        "level": "L4",
+                        "knowledge_points": [
+                            "与航空工程师、政策制定者、运营商对接",
+                            "推动技术-政策-市场协同",
+                        ],
+                    },
+                    {
+                        "name": "基础设施实施",
+                        "level": "L3",
+                        "knowledge_points": [
+                            "起降平台工程实施",
+                            "充电/氢能站工程实施",
+                            "雷达监控工程实施",
+                        ],
+                    },
+                    {
+                        "name": "安全应急",
+                        "level": "L3",
+                        "knowledge_points": [
+                            "低空安全应急预案制定",
+                            "空域冲突评估",
+                            "隐私保护与噪声污染风险评估",
+                        ],
+                    },
+                    {
+                        "name": "项目管理",
+                        "level": "L4",
+                        "knowledge_points": [
+                            "项目全生命周期管理（概念设计到试点示范）",
+                        ],
+                    },
+                ],
+            },
+        ],
+    },
+    # ── 研发制造类 ──────────────────────────────────────────
+    {
+        "job_role": "结构设计工程师",
+        "direction_name": "研发制造类",
+        "job_family": "研发制造",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {
+                        "name": "飞行器结构设计",
+                        "level": "L3",
+                        "knowledge_points": [
+                            "飞行器结构设计基础",
+                            "加工工艺",
+                            "常用结构材料（尤其复合材料）",
+                        ],
+                    },
+                    {
+                        "name": "专业分析",
+                        "level": "L3",
+                        "knowledge_points": [
+                            "强度计算（静强度、疲劳强度、损伤容限、动强度）",
+                            "材料选用",
+                            "零部件制造工艺制定",
+                            "仿真分析",
+                            "性能测试",
+                        ],
+                    },
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {
+                        "name": "三维建模",
+                        "level": "L3",
+                        "knowledge_points": ["CATIA", "SolidWorks"],
+                    },
+                    {
+                        "name": "仿真分析",
+                        "level": "L3",
+                        "knowledge_points": ["ANSYS有限元仿真", "强度计算软件"],
+                    },
+                    {
+                        "name": "性能测试",
+                        "level": "L3",
+                        "knowledge_points": ["零部件性能测试实验方法", "复合材料性能测试方法"],
+                    },
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {
+                        "name": "结构设计经验",
+                        "level": "L4",
+                        "knowledge_points": ["飞行器结构设计", "轻量化复合材料结构设计"],
+                    },
+                    {
+                        "name": "设计优化",
+                        "level": "L3",
+                        "knowledge_points": ["飞行器结构减重", "设计优化"],
+                    },
+                    {
+                        "name": "定制化开发",
+                        "level": "L4",
+                        "knowledge_points": ["结构设计软件开发", "强度校核软件开发", "仿真分析软件开发"],
+                    },
+                ],
+            },
+        ],
+    },
+    {
+        "job_role": "动力系统工程师",
+        "direction_name": "研发制造类",
+        "job_family": "研发制造",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {
+                        "name": "飞行器与动力系统",
+                        "level": "L3",
+                        "knowledge_points": ["飞行器设计", "动力系统设计", "结构设计"],
+                    },
+                    {
+                        "name": "电气系统",
+                        "level": "L3",
+                        "knowledge_points": ["电池技术", "电机技术", "电控技术"],
+                    },
+                    {
+                        "name": "传统动力",
+                        "level": "L2",
+                        "knowledge_points": ["活塞式发动机", "涡浆发动机"],
+                    },
+                    {
+                        "name": "新能源技术",
+                        "level": "L3",
+                        "knowledge_points": ["混合动力", "新能源技术"],
+                    },
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {
+                        "name": "三维设计与仿真",
+                        "level": "L3",
+                        "knowledge_points": ["CATIA三维造型", "建模与仿真分析"],
+                    },
+                    {
+                        "name": "控制系统开发",
+                        "level": "L3",
+                        "knowledge_points": ["动力控制系统硬件设计", "软件开发", "系统测试", "测试设备使用"],
+                    },
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {
+                        "name": "电动动力系统设计",
+                        "level": "L4",
+                        "knowledge_points": ["电动飞行器动力系统组成/结构设计", "电机/电池关键部件选用"],
+                    },
+                    {
+                        "name": "混合动力系统设计",
+                        "level": "L3",
+                        "knowledge_points": ["混合动力飞行器动力系统设计", "非电动飞行器动力系统设计"],
+                    },
+                    {
+                        "name": "开发测试经验",
+                        "level": "L3",
+                        "knowledge_points": ["飞行器动力系统开发经验", "动力系统测试经验"],
+                    },
+                ],
+            },
+        ],
+    },
+    {
+        "job_role": "飞控算法工程师",
+        "direction_name": "研发制造类",
+        "job_family": "研发制造",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {
+                        "name": "控制与信号",
+                        "level": "L3",
+                        "knowledge_points": ["自动控制原理", "飞行器飞行控制", "信号处理", "软件开发"],
+                    },
+                    {
+                        "name": "适航审定",
+                        "level": "L2",
+                        "knowledge_points": ["飞行器机载软件适航审定"],
+                    },
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {
+                        "name": "编程",
+                        "level": "L3",
+                        "knowledge_points": ["C/C++编程"],
+                    },
+                    {
+                        "name": "系统集成",
+                        "level": "L3",
+                        "knowledge_points": ["软硬件系统集成"],
+                    },
+                    {
+                        "name": "仿真",
+                        "level": "L3",
+                        "knowledge_points": ["MATLAB/Simulink仿真分析"],
+                    },
+                    {
+                        "name": "标准规范",
+                        "level": "L2",
+                        "knowledge_points": ["ARP 4754A/B标准", "DO-178B/C标准"],
+                    },
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {
+                        "name": "飞控开发全流程",
+                        "level": "L4",
+                        "knowledge_points": ["飞控算法需求定义", "开发与评审", "加载试验", "适航取证"],
+                    },
+                    {
+                        "name": "仿真与迭代",
+                        "level": "L3",
+                        "knowledge_points": ["飞控算法仿真试验", "优化迭代"],
+                    },
+                ],
+            },
+        ],
+    },
+    {
+        "job_role": "机载传感器研发工程师",
+        "direction_name": "研发制造类",
+        "job_family": "研发制造",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {
+                        "name": "专业基础",
+                        "level": "L3",
+                        "knowledge_points": ["电子学", "通信技术", "传感器技术", "飞行器设计"],
+                    },
+                    {
+                        "name": "传感器原理",
+                        "level": "L3",
+                        "knowledge_points": ["视觉传感器检测原理及标定", "激光雷达检测原理及标定", "毫米波雷达检测原理及标定"],
+                    },
+                    {
+                        "name": "硬件开发流程",
+                        "level": "L2",
+                        "knowledge_points": ["飞行器电子硬件开发流程", "硬件验证流程"],
+                    },
+                    {
+                        "name": "融合技术",
+                        "level": "L3",
+                        "knowledge_points": ["多传感器信息融合技术", "机器学习算法"],
+                    },
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {
+                        "name": "编程开发",
+                        "level": "L3",
+                        "knowledge_points": ["C/C++程序开发", "MATLAB程序开发"],
+                    },
+                    {
+                        "name": "数据处理",
+                        "level": "L3",
+                        "knowledge_points": ["传感器数据报文读取与处理"],
+                    },
+                    {
+                        "name": "驱动开发",
+                        "level": "L3",
+                        "knowledge_points": ["传感器驱动开发和维护", "算法开发/验证/迭代"],
+                    },
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {
+                        "name": "传感器设计选用",
+                        "level": "L4",
+                        "knowledge_points": ["大气数据传感器设计选用", "健康监测传感器设计选用", "数据集成与显示"],
+                    },
+                    {
+                        "name": "通信导航天线",
+                        "level": "L3",
+                        "knowledge_points": ["通信/导航天线设计选用", "卫星通导实现", "5G通导实现"],
+                    },
+                    {
+                        "name": "环境感知",
+                        "level": "L3",
+                        "knowledge_points": ["激光雷达设计选用", "毫米波雷达设计选用"],
+                    },
+                    {
+                        "name": "多传感器融合",
+                        "level": "L4",
+                        "knowledge_points": ["多传感器数据融合系统搭建", "多传感器数据集成"],
+                    },
+                ],
+            },
+        ],
+    },
+    {
+        "job_role": "自动飞行器研发工程师",
+        "direction_name": "研发制造类",
+        "job_family": "研发制造",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {
+                        "name": "专业基础",
+                        "level": "L3",
+                        "knowledge_points": ["飞行器设计", "控制理论", "软件工程"],
+                    },
+                    {
+                        "name": "法规",
+                        "level": "L2",
+                        "knowledge_points": ["飞行管理法规", "空域管理法规"],
+                    },
+                    {
+                        "name": "传感器原理",
+                        "level": "L3",
+                        "knowledge_points": ["视觉/激光雷达/毫米波雷达检测原理及标定"],
+                    },
+                    {
+                        "name": "开发流程",
+                        "level": "L2",
+                        "knowledge_points": ["飞行器电子硬件/软件开发流程", "验证流程"],
+                    },
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {
+                        "name": "自动飞行算法",
+                        "level": "L4",
+                        "knowledge_points": ["自动飞行算法", "路径规划算法", "避障算法"],
+                    },
+                    {
+                        "name": "飞行控制",
+                        "level": "L4",
+                        "knowledge_points": ["横向控制", "纵向控制", "自动起降", "自动避障"],
+                    },
+                    {
+                        "name": "编程与仿真",
+                        "level": "L3",
+                        "knowledge_points": ["C/C++编程", "MATLAB编程", "场景仿真软件验证"],
+                    },
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {
+                        "name": "算法开发测试",
+                        "level": "L4",
+                        "knowledge_points": ["自动飞行/路径规划/避障算法开发", "测试与验证", "优化"],
+                    },
+                    {
+                        "name": "多传感器融合",
+                        "level": "L4",
+                        "knowledge_points": ["GPS/IMU/LiDAR/Camera融合技术", "系统级联调"],
+                    },
+                    {
+                        "name": "总体架构",
+                        "level": "L3",
+                        "knowledge_points": ["飞行器总体架构设计", "动力/航电系统参数匹配"],
+                    },
+                    {
+                        "name": "故障诊断",
+                        "level": "L3",
+                        "knowledge_points": ["飞行器故障诊断技术", "飞控系统异常定位"],
+                    },
+                ],
+            },
+        ],
+    },
+    {
+        "job_role": "系统集成工程师",
+        "direction_name": "研发制造类",
+        "job_family": "研发制造",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {
+                        "name": "飞行基础",
+                        "level": "L3",
+                        "knowledge_points": ["无人机飞行原理", "空气动力学", "航空气象学", "多旋翼/固定翼机型结构"],
+                    },
+                    {
+                        "name": "法规标准",
+                        "level": "L2",
+                        "knowledge_points": ["民航局无人机管理规定", "适航认证要求", "行业技术规范"],
+                    },
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {
+                        "name": "硬件设计与调试",
+                        "level": "L3",
+                        "knowledge_points": ["AutoCAD/SolidWorks结构设计优化", "飞控系统（Pixhawk、APM）参数配置调试"],
+                    },
+                    {
+                        "name": "算法与仿真",
+                        "level": "L3",
+                        "knowledge_points": ["ROS算法开发", "MATLAB/Simulink仿真", "多传感器（IMU/GPS/LiDAR）数据融合"],
+                    },
+                    {
+                        "name": "嵌入式开发",
+                        "level": "L3",
+                        "knowledge_points": ["Linux/RTOS移植与驱动开发"],
+                    },
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {
+                        "name": "系统集成项目",
+                        "level": "L4",
+                        "knowledge_points": ["需求分析", "方案设计", "整机测试全流程"],
+                    },
+                    {
+                        "name": "联调经验",
+                        "level": "L3",
+                        "knowledge_points": ["动力/通信/导航系统联调", "系统兼容性与信号干扰问题解决"],
+                    },
+                    {
+                        "name": "飞行测试",
+                        "level": "L3",
+                        "knowledge_points": ["飞行测试与数据分析", "系统性能优化"],
+                    },
+                ],
+            },
+        ],
+    },
+    {
+        "job_role": "试验测试工程师",
+        "direction_name": "研发制造类",
+        "job_family": "研发制造",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {
+                        "name": "专业基础",
+                        "level": "L3",
+                        "knowledge_points": ["飞行器设计", "控制技术", "测试方法论"],
+                    },
+                    {
+                        "name": "适航知识",
+                        "level": "L2",
+                        "knowledge_points": ["适航法规中试验/试飞相关内容"],
+                    },
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {
+                        "name": "试验验证",
+                        "level": "L3",
+                        "knowledge_points": ["航空器试验验证理论与方法", "设计符合性检验"],
+                    },
+                    {
+                        "name": "测试系统搭建",
+                        "level": "L3",
+                        "knowledge_points": ["测试系统搭建", "测试/试验信息获取"],
+                    },
+                    {
+                        "name": "数据处理",
+                        "level": "L3",
+                        "knowledge_points": ["大数据处理", "算法处理试验/测试数据"],
+                    },
+                    {
+                        "name": "方案制定",
+                        "level": "L3",
+                        "knowledge_points": ["试验/试飞方案制定", "测试目标规划"],
+                    },
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {
+                        "name": "研发与审定试飞",
+                        "level": "L4",
+                        "knowledge_points": ["研发试验试飞经验", "审定试验试飞经验"],
+                    },
+                    {
+                        "name": "交付运行试飞",
+                        "level": "L3",
+                        "knowledge_points": ["交付/运行前试验试飞", "飞行器交付运行条件确认"],
+                    },
+                ],
+            },
+        ],
+    },
+    {
+        "job_role": "适航认证工程师",
+        "direction_name": "研发制造类",
+        "job_family": "研发制造",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {
+                        "name": "飞行器专业背景",
+                        "level": "L3",
+                        "knowledge_points": ["飞行器设计", "研制过程及各专业主要内容"],
+                    },
+                    {
+                        "name": "适航知识",
+                        "level": "L4",
+                        "knowledge_points": ["适航法规", "适航规章", "审定方法"],
+                    },
+                    {
+                        "name": "质量管理",
+                        "level": "L3",
+                        "knowledge_points": ["可靠性/安全性管理", "航空零部件工业生产质量管理"],
+                    },
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {
+                        "name": "适航体系建设",
+                        "level": "L4",
+                        "knowledge_points": ["适航体系建立", "全生命周期产品适航性保证", "供应商适航管理"],
+                    },
+                    {
+                        "name": "适航规章应用",
+                        "level": "L4",
+                        "knowledge_points": [
+                            "CCAR 23/25/27/29/92等适航规章",
+                            "适航审定计划制定",
+                            "四证（TC/PC/AC/OC）获颁流程",
+                        ],
+                    },
+                    {
+                        "name": "法规推动",
+                        "level": "L5",
+                        "knowledge_points": ["推动法规/适航规章完善", "预测航空器适航性新方法"],
+                    },
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {
+                        "name": "适航审定经验",
+                        "level": "L5",
+                        "knowledge_points": ["航空器适航经验", "适航审定经验"],
+                    },
+                    {
+                        "name": "当局对接",
+                        "level": "L4",
+                        "knowledge_points": ["与适航当局沟通对接", "适航问题协同解决"],
+                    },
+                    {
+                        "name": "指导规划",
+                        "level": "L4",
+                        "knowledge_points": ["指导各专业制定符合性表明方法", "适航取证计划"],
+                    },
+                ],
+            },
+        ],
+    },
+    # ── 运营服务类 ──────────────────────────────────────────
+    {
+        "job_role": "场景应用工程师",
+        "direction_name": "运营服务类",
+        "job_family": "运营服务",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {
+                        "name": "飞行基础",
+                        "level": "L3",
+                        "knowledge_points": [
+                            "机械原理",
+                            "无线电遥控",
+                            "航空气象学",
+                            "航空电子学",
+                            "飞机构造与飞行原理",
+                            "飞行器控制原理",
+                        ],
+                    },
+                    {
+                        "name": "飞行器系统",
+                        "level": "L3",
+                        "knowledge_points": ["固定翼/单旋翼/多旋翼/eVTOL系统组成、结构、功能"],
+                    },
+                    {
+                        "name": "子系统原理",
+                        "level": "L3",
+                        "knowledge_points": ["动力系统", "控制与导航系统", "任务系统", "数据链", "地面控制站"],
+                    },
+                    {
+                        "name": "法规安全",
+                        "level": "L2",
+                        "knowledge_points": ["劳动保护与安全", "相关法律法规"],
+                    },
+                    {
+                        "name": "应用场景",
+                        "level": "L2",
+                        "knowledge_points": ["物流运输场景", "巡检场景", "应急救援场景"],
+                    },
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {
+                        "name": "空域与任务规划",
+                        "level": "L3",
+                        "knowledge_points": ["空域申请流程", "飞行任务规划", "实时监控", "数据传输"],
+                    },
+                    {
+                        "name": "飞行器操控",
+                        "level": "L3",
+                        "knowledge_points": ["飞行控制系统操作", "多类型飞行器操控技术"],
+                    },
+                    {
+                        "name": "场景作业",
+                        "level": "L3",
+                        "knowledge_points": ["货物运输/巡检/应急救援操作流程", "起飞前检查", "飞行基本动作", "起降航线飞行"],
+                    },
+                    {
+                        "name": "作业技术",
+                        "level": "L3",
+                        "knowledge_points": ["作业前准备", "飞行操作", "人员安全防护", "飞行前检查与飞行后维护"],
+                    },
+                    {
+                        "name": "数据与应急",
+                        "level": "L3",
+                        "knowledge_points": ["数据处理", "作业报告编制", "应急预案制定与响应"],
+                    },
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {
+                        "name": "飞行器操控",
+                        "level": "L3",
+                        "knowledge_points": ["无人机/eVTOL操控能力"],
+                    },
+                    {
+                        "name": "场景作业",
+                        "level": "L3",
+                        "knowledge_points": ["满足各应用场景运行要求或操作流程"],
+                    },
+                ],
+            },
+        ],
+    },
+    {
+        "job_role": "航线规划工程师",
+        "direction_name": "运营服务类",
+        "job_family": "运营服务",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {
+                        "name": "空域与航线设计",
+                        "level": "L4",
+                        "knowledge_points": ["空域划设规则", "航线动态优化算法", "低空航路网络设计原理"],
+                    },
+                    {
+                        "name": "GIS与气象",
+                        "level": "L3",
+                        "knowledge_points": ["GIS地理信息系统", "三维建模", "气象学基础"],
+                    },
+                    {
+                        "name": "飞行器性能",
+                        "level": "L2",
+                        "knowledge_points": ["无人机续航性能", "避障能力对航线设计的影响"],
+                    },
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {
+                        "name": "航线规划工具",
+                        "level": "L3",
+                        "knowledge_points": ["UgCS", "Skyward", "大疆智图", "AirSim仿真"],
+                    },
+                    {
+                        "name": "航线优化",
+                        "level": "L3",
+                        "knowledge_points": ["覆盖效率/能耗/安全性优化", "多机协同调度"],
+                    },
+                    {
+                        "name": "冲突分析",
+                        "level": "L3",
+                        "knowledge_points": ["航路冲突分析（临时空域占用）", "动态调整策略"],
+                    },
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {
+                        "name": "项目经验",
+                        "level": "L4",
+                        "knowledge_points": ["复杂环境航线设计（城市物流、山区测绘）", "合规性报告输出"],
+                    },
+                    {
+                        "name": "审批流程",
+                        "level": "L3",
+                        "knowledge_points": ["民航局报批流程", "空域申请材料编制"],
+                    },
+                    {
+                        "name": "航线验证",
+                        "level": "L3",
+                        "knowledge_points": ["联合空管部门航线验证飞行", "异常问题排查"],
+                    },
+                ],
+            },
+        ],
+    },
+    {
+        "job_role": "地面支持工程师",
+        "direction_name": "运营服务类",
+        "job_family": "运营服务",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {
+                        "name": "地面站系统",
+                        "level": "L3",
+                        "knowledge_points": ["地面站系统架构", "MAVLink通信协议", "数据链技术（4G/5G、射频）"],
+                    },
+                    {
+                        "name": "起降场建设",
+                        "level": "L2",
+                        "knowledge_points": ["vertiport建设标准", "充电桩/气象站等地面保障设备配置"],
+                    },
+                    {
+                        "name": "应急响应",
+                        "level": "L2",
+                        "knowledge_points": ["信号丢失处置", "迫降处置流程"],
+                    },
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {
+                        "name": "地面控制站",
+                        "level": "L3",
+                        "knowledge_points": ["GCS部署和维护", "软硬件联调及信号测试"],
+                    },
+                    {
+                        "name": "通信排查",
+                        "level": "L3",
+                        "knowledge_points": ["频谱仪操作", "示波器操作", "通信干扰排查"],
+                    },
+                    {
+                        "name": "网络配置",
+                        "level": "L2",
+                        "knowledge_points": ["VPN配置", "防火墙设置", "数据传输安全保障"],
+                    },
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {
+                        "name": "野外作业",
+                        "level": "L3",
+                        "knowledge_points": ["10次以上野外作业", "现场设备架设与故障快速恢复"],
+                    },
+                    {
+                        "name": "SOP制定",
+                        "level": "L3",
+                        "knowledge_points": ["地面保障标准作业程序", "设备巡检清单", "应急预案"],
+                    },
+                    {
+                        "name": "多部门协同",
+                        "level": "L3",
+                        "knowledge_points": ["与空管、公安等部门协同保障"],
+                    },
+                ],
+            },
+        ],
+    },
+    {
+        "job_role": "低空实施运维工程师",
+        "direction_name": "运营服务类",
+        "job_family": "运营服务",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {"name": "系统维护", "level": "L3", "knowledge_points": ["无人机系统维护", "故障诊断方法", "寿命周期管理"]},
+                    {"name": "检测技术", "level": "L3", "knowledge_points": ["电池管理", "动力系统检测", "飞控参数调校"]},
+                    {"name": "适航与维修资质", "level": "L2", "knowledge_points": ["CAAC/FAA适航认证要求", "维修资质标准"]},
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {"name": "日志分析", "level": "L3", "knowledge_points": ["DroneLogbook等诊断工具", "飞行日志分析", "硬件/软件故障定位"]},
+                    {"name": "拆装校准", "level": "L3", "knowledge_points": ["无人机拆装与校准", "关键部件（IMU/GPS模块）更换"]},
+                    {"name": "远程运维", "level": "L3", "knowledge_points": ["IoT平台监控", "机队状态预警"]},
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {"name": "维护经验", "level": "L4", "knowledge_points": ["累计维护50架次以上", "重大故障（电机失效）返厂维修"]},
+                    {"name": "预防性维护", "level": "L3", "knowledge_points": ["预防性维护计划制定", "降低设备停机率"]},
+                    {"name": "数字化升级", "level": "L3", "knowledge_points": ["运维体系数字化升级", "预测性维护平台搭建"]},
+                ],
+            },
+        ],
+    },
+    {
+        "job_role": "无人机操控工程师",
+        "direction_name": "运营服务类",
+        "job_family": "运营服务",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {"name": "飞行器系统", "level": "L3", "knowledge_points": ["基本构造与飞行原理", "动力/通信/导航/飞控/传感器系统"]},
+                    {"name": "装配调试", "level": "L3", "knowledge_points": ["无人机组装", "调试", "维护", "低空飞行操控"]},
+                    {"name": "电路与电子", "level": "L3", "knowledge_points": ["电路图解析", "电调焊接/飞控接线/传感器集成", "电流计/电压表检测"]},
+                    {"name": "机电基础", "level": "L3", "knowledge_points": ["机械结构原理", "电子电路系统", "飞控与软件技术"]},
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {"name": "传感器应用", "level": "L3", "knowledge_points": ["多光谱/热成像设备操作", "传感器参数设置及数据采集"]},
+                    {"name": "装配与调试", "level": "L3", "knowledge_points": ["装配图纸识读", "飞控/动力/通信系统联调", "位置控制/自动驾驶仪校准"]},
+                    {"name": "检测诊断", "level": "L3", "knowledge_points": ["专用检测仪器及软件", "全系统检测与故障诊断"]},
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {"name": "操控技能", "level": "L3", "knowledge_points": ["起降/悬停/航线跟踪/复杂环境机动", "遥控器校准与飞行模式切换"]},
+                    {"name": "资质合规", "level": "L3", "knowledge_points": ["CAAC视距内/超视距驾驶员执照", "民用无人驾驶航空器安全管理条例"]},
+                    {"name": "维修维保", "level": "L3", "knowledge_points": ["故障维修/部件更换/参数调整", "功能模块维护保养"]},
+                    {"name": "远程操控", "level": "L3", "knowledge_points": ["远程控制设备低空飞行操控（起飞/飞行/降落）"]},
+                ],
+            },
+        ],
+    },
+    {
+        "job_role": "装调维修工程师",
+        "direction_name": "运营服务类",
+        "job_family": "运营服务",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {"name": "无人机理论", "level": "L3", "knowledge_points": ["航空器结构与飞行原理", "动力/飞控系统与气动布局"]},
+                    {"name": "系统组成", "level": "L3", "knowledge_points": ["多旋翼/固定翼/复合翼特点", "导航（GPS/北斗）与传感器（IMU/雷达）协同"]},
+                    {"name": "法规与空域管理", "level": "L2", "knowledge_points": ["无人机飞行管理条例", "禁飞区/高度限制/实名登记"]},
+                    {"name": "隐私与安全", "level": "L2", "knowledge_points": ["数据隐私保护法规", "通信链路加密技术"]},
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {"name": "传感器与数据", "level": "L3", "knowledge_points": ["多光谱/热成像设备操作", "传感器参数设置与数据采集"]},
+                    {"name": "数据处理", "level": "L3", "knowledge_points": ["遥感影像拼接与点云建模", "5G/卫星通信实时数据传输"]},
+                    {"name": "AI辅助", "level": "L2", "knowledge_points": ["AI辅助航线规划优化", "视觉识别自动避障/目标跟踪"]},
+                    {"name": "集群控制", "level": "L3", "knowledge_points": ["多机通信协议", "集群任务分配算法", "编队协同控制"]},
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {"name": "操控能力", "level": "L3", "knowledge_points": ["起降/悬停/航线跟踪/复杂环境机动", "遥控器校准"]},
+                    {"name": "应急处置", "level": "L3", "knowledge_points": ["信号丢失/电量不足/机械故障应急降落", "姿态调整/备用控制切换"]},
+                    {"name": "地面站操作", "level": "L3", "knowledge_points": ["三维航线规划", "飞行参数实时监控", "任务载荷控制"]},
+                    {"name": "综合维护", "level": "L3", "knowledge_points": ["设备维护与故障诊断", "系统装配调试", "作业方案与应急预案", "数据后期处理"]},
+                ],
+            },
+        ],
+    },
+    # ── 安全监管类 ──────────────────────────────────────────
+    {
+        "job_role": "空域动态监控员",
+        "direction_name": "安全监管类",
+        "job_family": "安全监管",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {"name": "算法基础", "level": "L3", "knowledge_points": ["数据分析", "路径规划算法", "无人机路径动态规划", "气象数据分析"]},
+                    {"name": "数据分析", "level": "L3", "knowledge_points": ["空域运行数据整合与分析", "飞行冲突/设备异常风险识别", "系统故障排查修复"]},
+                    {"name": "法规", "level": "L2", "knowledge_points": ["空域管理法规", "无人机驾驶航空器飞行管理条例"]},
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {"name": "监控系统操作", "level": "L3", "knowledge_points": ["监控系统操作"]},
+                    {"name": "数据分析能力", "level": "L3", "knowledge_points": ["监控数据问题发现与处理"]},
+                    {"name": "通信与导航", "level": "L2", "knowledge_points": ["导航原理", "航空通信技术", "航空电子设备"]},
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {"name": "设备操作", "level": "L3", "knowledge_points": ["雷达/ADS-B/空域管理系统操作", "数据分析与故障处理"]},
+                    {"name": "技术更新", "level": "L3", "knowledge_points": ["AI/大数据/数据智能分析工具应用"]},
+                    {"name": "职业素养", "level": "L3", "knowledge_points": ["高度责任心/抗压能力/长时间专注力", "保密规定"]},
+                    {"name": "应急响应", "level": "L4", "knowledge_points": ["航空器紧急迫降处理", "空域非法侵入处理", "多部门联动协同"]},
+                ],
+            },
+        ],
+    },
+    {
+        "job_role": "低空网络安全工程师",
+        "direction_name": "安全监管类",
+        "job_family": "安全监管",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {"name": "设备与通信", "level": "L3", "knowledge_points": ["雷达/ADS-B/VHF通信原理", "卫星导航系统在空域监控中的应用"]},
+                    {"name": "管制操作", "level": "L3", "knowledge_points": ["程序管制/雷达管制/机场管制", "飞行间隔标准", "交通流量管理/冲突解脱"]},
+                    {"name": "空域管理", "level": "L3", "knowledge_points": ["航路网络规划", "空域分类划分", "空域环境/结构/运行数据"]},
+                    {"name": "法规标准", "level": "L3", "knowledge_points": ["ICAO标准/CAAC航行规章", "ITIL标准", "低空空域管理条例", "民用无人机运行安全管理规定"]},
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {"name": "数据分析建模", "level": "L3", "knowledge_points": ["Pix4D/ContextCapture航测数据处理", "空域三维数字孪生", "运筹学空域容量评估"]},
+                    {"name": "IT服务管理", "level": "L3", "knowledge_points": ["IT服务部署/风险评估/质量管理", "复杂系统全周期管理"]},
+                    {"name": "自动化运维", "level": "L3", "knowledge_points": ["Shell/Python脚本", "Docker/Kubernetes容器部署", "混合云架构"]},
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {"name": "无人机空域管理", "level": "L4", "knowledge_points": ["北斗网格编码低空分区管理", "超视距飞行监控方案", "UTM系统集成"]},
+                    {"name": "智能预测", "level": "L4", "knowledge_points": ["机器学习交通流量预测与冲突预警", "空域资源动态分配"]},
+                    {"name": "数据安全", "level": "L3", "knowledge_points": ["网络入侵检测", "数据加密传输", "ICAO网络安全标准"]},
+                ],
+            },
+        ],
+    },
+    {
+        "job_role": "空域管理系统工程师",
+        "direction_name": "安全监管类",
+        "job_family": "安全监管",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {"name": "通信技术", "level": "L3", "knowledge_points": ["5G/6G/LoRa/Wi-Fi 6E低空无线通信", "动态自组网（MANET）拓扑与脆弱点"]},
+                    {"name": "安全架构", "level": "L3", "knowledge_points": ["低空网络防火墙与IDS", "ADS-B信号欺骗/GPS干扰防护"]},
+                    {"name": "前沿加密", "level": "L3", "knowledge_points": ["无人机群通信加密", "量子密钥分发（QKD）"]},
+                    {"name": "法规合规", "level": "L2", "knowledge_points": ["低空空域管理条例", "民用无人机运行安全管理规定", "空域数据采集合法性"]},
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {"name": "漏洞挖掘与防护", "level": "L4", "knowledge_points": ["飞控系统/RTOS漏洞挖掘", "GPS/北斗欺骗攻击与抗干扰", "数据安全与完整性验证"]},
+                    {"name": "渗透测试", "level": "L4", "knowledge_points": ["Python/Go自动化脚本", "遥控链路破解/传感器伪造/载荷劫持", "逆向工程与模糊测试"]},
+                    {"name": "数据安全防护", "level": "L3", "knowledge_points": ["国密算法加密遥测/图像数据", "区块链数据溯源与合规审计"]},
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {"name": "安全监测", "level": "L3", "knowledge_points": ["低空网络流量监测", "异常行为隔离", "飞控日志入侵路径分析"]},
+                    {"name": "前沿研究", "level": "L4", "knowledge_points": ["低轨卫星与地面站协同安全防护", "攻防技术跟踪", "防御算法优化"]},
+                    {"name": "事件溯源", "level": "L4", "knowledge_points": ["网络安全事件溯源", "电磁脉冲干扰/硬件逆向防护"]},
+                    {"name": "日志固化", "level": "L3", "knowledge_points": ["区块链固化飞行日志", "攻击链路不可篡改回溯"]},
+                ],
+            },
+        ],
+    },
+    # ── 数据应用类 ──────────────────────────────────────────
+    {
+        "job_role": "遥感数据处理师",
+        "direction_name": "数据应用类",
+        "job_family": "数据应用",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {"name": "GIS知识", "level": "L3", "knowledge_points": ["地理信息系统", "空间数据分析方法", "空间数据可视化"]},
+                    {"name": "遥感专业", "level": "L3", "knowledge_points": ["激光雷达/多光谱相机/卫星数据采集", "数据处理方式", "可视化方法"]},
+                    {"name": "地图学", "level": "L3", "knowledge_points": ["现代地图学", "高精度地图建图流程"]},
+                    {"name": "法规", "level": "L2", "knowledge_points": ["地理信息采集/处理/应用/管理相关法律法规"]},
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {"name": "数据采集处理", "level": "L3", "knowledge_points": ["激光雷达/多光谱相机/卫星数据采集", "数据处理软件操作（加载/编辑/可视化）"]},
+                    {"name": "高精度地图", "level": "L3", "knowledge_points": ["OpenDrive等高精度地图软件", "地图要素添加", "坐标转换", "拓扑/属性/完整性检查"]},
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {"name": "数据预处理", "level": "L3", "knowledge_points": ["多种遥感方式采集地理数据", "数据预处理"]},
+                    {"name": "数据融合", "level": "L3", "knowledge_points": ["多数据融合（时间/空间同步）", "不同坐标数据转化"]},
+                    {"name": "地图制作", "level": "L3", "knowledge_points": ["高精度地图制作与编辑", "地图质量检查"]},
+                ],
+            },
+        ],
+    },
+    {
+        "job_role": "空域数字孪生架构师",
+        "direction_name": "数据应用类",
+        "job_family": "数据应用",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {"name": "大数据与数字孪生", "level": "L3", "knowledge_points": ["大数据技术", "数字孪生理论"]},
+                    {"name": "物联网与GIS", "level": "L3", "knowledge_points": ["物联网技术", "地理信息系统（GIS）", "建筑信息模型（BIM）"]},
+                    {"name": "系统架构", "level": "L3", "knowledge_points": ["系统架构设计", "系统开发"]},
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {"name": "Web开发", "level": "L3", "knowledge_points": ["至少一门Web编程语言", "界面及Demo开发"]},
+                    {"name": "前端技术栈", "level": "L3", "knowledge_points": ["React", "VUE"]},
+                    {"name": "三维渲染", "level": "L4", "knowledge_points": ["Cesium", "Unity", "OpenGL"]},
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {"name": "数字孪生项目", "level": "L4", "knowledge_points": ["智慧园区/智慧城市数字孪生项目设计开发"]},
+                    {"name": "物联网经验", "level": "L3", "knowledge_points": ["物联网项目参与", "孪生系统场景模拟与优化建议"]},
+                ],
+            },
+        ],
+    },
+    {
+        "job_role": "低空大数据分析师",
+        "direction_name": "数据应用类",
+        "job_family": "数据应用",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {"name": "大数据与算法", "level": "L3", "knowledge_points": ["大数据专业知识", "常见算法原理", "机器学习理论"]},
+                    {"name": "大数据产品", "level": "L3", "knowledge_points": ["Flink", "Clickhouse", "MongoDB技术架构和原理"]},
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {"name": "编程与系统", "level": "L3", "knowledge_points": ["精通一门或多门编程语言", "Linux操作系统", "算法/数据结构基础"]},
+                    {"name": "分布式计算", "level": "L4", "knowledge_points": ["分布式计算框架设计和应用", "分布式/缓存/消息机制"]},
+                    {"name": "数据挖掘", "level": "L3", "knowledge_points": ["数据分析工具", "数据挖掘算法", "机器学习算法"]},
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {"name": "算法开发", "level": "L4", "knowledge_points": ["深度学习算法开发", "机器学习算法开发"]},
+                    {"name": "行业经验", "level": "L3", "knowledge_points": ["交通/低空行业数据分析经验", "行业算法开发"]},
+                ],
+            },
+        ],
+    },
+    {
+        "job_role": "低空AI训练师",
+        "direction_name": "数据应用类",
+        "job_family": "数据应用",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {"name": "AI专业", "level": "L3", "knowledge_points": ["人工智能专业知识", "常见AI算法原理", "机器学习理论"]},
+                    {"name": "大数据", "level": "L3", "knowledge_points": ["数据管理方法", "数据标记方法"]},
+                    {"name": "法规", "level": "L2", "knowledge_points": ["AI相关法律法规", "数据管理法律法规"]},
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {"name": "数据处理", "level": "L3", "knowledge_points": ["数据清洗", "数据标注（按AI系统要求和特征）"]},
+                    {"name": "算法调试", "level": "L3", "knowledge_points": ["测试工具使用", "AI系统训练/测试", "算法优化调试"]},
+                    {"name": "系统优化", "level": "L3", "knowledge_points": ["不同场景下人机交互优化"]},
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {"name": "综合应用", "level": "L4", "knowledge_points": ["复杂场景/多场景切换下数据清洗标注", "算法调试与系统优化"]},
+                ],
+            },
+        ],
+    },
+    # ── 操控培训类 ──────────────────────────────────────────
+    {
+        "job_role": "无人机驾驶培训师",
+        "direction_name": "操控培训类",
+        "job_family": "操控培训",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {"name": "无人机系统", "level": "L3", "knowledge_points": ["飞行平台", "动力系统", "导航系统", "任务载荷"]},
+                    {"name": "法规", "level": "L3", "knowledge_points": ["无人驾驶航空器飞行管理暂行条例", "民用无人机驾驶员管理规定"]},
+                    {"name": "气象与安全", "level": "L2", "knowledge_points": ["风速/气压/能见度对飞行影响", "航空安全操作规范"]},
+                    {"name": "教育学", "level": "L2", "knowledge_points": ["教育学与心理学", "成人学习特点", "教学方法设计"]},
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {"name": "飞行操控", "level": "L4", "knowledge_points": ["多旋翼/固定翼操控", "起飞/悬停/航线规划/应急处理"]},
+                    {"name": "模拟器教学", "level": "L3", "knowledge_points": ["FlightGear模拟器", "凤凰模拟器"]},
+                    {"name": "数字化教学", "level": "L3", "knowledge_points": ["PPT/动画课件制作", "视频剪辑（飞行案例分析）"]},
+                    {"name": "教学诊断", "level": "L3", "knowledge_points": ["现场观察", "数据复盘（飞行日志分析）", "学员操作问题诊断"]},
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {"name": "教学经验", "level": "L4", "knowledge_points": ["3年以上培训教学经验", "累计培训不少于50人"]},
+                    {"name": "课程开发", "level": "L3", "knowledge_points": ["2个以上培训课程开发项目", "定制化行业应用课程"]},
+                    {"name": "其他经验", "level": "L3", "knowledge_points": ["无人机赛事裁判（优先）", "应急救援演练培训讲师（优先）"]},
+                ],
+            },
+        ],
+    },
+    {
+        "job_role": "低空安全操作考评员",
+        "direction_name": "操控培训类",
+        "job_family": "操控培训",
+        "dimensions": [
+            {
+                "name": "理论知识",
+                "skills": [
+                    {"name": "安全法规", "level": "L4", "knowledge_points": ["无人驾驶航空器飞行管理暂行条例", "通用航空飞行管制条例"]},
+                    {"name": "安全操作规范", "level": "L3", "knowledge_points": ["起降流程", "避障规则", "无线电通讯协议"]},
+                    {"name": "环境与风险", "level": "L3", "knowledge_points": ["气象学", "空气动力学", "低空环境风险分析"]},
+                    {"name": "评价理论", "level": "L3", "knowledge_points": ["教育测量与评价理论", "考评方案设计与结果分析"]},
+                ],
+            },
+            {
+                "name": "技术技能",
+                "skills": [
+                    {"name": "监管平台", "level": "L3", "knowledge_points": ["无人机安全监管平台", "频谱监测设备", "飞行数据回放软件"]},
+                    {"name": "模拟操作", "level": "L3", "knowledge_points": ["无人机模拟飞行操作", "典型违规场景复现"]},
+                    {"name": "数据分析", "level": "L3", "knowledge_points": ["Tableau等数据可视化工具", "操作行为风险点分析"]},
+                    {"name": "应急能力", "level": "L3", "knowledge_points": ["应急救援流程", "现场突发安全事件响应"]},
+                ],
+            },
+            {
+                "name": "工程实践",
+                "skills": [
+                    {"name": "考评经验", "level": "L5", "knowledge_points": ["5年以上安全管理/考评经验", "累计完成不少于200人次考核"]},
+                    {"name": "标准制定", "level": "L4", "knowledge_points": ["1项以上省级/行业级低空安全操作标准制定"]},
+                    {"name": "违规处置", "level": "L4", "knowledge_points": ["3起以上低空飞行安全违规案例处理", "风险研判与处置"]},
+                ],
+            },
+        ],
+    },
+]
+
+
+async def seed() -> None:
+    async with async_session() as db:
+        org = (
+            await db.execute(
+                select(Organization).order_by(Organization.created_at.asc()).limit(1)
+            )
+        ).scalar_one_or_none()
+        if org is None:
+            print("Error: No organization found. Please create an organization first.")
+            return
+
+        created_count = 0
+
+        for definition in STANDARD_MODELS:
+            existing = (
+                await db.execute(
+                    select(JobModel).where(
+                        JobModel.job_role == definition["job_role"],
+                        JobModel.model_type == "standard",
+                        JobModel.industry_name == INDUSTRY,
+                        JobModel.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+
+            if existing is not None:
+                print(f"Skipping existing: {definition['job_role']}")
+                continue
+
+            model = JobModel(
+                job_role=definition["job_role"],
+                model_type="standard",
+                status="published",
+                job_family=definition.get("job_family"),
+                industry_name=INDUSTRY,
+                direction_name=definition["direction_name"],
+                org_id=org.id,
+            )
+            db.add(model)
+            await db.flush()
+
+            version = JobModelVersion(
+                job_model_id=model.id,
+                version=1,
+                version_note=VERSION_NOTE,
+                is_current=True,
+                source_type="manual",
+                raw_content={
+                    "job_role": definition["job_role"],
+                    "industry_name": INDUSTRY,
+                    "direction_name": definition["direction_name"],
+                    "dimensions": definition["dimensions"],
+                },
+            )
+            db.add(version)
+            await db.flush()
+
+            model.current_version_id = version.id
+            model.current_version = version
+            await db.flush()
+
+            for dim_idx, dim_data in enumerate(definition["dimensions"]):
+                dimension = CompetencyDimension(
+                    model_version_id=version.id,
+                    name=dim_data["name"],
+                    sort_order=dim_idx,
+                )
+                db.add(dimension)
+                await db.flush()
+
+                for skill_idx, skill_data in enumerate(dim_data["skills"]):
+                    skill = Skill(
+                        dimension_id=dimension.id,
+                        name=skill_data["name"],
+                        level=skill_data.get("level"),
+                        sort_order=skill_idx,
+                        item_source="standard",
+                    )
+                    db.add(skill)
+                    await db.flush()
+
+                    for kp_idx, kp_name in enumerate(skill_data["knowledge_points"]):
+                        db.add(
+                            SkillKnowledgePoint(
+                                skill_id=skill.id,
+                                name=kp_name,
+                                sort_order=kp_idx,
+                                item_source="standard",
+                            )
+                        )
+
+            created_count += 1
+            print(f"Created: {definition['job_role']} ({definition['direction_name']})")
+
+        await db.commit()
+        print(f"\nDone. Created {created_count} low-altitude industry standard job models.")
+
+
+if __name__ == "__main__":
+    asyncio.run(seed())

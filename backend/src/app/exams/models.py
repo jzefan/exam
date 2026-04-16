@@ -190,6 +190,7 @@ class Exam(OwnerMixin, BaseModel):
     max_switch_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     show_result: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     notes_template: Mapped[str | None] = mapped_column(Text, nullable=True)
+    question_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False)
 
     creator: Mapped["app.auth.models.User"] = relationship(  # type: ignore[name-defined]

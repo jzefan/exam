@@ -56,15 +56,13 @@ async def _get_visible_kp_or_404(
 
 @router.get("/majors", response_model=list[MajorResponse])
 async def list_majors(db: DB, user: CurrentUser) -> list[MajorResponse]:
-    is_admin = await _is_knowledge_admin(db, user)
-    majors = await service.list_majors(db, user=user, is_platform_admin=is_admin)
+    majors = await service.list_majors(db, user=user, is_platform_admin=False)
     return [MajorResponse.model_validate(major) for major in majors]
 
 
 @router.get("/majors/{major_id}", response_model=MajorResponse)
 async def get_major(major_id: uuid.UUID, db: DB, user: CurrentUser) -> MajorResponse:
-    is_admin = await _is_knowledge_admin(db, user)
-    major = await service.get_major(db, major_id, user=user, is_platform_admin=is_admin)
+    major = await service.get_major(db, major_id, user=user, is_platform_admin=False)
     if not major:
         raise HTTPException(status_code=404, detail="Major not found")
     return MajorResponse.model_validate(major)
@@ -95,15 +93,13 @@ async def delete_major(major_id: uuid.UUID, db: DB, _: WriteUser) -> None:
 
 @router.get("/majors/{major_id}/directions", response_model=list[DirectionResponse])
 async def list_directions(major_id: uuid.UUID, db: DB, user: CurrentUser) -> list[DirectionResponse]:
-    is_admin = await _is_knowledge_admin(db, user)
-    directions = await service.list_directions(db, major_id, user=user, is_platform_admin=is_admin)
+    directions = await service.list_directions(db, major_id, user=user, is_platform_admin=False)
     return [DirectionResponse.model_validate(direction) for direction in directions]
 
 
 @router.get("/directions/{direction_id}", response_model=DirectionResponse)
 async def get_direction(direction_id: uuid.UUID, db: DB, user: CurrentUser) -> DirectionResponse:
-    is_admin = await _is_knowledge_admin(db, user)
-    direction = await service.get_direction(db, direction_id, user=user, is_platform_admin=is_admin)
+    direction = await service.get_direction(db, direction_id, user=user, is_platform_admin=False)
     if not direction:
         raise HTTPException(status_code=404, detail="Direction not found")
     return DirectionResponse.model_validate(direction)
@@ -134,12 +130,11 @@ async def delete_direction(direction_id: uuid.UUID, db: DB, _: WriteUser) -> Non
 
 @router.get("/directions/{direction_id}/tree", response_model=FlowData)
 async def get_tree(direction_id: uuid.UUID, db: DB, user: CurrentUser) -> FlowData:
-    is_admin = await _is_knowledge_admin(db, user)
-    direction = await service.get_direction(db, direction_id, user=user, is_platform_admin=is_admin)
+    direction = await service.get_direction(db, direction_id, user=user, is_platform_admin=False)
     if not direction:
         raise HTTPException(status_code=404, detail="Direction not found")
     try:
-        data = await service.get_direction_tree(db, direction_id, user=user, is_platform_admin=is_admin)
+        data = await service.get_direction_tree(db, direction_id, user=user, is_platform_admin=False)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return FlowData(**data)
@@ -147,37 +142,32 @@ async def get_tree(direction_id: uuid.UUID, db: DB, user: CurrentUser) -> FlowDa
 
 @router.post("/knowledge-points", response_model=dict, status_code=201)
 async def create_kp(data: KnowledgePointCreate, db: DB, user: WriteUser) -> dict[str, str]:
-    is_admin = await _is_knowledge_admin(db, user)
     if data.parent_id is not None:
-        parent = await _get_visible_kp_or_404(db, data.parent_id, user, is_admin)
-        _ensure_can_write_kp(parent, user, is_admin)
+        await _get_visible_kp_or_404(db, data.parent_id, user, False)
     kp = await service.create_knowledge_point(db, data, user.id)
     return {"id": str(kp.id), "name": kp.name, "owner_id": str(kp.owner_id), "visibility": kp.visibility.value}
 
 
 @router.put("/knowledge-points/{kp_id}", response_model=dict)
 async def update_kp(kp_id: uuid.UUID, data: KnowledgePointUpdate, db: DB, user: WriteUser) -> dict[str, str]:
-    is_admin = await _is_knowledge_admin(db, user)
-    kp = await _get_visible_kp_or_404(db, kp_id, user, is_admin)
-    _ensure_can_write_kp(kp, user, is_admin)
+    kp = await _get_visible_kp_or_404(db, kp_id, user, False)
+    _ensure_can_write_kp(kp, user, False)
     kp = await service.update_knowledge_point(db, kp, data)
     return {"id": str(kp.id), "name": kp.name, "owner_id": str(kp.owner_id), "visibility": kp.visibility.value}
 
 
 @router.delete("/knowledge-points/{kp_id}", status_code=204)
 async def delete_kp(kp_id: uuid.UUID, db: DB, user: WriteUser) -> None:
-    is_admin = await _is_knowledge_admin(db, user)
-    kp = await _get_visible_kp_or_404(db, kp_id, user, is_admin)
-    _ensure_can_write_kp(kp, user, is_admin)
+    kp = await _get_visible_kp_or_404(db, kp_id, user, False)
+    _ensure_can_write_kp(kp, user, False)
     await service.soft_delete_knowledge_point(db, kp)
 
 
 @router.post("/knowledge-points/{kp_id}/prerequisites", response_model=dict, status_code=201)
 async def add_prereq(kp_id: uuid.UUID, data: PrerequisiteCreate, db: DB, user: WriteUser) -> dict[str, str]:
-    is_admin = await _is_knowledge_admin(db, user)
-    kp = await _get_visible_kp_or_404(db, kp_id, user, is_admin)
-    _ensure_can_write_kp(kp, user, is_admin)
-    await _get_visible_kp_or_404(db, data.from_id, user, is_admin)
+    kp = await _get_visible_kp_or_404(db, kp_id, user, False)
+    _ensure_can_write_kp(kp, user, False)
+    await _get_visible_kp_or_404(db, data.from_id, user, False)
     try:
         prereq = await service.add_prerequisite(db, kp_id, data.from_id)
     except ValueError as exc:
@@ -187,9 +177,8 @@ async def add_prereq(kp_id: uuid.UUID, data: PrerequisiteCreate, db: DB, user: W
 
 @router.delete("/knowledge-points/{kp_id}/prerequisites/{prereq_id}", status_code=204)
 async def remove_prereq(kp_id: uuid.UUID, prereq_id: uuid.UUID, db: DB, user: WriteUser) -> None:
-    is_admin = await _is_knowledge_admin(db, user)
-    kp = await _get_visible_kp_or_404(db, kp_id, user, is_admin)
-    _ensure_can_write_kp(kp, user, is_admin)
+    kp = await _get_visible_kp_or_404(db, kp_id, user, False)
+    _ensure_can_write_kp(kp, user, False)
     await service.remove_prerequisite(db, kp_id, prereq_id)
 
 
@@ -203,8 +192,7 @@ async def generate_recommendations(
     db: DB,
     user: CurrentUser,
 ) -> RecommendationGenerateResponse:
-    is_admin = await _is_knowledge_admin(db, user)
-    await _get_visible_kp_or_404(db, kp_id, user, is_admin)
+    await _get_visible_kp_or_404(db, kp_id, user, False)
     try:
         items = await service.generate_bilibili_recommendations(db, kp_id, data.model)
     except ValueError as exc:

@@ -1,0 +1,203 @@
+{
+  "metadata": {
+    "source": "T/MIITEC《数据标注产业人才岗位能力要求》",
+    "industry": "数据标注产业",
+    "version_note": "来源：T/MIITEC《数据标注产业人才岗位能力要求》",
+    "model_type": "standard"
+  },
+  "models": [
+    {
+      "job_role": "标注采集工程师",
+      "direction_name": "数据标注",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "数据采集规范",
+              "level": "L2",
+              "knowledge_points": [
+                "数据采集作业规范",
+                "专业设备使用",
+                "数据标注工具"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "数据采集技能",
+              "level": "L2",
+              "knowledge_points": [
+                "合法合规数据获取",
+                "专业采集环境搭建",
+                "采集脚本开发"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "数据采集实施",
+              "level": "L2",
+              "knowledge_points": [
+                "通用数据采集",
+                "复杂场景数据采集",
+                "3D数据采集"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "数据标注工程师",
+      "direction_name": "数据标注",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "人工智能基础",
+              "level": "L2",
+              "knowledge_points": [
+                "人工智能基础知识",
+                "数据标注规范",
+                "标注类型"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "标注工具",
+              "level": "L2",
+              "knowledge_points": [
+                "标注工具使用",
+                "标注平台操作",
+                "保密标注"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "标注任务",
+              "level": "L2",
+              "knowledge_points": [
+                "图像标注",
+                "视频标注",
+                "语音标注",
+                "文本标注"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "标注质检工程师",
+      "direction_name": "数据标注",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "质检理论",
+              "level": "L3",
+              "knowledge_points": [
+                "人工智能基础",
+                "质检审核规范",
+                "样本抽样检测"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "质检技能",
+              "level": "L3",
+              "knowledge_points": [
+                "在线数据审核",
+                "数据格式检查",
+                "质检方案设计"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "质检实施",
+              "level": "L3",
+              "knowledge_points": [
+                "数据标注审核",
+                "项目质检",
+                "质量改善方案"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "标注管理工程师",
+      "direction_name": "数据标注",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "项目管理",
+              "level": "L3",
+              "knowledge_points": [
+                "项目管理知识",
+                "数据定制服务",
+                "工期管控"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "项目管理技能",
+              "level": "L3",
+              "knowledge_points": [
+                "标注流程制定",
+                "任务分配",
+                "项目风险管理"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "项目实施",
+              "level": "L3",
+              "knowledge_points": [
+                "数据采集项目",
+                "标注项目",
+                "质检项目"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

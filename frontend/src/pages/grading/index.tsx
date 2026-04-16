@@ -133,6 +133,34 @@ export function GradingCenterPage() {
   const [manualScore, setManualScore] = useState("");
   const [promptDraft, setPromptDraft] = useState("");
   const [showFollowUpWorkspace, setShowFollowUpWorkspace] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isTransitioning, setIsTransitioning] = useState(false);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      if (!document.fullscreenElement) {
+        setIsFullscreen(false);
+        setShowFollowUpWorkspace(false);
+      }
+    };
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  const handleEnterFullscreen = async () => {
+    try {
+      setIsTransitioning(true);
+      await document.documentElement.requestFullscreen();
+      setIsFullscreen(true);
+      setShowFollowUpWorkspace(true);
+      setTimeout(() => setIsTransitioning(false), 300);
+    } catch (err) {
+      console.error("Failed to enter fullscreen:", err);
+      setIsTransitioning(false);
+      setShowFollowUpWorkspace(true);
+    }
+  };
   const [followUpConversation, setFollowUpConversation] = useState<
     Array<{
       prompt: string;
@@ -580,7 +608,13 @@ export function GradingCenterPage() {
         </div>
       ) : null}
 
-      <main className="relative grid min-h-0 flex-1 gap-0 overflow-hidden xl:grid-cols-[360px_minmax(0,1fr)]">
+      <main
+        className={cn(
+          "relative grid min-h-0 flex-1 gap-0 overflow-hidden xl:grid-cols-[360px_minmax(0,1fr)]",
+          showFollowUpWorkspace &&
+            "pointer-events-none scale-[0.985] opacity-0 blur-[2px] transition-all duration-200 ease-out",
+        )}
+      >
         <section className="min-h-0 overflow-hidden border-r border-border dark:border-white/15">
           <div className="flex h-full min-h-0 flex-col overflow-hidden px-4 pt-6 pb-2">
             <div className="shrink-0 space-y-3 border-b border-border/70 pb-4">
@@ -671,220 +705,6 @@ export function GradingCenterPage() {
             </div>
           </div>
         </section>
-
-        {showFollowUpWorkspace && hasVisibleQuestions ? (
-          <section className="absolute inset-0 z-30 animate-in fade-in-0 zoom-in-[0.99] duration-300 bg-background">
-            <div className="flex h-full min-h-0 flex-col">
-              <div className="flex items-center justify-between border-b border-border/70 px-6 py-4">
-                <div className="min-w-0 space-y-1">
-                  <p className="truncate text-sm font-medium text-foreground/90">
-                    {candidateDetail?.candidate_name ?? "-"}
-                    {candidateDetail?.candidate_code ? ` ｜ ${candidateDetail.candidate_code}` : ""}
-                    {candidateDetail?.suggested_score != null ? ` ｜ 建议分数 ${candidateDetail.suggested_score}` : ""}
-                  </p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {questionSummary || questionDetail?.question_label || "当前题目"}
-                  </p>
-                </div>
-                <Button variant="ghost" size="icon" onClick={() => setShowFollowUpWorkspace(false)} aria-label="退出 Prompt 复评">
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-
-              <div className="grid min-h-0 flex-1 grid-cols-[320px_minmax(0,1fr)] overflow-hidden">
-                <aside className="flex min-h-0 flex-col border-r border-border/70 bg-muted/10 dark:border-white/15 dark:bg-white/[0.02]">
-                  <div className="border-b border-border/70 px-5 py-4">
-                    <div className="text-sm font-medium">考生列表</div>
-                  </div>
-                  <div className="min-h-0 flex-1 overflow-y-auto">
-                    {loadingQuestion ? (
-                      <div className="flex h-full items-center justify-center px-4 text-sm text-muted-foreground">
-                        正在加载考生...
-                      </div>
-                    ) : (
-                      <div className="flex flex-col">
-                        {sortedCandidates.map((candidate) => (
-                          <TooltipProvider key={`followup-${candidate.task_id}`} delayDuration={120}>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setCandidateTransitionDirection("neutral");
-                                    setSelectedTaskId(candidate.task_id);
-                                  }}
-                                  className={cn(
-                                    "group mx-2 my-1 flex min-h-11 w-auto items-center gap-3 rounded-lg px-3 text-left transition-all duration-200",
-                                    candidate.task_id === activeCandidate?.task_id
-                                      ? "bg-accent text-accent-foreground"
-                                      : "bg-transparent text-muted-foreground hover:bg-accent/70 hover:text-foreground",
-                                  )}
-                                >
-                                  <span
-                                    className={cn(
-                                      "h-2 w-2 shrink-0 rounded-full transition-transform group-hover:scale-125",
-                                      statusDotClass(candidate.status),
-                                      candidate.task_id === activeCandidate?.task_id && "ring-2 ring-primary/20",
-                                    )}
-                                  />
-                                  <div className="min-w-0 flex-1">
-                                    <span
-                                      className={cn(
-                                      "block truncate text-sm",
-                                        candidate.task_id === activeCandidate?.task_id ? "font-medium text-accent-foreground" : "text-foreground/80",
-                                      )}
-                                    >
-                                      {candidate.candidate_name}
-                                    </span>
-                                  </div>
-                                </button>
-                              </TooltipTrigger>
-                              <TooltipContent
-                                side="right"
-                                className="rounded-lg border border-border bg-background px-3 py-2 text-foreground shadow-lg"
-                              >
-                                <div className="space-y-1 text-xs">
-                                  <p className="font-semibold">{candidate.candidate_name}</p>
-                                  {candidate.candidate_code ? (
-                                    <p className="text-muted-foreground">学号：{candidate.candidate_code}</p>
-                                  ) : null}
-                                  <p className="text-muted-foreground">状态：{candidate.status}</p>
-                                </div>
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </aside>
-
-                <section className="flex min-h-0 flex-col">
-                  <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-                    {followUpConversation.length > 0 ? (
-                      <div className="space-y-8">
-                        {followUpConversation.map((entry, entryIndex) => (
-                          <div key={`${entry.prompt}-${entryIndex}`} className="space-y-5">
-                            {entry.system ? (
-                              <div className="flex justify-start">
-                                <div className="max-w-3xl rounded-2xl border border-border/70 bg-muted/20 px-5 py-4 text-sm leading-7 text-foreground/80 shadow-sm">
-                                  当前考生既有模型评估
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="flex justify-end">
-                                <div className="max-w-3xl rounded-2xl bg-primary px-5 py-4 text-sm leading-7 text-primary-foreground shadow-sm">
-                                  {entry.prompt}
-                                </div>
-                              </div>
-                            )}
-
-                            <div className="space-y-6">
-                              {(entry.pending && entry.models.length === 0
-                                ? (candidateDetail?.models ?? []).map((model) => ({
-                                    stage: model.stage,
-                                    model_label: model.model_label,
-                                    score: model.score,
-                                    summary: "",
-                                    process: [],
-                                    risk_flags: [],
-                                    streamingText: "",
-                                  }))
-                                : entry.models
-                              ).map((model) => {
-                                const modelLogoSrc = getModelLogoSrc(model.model_label);
-                                return (
-                                  <div key={`${entry.prompt}-${model.stage}`} className="space-y-3 border-b border-border/60 pb-5 last:border-b-0">
-                                    <div className="flex items-center gap-3">
-                                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-background shadow-sm ring-1 ring-border/50">
-                                        {modelLogoSrc ? (
-                                          <img src={modelLogoSrc} alt={model.model_label} className="h-5 w-5 object-contain" />
-                                        ) : (
-                                          <RefreshCw className="h-4 w-4 text-muted-foreground" />
-                                        )}
-                                      </div>
-                                      <div className="flex items-baseline gap-3">
-                                        <p className="text-sm font-semibold">{toShortModelName(model.model_label)}</p>
-                                        {entry.pending ? (
-                                          <span className="text-xs text-muted-foreground">等待回复</span>
-                                        ) : (
-                                          <span className="text-sm text-primary">{model.score}</span>
-                                        )}
-                                      </div>
-                                    </div>
-                                    <div className="space-y-3 pl-11">
-                                      {entry.pending ? (
-                                        model.streamingText ? (
-                                          <p className="whitespace-pre-wrap text-sm leading-7 text-foreground/85">
-                                            {model.streamingText}
-                                          </p>
-                                        ) : (
-                                          <>
-                                            <div className="h-4 w-40 animate-pulse rounded bg-muted" />
-                                            <div className="h-4 w-full animate-pulse rounded bg-muted/80" />
-                                            <div className="h-4 w-5/6 animate-pulse rounded bg-muted/80" />
-                                          </>
-                                        )
-                                      ) : (
-                                        <>
-                                          <p className="text-sm leading-7 text-foreground/85">{model.summary}</p>
-                                          {model.process.length > 0 ? (
-                                            <ul className="space-y-2 text-sm text-muted-foreground">
-                                              {model.process.map((item) => (
-                                                <li key={item} className="flex gap-2">
-                                                  <ChevronRight className="mt-1 h-4 w-4 shrink-0 opacity-50" />
-                                                  <span>{item}</span>
-                                                </li>
-                                              ))}
-                                            </ul>
-                                          ) : null}
-                                        </>
-                                      )}
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-border/70 bg-muted/10 px-6 text-center text-sm text-muted-foreground">
-                        当前考生还没有复评会话，直接在底部输入 Prompt 开始。
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="border-t border-border/70 bg-background px-6 py-4">
-                    <div className="mx-auto flex max-w-4xl flex-col gap-3">
-                      <Textarea
-                        value={promptDraft}
-                        onChange={(event) => setPromptDraft(event.target.value)}
-                        placeholder="继续追问这道题或这位考生的评分依据、知识点覆盖和边界情况。"
-                        className="min-h-[104px] resize-none rounded-2xl border-border/70 bg-muted/15"
-                      />
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="text-xs text-muted-foreground">这会分别发送给各模型，并保留为本次复评记录。</p>
-                        <div className="flex items-center gap-2">
-                          <Button variant="outline" onClick={() => setShowFollowUpWorkspace(false)}>
-                            返回评分
-                          </Button>
-                          <Button
-                            onClick={handlePromptFollowUp}
-                            disabled={!promptDraft.trim() || followUpStreaming || !selectedTaskId}
-                          >
-                            <ArrowUp className="h-4 w-4" />
-                            {followUpStreaming ? "发送中..." : "发送给各模型"}
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </section>
-              </div>
-            </div>
-          </section>
-        ) : null}
 
         <section className="flex min-h-[calc(100vh-180px)] flex-col">
           {!hasVisibleQuestions ? (
@@ -1298,6 +1118,220 @@ export function GradingCenterPage() {
           )}
         </section>
       </main>
+
+      {showFollowUpWorkspace && hasVisibleQuestions ? (
+        <section className="fixed inset-0 z-[120] animate-in fade-in-0 zoom-in-[0.985] duration-300 bg-background">
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="flex items-center justify-between border-b border-border/70 px-6 py-4">
+              <div className="min-w-0 space-y-1">
+                <p className="truncate text-sm font-medium text-foreground/90">
+                  {candidateDetail?.candidate_name ?? "-"}
+                  {candidateDetail?.candidate_code ? ` ｜ ${candidateDetail.candidate_code}` : ""}
+                  {candidateDetail?.suggested_score != null ? ` ｜ 建议分数 ${candidateDetail.suggested_score}` : ""}
+                </p>
+                <p className="truncate text-xs text-muted-foreground">
+                  {questionSummary || questionDetail?.question_label || "当前题目"}
+                </p>
+              </div>
+              <Button variant="ghost" size="icon" onClick={() => setShowFollowUpWorkspace(false)} aria-label="退出 Prompt 复评">
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="grid min-h-0 flex-1 grid-cols-[320px_minmax(0,1fr)] overflow-hidden">
+              <aside className="animate-in slide-in-from-left-2 duration-300 flex min-h-0 flex-col border-r border-border/70 bg-muted/10 dark:border-white/15 dark:bg-white/[0.02]">
+                <div className="border-b border-border/70 px-5 py-4">
+                  <div className="text-sm font-medium">考生列表</div>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto">
+                  {loadingQuestion ? (
+                    <div className="flex h-full items-center justify-center px-4 text-sm text-muted-foreground">
+                      正在加载考生...
+                    </div>
+                  ) : (
+                    <div className="flex flex-col">
+                      {sortedCandidates.map((candidate) => (
+                        <TooltipProvider key={`followup-${candidate.task_id}`} delayDuration={120}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setCandidateTransitionDirection("neutral");
+                                  setSelectedTaskId(candidate.task_id);
+                                }}
+                                className={cn(
+                                  "group mx-2 my-1 flex min-h-11 w-auto items-center gap-3 rounded-lg px-3 text-left transition-all duration-200",
+                                  candidate.task_id === activeCandidate?.task_id
+                                    ? "bg-accent text-accent-foreground"
+                                    : "bg-transparent text-muted-foreground hover:bg-accent/70 hover:text-foreground",
+                                )}
+                              >
+                                <span
+                                  className={cn(
+                                    "h-2 w-2 shrink-0 rounded-full transition-transform group-hover:scale-125",
+                                    statusDotClass(candidate.status),
+                                    candidate.task_id === activeCandidate?.task_id && "ring-2 ring-primary/20",
+                                  )}
+                                />
+                                <div className="min-w-0 flex-1">
+                                  <span
+                                    className={cn(
+                                      "block truncate text-sm",
+                                      candidate.task_id === activeCandidate?.task_id ? "font-medium text-accent-foreground" : "text-foreground/80",
+                                    )}
+                                  >
+                                    {candidate.candidate_name}
+                                  </span>
+                                </div>
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent
+                              side="right"
+                              className="rounded-lg border border-border bg-background px-3 py-2 text-foreground shadow-lg"
+                            >
+                              <div className="space-y-1 text-xs">
+                                <p className="font-semibold">{candidate.candidate_name}</p>
+                                {candidate.candidate_code ? (
+                                  <p className="text-muted-foreground">学号：{candidate.candidate_code}</p>
+                                ) : null}
+                                <p className="text-muted-foreground">状态：{candidate.status}</p>
+                              </div>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </aside>
+
+              <section className="animate-in slide-in-from-right-2 duration-300 flex min-h-0 flex-col">
+                <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+                  {followUpConversation.length > 0 ? (
+                    <div className="space-y-8">
+                      {followUpConversation.map((entry, entryIndex) => (
+                        <div key={`${entry.prompt}-${entryIndex}`} className="space-y-5">
+                          {entry.system ? (
+                            <div className="flex justify-start">
+                              <div className="max-w-3xl rounded-2xl border border-border/70 bg-muted/20 px-5 py-4 text-sm leading-7 text-foreground/80 shadow-sm">
+                                当前考生既有模型评估
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex justify-end">
+                              <div className="max-w-3xl rounded-2xl bg-primary px-5 py-4 text-sm leading-7 text-primary-foreground shadow-sm">
+                                {entry.prompt}
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="space-y-6">
+                            {(entry.pending && entry.models.length === 0
+                              ? (candidateDetail?.models ?? []).map((model) => ({
+                                  stage: model.stage,
+                                  model_label: model.model_label,
+                                  score: model.score,
+                                  summary: "",
+                                  process: [],
+                                  risk_flags: [],
+                                  streamingText: "",
+                                }))
+                              : entry.models
+                            ).map((model) => {
+                              const modelLogoSrc = getModelLogoSrc(model.model_label);
+                              return (
+                                <div key={`${entry.prompt}-${model.stage}`} className="space-y-3 border-b border-border/60 pb-5 last:border-b-0">
+                                  <div className="flex items-center gap-3">
+                                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-background shadow-sm ring-1 ring-border/50">
+                                      {modelLogoSrc ? (
+                                        <img src={modelLogoSrc} alt={model.model_label} className="h-5 w-5 object-contain" />
+                                      ) : (
+                                        <RefreshCw className="h-4 w-4 text-muted-foreground" />
+                                      )}
+                                    </div>
+                                    <div className="flex items-baseline gap-3">
+                                      <p className="text-sm font-semibold">{toShortModelName(model.model_label)}</p>
+                                      {entry.pending ? (
+                                        <span className="text-xs text-muted-foreground">等待回复</span>
+                                      ) : (
+                                        <span className="text-sm text-primary">{model.score}</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="space-y-3 pl-11">
+                                    {entry.pending ? (
+                                      model.streamingText ? (
+                                        <p className="whitespace-pre-wrap text-sm leading-7 text-foreground/85">
+                                          {model.streamingText}
+                                        </p>
+                                      ) : (
+                                        <>
+                                          <div className="h-4 w-40 animate-pulse rounded bg-muted" />
+                                          <div className="h-4 w-full animate-pulse rounded bg-muted/80" />
+                                          <div className="h-4 w-5/6 animate-pulse rounded bg-muted/80" />
+                                        </>
+                                      )
+                                    ) : (
+                                      <>
+                                        <p className="text-sm leading-7 text-foreground/85">{model.summary}</p>
+                                        {model.process.length > 0 ? (
+                                          <ul className="space-y-2 text-sm text-muted-foreground">
+                                            {model.process.map((item) => (
+                                              <li key={item} className="flex gap-2">
+                                                <ChevronRight className="mt-1 h-4 w-4 shrink-0 opacity-50" />
+                                                <span>{item}</span>
+                                              </li>
+                                            ))}
+                                          </ul>
+                                        ) : null}
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-border/70 bg-muted/10 px-6 text-center text-sm text-muted-foreground">
+                      当前考生还没有复评会话，直接在底部输入 Prompt 开始。
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-border/70 bg-background px-6 py-4">
+                  <div className="mx-auto flex max-w-4xl flex-col gap-3">
+                    <Textarea
+                      value={promptDraft}
+                      onChange={(event) => setPromptDraft(event.target.value)}
+                      placeholder="继续追问这道题或这位考生的评分依据、知识点覆盖和边界情况。"
+                      className="min-h-[104px] resize-none rounded-2xl border-border/70 bg-muted/15"
+                    />
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs text-muted-foreground">这会分别发送给各模型，并保留为本次复评记录。</p>
+                      <div className="flex items-center gap-2">
+                        <Button variant="outline" onClick={() => setShowFollowUpWorkspace(false)}>
+                          返回评分
+                        </Button>
+                        <Button
+                          onClick={handlePromptFollowUp}
+                          disabled={!promptDraft.trim() || followUpStreaming || !selectedTaskId}
+                        >
+                          <ArrowUp className="h-4 w-4" />
+                          {followUpStreaming ? "发送中..." : "发送给各模型"}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }

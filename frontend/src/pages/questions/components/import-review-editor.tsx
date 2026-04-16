@@ -23,20 +23,24 @@ const typeOptions: Array<{ value: QuestionType; label: string }> = [
 export function ImportReviewEditor({
   draft,
   isRecognizing,
+  isAnalyzingDocument,
   canApproveAll,
   onChange,
   onApprove,
   onApproveAll,
   onReRecognize,
+  onAnalyzeDocument,
   onEditSource,
 }: {
   draft: QuestionImportDraft | null;
   isRecognizing: boolean;
+  isAnalyzingDocument: boolean;
   canApproveAll: boolean;
   onChange: (patch: Partial<QuestionImportDraft>) => void;
   onApprove: () => void;
   onApproveAll: () => void;
   onReRecognize: () => void;
+  onAnalyzeDocument: () => void;
   onEditSource: () => void;
 }) {
   if (!draft) {
@@ -174,6 +178,18 @@ export function ImportReviewEditor({
               {isRecognizing ? <RotateCcw size={14} className="mr-2 animate-spin" /> : <Bot size={14} className="mr-2" />}
               AI 补全
             </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={isAnalyzingDocument}
+              className="h-9 rounded-lg border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50"
+              onClick={onAnalyzeDocument}
+            >
+              {isAnalyzingDocument ? <RotateCcw size={14} className="mr-2 animate-spin" /> : <Bot size={14} className="mr-2" />}
+              AI 一键分析
+            </Button>
+          </div>
+          <div className="mt-2 grid grid-cols-1 gap-2">
             <Button
               variant="outline"
               size="sm"

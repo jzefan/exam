@@ -22,7 +22,7 @@ router = APIRouter()
 async def register(data: UserCreate, db: Annotated[AsyncSession, Depends(get_db)]) -> UserResponse:
     if await get_user_by_username(db, data.username):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already exists")
-    if await get_user_by_email(db, data.email):
+    if data.email and await get_user_by_email(db, data.email):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already exists")
     user = await create_user(db, data)
     return await build_user_response(db, user)

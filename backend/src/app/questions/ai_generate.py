@@ -19,6 +19,7 @@ from app.auth.dependencies import CurrentUser
 from app.config import settings
 from app.database import get_db
 from app.learning.models import KnowledgePoint
+from app.auth.user_settings import get_user_ai_config
 from app.questions.models import UserKnowledgePointUsage
 
 logger = logging.getLogger(__name__)
@@ -158,8 +159,8 @@ async def list_user_frequent_knowledge_points(
     return FrequentKnowledgePointResponse(recent=recent, frequent=frequent)
 
 
-def _get_model_config(model: AIModelProvider) -> tuple[str, str, str]:
-    """Return (api_key, base_url, model_name) for the selected provider."""
+def _get_system_model_config(model: AIModelProvider) -> tuple[str, str, str]:
+    """Return (api_key, base_url, model_name) for the selected provider from system config."""
     if model == AIModelProvider.QWEN:
         return (settings.qwen_api_key or "", settings.qwen_base_url, settings.qwen_model_name)
     elif model == AIModelProvider.DEEPSEEK:
@@ -167,6 +168,29 @@ def _get_model_config(model: AIModelProvider) -> tuple[str, str, str]:
     elif model == AIModelProvider.CLAUDE:
         return (settings.openrouter_api_key or "", settings.openrouter_base_url, settings.openrouter_model_name)
     return (settings.qwen_api_key or "", settings.qwen_base_url, settings.qwen_model_name)
+
+
+async def _get_model_config(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    model: AIModelProvider,
+) -> tuple[str, str, str]:
+    """Return (api_key, base_url, model_name). Prefer user custom key, fallback to system."""
+    try:
+        provider, api_key, model_name, base_url = await get_user_ai_config(db, user_id)
+        if api_key:
+            # Use system defaults for base_url/model_name if user didn't override
+            sys_key, sys_url, sys_model = _get_system_model_config(
+                AIModelProvider(provider) if provider else model
+            )
+            return (
+                api_key,
+                base_url or sys_url,
+                model_name or sys_model,
+            )
+    except Exception:
+        logger.warning("Failed to load user AI settings, using system defaults")
+    return _get_system_model_config(model)
 
 
 def _build_system_prompt(
@@ -255,7 +279,7 @@ async def generate_questions_stream(
 
     system_prompt = _build_system_prompt(request, knowledge_point_names)
 
-    api_key, base_url, model_name = _get_model_config(request.model)
+    api_key, base_url, model_name = await _get_model_config(db, user_id, request.model)
     if not api_key:
         yield {"type": "error", "message": f"{request.model.value} API key is not configured"}
         return

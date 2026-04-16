@@ -15,6 +15,7 @@ import { Toaster } from "./components/ui/toaster";
 import { Layout } from "./components/layout";
 import { StudentLayout } from "./components/student-layout";
 import { LoginPage } from "./pages/auth/login";
+import { RegisterPage } from "./pages/auth/register";
 import { UserList } from "./pages/admin/users/list";
 import { UserCreate } from "./pages/admin/users/create";
 import { UserEdit } from "./pages/admin/users/edit";
@@ -43,6 +44,7 @@ import { JobModelFastCreate } from "./pages/job-models/fast-create";
 import { StandardLibraryPage } from "./pages/job-models/standard-library";
 import { JobModelUploadAI } from "./pages/job-models/upload-ai";
 import { GradingAnalyticsPage } from "./pages/grading/analytics";
+import { ModelConfigPage } from "./pages/settings/model-config";
 import { GradingCenterPage } from "./pages/grading";
 import { GwmxLanding } from "./pages/gwmx/landing";
 import StudentManagementPage from "./pages/students";
@@ -186,6 +188,7 @@ function App() {
                 <Route path="/grading" element={<GradingCenterPage />} />
                 <Route path="/grading/analytics" element={<GradingAnalyticsPage />} />
                 <Route path="/students" element={<StudentManagementPage />} />
+                <Route path="/settings/model" element={<ModelConfigPage />} />
               </Route>
             </Route>
 
@@ -239,6 +242,7 @@ function App() {
               }
             >
               <Route path="/login" element={<LoginPage />} />
+              <Route path="/register" element={<RegisterPage />} />
             </Route>
           </Routes>
         </Refine>

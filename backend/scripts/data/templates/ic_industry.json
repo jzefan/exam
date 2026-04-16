@@ -1,0 +1,1947 @@
+{
+  "metadata": {
+    "source": "T/MIITEC 013-2023《集成电路产业人才岗位能力要求》",
+    "industry": "集成电路产业",
+    "version_note": "来源：T/MIITEC 013-2023",
+    "model_type": "standard"
+  },
+  "models": [
+    {
+      "job_role": "EDA软件研发工程师",
+      "direction_name": "设计",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "EDA开发基础",
+              "level": "L3",
+              "knowledge_points": [
+                "电子信息、微电子技术、集成电路",
+                "数据结构与算法",
+                "数值计算、计算几何学、布尔代数",
+                "Linux环境和脚本语言"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "EDA开发技能",
+              "level": "L3",
+              "knowledge_points": [
+                "微分方程组和矩阵求解",
+                "几何图形分析与运算",
+                "硬件描述语言并行仿真",
+                "布局布线、时序ECO"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "EDA工程实践",
+              "level": "L3",
+              "knowledge_points": [
+                "EDA软件系统编译和打包",
+                "客户现场问题解决",
+                "DRC/LVS工具使用和开发"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "EDA行业发展认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "数字设计工程师",
+      "direction_name": "设计",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "数字设计基础",
+              "level": "L3",
+              "knowledge_points": [
+                "VerilogHDL硬件描述语言",
+                "芯片设计和制造流程",
+                "数字接口、总线设计",
+                "SoC架构和处理器结构"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "数字设计技能",
+              "level": "L3",
+              "knowledge_points": [
+                "芯片架构spec定义和建模",
+                "数字电路功能模块设计",
+                "RTL设计实现和验证",
+                "DFT、ATPG可测性方案"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "数字设计实践",
+              "level": "L3",
+              "knowledge_points": [
+                "SoC芯片spec定义、RTL coding",
+                "UVM验证流程",
+                "与后端工程师协作"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "芯片设计行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "数字后端工程师",
+      "direction_name": "设计",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "数字后端基础",
+              "level": "L3",
+              "knowledge_points": [
+                "物理验证DRC、LVS、ERC",
+                "Verilog硬件描述语言",
+                "数字芯片设计全流程",
+                "半导体工艺器件基础"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "后端设计技能",
+              "level": "L3",
+              "knowledge_points": [
+                "EDA工具使用",
+                "逻辑综合和布局布线",
+                "SDC时序约束",
+                "低功耗设计"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "后端设计实践",
+              "level": "L3",
+              "knowledge_points": [
+                "RTL到版图GDS全流程",
+                "时钟方案和低功耗优化"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "芯片设计行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "模拟设计工程师",
+      "direction_name": "设计",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "模拟设计基础",
+              "level": "L3",
+              "knowledge_points": [
+                "工艺设计库(PDK)",
+                "模拟模块设计方法论",
+                "模拟与混合信号芯片设计",
+                "VerilogA硬件行为描述语言"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "模拟设计技能",
+              "level": "L3",
+              "knowledge_points": [
+                "EDA工具(Matlab、SPICE仿真器)",
+                "电路模块架构设计",
+                "电路仿真验证和优化",
+                "数模接口和ESD/EMI/EMC设计"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "模拟设计实践",
+              "level": "L3",
+              "knowledge_points": [
+                "电路原理图设计和仿真验证",
+                "根据测试结果优化设计"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "模拟芯片行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "版图设计工程师",
+      "direction_name": "设计",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "版图设计基础",
+              "level": "L3",
+              "knowledge_points": [
+                "工艺设计库(PDK)",
+                "模拟与混合信号版图设计",
+                "CMOS&BCD工艺流程",
+                "ESD、latch-up原理"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "版图设计技能",
+              "level": "L3",
+              "knowledge_points": [
+                "复杂电路版图布局和规划",
+                "版图绘制和物理验证",
+                "寄生参数提取"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "版图设计实践",
+              "level": "L3",
+              "knowledge_points": [
+                "版图设计和物理验证",
+                "SoC版图拼接"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "版图设计行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "射频电路设计工程师",
+      "direction_name": "设计",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "射频设计基础",
+              "level": "L3",
+              "knowledge_points": [
+                "射频电路知识和理念",
+                "射频芯片工艺及结构",
+                "通信协议",
+                "射频测试系统"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "射频设计技能",
+              "level": "L3",
+              "knowledge_points": [
+                "射频EDA工具使用",
+                "电路设计和系统建模",
+                "电磁场建模和仿真",
+                "射频电路调试和测试"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "射频设计实践",
+              "level": "L3",
+              "knowledge_points": [
+                "电路设计和仿真验证",
+                "可靠性验证方案制定",
+                "射频电路调试测试"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "射频芯片行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "验证工程师",
+      "direction_name": "设计",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "验证基础",
+              "level": "L3",
+              "knowledge_points": [
+                "VerilogHDL硬件描述语言",
+                "通用验证方法学(UVM)",
+                "覆盖率分析和形式验证",
+                "数字集成电路验证流程"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "验证技能",
+              "level": "L3",
+              "knowledge_points": [
+                "验证策略制定",
+                "FPGA原型验证和Emulator",
+                "Git、SVN版本管理",
+                "验证方案和测试用例开发"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "验证实践",
+              "level": "L3",
+              "knowledge_points": [
+                "与数字前端设计协作",
+                "逻辑仿真和硬件加速验证"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "芯片验证行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "产品工程师",
+      "direction_name": "设计",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "产品工程基础",
+              "level": "L3",
+              "knowledge_points": [
+                "集成电路产品鉴定和可靠性评估",
+                "集成电路设计、制造、测试",
+                "工艺设计库(PDK)构建"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "产品工程技能",
+              "level": "L3",
+              "knowledge_points": [
+                "新产品导入和技术方案",
+                "六西格玛SPC方法",
+                "成品率管控",
+                "产品手册和技术标准"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "产品工程实践",
+              "level": "L3",
+              "knowledge_points": [
+                "新产品导入全流程",
+                "项目管理(立项到推广)",
+                "成本优化"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "芯片行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "嵌入式软件工程师",
+      "direction_name": "设计",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "嵌入式基础",
+              "level": "L3",
+              "knowledge_points": [
+                "嵌入式系统基础",
+                "VerilogHDL硬件描述语言",
+                "驱动开发和接口设计",
+                "CPU体系结构"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "嵌入式开发技能",
+              "level": "L3",
+              "knowledge_points": [
+                "Linux、RTOS嵌入式操作系统",
+                "gcc、cmake编译工具",
+                "示波器、逻辑分析仪使用",
+                "软件设计和开发"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "嵌入式开发实践",
+              "level": "L3",
+              "knowledge_points": [
+                "模块验证和问题解决",
+                "客户问题分析和软件优化"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "嵌入式软件行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "工艺研发工程师",
+      "direction_name": "制造",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "工艺研发基础",
+              "level": "L3",
+              "knowledge_points": [
+                "微电子、材料、光学、化学",
+                "晶圆制造工艺原理",
+                "设备控制原理"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "工艺研发技能",
+              "level": "L3",
+              "knowledge_points": [
+                "工艺研发与平台搭建",
+                "新器件和工艺技术开发",
+                "现有工艺优化"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "工艺研发实践",
+              "level": "L3",
+              "knowledge_points": [
+                "生产过程工艺问题解决",
+                "工艺实验设计"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "晶圆制造行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "可靠性工程师",
+      "direction_name": "制造",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "可靠性基础",
+              "level": "L3",
+              "knowledge_points": [
+                "微电子、集成电路、机械",
+                "可靠性国际标准",
+                "晶圆制造工艺流程"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "可靠性技能",
+              "level": "L3",
+              "knowledge_points": [
+                "可靠性实验室设备管理",
+                "功能安全分析",
+                "可靠性测试和失效分析"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "可靠性实践",
+              "level": "L3",
+              "knowledge_points": [
+                "产品可靠性分析验证",
+                "实验室设备运维"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "晶圆制造行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "器件研发工程师",
+      "direction_name": "制造",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "器件研发基础",
+              "level": "L3",
+              "knowledge_points": [
+                "微电子、半导体器件",
+                "器件工艺和仿真",
+                "器件版图设计"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "器件研发技能",
+              "level": "L3",
+              "knowledge_points": [
+                "器件和模型设计",
+                "特性评估和电学测试",
+                "器件技术与工艺优化"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "器件研发实践",
+              "level": "L3",
+              "knowledge_points": [
+                "器件生产流程建立",
+                "产品导入和异常处理",
+                "功率器件项目经验"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "半导体器件行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "工艺器件设计服务工程师",
+      "direction_name": "制造",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "工艺器件设计基础",
+              "level": "L3",
+              "knowledge_points": [
+                "器件模型理论和半导体物理",
+                "集成电路工艺理论",
+                "器件设计和生产流程"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "工艺器件设计技能",
+              "level": "L3",
+              "knowledge_points": [
+                "半导体器件分析",
+                "TCAD模型建立和校准",
+                "工艺器件仿真实验"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "设计服务实践",
+              "level": "L3",
+              "knowledge_points": [
+                "TCAD器件设计与工艺仿真",
+                "半导体工艺模型优化"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "半导体器件行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "工艺集成工程师",
+      "direction_name": "制造",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "工艺集成基础",
+              "level": "L3",
+              "knowledge_points": [
+                "微电子、材料、化学、物理",
+                "晶圆制造工艺原理",
+                "生产环境条件和操作规范"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "工艺集成技能",
+              "level": "L3",
+              "knowledge_points": [
+                "工作计划制定和执行",
+                "良率分析和工艺优化",
+                "可靠性监控和数据分析"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "工艺集成实践",
+              "level": "L3",
+              "knowledge_points": [
+                "客户沟通和技术支持",
+                "工艺改进和优化"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "晶圆行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "制造设备工程师",
+      "direction_name": "制造",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "设备工程基础",
+              "level": "L3",
+              "knowledge_points": [
+                "微电子、机械制造自动化",
+                "晶圆制造安全生产",
+                "设备基本原理和故障处理"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "设备工程技能",
+              "level": "L3",
+              "knowledge_points": [
+                "设备运行效能提升",
+                "设备安装调试和预防保养",
+                "关键故障判断和处理"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "设备工程实践",
+              "level": "L3",
+              "knowledge_points": [
+                "设备转产和安装调试",
+                "设备运维方案制定"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "晶圆设备行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "光刻工艺工程师",
+      "direction_name": "制造",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "光刻工艺基础",
+              "level": "L3",
+              "knowledge_points": [
+                "微电子、材料、自动化、光学",
+                "光刻工艺和设备原理",
+                "光刻技术和材料"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "光刻工艺技能",
+              "level": "L3",
+              "knowledge_points": [
+                "曝光和涂布显影工艺",
+                "光刻工艺稳定性监控",
+                "良率优化和成本控制"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "光刻工艺实践",
+              "level": "L3",
+              "knowledge_points": [
+                "光刻设备转产和调试",
+                "工艺测试和产能优化"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "光刻工艺行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "薄膜工艺工程师",
+      "direction_name": "制造",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "薄膜工艺基础",
+              "level": "L3",
+              "knowledge_points": [
+                "微电子、材料、自动化",
+                "薄膜工艺和设备原理",
+                "薄膜工艺流程"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "薄膜工艺技能",
+              "level": "L3",
+              "knowledge_points": [
+                "薄膜设备操作和维护",
+                "薄膜工艺开发和优化",
+                "不良率降低和产能提升"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "薄膜工艺实践",
+              "level": "L3",
+              "knowledge_points": [
+                "薄膜设备转产和调试",
+                "工艺测试和产能优化"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "薄膜工艺行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "刻蚀工艺工程师",
+      "direction_name": "制造",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "刻蚀工艺基础",
+              "level": "L3",
+              "knowledge_points": [
+                "微电子、材料、自动化",
+                "刻蚀工艺和设备原理",
+                "刻蚀工艺流程"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "刻蚀工艺技能",
+              "level": "L3",
+              "knowledge_points": [
+                "干法/湿法刻蚀工艺开发",
+                "新材料和新设备评估",
+                "工艺异常分析和处理"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "刻蚀工艺实践",
+              "level": "L3",
+              "knowledge_points": [
+                "刻蚀工艺开发和推进",
+                "异常问题解决"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "刻蚀工艺行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "扩散工艺工程师",
+      "direction_name": "制造",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "扩散工艺基础",
+              "level": "L3",
+              "knowledge_points": [
+                "微电子、材料、自动化",
+                "扩散工艺和设备原理",
+                "离子注入和快速退火流程"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "扩散工艺技能",
+              "level": "L3",
+              "knowledge_points": [
+                "SOP/OI改进和SPC维护",
+                "工艺参数监控和RECIPE管理",
+                "新工艺和新材料引进"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "扩散工艺实践",
+              "level": "L3",
+              "knowledge_points": [
+                "离子注入和快速退火工艺",
+                "半导体扩散制程经验"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "扩散工艺行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "厂务工程师",
+      "direction_name": "制造",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "厂务基础",
+              "level": "L3",
+              "knowledge_points": [
+                "电气、自动化、机电工程",
+                "半导体制造管理原理",
+                "厂房日常管理运作"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "厂务技能",
+              "level": "L3",
+              "knowledge_points": [
+                "电气水系统节能降耗",
+                "设备运行维护",
+                "厂房空间设计和施工管理"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "厂务实践",
+              "level": "L3",
+              "knowledge_points": [
+                "气化系统节能降耗",
+                "工程项目管理"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "晶圆行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "供应链管理师",
+      "direction_name": "制造",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "供应链基础",
+              "level": "L3",
+              "knowledge_points": [
+                "国际贸易、采购、仓储、物流",
+                "集成电路供应链术语",
+                "产业战略和区域分布"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "供应链管理技能",
+              "level": "L3",
+              "knowledge_points": [
+                "数据分析和可视化",
+                "订单处理和物流服务",
+                "供应商管理和采购策略"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "供应链实践",
+              "level": "L3",
+              "knowledge_points": [
+                "仓储和运输运营方案",
+                "供应链协同战略",
+                "库存策略制定"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "集成电路供应链认知",
+                "学习能力和管理能力",
+                "团队合作能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "先进封装制程工艺工程师",
+      "direction_name": "封装",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "先进封装基础",
+              "level": "L3",
+              "knowledge_points": [
+                "微电子、半导体物理、材料",
+                "先进封装技术规范",
+                "封装材料检验和异常处理"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "先进封装工艺技能",
+              "level": "L3",
+              "knowledge_points": [
+                "先进封装工艺技术",
+                "设备参数调整优化",
+                "数据统计与异常分析"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "先进封装实践",
+              "level": "L3",
+              "knowledge_points": [
+                "封装过程问题解决",
+                "生产管理经验"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "先进封装行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "先进封装设备工程师",
+      "direction_name": "封装",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "先进封装设备基础",
+              "level": "L3",
+              "knowledge_points": [
+                "机械制造自动化、机电一体化",
+                "先进封装设备结构和原理",
+                "设备性能和参数"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "设备维护技能",
+              "level": "L3",
+              "knowledge_points": [
+                "设备故障判断和处理",
+                "设备维护文件撰写",
+                "数据收集和分析"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "设备工程实践",
+              "level": "L3",
+              "knowledge_points": [
+                "设备制程识别和转产",
+                "设备异常处理和故障定位",
+                "设备稳定性维护"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "先进封装行业认知",
+                "创新思维和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "先进封装研发工程师",
+      "direction_name": "封装",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "先进封装研发基础",
+              "level": "L3",
+              "knowledge_points": [
+                "材料、物理、化学、微电子",
+                "先进封装前后道工序",
+                "SPC系统和数据要素",
+                "机台验证流程和标准"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "研发技能",
+              "level": "L3",
+              "knowledge_points": [
+                "FMEA、Control plan、BOM撰写",
+                "SOP和OCAP文件撰写",
+                "产品导入和程式建立",
+                "异常问题处理"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "研发实践",
+              "level": "L3",
+              "knowledge_points": [
+                "新产品开发和验证",
+                "新材料导入和优化",
+                "新设备评估和验证"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "先进封装行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "封装制程工艺工程师",
+      "direction_name": "封装",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "封装工艺基础",
+              "level": "L3",
+              "knowledge_points": [
+                "微电子、半导体物理、材料",
+                "封装工艺流程和规范",
+                "封装材料特性和选用",
+                "封装设备原理"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "封装工艺技能",
+              "level": "L3",
+              "knowledge_points": [
+                "机台参数设置",
+                "设备故障判断和参数优化",
+                "可靠性和失效风险分析",
+                "数据统计和分析"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "封装工艺实践",
+              "level": "L3",
+              "knowledge_points": [
+                "封装设备运行参数维护",
+                "生产问题解决",
+                "关键工艺参数分析"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "封装行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "封装设备工程师",
+      "direction_name": "封装",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "封装设备基础",
+              "level": "L3",
+              "knowledge_points": [
+                "机械制造自动化、机电一体化",
+                "封装设备结构和原理",
+                "设备性能和参数"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "封装设备技能",
+              "level": "L3",
+              "knowledge_points": [
+                "设备配件耗材管理",
+                "新设备引入和参数调试",
+                "设备维护和保养",
+                "作业指导书编写"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "封装设备实践",
+              "level": "L3",
+              "knowledge_points": [
+                "设备转产和安装调试",
+                "故障定位和分析",
+                "设备稳定性维护"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "封装行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "封装研发工程师",
+      "direction_name": "封装",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "封装研发基础",
+              "level": "L3",
+              "knowledge_points": [
+                "材料、物理、化学、微电子",
+                "封装工序工艺原理",
+                "产品验证和实验设计",
+                "封装设计规则"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "封装研发技能",
+              "level": "L3",
+              "knowledge_points": [
+                "FMEA、Control plan撰写",
+                "JMP/Minitab数据分析",
+                "封装设计软件使用",
+                "新产品参数设定和验证"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "封装研发实践",
+              "level": "L3",
+              "knowledge_points": [
+                "新产品开发和验证",
+                "新材料导入和优化",
+                "质量工具和统计分析"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "封装行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "ATE工程师",
+      "direction_name": "测试",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "ATE测试基础",
+              "level": "L3",
+              "knowledge_points": [
+                "半导体测试原理",
+                "数字/模拟芯片测试方法",
+                "VerilogHDL硬件描述语言",
+                "FT及CP测试流程"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "ATE测试技能",
+              "level": "L3",
+              "knowledge_points": [
+                "电路板焊接和验证",
+                "EDA设计和PCB layout",
+                "ATE测试方案制定",
+                "探针卡和接口选型"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "ATE测试实践",
+              "level": "L3",
+              "knowledge_points": [
+                "测试故障定位和解决",
+                "SoC芯片量产ATE测试",
+                "测试文档编写"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "半导体测试行业认知",
+                "创新思维和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "晶圆测试工程师",
+      "direction_name": "测试",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "晶圆测试基础",
+              "level": "L3",
+              "knowledge_points": [
+                "晶圆测试原理",
+                "测试设备和仪器",
+                "CP测试流程",
+                "数字/模拟芯片测试方法"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "晶圆测试技能",
+              "level": "L3",
+              "knowledge_points": [
+                "晶圆测试方案设计",
+                "Probecard设计制造",
+                "Pattern文件编写",
+                "测试程序开发和自动化"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "晶圆测试实践",
+              "level": "L3",
+              "knowledge_points": [
+                "测试程序开发和量产导入",
+                "测试覆盖率提升",
+                "芯片测试规范制定"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "半导体测试行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "成品测试工程师",
+      "direction_name": "测试",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "成品测试基础",
+              "level": "L3",
+              "knowledge_points": [
+                "成品测试原理",
+                "测试设备和仪器",
+                "FT测试流程",
+                "分选机原理和操作"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "成品测试技能",
+              "level": "L3",
+              "knowledge_points": [
+                "成品测试方案设计",
+                "Load Board、Socket设计",
+                "测试程序开发",
+                "失效样品分析"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "成品测试实践",
+              "level": "L3",
+              "knowledge_points": [
+                "测试程序开发和量产导入",
+                "测试覆盖率提升",
+                "测试规范和硬件设计"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "半导体测试行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "测试设备工程师",
+      "direction_name": "测试",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "测试设备基础",
+              "level": "L3",
+              "knowledge_points": [
+                "测试设备原理和操作规范",
+                "测试系统结构和工作原理",
+                "IC测试方法和标准",
+                "电子元器件性能指标"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "测试设备技能",
+              "level": "L3",
+              "knowledge_points": [
+                "示波器、逻辑分析仪使用",
+                "ATE测试软件操作",
+                "电子元器件焊接和检测",
+                "设备维护保养和故障排查"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "测试设备实践",
+              "level": "L3",
+              "knowledge_points": [
+                "设备维修和故障诊断",
+                "设备校准和验证",
+                "设备数据分析和报告"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "综合素养",
+              "level": "L3",
+              "knowledge_points": [
+                "半导体测试行业认知",
+                "创新意识和学习能力",
+                "团队协作和沟通能力"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

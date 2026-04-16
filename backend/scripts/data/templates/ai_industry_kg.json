@@ -1,0 +1,590 @@
+{
+  "metadata": {
+    "source": "T/MIITEC 001-2023《人工智能产业人才岗位能力要求》",
+    "industry": "人工智能产业",
+    "version_note": "来源：T/MIITEC 001-2023《人工智能产业人才岗位能力要求》",
+    "model_type": "standard"
+  },
+  "models": [
+    {
+      "job_role": "知识图谱研发工程师",
+      "direction_name": "知识图谱",
+      "job_family": "知识图谱",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "掌握领域知识的定向爬取、深度提取和挖掘",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握领域知识的定向爬取、深度提取和挖掘"
+              ]
+            },
+            {
+              "name": "掌握知识抽取、知识表示、知识融合、知识存储、知识推理、知识嵌入等基本算法和流程",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握知识抽取、知识表示、知识融合、知识存储、知识推理、知识嵌入等基本算法和流程"
+              ]
+            },
+            {
+              "name": "掌握知识图谱成熟和前沿的算法",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握知识图谱成熟和前沿的算法，例如将知识图谱与深度学习技术的融合与应用"
+              ]
+            },
+            {
+              "name": "熟悉机器学习、自然语言处理（命名实体识别",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉机器学习、自然语言处理（命名实体识别，关系抽取，句法分析等）和数据挖掘基础"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "掌握RDF、OWL等知识表示语言",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握RDF、OWL等知识表示语言，掌握Protege等本体建模工具"
+              ]
+            },
+            {
+              "name": "掌握Neo4j、AllegroGraph、Virtuoso等图数据库的使用",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握Neo4j、AllegroGraph、Virtuoso等图数据库的使用"
+              ]
+            },
+            {
+              "name": "掌握常见的爬虫框架如Scrapy",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握常见的爬虫框架如Scrapy，并利用自然语言处理预处理获取的数据"
+              ]
+            },
+            {
+              "name": "掌握深度学习常用的算法模型",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握深度学习常用的算法模型，对CNN与RNN有深入的理解"
+              ]
+            },
+            {
+              "name": "具备扎实的编程开发基础",
+              "level": "L3",
+              "knowledge_points": [
+                "具备扎实的编程开发基础，熟练掌握C/C++、Python、Java等编程语言，熟悉Linux开发环\n境"
+              ]
+            },
+            {
+              "name": "掌握深度学习基本算法原理及数据处理框架",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握深度学习基本算法原理及数据处理框架，熟悉TensorFlow、Keras、Caffe、PyTorch等\n框架"
+              ]
+            },
+            {
+              "name": "掌握并行计算基本原理及分布式计算框架",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握并行计算基本原理及分布式计算框架，熟悉Hadoop、Spark等分布式开发环境"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "具备丰富的项目经验",
+              "level": "L3",
+              "knowledge_points": [
+                "具备丰富的项目经验，至少拥有一个领域知识图谱完整的构建和应用经验，例如搜索引擎、\n推荐系统、问答系统、辅助决策"
+              ]
+            },
+            {
+              "name": "具备复杂系统的设计与架构能力",
+              "level": "L3",
+              "knowledge_points": [
+                "具备复杂系统的设计与架构能力，能解决工具选择、性能优化等问题"
+              ]
+            },
+            {
+              "name": "能够快速选择并实现知识图谱构建过程中所需要的常见算法",
+              "level": "L3",
+              "knowledge_points": [
+                "能够快速选择并实现知识图谱构建过程中所需要的常见算法，准确理解业务需求，提供相\n应的解决方案"
+              ]
+            },
+            {
+              "name": "具备丰富的大数据处理以及数据挖掘经验",
+              "level": "L3",
+              "knowledge_points": [
+                "具备丰富的大数据处理以及数据挖掘经验，具备一定的自然语言处理实践能力"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "能够根据不同领域的需求",
+              "level": "L3",
+              "knowledge_points": [
+                "能够根据不同领域的需求，设计并构建适合的知识图谱，并应用解决实际问题"
+              ]
+            },
+            {
+              "name": "能够深入分析知识图谱应用各个方面要求",
+              "level": "L3",
+              "knowledge_points": [
+                "能够深入分析知识图谱应用各个方面要求，实现知识图谱的优化"
+              ]
+            },
+            {
+              "name": "能够将知识图谱应用到搜索引擎、推荐系统、对话系统、辅助决策",
+              "level": "L3",
+              "knowledge_points": [
+                "能够将知识图谱应用到搜索引擎、推荐系统、对话系统、辅助决策。"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "知识图谱工程师（问答系统方向）",
+      "direction_name": "知识图谱",
+      "job_family": "知识图谱",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "掌握构建对话领域知识图谱相关算法知识",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握构建对话领域知识图谱相关算法知识，掌握对话领域知识图谱构建相关主要流程的原\n理和常见算法的原理与实现"
+              ]
+            },
+            {
+              "name": "具备机器学习与数据挖掘基础",
+              "level": "L3",
+              "knowledge_points": [
+                "具备机器学习与数据挖掘基础",
+                "熟悉机器学习、自然语言处理、数据挖掘中一项或多项技\n术领域"
+              ]
+            },
+            {
+              "name": "掌握知识抽取、知识融合和知识推理等基本算法和流程",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握知识抽取、知识融合和知识推理等基本算法和流程"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "掌握知识嵌入如TransE等深度学习算法",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握知识嵌入如TransE等深度学习算法"
+              ]
+            },
+            {
+              "name": "掌握深度学习基本算法原理及数据处理框架",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握深度学习基本算法原理及数据处理框架，掌握TensorFlow、Keras、Caffe、PyTorch等\n框架"
+              ]
+            },
+            {
+              "name": "掌握深度学习在对话系统应用的常见算法",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握深度学习在对话系统应用的常见算法，如seq2seq、attention等"
+              ]
+            },
+            {
+              "name": "熟悉RDF、OWL等知识表示语言",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉RDF、OWL等知识表示语言，掌握Protege等本体建模工具"
+              ]
+            },
+            {
+              "name": "熟悉Neo4j、AllegroGraph、Virtuoso等图数据库的使用",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉Neo4j、AllegroGraph、Virtuoso等图数据库的使用"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "具备一定的项目经验",
+              "level": "L3",
+              "knowledge_points": [
+                "具备一定的项目经验，具备大型复杂对话领域知识图谱工程实现经验，对于对话领域知识\n图谱构建过程的相关问题能提出独立见解,拥有分布式系统研发经验"
+              ]
+            },
+            {
+              "name": "能够选择并实现对话领域知识图谱构建算法",
+              "level": "L3",
+              "knowledge_points": [
+                "能够选择并实现对话领域知识图谱构建算法，准确理解业务需求并转化为技术语言，能够\n调整知识图谱构建，使之适应业务需求"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "能够参与构建对话领域知识图谱的主要工作",
+              "level": "L3",
+              "knowledge_points": [
+                "能够参与构建对话领域知识图谱的主要工作，能够实现知识图谱构建过程中的知识抽取、\n知识表示、知识融合、知识推理等任务"
+              ]
+            },
+            {
+              "name": "熟悉常用相关算法的原理及不同算法间的差异",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉常用相关算法的原理及不同算法间的差异，具备一定的相关算法优化能力。"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "知识图谱工程师（搜索/推荐方向）",
+      "direction_name": "知识图谱",
+      "job_family": "知识图谱",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "掌握构建搜索/推荐领域知识图谱相关算法知识",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握构建搜索/推荐领域知识图谱相关算法知识，掌握搜索、推荐领域知识图谱构建相关主\n要流程的原理和常见算法的原理与实现"
+              ]
+            },
+            {
+              "name": "具备机器学习与数据挖掘基础",
+              "level": "L3",
+              "knowledge_points": [
+                "具备机器学习与数据挖掘基础",
+                "熟悉机器学习、自然语言处理、数据挖掘中一项或多项技\n术领域"
+              ]
+            },
+            {
+              "name": "掌握知识抽取、知识融合和知识推理等基本算法和流程",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握知识抽取、知识融合和知识推理等基本算法和流程"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "掌握知识图谱特性学习在推荐系统中的常见算法",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握知识图谱特性学习在推荐系统中的常见算法，如DKN、RippleNetwork、MKR等"
+              ]
+            },
+            {
+              "name": "掌握知识嵌入",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握知识嵌入，如TransE等深度学习算法"
+              ]
+            },
+            {
+              "name": "掌握深度学习基本算法原理及数据处理框架",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握深度学习基本算法原理及数据处理框架，熟悉TensorFlow、Keras、Caffe、PyTorch等\n框架"
+              ]
+            },
+            {
+              "name": "熟悉RDF、OWL等知识表示语言",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉RDF、OWL等知识表示语言，熟悉Protege等本体建模工具"
+              ]
+            },
+            {
+              "name": "熟悉Neo4j、AllegroGraph、Virtuoso等图数据库的使用",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉Neo4j、AllegroGraph、Virtuoso等图数据库的使用"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "具备一定的项目经验",
+              "level": "L3",
+              "knowledge_points": [
+                "具备一定的项目经验，具备大型复杂搜索、推荐领域知识图谱工程实现经验，对于搜索、\n推荐领域知识图谱构建过程的相关问题能提出独立见解,拥有分布式系统研发经验"
+              ]
+            },
+            {
+              "name": "能够选择并实现搜索、推荐领域知识图谱构建算法",
+              "level": "L3",
+              "knowledge_points": [
+                "能够选择并实现搜索、推荐领域知识图谱构建算法，准确理解业务需求并转化为技术语言，\n能够调整知识图谱构建，使之适应业务需求",
+                "T/MIITEC001-2023\n37"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "能够参与构建搜索/推荐领域知识图谱的主要工作",
+              "level": "L3",
+              "knowledge_points": [
+                "能够参与构建搜索/推荐领域知识图谱的主要工作，能够实现知识图谱构建过程中的知识抽\n取、知识表示、知识融合、知识推理等任务"
+              ]
+            },
+            {
+              "name": "熟悉常用搜索、推荐算法的原理及不同算法间的差异",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉常用搜索、推荐算法的原理及不同算法间的差异，具备一定的相关算法优化能力。"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "知识图谱工程师（自然语言处理方向）",
+      "direction_name": "知识图谱",
+      "job_family": "知识图谱",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "掌握构建领域知识图谱相关算法知识",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握构建领域知识图谱相关算法知识，掌握自然语言处理常用的机器学习算法，掌握自然\n语言处理常用的深度学习算法"
+              ]
+            },
+            {
+              "name": "熟悉知识抽取、知识融合和知识推理等基本算法和流程",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉知识抽取、知识融合和知识推理等基本算法和流程"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "掌握常用的自然语言处理算法",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握常用的自然语言处理算法，如HMM、CRF、TFIDF、LDA、Word2vec、Lstm、Seq2seq、\nattention等"
+              ]
+            },
+            {
+              "name": "掌握深度学习基本算法原理及数据处理框架",
+              "level": "L3",
+              "knowledge_points": [
+                "掌握深度学习基本算法原理及数据处理框架，熟悉TensorFlow、Keras、Caffe、PyTorch等\n框架"
+              ]
+            },
+            {
+              "name": "熟悉RDF、OWL等知识表示语言",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉RDF、OWL等知识表示语言，掌握Protege等本体建模工具"
+              ]
+            },
+            {
+              "name": "熟悉Neo4j、AllegroGraph、Virtuoso等图数据库的使用",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉Neo4j、AllegroGraph、Virtuoso等图数据库的使用"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "具备一定的项目经验",
+              "level": "L3",
+              "knowledge_points": [
+                "具备一定的项目经验，具备大型复杂知识图谱工程实现经验，对于知识图谱构建过程的相\n关问题能提出独立见解,能够应用自然语言处理算法辅助知识图谱应用开发"
+              ]
+            },
+            {
+              "name": "能够选择并实现知识图谱构建算法",
+              "level": "L3",
+              "knowledge_points": [
+                "能够选择并实现知识图谱构建算法，准确理解业务需求并转化为技术语言，能够调整知识\n图谱构建，使之适应业务需求"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "能够参与构建知识图谱的主要工作",
+              "level": "L3",
+              "knowledge_points": [
+                "能够参与构建知识图谱的主要工作，能够实现自然语言处理预处理知识图谱爬取的数据，\n并能将自然语言处理常用算法应用到知识图谱应用当中"
+              ]
+            },
+            {
+              "name": "熟悉自然语言处理常用算法的原理及不同算法间的差异",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉自然语言处理常用算法的原理及不同算法间的差异，具备一定的相关算法优化能力。"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_role": "知识图谱数据处理工程师",
+      "direction_name": "知识图谱",
+      "job_family": "知识图谱",
+      "dimensions": [
+        {
+          "name": "专业知识",
+          "skills": [
+            {
+              "name": "了解知识图谱相关算法知识以及常用对机器学习算法等",
+              "level": "L3",
+              "knowledge_points": [
+                "了解知识图谱相关算法知识以及常用对机器学习算法等"
+              ]
+            },
+            {
+              "name": "熟悉图数据库",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉图数据库，如Neo4j/dgraph/JanusGraph等"
+              ]
+            },
+            {
+              "name": "熟悉大数据处理完整流程",
+              "level": "L3",
+              "knowledge_points": [
+                "熟悉大数据处理完整流程，包括数据采集、清洗、预处理、存储和数据可视化"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "技术技能",
+          "skills": [
+            {
+              "name": "能够在实际工作中熟练应用知识图谱工具或产品",
+              "level": "L3",
+              "knowledge_points": [
+                "能够在实际工作中熟练应用知识图谱工具或产品"
+              ]
+            },
+            {
+              "name": "能够根据特定的需求场景选择合适的工具或产品对需求进行支撑",
+              "level": "L3",
+              "knowledge_points": [
+                "能够根据特定的需求场景选择合适的工具或产品对需求进行支撑"
+              ]
+            },
+            {
+              "name": "能够运用标注工具对图片、音频、视频数据进行整理及标注",
+              "level": "L3",
+              "knowledge_points": [
+                "能够运用标注工具对图片、音频、视频数据进行整理及标注"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "工程实践",
+          "skills": [
+            {
+              "name": "具备一定的项目使用经验",
+              "level": "L3",
+              "knowledge_points": [
+                "具备一定的项目使用经验，拥有知识图谱工具及应用的部署和使用经验"
+              ]
+            },
+            {
+              "name": "能够根据反馈的数据问题能够及时调整标注",
+              "level": "L3",
+              "knowledge_points": [
+                "能够根据反馈的数据问题能够及时调整标注，能够给出标记工具的缺点并提出优化。"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "综合能力",
+          "skills": [
+            {
+              "name": "对图像、音频、视频数据敏感",
+              "level": "L3",
+              "knowledge_points": [
+                "对图像、音频、视频数据敏感，具有敏锐的观察、分析和判断能力"
+              ]
+            },
+            {
+              "name": "对标注结果进行质量评估",
+              "level": "L3",
+              "knowledge_points": [
+                "对标注结果进行质量评估，并反馈标注结果，高效地完成精准标注工作",
+                "T/MIITEC001-2023\n38"
+              ]
+            },
+            {
+              "name": "具备良好的表达、沟通、协调和组织能力",
+              "level": "L3",
+              "knowledge_points": [
+                "具备良好的表达、沟通、协调和组织能力。"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

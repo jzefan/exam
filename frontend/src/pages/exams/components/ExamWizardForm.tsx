@@ -9,20 +9,16 @@ import {
   BookCopy,
   CheckCircle2,
   CircleAlert,
-  Bot,
-  ChevronDown,
   FileText,
   ListChecks,
   Loader2,
   Maximize2,
-  Search,
   Settings2,
   Sparkles,
   StopCircle,
   Trash2,
   Users,
   Wand2,
-  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -41,12 +37,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { DatePicker } from "@/components/ui/date-picker";
 import {
   Card,
@@ -68,11 +58,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import { PositionSelector } from "./PositionSelector";
 import { QuestionSelector } from "./QuestionSelector";
 import { StudentSelector } from "./StudentSelector";
@@ -80,6 +65,14 @@ import { apiRequest } from "@/pages/grading/api";
 import { validateTypeAllocation } from "@/pages/questions/ai-generate-utils";
 import type { IKnowledgePoint, IQuestion, IQuestionBank, QuestionType } from "@/types";
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
+import {
+  AIQuestionConfigPanel,
+  AI_MODEL_OPTIONS,
+  AI_TYPE_LABELS,
+  type AIModelProvider,
+  type SelectedKnowledgePoint,
+} from "@/components/questions/ai-question-config-panel";
+import { AIGenerateLoadingOverlay } from "@/pages/questions/components/ai-generate-loading-overlay";
 import {
   DEFAULT_NOTES,
   type ExamFormValues as ExamForm,
@@ -113,11 +106,6 @@ type GeneratedQuestion = {
   analysis: string | null;
   difficulty: number;
   selected: boolean;
-};
-type SelectedKnowledgePoint = {
-  id: string;
-  name: string;
-  path: string;
 };
 type QuestionTypeSummary = {
   type: QuestionType;
@@ -167,15 +155,7 @@ const difficultyOptions = [
   { value: 5, label: "很难" },
 ];
 
-const aiModelOptions = [
-  { value: "qwen", label: "通义千问", desc: "Qwen 3.5" },
-  { value: "deepseek", label: "DeepSeek", desc: "DeepSeek Chat" },
-  { value: "claude", label: "Claude", desc: "Claude Sonnet" },
-] as const;
-
-type AIModelProvider = (typeof aiModelOptions)[number]["value"];
-
-const aiTypeLabels: Record<QuestionType, string> = {
+const questionTypeLabels: Record<string, string> = {
   choice: "选择题",
   true_false: "判断题",
   fill_in: "填空题",
@@ -184,13 +164,13 @@ const aiTypeLabels: Record<QuestionType, string> = {
   code: "编程题",
 };
 
-const questionTypeLabels: Record<string, string> = {
-  choice: "选择题",
-  true_false: "判断题",
-  fill_in: "填空题",
-  short_answer: "简答题",
-  essay: "论述题",
-  code: "编程题",
+const questionTypePreviewGroupClasses: Record<QuestionType, string> = {
+  choice: "border-sky-200/80 bg-gradient-to-br from-sky-50 via-white to-cyan-50 dark:border-sky-900/50 dark:from-sky-950/40 dark:via-background dark:to-cyan-950/30",
+  true_false: "border-emerald-200/80 bg-gradient-to-br from-emerald-50 via-white to-green-50 dark:border-emerald-900/50 dark:from-emerald-950/40 dark:via-background dark:to-green-950/30",
+  fill_in: "border-amber-200/80 bg-gradient-to-br from-amber-50 via-white to-yellow-50 dark:border-amber-900/50 dark:from-amber-950/40 dark:via-background dark:to-yellow-950/30",
+  short_answer: "border-violet-200/80 bg-gradient-to-br from-violet-50 via-white to-fuchsia-50 dark:border-violet-900/50 dark:from-violet-950/40 dark:via-background dark:to-fuchsia-950/30",
+  essay: "border-rose-200/80 bg-gradient-to-br from-rose-50 via-white to-pink-50 dark:border-rose-900/50 dark:from-rose-950/40 dark:via-background dark:to-pink-950/30",
+  code: "border-slate-200/80 bg-gradient-to-br from-slate-100 via-white to-zinc-100 dark:border-slate-800/60 dark:from-slate-950/70 dark:via-background dark:to-zinc-950/50",
 };
 
 const ALL_BANKS = "__all_banks__";
@@ -268,7 +248,7 @@ export function ExamWizardForm({
   const [form, setForm] = useState<ExamForm>(initialValues);
   const [currentStep, setCurrentStep] = useState(0);
   const [maxVisitedStep, setMaxVisitedStep] = useState(0);
-  const [questionMode, setQuestionMode] = useState<QuestionMode>("manual");
+  const [questionMode, setQuestionMode] = useState<QuestionMode>(initialValues.question_mode ?? "manual");
   const [flowError, setFlowError] = useState<string | null>(null);
   const [showValidationErrors, setShowValidationErrors] = useState(false);
   const [autoQuestionBankId, setAutoQuestionBankId] = useState<string | null>(null);
@@ -292,8 +272,6 @@ export function ExamWizardForm({
   const [aiModel, setAIModel] = useState<AIModelProvider>("qwen");
   const [aiSelectedKnowledgePoints, setAISelectedKnowledgePoints] = useState<SelectedKnowledgePoint[]>([]);
   const [aiPrompt, setAIPrompt] = useState("");
-  const [aiKnowledgeKeyword, setAIKnowledgeKeyword] = useState("");
-  const [aiKnowledgeOpen, setAIKnowledgeOpen] = useState(false);
   const [aiQuestions, setAIQuestions] = useState<GeneratedQuestion[]>([]);
   const [aiGenerating, setAIGenerating] = useState(false);
   const [aiApplying, setAIApplying] = useState(false);
@@ -301,7 +279,9 @@ export function ExamWizardForm({
     count: number;
     totalScore: number;
   } | null>(null);
+  const [aiHydratedFromExisting, setAIHydratedFromExisting] = useState(false);
   const [pendingQuestionMode, setPendingQuestionMode] = useState<QuestionMode | null>(null);
+  const [questionStepFullscreenOpen, setQuestionStepFullscreenOpen] = useState(false);
   const [previewFullscreenOpen, setPreviewFullscreenOpen] = useState(false);
   const [previewMode, setPreviewMode] = useState<PreviewMode>("order");
   const [typeScoreDrafts, setTypeScoreDrafts] = useState<Partial<Record<QuestionType, string>>>({});
@@ -309,7 +289,19 @@ export function ExamWizardForm({
 
   useEffect(() => {
     setForm(initialValues);
+    setQuestionMode(initialValues.question_mode ?? "manual");
+    setAIHydratedFromExisting(false);
   }, [initialValues]);
+
+  useEffect(() => {
+    if (!questionStepFullscreenOpen && !previewFullscreenOpen) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [previewFullscreenOpen, questionStepFullscreenOpen]);
 
   const now = new Date();
   const startTimeValue = toPickerDate(form.start_time);
@@ -394,10 +386,69 @@ export function ExamWizardForm({
     () => new Map(selectedQuestions.map((question) => [question.id, question])),
     [selectedQuestions],
   );
+  const inferredLegacyQuestionMode = useMemo<QuestionMode | null>(() => {
+    if (initialValues.question_mode) {
+      return null;
+    }
+    if (mode !== "edit" || form.question_ids.length === 0 || selectedQuestions.length !== form.question_ids.length) {
+      return null;
+    }
+    const allFromAIBank = selectedQuestions.every((question) => question.question_bank_name === "AI题库");
+    return allFromAIBank ? "ai" : null;
+  }, [form.question_ids.length, initialValues.question_mode, mode, selectedQuestions]);
+
+  useEffect(() => {
+    if (!initialValues.question_mode && inferredLegacyQuestionMode === "ai") {
+      setQuestionMode("ai");
+    }
+  }, [inferredLegacyQuestionMode, initialValues.question_mode]);
   const sortedQuestionItems = useMemo(
     () => form.question_items.slice().sort((left, right) => left.order - right.order),
     [form.question_items],
   );
+  const existingAIQuestions = useMemo<GeneratedQuestion[]>(() => {
+    return sortedQuestionItems
+      .map((item, index) => {
+        const question = selectedQuestionMap.get(item.question_id);
+        if (!question) return null;
+
+        return {
+          index,
+          type: question.type,
+          title: question.title,
+          content: question.content,
+          options: question.options,
+          answer: question.answer,
+          analysis: question.analysis,
+          difficulty: question.difficulty,
+          selected: true,
+        };
+      })
+      .filter((question): question is GeneratedQuestion => question !== null);
+  }, [selectedQuestionMap, sortedQuestionItems]);
+  useEffect(() => {
+    if (mode !== "edit" || questionMode !== "ai" || aiHydratedFromExisting || aiGenerating) {
+      return;
+    }
+    if (existingAIQuestions.length === 0) {
+      setAIHydratedFromExisting(true);
+      return;
+    }
+
+    setAIQuestions(existingAIQuestions);
+    setAIGeneratedMeta({
+      count: existingAIQuestions.length,
+      totalScore: sortedQuestionItems.reduce((sum, item) => sum + (Number(item.score_override) || 0), 0),
+    });
+    setAIHydratedFromExisting(true);
+  }, [
+    aiGenerating,
+    aiHydratedFromExisting,
+    existingAIQuestions,
+    mode,
+    questionMode,
+    sortedQuestionItems,
+  ]);
   const questionTypeSummaries = useMemo<QuestionTypeSummary[]>(() => {
     const grouped = new Map<QuestionType, QuestionTypeSummary>();
 
@@ -525,8 +576,13 @@ export function ExamWizardForm({
             })
           : questionItemsByType.map(({ summary, items }) => (
               <div key={summary.type} className="px-4 py-4">
-                <div className="space-y-3">
-                  <div className="rounded-xl bg-background/80 p-3 ring-1 ring-border/50">
+                <div
+                  className={cn(
+                    "space-y-3 rounded-2xl border p-4 shadow-sm",
+                    questionTypePreviewGroupClasses[summary.type],
+                  )}
+                >
+                  <div className="rounded-xl bg-background/80 p-3 ring-1 ring-border/40 backdrop-blur-sm">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="flex min-w-0 flex-wrap items-center gap-3">
                         <Badge variant="outline">{questionTypeLabels[summary.type]}</Badge>
@@ -578,7 +634,7 @@ export function ExamWizardForm({
                     const scoreInputId = `${variant}-exam-question-score-${item.question_id}`;
 
                     return (
-                      <div key={item.question_id} className="space-y-2.5">
+                      <div key={item.question_id} className="space-y-2.5 rounded-xl bg-background/70 p-3 ring-1 ring-border/30">
                         <div className="flex flex-wrap items-center justify-between gap-3">
                           <div className="flex min-w-0 flex-wrap items-center gap-3">
                             <Badge variant="outline">{questionTypeLabels[summary.type]} 第 {index + 1} 题</Badge>
@@ -653,13 +709,6 @@ export function ExamWizardForm({
   );
   const aiAllocationState = validateTypeAllocation(aiQuestionCount, aiTypeAlloc);
   const aiAllocMismatch = aiAllocationState.hasCustomAllocation && !aiAllocationState.isValid;
-  const filteredAIKnowledgePoints = useMemo(() => {
-    const keyword = aiKnowledgeKeyword.trim().toLowerCase();
-    if (!keyword) return knowledgePoints;
-    return knowledgePoints.filter((knowledgePoint) =>
-      knowledgePoint.name.toLowerCase().includes(keyword),
-    );
-  }, [aiKnowledgeKeyword, knowledgePoints]);
   const requestedKnowledgeQuestionCount = autoKnowledgeAllocations.reduce(
     (sum, allocation) => sum + allocation.count,
     0,
@@ -846,8 +895,6 @@ export function ExamWizardForm({
     setAIModel("qwen");
     setAISelectedKnowledgePoints([]);
     setAIPrompt("");
-    setAIKnowledgeKeyword("");
-    setAIKnowledgeOpen(false);
     setAIQuestions([]);
     setAIGenerating(false);
     setAIApplying(false);
@@ -869,6 +916,7 @@ export function ExamWizardForm({
     }
 
     setQuestionMode(nextMode);
+    updateField("question_mode", nextMode);
     setFlowError(null);
     setPendingQuestionMode(null);
   };
@@ -988,23 +1036,6 @@ export function ExamWizardForm({
     setAutoGeneratedMeta({
       count: picked.length,
       totalScore: picked.reduce((sum, question) => sum + question.score, 0),
-    });
-  };
-
-  const toggleAIKnowledgePoint = (knowledgePoint: IKnowledgePoint) => {
-    setAISelectedKnowledgePoints((prev) => {
-      if (prev.some((item) => item.id === knowledgePoint.id)) {
-        return prev.filter((item) => item.id !== knowledgePoint.id);
-      }
-
-      return [
-        ...prev,
-        {
-          id: knowledgePoint.id,
-          name: knowledgePoint.name,
-          path: knowledgePoint.name,
-        },
-      ];
     });
   };
 
@@ -1225,6 +1256,11 @@ export function ExamWizardForm({
     setShowValidationErrors(true);
     setFlowError(null);
 
+    if (mode === "create" && currentStep < stepItems.length - 1) {
+      goNext();
+      return;
+    }
+
     if (Object.keys(validationErrors).length > 0) {
       const message =
         mode === "create"
@@ -1279,7 +1315,7 @@ export function ExamWizardForm({
       return;
     }
 
-    onSubmit(form);
+    onSubmit({ ...form, question_mode: questionMode });
   };
 
   const currentStepId = stepItems[currentStep].id;
@@ -1292,6 +1328,388 @@ export function ExamWizardForm({
     { label: "考试时长", value: `${form.duration_minutes} 分钟` },
     { label: "总分", value: `${form.total_score} 分` },
   ];
+
+  const renderQuestionStepContent = (variant: "embedded" | "fullscreen" = "embedded") => (
+    <div className="space-y-5">
+      <div className="grid gap-3 md:grid-cols-3">
+        <button
+          type="button"
+          onClick={() => {
+            requestQuestionModeChange("manual");
+          }}
+          className={`rounded-lg border px-3 py-2 text-left transition-colors bg-background ${
+            questionMode === "manual"
+              ? "border-primary ring-1 ring-primary/40 shadow-sm"
+              : "border-border hover:border-primary/40"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <BookCopy
+              size={14}
+              className={questionMode === "manual" ? "text-primary" : "text-muted-foreground"}
+            />
+            <p className="text-sm font-semibold text-foreground">手动选题</p>
+            <span className="ml-auto text-xs text-muted-foreground line-clamp-1">
+              精确控制题目内容、题型和顺序
+            </span>
+          </div>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            requestQuestionModeChange("auto");
+          }}
+          className={`rounded-lg border px-3 py-2 text-left transition-colors bg-background ${
+            questionMode === "auto"
+              ? "border-primary ring-1 ring-primary/40 shadow-sm"
+              : "border-border hover:border-primary/40"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <Wand2
+              size={14}
+              className={questionMode === "auto" ? "text-primary" : "text-muted-foreground"}
+            />
+            <p className="text-sm font-semibold text-foreground">自动出卷</p>
+            <span className="ml-auto text-xs text-muted-foreground line-clamp-1">
+              按题库与难度随机抽题
+            </span>
+          </div>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            requestQuestionModeChange("ai");
+          }}
+          className={`rounded-lg border px-3 py-2 text-left transition-colors bg-background ${
+            questionMode === "ai"
+              ? "border-primary ring-1 ring-primary/40 shadow-sm"
+              : "border-border hover:border-primary/40"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <Sparkles
+              size={14}
+              className={questionMode === "ai" ? "text-primary" : "text-muted-foreground"}
+            />
+            <p className="text-sm font-semibold text-foreground">AI出题</p>
+            <span className="ml-auto text-xs text-muted-foreground line-clamp-1">
+              按配置生成新题并直接加入考试
+            </span>
+          </div>
+        </button>
+      </div>
+
+      {questionMode === "manual" ? (
+        <QuestionSelector
+          selectedIds={form.question_ids}
+          onChange={(ids) => {
+            updateField("question_ids", ids);
+            setAutoGeneratedMeta(null);
+            setAIGeneratedMeta(null);
+          }}
+        />
+      ) : questionMode === "auto" ? (
+        <div className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_140px]">
+            <div className="space-y-1.5">
+              <FieldHint
+                label="题库范围"
+                enabled={Boolean(autoQuestionBankId && autoQuestionBankId !== ALL_BANKS)}
+              >
+                <div>
+                  <Select
+                    value={autoQuestionBankId ?? ALL_BANKS}
+                    onValueChange={(value) =>
+                      setAutoQuestionBankId(value === ALL_BANKS ? null : value)
+                    }
+                  >
+                    <SelectTrigger id="auto-question-bank">
+                      <SelectValue placeholder="题库范围：全部题库" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={ALL_BANKS}>全部题库</SelectItem>
+                      {questionBanks.map((bank) => (
+                        <SelectItem key={bank.id} value={bank.id}>
+                          {bank.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </FieldHint>
+            </div>
+            <div className="space-y-1.5">
+              <FieldHint label="出题数量" enabled={Boolean(autoQuestionCount)}>
+                <Input
+                  id="auto-question-count"
+                  type="number"
+                  min={1}
+                  placeholder="出题数量"
+                  aria-label="出题数量"
+                  value={isKnowledgeAllocationMode ? requestedKnowledgeQuestionCount : autoQuestionCount}
+                  onChange={(e) => setAutoQuestionCount(parseInt(e.target.value, 10) || 0)}
+                  disabled={isKnowledgeAllocationMode}
+                />
+              </FieldHint>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+              {difficultyOptions.map((item) => {
+                const checked = autoDifficulties.includes(item.value);
+                return (
+                  <label
+                    key={item.value}
+                    className={`flex items-center gap-3 rounded-lg border px-3 py-2 text-sm transition-colors ${
+                      checked
+                        ? "border-primary text-primary font-medium"
+                        : "border-border bg-background text-foreground"
+                    }`}
+                  >
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={(value) =>
+                        handleAutoDifficultyChange(item.value, value === true)
+                      }
+                    />
+                    <span>{item.label}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="space-y-3 rounded-xl border border-border/80 bg-muted/20 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-foreground">技能知识点配额</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  为每个知识点单独设置抽题数量。系统会显示当前筛选条件下的可用题量，不足时不可生成。
+                </p>
+              </div>
+              {isKnowledgeAllocationMode && (
+                <Badge variant="secondary">合计 {requestedKnowledgeQuestionCount} 题</Badge>
+              )}
+            </div>
+
+            {knowledgePointQuery.isLoading ? (
+              <div className="text-sm text-muted-foreground">知识点加载中...</div>
+            ) : availableKnowledgePoints.length === 0 ? (
+              <div className="text-sm text-muted-foreground">
+                当前题库与难度条件下暂无可用于自动出卷的知识点。
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {availableKnowledgePoints.map((knowledgePoint) => {
+                  const allocation = allocationMap.get(knowledgePoint.id);
+                  const shortage = allocation ? allocation.count > knowledgePoint.availableCount : false;
+
+                  return (
+                    <div
+                      key={knowledgePoint.id}
+                      className={`grid gap-3 rounded-lg border p-3 md:grid-cols-[minmax(0,1fr)_120px] ${
+                        allocation ? "border-primary/40 bg-background" : "border-border bg-background/70"
+                      }`}
+                    >
+                      <label className="flex items-start gap-3">
+                        <Checkbox
+                          checked={Boolean(allocation)}
+                          onCheckedChange={(value) =>
+                            handleKnowledgeAllocationToggle(knowledgePoint.id, value === true)
+                          }
+                        />
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium text-foreground">
+                            {knowledgePoint.name}
+                          </span>
+                          <span className="mt-1 block text-xs text-muted-foreground">
+                            当前可用 {knowledgePoint.availableCount} 题
+                          </span>
+                          {shortage && (
+                            <span className="mt-1 flex items-center gap-1 text-xs text-destructive">
+                              <CircleAlert size={12} />
+                              数量不足，最多可选 {knowledgePoint.availableCount} 题
+                            </span>
+                          )}
+                        </span>
+                      </label>
+
+                      <Input
+                        type="number"
+                        min={1}
+                        max={knowledgePoint.availableCount}
+                        aria-label={`${knowledgePoint.name}题目数量`}
+                        value={allocation?.count ?? ""}
+                        placeholder="题目数"
+                        disabled={!allocation}
+                        onChange={(e) =>
+                          handleKnowledgeAllocationCountChange(knowledgePoint.id, e.target.value)
+                        }
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-3 rounded-xl border border-border/80 bg-background p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-foreground">
+                生成题单
+                <span className="ml-2 text-xs font-normal text-muted-foreground">
+                  已选 {form.question_ids.length} 题
+                  {autoGeneratedMeta && (
+                    <span className="ml-2">
+                      · 最近生成 {autoGeneratedMeta.count} 题 / {autoGeneratedMeta.totalScore} 分
+                    </span>
+                  )}
+                </span>
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                满足条件后会随机抽题，并直接覆盖当前已选题目。
+              </p>
+            </div>
+            <Button
+              type="button"
+              onClick={handleAutoGenerate}
+              disabled={
+                autoQuestionQuery.isLoading ||
+                knowledgePointQuery.isLoading ||
+                (isKnowledgeAllocationMode
+                  ? requestedKnowledgeQuestionCount <= 0 || hasKnowledgeAllocationShortage
+                  : autoQuestionCount <= 0)
+              }
+            >
+              <Sparkles size={16} className="mr-1" />
+              {autoGeneratedMeta ? "重新生成" : "生成题单"}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className={`grid items-start gap-5 xl:grid-cols-[360px_minmax(0,1fr)] xl:[&>*]:self-stretch ${variant === "fullscreen" ? "2xl:grid-cols-[400px_minmax(0,1fr)]" : ""}`}>
+          <AIQuestionConfigPanel
+            title="AI出题设置"
+            fetcher={apiRequest}
+            storageKey="exam-ai-generate-recent-keywords"
+            className="space-y-5"
+            totalCount={aiQuestionCount}
+            onTotalCountChange={setAIQuestionCount}
+            difficulty={aiDifficulty}
+            onDifficultyChange={setAIDifficulty}
+            typeAlloc={aiTypeAlloc}
+            onTypeAllocChange={setAITypeAlloc}
+            model={aiModel}
+            onModelChange={setAIModel}
+            selectedKnowledgePoints={aiSelectedKnowledgePoints}
+            onSelectedKnowledgePointsChange={setAISelectedKnowledgePoints}
+            customPrompt={aiPrompt}
+            onCustomPromptChange={setAIPrompt}
+            allocationError={
+              aiAllocMismatch
+                ? `题型数量之和 (${aiAllocationState.allocated}) 与题目总数 (${aiQuestionCount}) 不一致`
+                : null
+            }
+            footer={
+              <>
+                <div className="flex gap-2">
+                  {!aiGenerating ? (
+                    <Button type="button" className="flex-1" onClick={() => void handleAIGenerate()} disabled={aiApplying || aiAllocMismatch}>
+                      <Sparkles size={16} className="mr-1" />
+                      开始生成
+                    </Button>
+                  ) : (
+                    <Button type="button" variant="destructive" className="flex-1" onClick={stopAIGeneration}>
+                      <StopCircle size={16} className="mr-1" />
+                      停止生成
+                    </Button>
+                  )}
+                </div>
+
+                {aiGenerating ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 size={14} className="animate-spin" />
+                    生成中... 已生成 {aiQuestions.length} 道
+                  </div>
+                ) : null}
+              </>
+            }
+          />
+
+          <div className="relative flex min-w-0 flex-col">
+            {aiQuestions.length === 0 && !aiGenerating ? (
+              <div className="flex min-h-full flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border/70 bg-muted/10 text-muted-foreground">
+                <Sparkles size={40} className="opacity-50" />
+                <p className="text-sm">配置参数后点击开始生成</p>
+              </div>
+            ) : (
+              <div className="flex min-h-full max-h-[72vh] flex-1 flex-col overflow-hidden rounded-xl border border-border/80 bg-background">
+                <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border/80 bg-background px-4 py-3">
+                  <p className="text-sm font-semibold text-foreground">
+                    生成结果
+                    <span className="ml-2 text-xs font-normal text-muted-foreground">
+                      已选择 {aiQuestions.filter((question) => question.selected).length}/{aiQuestions.length} 道题目
+                      {aiGeneratedMeta && <span className="ml-2">· 最近生成 {aiGeneratedMeta.count} 题 / {aiGeneratedMeta.totalScore} 分</span>}
+                    </span>
+                  </p>
+                  <div className="ml-auto flex gap-2">
+                    <Button type="button" variant="outline" size="sm" onClick={toggleSelectAllAIQuestions} disabled={aiQuestions.length === 0}>
+                      {aiQuestions.every((question) => question.selected) ? "取消全选" : "全选"}
+                    </Button>
+                    <Button type="button" size="sm" onClick={() => void handleApplyAIQuestions()} disabled={aiApplying || aiGenerating || aiQuestions.filter((question) => question.selected).length === 0}>
+                      {aiApplying && <Loader2 size={14} className="mr-1 animate-spin" />}
+                      加入当前考试
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
+                  {aiQuestions.map((question) => (
+                    <div key={question.index} className="rounded-xl border border-border/70 bg-card p-4">
+                      <div className="mb-3 flex items-center gap-2">
+                        <Checkbox checked={question.selected} onCheckedChange={() => toggleAIQuestionSelection(question.index)} />
+                        <span className="text-sm font-medium text-muted-foreground">#{question.index + 1}</span>
+                        <Badge variant="secondary">{AI_TYPE_LABELS[question.type] ?? question.type}</Badge>
+                        <Badge variant="outline">难度 {question.difficulty}</Badge>
+                        <div className="flex-1" />
+                        <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive" onClick={() => removeAIQuestion(question.index)}>
+                          <Trash2 size={14} />
+                        </Button>
+                      </div>
+                      <p className="text-sm font-semibold text-foreground">{question.title}</p>
+                      {question.content.text && question.content.text !== question.title && (
+                        <p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">{question.content.text}</p>
+                      )}
+                      {question.options && Object.keys(question.options).length > 0 && (
+                        <div className="mt-3 grid gap-1 text-sm text-foreground">
+                          {Object.entries(question.options).map(([key, value]) => (
+                            <p key={key}><span className="mr-1 font-medium">{key}.</span>{value}</p>
+                          ))}
+                        </div>
+                      )}
+                      <div className="mt-3 rounded-lg bg-muted/40 p-3 text-sm">
+                        <span className="font-medium text-primary">答案：</span>
+                        {String(question.answer.correct ?? question.answer.text ?? "—")}
+                      </div>
+                      {question.analysis && (
+                        <div className="mt-2 rounded-lg bg-muted/20 p-3 text-sm text-muted-foreground">
+                          <span className="font-medium text-foreground">解析：</span>
+                          {question.analysis}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {aiGenerating && <AIGenerateLoadingOverlay generatedCount={aiQuestions.length} />}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <form className="space-y-6" onSubmit={handleSubmit}>
@@ -1561,519 +1979,20 @@ export function ExamWizardForm({
 
           {currentStepId === "questions" && (
             <Card>
-              <CardHeader>
+              <CardHeader className="flex flex-row items-center justify-between gap-3">
                 <CardTitle>第 2 步：选择题目 / 自动出卷</CardTitle>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => setQuestionStepFullscreenOpen(true)}
+                  aria-label="全屏展示第2步内容"
+                >
+                  <Maximize2 size={14} />
+                </Button>
               </CardHeader>
-              <CardContent className="space-y-5">
-                <div className="grid gap-3 md:grid-cols-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      requestQuestionModeChange("manual");
-                    }}
-                    className={`rounded-lg border px-3 py-2 text-left transition-colors bg-background ${
-                      questionMode === "manual"
-                        ? "border-primary ring-1 ring-primary/40 shadow-sm"
-                        : "border-border hover:border-primary/40"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <BookCopy
-                        size={14}
-                        className={questionMode === "manual" ? "text-primary" : "text-muted-foreground"}
-                      />
-                      <p className="text-sm font-semibold text-foreground">手动选题</p>
-                      <span className="ml-auto text-xs text-muted-foreground line-clamp-1">
-                        精确控制题目内容、题型和顺序
-                      </span>
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      requestQuestionModeChange("auto");
-                    }}
-                    className={`rounded-lg border px-3 py-2 text-left transition-colors bg-background ${
-                      questionMode === "auto"
-                        ? "border-primary ring-1 ring-primary/40 shadow-sm"
-                        : "border-border hover:border-primary/40"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <Wand2
-                        size={14}
-                        className={questionMode === "auto" ? "text-primary" : "text-muted-foreground"}
-                      />
-                      <p className="text-sm font-semibold text-foreground">自动出卷</p>
-                      <span className="ml-auto text-xs text-muted-foreground line-clamp-1">
-                        按题库与难度随机抽题
-                      </span>
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      requestQuestionModeChange("ai");
-                    }}
-                    className={`rounded-lg border px-3 py-2 text-left transition-colors bg-background ${
-                      questionMode === "ai"
-                        ? "border-primary ring-1 ring-primary/40 shadow-sm"
-                        : "border-border hover:border-primary/40"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <Sparkles
-                        size={14}
-                        className={questionMode === "ai" ? "text-primary" : "text-muted-foreground"}
-                      />
-                      <p className="text-sm font-semibold text-foreground">AI出题</p>
-                      <span className="ml-auto text-xs text-muted-foreground line-clamp-1">
-                        按配置生成新题并直接加入考试
-                      </span>
-                    </div>
-                  </button>
-                </div>
-
-                {questionMode === "manual" ? (
-                  <QuestionSelector
-                    selectedIds={form.question_ids}
-                    onChange={(ids) => {
-                      updateField("question_ids", ids);
-                      setAutoGeneratedMeta(null);
-                      setAIGeneratedMeta(null);
-                    }}
-                  />
-                ) : questionMode === "auto" ? (
-                  <div className="space-y-4">
-                    <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_140px]">
-                      <div className="space-y-1.5">
-                        <FieldHint
-                          label="题库范围"
-                          enabled={Boolean(autoQuestionBankId && autoQuestionBankId !== ALL_BANKS)}
-                        >
-                          <div>
-                            <Select
-                              value={autoQuestionBankId ?? ALL_BANKS}
-                              onValueChange={(value) =>
-                                setAutoQuestionBankId(value === ALL_BANKS ? null : value)
-                              }
-                            >
-                              <SelectTrigger id="auto-question-bank">
-                                <SelectValue placeholder="题库范围：全部题库" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value={ALL_BANKS}>全部题库</SelectItem>
-                                {questionBanks.map((bank) => (
-                                  <SelectItem key={bank.id} value={bank.id}>
-                                    {bank.name}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        </FieldHint>
-                      </div>
-                      <div className="space-y-1.5">
-                        <FieldHint label="出题数量" enabled={Boolean(autoQuestionCount)}>
-                          <Input
-                            id="auto-question-count"
-                            type="number"
-                            min={1}
-                            placeholder="出题数量"
-                            aria-label="出题数量"
-                            value={isKnowledgeAllocationMode ? requestedKnowledgeQuestionCount : autoQuestionCount}
-                            onChange={(e) => setAutoQuestionCount(parseInt(e.target.value, 10) || 0)}
-                            disabled={isKnowledgeAllocationMode}
-                          />
-                        </FieldHint>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-                        {difficultyOptions.map((item) => {
-                          const checked = autoDifficulties.includes(item.value);
-                          return (
-                            <label
-                              key={item.value}
-                              className={`flex items-center gap-3 rounded-lg border px-3 py-2 text-sm transition-colors ${
-                                checked
-                                  ? "border-primary text-primary font-medium"
-                                  : "border-border bg-background text-foreground"
-                              }`}
-                            >
-                              <Checkbox
-                                checked={checked}
-                                onCheckedChange={(value) =>
-                                  handleAutoDifficultyChange(item.value, value === true)
-                                }
-                              />
-                              <span>{item.label}</span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    <div className="space-y-3 rounded-xl border border-border/80 bg-muted/20 p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-semibold text-foreground">技能知识点配额</p>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            为每个知识点单独设置抽题数量。系统会显示当前筛选条件下的可用题量，不足时不可生成。
-                          </p>
-                        </div>
-                        {isKnowledgeAllocationMode && (
-                          <Badge variant="secondary">合计 {requestedKnowledgeQuestionCount} 题</Badge>
-                        )}
-                      </div>
-
-                      {knowledgePointQuery.isLoading ? (
-                        <div className="text-sm text-muted-foreground">知识点加载中...</div>
-                      ) : availableKnowledgePoints.length === 0 ? (
-                        <div className="text-sm text-muted-foreground">
-                          当前题库与难度条件下暂无可用于自动出卷的知识点。
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          {availableKnowledgePoints.map((knowledgePoint) => {
-                            const allocation = allocationMap.get(knowledgePoint.id);
-                            const shortage = allocation ? allocation.count > knowledgePoint.availableCount : false;
-
-                            return (
-                              <div
-                                key={knowledgePoint.id}
-                                className={`grid gap-3 rounded-lg border p-3 md:grid-cols-[minmax(0,1fr)_120px] ${
-                                  allocation ? "border-primary/40 bg-background" : "border-border bg-background/70"
-                                }`}
-                              >
-                                <label className="flex items-start gap-3">
-                                  <Checkbox
-                                    checked={Boolean(allocation)}
-                                    onCheckedChange={(value) =>
-                                      handleKnowledgeAllocationToggle(knowledgePoint.id, value === true)
-                                    }
-                                  />
-                                  <span className="min-w-0">
-                                    <span className="block text-sm font-medium text-foreground">
-                                      {knowledgePoint.name}
-                                    </span>
-                                    <span className="mt-1 block text-xs text-muted-foreground">
-                                      当前可用 {knowledgePoint.availableCount} 题
-                                    </span>
-                                    {shortage && (
-                                      <span className="mt-1 flex items-center gap-1 text-xs text-destructive">
-                                        <CircleAlert size={12} />
-                                        数量不足，最多可选 {knowledgePoint.availableCount} 题
-                                      </span>
-                                    )}
-                                  </span>
-                                </label>
-
-                                <Input
-                                  type="number"
-                                  min={1}
-                                  max={knowledgePoint.availableCount}
-                                  aria-label={`${knowledgePoint.name}题目数量`}
-                                  value={allocation?.count ?? ""}
-                                  placeholder="题目数"
-                                  disabled={!allocation}
-                                  onChange={(e) =>
-                                    handleKnowledgeAllocationCountChange(knowledgePoint.id, e.target.value)
-                                  }
-                                />
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="flex flex-col gap-3 rounded-xl border border-border/80 bg-background p-4 sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        <p className="text-sm font-semibold text-foreground">
-                          生成题单
-                          <span className="ml-2 text-xs font-normal text-muted-foreground">
-                            已选 {form.question_ids.length} 题
-                            {autoGeneratedMeta && (
-                              <span className="ml-2">
-                                · 最近生成 {autoGeneratedMeta.count} 题 / {autoGeneratedMeta.totalScore} 分
-                              </span>
-                            )}
-                          </span>
-                        </p>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          满足条件后会随机抽题，并直接覆盖当前已选题目。
-                        </p>
-                      </div>
-                      <Button
-                        type="button"
-                        onClick={handleAutoGenerate}
-                        disabled={
-                          autoQuestionQuery.isLoading ||
-                          knowledgePointQuery.isLoading ||
-                          (isKnowledgeAllocationMode
-                            ? requestedKnowledgeQuestionCount <= 0 || hasKnowledgeAllocationShortage
-                            : autoQuestionCount <= 0)
-                        }
-                      >
-                        <Sparkles size={16} className="mr-1" />
-                        {autoGeneratedMeta ? "重新生成" : "生成题单"}
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
-                    <aside className="space-y-5 rounded-xl border border-border/80 bg-card p-5">
-                      <div className="space-y-1">
-                        <h3 className="text-base font-semibold text-foreground">AI出题设置</h3>
-                        <p className="text-sm text-muted-foreground">参考 AI 出题左栏配置，生成后可直接加入当前考试。</p>
-                      </div>
-
-                      <div className="space-y-1.5">
-                        <Label>题目总数</Label>
-                        <Input
-                          type="number"
-                          min={1}
-                          max={50}
-                          value={aiQuestionCount}
-                          onChange={(e) => setAIQuestionCount(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
-                        />
-                      </div>
-
-                      <div className="space-y-1.5">
-                        <Label>难度</Label>
-                        <Select value={String(aiDifficulty)} onValueChange={(value) => setAIDifficulty(Number(value))}>
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {difficultyOptions.map((item) => (
-                              <SelectItem key={item.value} value={String(item.value)}>
-                                {item.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label>题型分配</Label>
-                        {aiAllocMismatch && (
-                          <p className="text-xs text-destructive">
-                            题型数量之和 ({aiAllocationState.allocated}) 与题目总数 ({aiQuestionCount}) 不一致
-                          </p>
-                        )}
-                        <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-                          {(Object.keys(aiTypeLabels) as QuestionType[]).map((type) => (
-                            <div key={type} className="flex items-center gap-2">
-                              <span className="w-16 text-xs text-muted-foreground">{aiTypeLabels[type]}</span>
-                              <Input
-                                type="number"
-                                min={0}
-                                max={50}
-                                className="h-8 w-16"
-                                value={aiTypeAlloc[type]}
-                                onChange={(e) =>
-                                  setAITypeAlloc((prev) => ({
-                                    ...prev,
-                                    [type]: Math.max(0, Number(e.target.value) || 0),
-                                  }))
-                                }
-                              />
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="space-y-1.5">
-                        <Label className="flex items-center gap-1.5"><Bot size={14} />AI 模型</Label>
-                        <Select value={aiModel} onValueChange={(value) => setAIModel(value as AIModelProvider)}>
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {aiModelOptions.map((option) => (
-                              <SelectItem key={option.value} value={option.value}>
-                                {option.label} <span className="ml-2 text-xs text-muted-foreground">{option.desc}</span>
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="space-y-1.5">
-                        <Label>知识点</Label>
-                        {aiSelectedKnowledgePoints.length > 0 && (
-                          <div className="flex flex-wrap gap-1">
-                            {aiSelectedKnowledgePoints.map((knowledgePoint) => (
-                              <Badge key={knowledgePoint.id} variant="secondary" className="gap-1 pr-1">
-                                <span className="max-w-[150px] truncate text-xs" title={knowledgePoint.path}>{knowledgePoint.name}</span>
-                                <button
-                                  type="button"
-                                  className="rounded-sm hover:bg-muted"
-                                  onClick={() =>
-                                    setAISelectedKnowledgePoints((prev) =>
-                                      prev.filter((item) => item.id !== knowledgePoint.id),
-                                    )
-                                  }
-                                >
-                                  <X size={12} />
-                                </button>
-                              </Badge>
-                            ))}
-                          </div>
-                        )}
-                        <Popover open={aiKnowledgeOpen} onOpenChange={setAIKnowledgeOpen}>
-                          <PopoverTrigger asChild>
-                            <Button variant="outline" type="button" className="w-full justify-between">
-                              <span>{aiSelectedKnowledgePoints.length > 0 ? `已选 ${aiSelectedKnowledgePoints.length} 个知识点` : "选择知识点"}</span>
-                              <ChevronDown size={14} className="text-muted-foreground" />
-                            </Button>
-                          </PopoverTrigger>
-                          <PopoverContent align="start" className="w-[420px] max-w-[calc(100vw-2rem)] p-0">
-                            <div className="border-b p-3">
-                              <div className="flex items-center rounded-lg border bg-background px-3">
-                                <Search className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
-                                <Input
-                                  value={aiKnowledgeKeyword}
-                                  onChange={(e) => setAIKnowledgeKeyword(e.target.value)}
-                                  className="border-0 px-0 shadow-none focus-visible:ring-0"
-                                  placeholder="搜索知识点..."
-                                />
-                              </div>
-                            </div>
-                            <div className="max-h-[360px] overflow-y-auto p-2">
-                              {filteredAIKnowledgePoints.length === 0 ? (
-                                <p className="py-6 text-center text-xs text-muted-foreground">暂无匹配的知识点</p>
-                              ) : (
-                                <div className="space-y-1">
-                                  {filteredAIKnowledgePoints.map((knowledgePoint) => {
-                                    const active = aiSelectedKnowledgePoints.some((item) => item.id === knowledgePoint.id);
-                                    return (
-                                      <button
-                                        key={knowledgePoint.id}
-                                        type="button"
-                                        className={cn(
-                                          "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition-colors",
-                                          active ? "bg-primary/10 text-primary" : "hover:bg-muted",
-                                        )}
-                                        onClick={() => toggleAIKnowledgePoint(knowledgePoint)}
-                                      >
-                                        <span>{knowledgePoint.name}</span>
-                                        <Checkbox checked={active} />
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </div>
-                          </PopoverContent>
-                        </Popover>
-                      </div>
-
-                      <div className="space-y-1.5">
-                        <Label>自定义提示</Label>
-                        <Textarea
-                          placeholder="对生成题目的额外要求..."
-                          rows={3}
-                          value={aiPrompt}
-                          onChange={(e) => setAIPrompt(e.target.value)}
-                        />
-                      </div>
-
-                      <div className="flex gap-2">
-                        {!aiGenerating ? (
-                          <Button type="button" className="flex-1" onClick={() => void handleAIGenerate()} disabled={aiApplying || aiAllocMismatch}>
-                            <Sparkles size={16} className="mr-1" />
-                            开始生成
-                          </Button>
-                        ) : (
-                          <Button type="button" variant="destructive" className="flex-1" onClick={stopAIGeneration}>
-                            <StopCircle size={16} className="mr-1" />
-                            停止生成
-                          </Button>
-                        )}
-                      </div>
-
-                      {aiGenerating && (
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <Loader2 size={14} className="animate-spin" />
-                          生成中... 已生成 {aiQuestions.length} 道
-                        </div>
-                      )}
-                    </aside>
-
-                    <div className="min-w-0 space-y-4">
-                      {aiQuestions.length === 0 && !aiGenerating ? (
-                        <div className="flex min-h-[280px] flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border/70 bg-muted/10 text-muted-foreground">
-                          <Sparkles size={40} className="opacity-50" />
-                          <p className="text-sm">配置参数后点击开始生成</p>
-                        </div>
-                      ) : (
-                        <>
-                          <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border/80 bg-background px-4 py-3">
-                            <p className="text-sm font-semibold text-foreground">
-                              生成结果
-                              <span className="ml-2 text-xs font-normal text-muted-foreground">
-                                已选择 {aiQuestions.filter((question) => question.selected).length}/{aiQuestions.length} 道题目
-                                {aiGeneratedMeta && <span className="ml-2">· 最近生成 {aiGeneratedMeta.count} 题 / {aiGeneratedMeta.totalScore} 分</span>}
-                              </span>
-                            </p>
-                            <div className="ml-auto flex gap-2">
-                              <Button type="button" variant="outline" size="sm" onClick={toggleSelectAllAIQuestions} disabled={aiQuestions.length === 0}>
-                                {aiQuestions.every((question) => question.selected) ? "取消全选" : "全选"}
-                              </Button>
-                              <Button type="button" size="sm" onClick={() => void handleApplyAIQuestions()} disabled={aiApplying || aiGenerating || aiQuestions.filter((question) => question.selected).length === 0}>
-                                {aiApplying && <Loader2 size={14} className="mr-1 animate-spin" />}
-                                加入当前考试
-                              </Button>
-                            </div>
-                          </div>
-
-                          <div className="space-y-3">
-                            {aiQuestions.map((question) => (
-                              <div key={question.index} className="rounded-xl border border-border/70 bg-card p-4">
-                                <div className="mb-3 flex items-center gap-2">
-                                  <Checkbox checked={question.selected} onCheckedChange={() => toggleAIQuestionSelection(question.index)} />
-                                  <span className="text-sm font-medium text-muted-foreground">#{question.index + 1}</span>
-                                  <Badge variant="secondary">{aiTypeLabels[question.type] ?? question.type}</Badge>
-                                  <Badge variant="outline">难度 {question.difficulty}</Badge>
-                                  <div className="flex-1" />
-                                  <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive" onClick={() => removeAIQuestion(question.index)}>
-                                    <Trash2 size={14} />
-                                  </Button>
-                                </div>
-                                <p className="text-sm font-semibold text-foreground">{question.title}</p>
-                                {question.content.text && question.content.text !== question.title && (
-                                  <p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">{question.content.text}</p>
-                                )}
-                                {question.options && Object.keys(question.options).length > 0 && (
-                                  <div className="mt-3 grid gap-1 text-sm text-foreground">
-                                    {Object.entries(question.options).map(([key, value]) => (
-                                      <p key={key}><span className="mr-1 font-medium">{key}.</span>{value}</p>
-                                    ))}
-                                  </div>
-                                )}
-                                <div className="mt-3 rounded-lg bg-muted/40 p-3 text-sm">
-                                  <span className="font-medium text-primary">答案：</span>
-                                  {String(question.answer.correct ?? question.answer.text ?? "—")}
-                                </div>
-                                {question.analysis && (
-                                  <div className="mt-2 rounded-lg bg-muted/20 p-3 text-sm text-muted-foreground">
-                                    <span className="font-medium text-foreground">解析：</span>
-                                    {question.analysis}
-                                  </div>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </CardContent>
+              <CardContent>{renderQuestionStepContent()}</CardContent>
             </Card>
           )}
 
@@ -2100,15 +2019,6 @@ export function ExamWizardForm({
                 <CardTitle>第 4 步：考试设置</CardTitle>
               </CardHeader>
               <CardContent className="space-y-5">
-                <div className="grid gap-3 rounded-xl border border-border/80 bg-muted/30 p-4 md:grid-cols-4">
-                  {summaryItems.map((item) => (
-                    <div key={item.label}>
-                      <p className="text-xs text-muted-foreground">{item.label}</p>
-                      <p className="mt-1 text-sm font-semibold text-foreground">{item.value}</p>
-                    </div>
-                  ))}
-                </div>
-
                 <div className="space-y-4">
                   <div className="space-y-1">
                     <p className="text-sm font-semibold text-foreground">其它设置</p>
@@ -2357,7 +2267,7 @@ export function ExamWizardForm({
                       难度：{difficultyOptions.find((item) => item.value === aiDifficulty)?.label ?? aiDifficulty}
                     </p>
                     <p className="text-sm text-foreground">
-                      模型：{aiModelOptions.find((item) => item.value === aiModel)?.label ?? aiModel}
+                      模型：{AI_MODEL_OPTIONS.find((item) => item.value === aiModel)?.label ?? aiModel}
                     </p>
                     <p className="text-sm text-foreground">
                       知识点：{aiSelectedKnowledgePoints.length > 0 ? `${aiSelectedKnowledgePoints.length} 个` : "未限制"}
@@ -2370,22 +2280,86 @@ export function ExamWizardForm({
         </div>
       </div>
 
-      <Dialog open={previewFullscreenOpen} onOpenChange={setPreviewFullscreenOpen}>
-        <DialogContent className="flex max-h-[90vh] w-[min(96vw,1200px)] max-w-[1200px] flex-col overflow-hidden p-0">
-          <DialogHeader className="border-b px-6 py-4">
-            <div className="flex items-center justify-between gap-3 pr-8">
-              <DialogTitle className="flex items-center gap-2 text-base">
-                <ListChecks size={18} className="text-primary" />
-                试卷预览与考试分数
-              </DialogTitle>
-              <Badge variant="secondary">卷面总分 {form.total_score} 分</Badge>
+      {previewFullscreenOpen && (
+        <div className="fixed inset-0 z-50 bg-background">
+          <div className="flex h-full flex-col">
+            <div className="border-b bg-background px-6 py-4">
+              <div className="mx-auto flex w-full max-w-[1440px] flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 text-base font-semibold text-foreground">
+                    <ListChecks size={18} className="text-primary" />
+                    <h2>试卷预览与考试分数</h2>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={previewMode === "order" ? "default" : "outline"}
+                      className="h-8 px-3 text-xs"
+                      onClick={() => setPreviewMode("order")}
+                    >
+                      按顺序展示
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={previewMode === "type" ? "default" : "outline"}
+                      className="h-8 px-3 text-xs"
+                      onClick={() => setPreviewMode("type")}
+                    >
+                      按题型展示
+                    </Button>
+                  </div>
+                  <Badge variant="secondary">卷面总分 {form.total_score} 分</Badge>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPreviewFullscreenOpen(false)}
+                  >
+                    退出全屏
+                  </Button>
+                </div>
+              </div>
             </div>
-          </DialogHeader>
-          <div className="flex-1 overflow-y-auto px-6 py-5">
-            {renderQuestionPreviewList("fullscreen")}
+            <div className="flex-1 overflow-y-auto px-6 py-5">
+              <div className="mx-auto w-full max-w-[1440px]">
+                {renderQuestionPreviewList("fullscreen")}
+              </div>
+            </div>
           </div>
-        </DialogContent>
-      </Dialog>
+        </div>
+      )}
+
+      {questionStepFullscreenOpen && (
+        <div className="fixed inset-0 z-50 bg-background">
+          <div className="flex h-full flex-col">
+            <div className="border-b bg-background px-6 py-4">
+              <div className="mx-auto flex w-full max-w-[1440px] items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-semibold text-foreground">第 2 步：选择题目 / 自动出卷</h2>
+                  <p className="text-sm text-muted-foreground">全屏查看和操作当前选题内容</p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setQuestionStepFullscreenOpen(false)}
+                >
+                  退出全屏
+                </Button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto px-6 py-5">
+              <div className="mx-auto w-full max-w-[1440px]">
+                {renderQuestionStepContent("fullscreen")}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <AlertDialog open={pendingQuestionMode !== null} onOpenChange={(open) => !open && setPendingQuestionMode(null)}>
         <AlertDialogContent>

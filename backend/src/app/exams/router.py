@@ -105,6 +105,7 @@ def _build_exam_response(exam: Exam, student_id: uuid.UUID | None = None) -> Exa
         max_switch_count=exam.max_switch_count,
         show_result=exam.show_result,
         notes_template=exam.notes_template,
+        question_mode=exam.question_mode,
         total_questions=len(exam.exam_questions),
         total_students=len(exam.exam_students),
         submitted_count=submitted,
@@ -262,6 +263,7 @@ async def create_exam(
         max_switch_count=body.max_switch_count,
         show_result=body.show_result,
         notes_template=body.notes_template,
+        question_mode=body.question_mode,
         created_by=user.id,
         owner_id=user.id,
     )

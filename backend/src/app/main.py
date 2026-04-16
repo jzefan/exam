@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.auth.router import router as auth_router
+from app.auth.user_settings import router as user_settings_router
 from app.auth.users_router import router as users_router
 from app.config import settings
 from app.exams.positions_router import router as positions_router
@@ -28,10 +29,16 @@ from app.uploads.router import router as uploads_router
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Seed RBAC and AI pipeline data on startup."""
     from app.ai_pipeline.models import seed_prompt_templates
-    from app.database import async_session
+    from app.database import async_session, engine
     from app.grading.seed import seed_grading_defaults
     from app.rbac.service import assign_unowned_students_to_single_teacher
     from app.rbac.seed import seed_permissions, seed_roles
+
+    # Ensure new tables exist (e.g. user_settings)
+    from app.auth.user_settings import UserSettings  # noqa: F401
+    from app.models import Base
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
     async with async_session() as db:
         await seed_permissions(db)
@@ -55,6 +62,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+app.include_router(user_settings_router, prefix="/api/auth", tags=["user-settings"])
 app.include_router(users_router, prefix="/api/users", tags=["users"])
 app.include_router(questions_router, prefix="/api/questions", tags=["questions"])
 app.include_router(tags_router, prefix="/api/tags", tags=["tags"])
