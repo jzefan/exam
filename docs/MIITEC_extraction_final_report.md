@@ -7,6 +7,8 @@
 - T/MIITEC 001-2023《人工智能产业人才岗位能力要求》
 - T/MIITEC 032-2025《低空产业人才岗位能力要求》
 - T/MIITEC 026-2025《生物医药产业人才岗位能力要求》
+- 《新材料产业人才岗位能力要求》
+- 《制造业可靠性人才岗位能力要求》
 
 ## 本轮补齐（模板实数化）
 本轮在既有提取成果基础上，完成了三批模板文件的实数化替换与导入验证：
@@ -40,9 +42,23 @@
 对应岗位规模（文件内）：
 - 生物医药：34
 
+### 第四批（新材料）
+- `backend/scripts/data/templates/new_materials.json`（来源于 `backend/scripts/data/extracted/new_materials_complete.json` 的结构化提取结果）
+
+对应岗位规模（文件内）：
+- 新材料产业：13
+
+### 第五批（制造业可靠性，已完成）
+- `backend/scripts/data/templates/manufacturing_reliability.json`（基于《制造业可靠性人才岗位能力要求》直接整理为 importer 可消费模板）
+
+对应岗位规模（文件内）：
+- 制造业可靠性：17
+
+
 ## 结果边界（重要）
-- ✅ 已完成：上述 12 个模板文件（3 + AI 8 + 生物医药 1）的占位内容替换、JSON 校验、导入与幂等验证。
+- ✅ 已完成：上述 14 个模板文件（3 + AI 8 + 生物医药 1 + 新材料 1 + 制造业可靠性 1）的占位内容替换、JSON 校验、导入与幂等验证。
 - ✅ 已完成：后端 job_models 核心测试与前端标准库/快创页面测试通过。
+- ⚠️ 边界说明：制造业可靠性本次完成的是模板直写、导入、幂等与回归验证；不将受阻的在线提取链路记为已完成事实。
 - ⚠️ 边界说明：本报告仅覆盖上述模板文件与导入链路，不对未列入文件作完成性声明。
 
 ## 复现命令
@@ -64,10 +80,12 @@ PYTHONPATH=src uv run python scripts/import_standard_models.py scripts/data/temp
 PYTHONPATH=src uv run python scripts/import_standard_models.py scripts/data/templates/ai_industry_robot.json
 
 PYTHONPATH=src uv run python scripts/import_standard_models.py scripts/data/templates/biopharma.json
+PYTHONPATH=src uv run python scripts/import_standard_models.py scripts/data/templates/new_materials.json
+PYTHONPATH=src uv run python scripts/import_standard_models.py scripts/data/templates/manufacturing_reliability.json
 ```
 
 ### 2) 幂等验证
-重复执行上面导入命令，期望 `Created 0, skipped N`。
+重复执行上面导入命令，期望 `Created 0, skipped N`；其中 `manufacturing_reliability.json` 已验证为首次 `Created 17, skipped 0`、二次 `Created 0, skipped 17`。
 
 ### 3) 测试验证
 ```bash
@@ -81,5 +99,5 @@ pnpm vitest run src/pages/job-models/standard-library.test.tsx src/pages/job-mod
 ```
 
 ## 总结
-- 报告已更新为“按范围完成”，并纳入生物医药模板补齐结果。
-- 本轮目标（IC/大数据/数据标注 + AI 八方向 + 生物医药）已按可复现流程完成并验证通过。
+- 报告已更新为“按范围完成”，并纳入生物医药、新材料与制造业可靠性模板补齐结果。
+- 本轮目标（IC/大数据/数据标注 + AI 八方向 + 生物医药 + 新材料 + 制造业可靠性）已按可复现流程完成并验证通过。

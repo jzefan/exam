@@ -25,6 +25,7 @@ templates=(
     "templates/ic_industry.json"
     "templates/data_annotation.json"
     "templates/biopharma.json"
+    "templates/manufacturing_reliability.json"
 )
 
 for template in "${templates[@]}"; do
