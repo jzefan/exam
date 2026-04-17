@@ -32,7 +32,7 @@ export function UserDropdown({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" className="flex items-center gap-2 px-2 py-1.5 h-auto">
+        <Button variant="ghost" className="flex items-center gap-1.5 px-2 py-1.5 h-auto">
           <Avatar className="h-7 w-7">
             <AvatarFallback className="bg-primary text-primary-foreground text-xs font-bold">
               {initials}

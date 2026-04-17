@@ -147,7 +147,7 @@ export function ThemeCustomizer() {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className="h-8 gap-2 rounded-full border-border/60 bg-background/50 backdrop-blur-sm px-3 font-bold text-xs shadow-sm hover:bg-muted/80 active:scale-95 transition-all">
+        <Button variant="outline" size="sm" className="h-8 gap-1.5 rounded-full border-border/60 bg-background/50 backdrop-blur-sm px-3 font-bold text-xs shadow-sm hover:bg-muted/80 active:scale-95 transition-all">
           <Settings2 size={14} className="text-primary" />
           <span>界面定制</span>
         </Button>

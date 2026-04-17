@@ -144,3 +144,67 @@ class ExamDetailResponse(ExamResponse):
 
     questions: list[ExamQuestionResponse] = Field(default_factory=list)
     students: list[ExamStudentResponse] = Field(default_factory=list)
+
+
+# ── Exam Analysis ──
+
+
+class AnalysisOverall(BaseModel):
+    total_students: int
+    submitted_count: int
+    graded_count: int
+    average_score: float | None = None
+    median_score: float | None = None
+    highest_score: float | None = None
+    lowest_score: float | None = None
+    pass_count: int = 0
+    pass_rate: float | None = None
+    total_score: float
+
+
+class ScoreBucket(BaseModel):
+    label: str
+    min_percent: float
+    max_percent: float
+    count: int
+
+
+class StudentResultRow(BaseModel):
+    student_id: uuid.UUID
+    full_name: str | None = None
+    username: str | None = None
+    submitted_at: datetime | None = None
+    grading_status: str | None = None
+    objective_score: float | None = None
+    subjective_score: float | None = None
+    score: float | None = None
+    percent: float | None = None
+
+
+class QuestionStatRow(BaseModel):
+    question_id: uuid.UUID
+    order: int
+    title: str | None = None
+    type: str | None = None
+    max_score: float
+    attempt_count: int
+    correct_count: int
+    correct_rate: float | None = None
+    average_score: float | None = None
+
+
+class KnowledgePointStatRow(BaseModel):
+    knowledge_point_id: uuid.UUID
+    name: str
+    question_count: int
+    average_correct_rate: float | None = None
+
+
+class ExamAnalysisResponse(BaseModel):
+    exam_id: uuid.UUID
+    title: str
+    overall: AnalysisOverall
+    score_distribution: list[ScoreBucket] = Field(default_factory=list)
+    students: list[StudentResultRow] = Field(default_factory=list)
+    questions: list[QuestionStatRow] = Field(default_factory=list)
+    knowledge_points: list[KnowledgePointStatRow] = Field(default_factory=list)

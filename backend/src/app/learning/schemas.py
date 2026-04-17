@@ -98,6 +98,16 @@ class PrerequisiteCreate(BaseModel):
 RecommendationModel = Literal["deepseek", "qwen", "kimi"]
 
 
+class CatalogPhotoRecognizeRequest(BaseModel):
+    file_name: str = Field(min_length=1, max_length=255)
+    images: list[str] = Field(min_length=1)
+    model: RecommendationModel = "qwen"
+
+
+class CatalogPhotoRecognizeResponse(BaseModel):
+    paths: list[list[str]]
+
+
 class RecommendationGenerateRequest(BaseModel):
     model: RecommendationModel
 

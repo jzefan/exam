@@ -27,6 +27,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import type { IQuestion } from "@/types";
+import { KnowledgeImportDialog } from "./KnowledgeImportDialog";
+import { KnowledgeCatalogPhotoDialog } from "./KnowledgeCatalogPhotoDialog";
 import { KnowledgeTreeCanvas } from "./KnowledgeTreeCanvas";
 import { MajorDirectionSidebar } from "./MajorDirectionSidebar";
 import { NodeDetailPanel } from "./NodeDetailPanel";
@@ -37,6 +39,7 @@ import {
   getReadOnlyKnowledgeFeedback,
   getReadOnlyMajorFeedback,
 } from "./access-messages";
+import type { KnowledgeImportPath } from "./import-knowledge-utils";
 import type {
   AIRecommendationModel,
   IDirection,
@@ -153,6 +156,8 @@ export function KnowledgeManagementPage() {
   const [materialsByNode, setMaterialsByNode] = useState<Record<string, LearningMaterial[]>>({});
   const [relatedQuestions, setRelatedQuestions] = useState<IQuestion[]>([]);
   const [relatedQuestionsLoading, setRelatedQuestionsLoading] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [catalogPhotoDialogOpen, setCatalogPhotoDialogOpen] = useState(false);
   const roleName = identity?.primary_org?.role_name;
   const canManageSharedResources = roleName === "admin" || roleName === "platform_admin" || roleName === "school_admin";
   const isReadOnlySharedNode = useCallback(
@@ -195,6 +200,11 @@ export function KnowledgeManagementPage() {
   const getDirections = useCallback(
     (majorId: string) => directions.filter((direction) => direction.major_id === majorId),
     [directions],
+  );
+
+  const selectedDirection = useMemo(
+    () => directions.find((direction) => direction.id === selectedDirectionId) ?? null,
+    [directions, selectedDirectionId],
   );
 
   const rootKnowledgePoints = useMemo(
@@ -296,6 +306,73 @@ export function KnowledgeManagementPage() {
     void loadTree(direction.id);
   }, [loadTree]);
 
+  const handleImportKnowledgePaths = useCallback(
+    async (paths: KnowledgeImportPath[]) => {
+      if (!selectedDirectionId) {
+        throw new Error("请先选择方向。");
+      }
+
+      const existingNodes = nodes.map((node) => node.data as IKnowledgePointDetail);
+      const nodeIdByKey = new Map<string, string>();
+      for (const node of existingNodes) {
+        const key = `${node.parent_id ?? "root"}::${node.name.trim()}`;
+        nodeIdByKey.set(key, node.id);
+      }
+
+      let createdCount = 0;
+
+      for (const path of paths) {
+        let parentId: string | null = null;
+        for (const segment of path) {
+          const name = segment.trim();
+          if (!name) {
+            continue;
+          }
+          const key = `${parentId ?? "root"}::${name}`;
+          const existingId = nodeIdByKey.get(key);
+          if (existingId) {
+            parentId = existingId;
+            continue;
+          }
+
+          const created = await apiFetch<{ id: string; name: string }>(`${API}/knowledge-points`, {
+            method: "POST",
+            body: JSON.stringify({
+              direction_id: selectedDirectionId,
+              parent_id: parentId,
+              name,
+            }),
+          });
+          nodeIdByKey.set(key, created.id);
+          parentId = created.id;
+          createdCount += 1;
+        }
+      }
+
+      await loadTree(selectedDirectionId);
+      toast({
+        title: "知识库导入完成",
+        description: createdCount > 0 ? `新增 ${createdCount} 个知识点。` : "导入内容已存在，没有重复创建。",
+      });
+    },
+    [loadTree, nodes, selectedDirectionId, toast],
+  );
+
+  const handleRecognizeCatalogPhoto = useCallback(
+    async (payload: { fileName: string; images: string[] }) => {
+      const response = await apiFetch<{ paths: KnowledgeImportPath[] }>(`${API}/catalog-photo/recognize`, {
+        method: "POST",
+        body: JSON.stringify({
+          file_name: payload.fileName,
+          images: payload.images,
+          model: "qwen",
+        }),
+      });
+      return response.paths;
+    },
+    [],
+  );
+
   const handleCreateMajor = useCallback(async () => {
     setFormState({
       open: true,
@@ -384,16 +461,21 @@ export function KnowledgeManagementPage() {
         notifyReadOnly(getReadOnlyDirectionFeedback());
         return;
       }
+      const isCurrentDirection = selectedDirectionId === direction.id;
+      const knowledgeCount = isCurrentDirection ? nodes.length : 0;
       setDeleteState({
         open: true,
         kind: "direction",
         id: direction.id,
         name: direction.name,
-        description: "删除后该方向下的知识点树会一起移除。",
-        isCurrentDirection: selectedDirectionId === direction.id,
+        description:
+          knowledgeCount > 0
+            ? `删除后该方向下的 ${knowledgeCount} 个知识点会一起移除，此操作不可恢复。`
+            : "删除后该方向及其知识点树会一起移除，此操作不可恢复。",
+        isCurrentDirection,
       });
     },
-    [canManageSharedResources, notifyReadOnly, selectedDirectionId],
+    [canManageSharedResources, nodes.length, notifyReadOnly, selectedDirectionId],
   );
 
   const handleAddChild = useCallback(
@@ -857,20 +939,28 @@ export function KnowledgeManagementPage() {
             <h1 className="mt-1 text-base font-semibold text-stone-900 dark:text-stone-100">知识点管理</h1>
           </div>
           {selectedDirectionId && (
-            <Button
-              className="rounded-full"
-              onClick={() => {
-                setPanelInitial({
-                  directionId: selectedDirectionId,
-                  parent_id: selectedRootKnowledgeId,
-                });
-                setPanelOpen(true);
-              }}
-              size="sm"
-              type="button"
-            >
-              {selectedRootKnowledgeId ? "+ 添加子知识" : "+ 添加主知识/技能"}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button onClick={() => setImportDialogOpen(true)} size="sm" type="button" variant="outline">
+                导入知识库
+              </Button>
+              <Button onClick={() => setCatalogPhotoDialogOpen(true)} size="sm" type="button" variant="outline">
+                书籍目录拍照导入
+              </Button>
+              <Button
+                className="rounded-full"
+                onClick={() => {
+                  setPanelInitial({
+                    directionId: selectedDirectionId,
+                    parent_id: selectedRootKnowledgeId,
+                  });
+                  setPanelOpen(true);
+                }}
+                size="sm"
+                type="button"
+              >
+                {selectedRootKnowledgeId ? "+ 添加子知识" : "+ 添加主知识/技能"}
+              </Button>
+            </div>
           )}
         </div>
 
@@ -955,6 +1045,21 @@ export function KnowledgeManagementPage() {
         onClose={() => setPanelOpen(false)}
         onSave={handleSave}
         open={panelOpen}
+      />
+
+      <KnowledgeImportDialog
+        onImport={handleImportKnowledgePaths}
+        onOpenChange={setImportDialogOpen}
+        open={importDialogOpen}
+        selectedDirectionName={selectedDirection?.name ?? null}
+      />
+
+      <KnowledgeCatalogPhotoDialog
+        onImport={handleImportKnowledgePaths}
+        onOpenChange={setCatalogPhotoDialogOpen}
+        onRecognize={handleRecognizeCatalogPhoto}
+        open={catalogPhotoDialogOpen}
+        selectedDirectionName={selectedDirection?.name ?? null}
       />
 
       <PrerequisiteSelectModal

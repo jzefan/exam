@@ -6,12 +6,12 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronUp,
-  Filter,
+  PanelLeftClose,
+  PanelLeftOpen,
   RefreshCw,
   Search,
   X,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { CodeBlock } from "@/components/ui/code-block";
@@ -123,7 +123,6 @@ function getUiLocale(): string {
 }
 
 export function GradingCenterPage() {
-  const navigate = useNavigate();
   const [searchText, setSearchText] = useState("");
   const [inbox, setInbox] = useState<GradingInboxResponse | null>(null);
   const [selectedQuestionRef, setSelectedQuestionRef] = useState<string | null>(null);
@@ -172,6 +171,7 @@ export function GradingCenterPage() {
   const [questionExpanded, setQuestionExpanded] = useState(false);
   const [showCandidateList, setShowCandidateList] = useState(true);
   const [candidateTransitionDirection, setCandidateTransitionDirection] = useState<"prev" | "next" | "neutral">("neutral");
+  const [expandedExamGroups, setExpandedExamGroups] = useState<Set<string>>(new Set());
   const [loadingInbox, setLoadingInbox] = useState(false);
   const [loadingQuestion, setLoadingQuestion] = useState(false);
   const [loadingCandidate, setLoadingCandidate] = useState(false);
@@ -260,13 +260,28 @@ export function GradingCenterPage() {
       .filter((exam) => exam.questions.length > 0);
   }, [inbox, searchText]);
 
+  const orderedExamGroups = useMemo(() => {
+    const sorted = [...filteredExamGroups].sort(
+      (left, right) => new Date(right.exam_date).getTime() - new Date(left.exam_date).getTime(),
+    );
+
+    const pending = sorted.filter((exam) => exam.questions.some((question) => question.pending_count > 0));
+    const completed = sorted.filter((exam) => exam.questions.every((question) => question.pending_count === 0));
+
+    return {
+      pending,
+      completed,
+      all: [...pending, ...completed],
+    };
+  }, [filteredExamGroups]);
+
   useEffect(() => {
-    if (selectedQuestionRef || filteredExamGroups.length === 0) return;
-    const firstExam = filteredExamGroups[0];
+    if (selectedQuestionRef || orderedExamGroups.all.length === 0) return;
+    const firstExam = orderedExamGroups.all[0];
     const firstQuestion = firstExam.questions[0];
     if (!firstQuestion) return;
     setSelectedQuestionRef(buildQuestionRef(firstExam.exam_id, firstQuestion.question_id));
-  }, [filteredExamGroups, selectedQuestionRef]);
+  }, [orderedExamGroups, selectedQuestionRef]);
 
   useEffect(() => {
     if (filteredExamGroups.length > 0) return;
@@ -276,6 +291,27 @@ export function GradingCenterPage() {
     setCandidateDetail(null);
     setShowFollowUpWorkspace(false);
   }, [filteredExamGroups.length]);
+
+  useEffect(() => {
+    if (orderedExamGroups.all.length === 0) {
+      setExpandedExamGroups(new Set());
+      return;
+    }
+
+    const validExamKeys = new Set(orderedExamGroups.all.map((exam) => exam.exam_id ?? "standalone"));
+    const selectedExamKey = selectedQuestionRef?.split("::")[0] ?? null;
+
+    setExpandedExamGroups((current) => {
+      const next = new Set(Array.from(current).filter((key) => validExamKeys.has(key)));
+      if (next.size === 0) {
+        next.add(orderedExamGroups.all[0].exam_id ?? "standalone");
+      }
+      if (selectedExamKey && validExamKeys.has(selectedExamKey)) {
+        next.add(selectedExamKey);
+      }
+      return next;
+    });
+  }, [orderedExamGroups, selectedQuestionRef]);
 
   useEffect(() => {
     if (!selectedQuestionRef || !inbox) return;
@@ -585,24 +621,20 @@ export function GradingCenterPage() {
         </div>
       )}
       {!showFollowUpWorkspace ? (
-        <div className="flex flex-col gap-4 border-b border-border/70 px-4 pb-4 xl:flex-row xl:items-start xl:justify-between">
-          <div className="space-y-3">
-            <div>
-              <h1 className="text-base font-bold tracking-tight">阅卷中心</h1>
-              <p className="mt-2 text-sm text-muted-foreground">
-                当前共有 {summaryStats.examCount} 场考试、{summaryStats.questionCount} 道题，
-                待处理 {summaryStats.pendingCount} 份，已完成 {summaryStats.completedCount} 份。
-              </p>
-            </div>
+        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-4 border-b border-border/70 px-4 pb-4">
+          <div className="justify-self-start">
+            <h1 className="text-base font-bold tracking-tight">阅卷中心</h1>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" onClick={() => void refreshCurrentWorkspace()}>
+          <div className="min-w-0 justify-self-center">
+            <p className="text-center text-sm text-muted-foreground">
+              当前共有 {summaryStats.examCount} 场考试、{summaryStats.questionCount} 道题，
+              待处理 {summaryStats.pendingCount} 份，已完成 {summaryStats.completedCount} 份。
+            </p>
+          </div>
+          <div className="justify-self-end">
+            <Button variant="outline" size="sm" onClick={() => void refreshCurrentWorkspace()}>
               <RefreshCw className="h-4 w-4" />
               刷新
-            </Button>
-            <Button variant="outline" onClick={() => navigate("/grading/analytics")}>
-              <Filter className="h-4 w-4" />
-              查看统计
             </Button>
           </div>
         </div>
@@ -616,9 +648,9 @@ export function GradingCenterPage() {
         )}
       >
         <section className="min-h-0 overflow-hidden border-r border-border dark:border-white/15">
-          <div className="flex h-full min-h-0 flex-col overflow-hidden px-4 pt-6 pb-2">
-            <div className="shrink-0 space-y-3 border-b border-border/70 pb-4">
-              <h2 className="text-sm font-semibold text-muted-foreground">主观题列表</h2>
+          <div className="flex h-full min-h-0 flex-col overflow-hidden px-4 pt-4 pb-2">
+            <div className="shrink-0 space-y-3 border-b border-border/70 pb-3">
+              <h2 className="text-sm font-semibold text-muted-foreground">待阅试卷和题目</h2>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -635,72 +667,136 @@ export function GradingCenterPage() {
                 <div className="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
                   正在加载题目列表...
                 </div>
-              ) : filteredExamGroups.length === 0 ? (
+              ) : orderedExamGroups.all.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
                   当前没有可展示的题目。
                 </div>
               ) : (
-                filteredExamGroups.map((exam: GradingInboxExamGroup) => (
-                  <div
-                    key={exam.exam_id ?? "standalone"}
-                    className="space-y-2 border-b border-border/70 py-3 first:pt-0 last:border-b-0 last:pb-0"
-                  >
-                    <div className="space-y-1">
-                      <h3 className="text-sm text-foreground/90">{exam.exam_label}</h3>
-                      <p className="text-xs text-muted-foreground">
-                        {new Date(exam.exam_date).toLocaleDateString("zh-CN")}
-                      </p>
-                    </div>
-                    <div className="space-y-2">
-                      {exam.questions.map((question: GradingInboxQuestionItem) => {
-                        const selected = selectedQuestionRef === buildQuestionRef(exam.exam_id, question.question_id);
-                        return (
-                          <button
-                            key={question.question_key}
-                            type="button"
-                            onClick={() =>
-                              setSelectedQuestionRef(buildQuestionRef(exam.exam_id, question.question_id))
-                            }
-                            className={cn(
-                              "w-full rounded-lg border border-transparent px-3 py-3 text-left transition-all hover:border-border hover:bg-accent/30",
-                              selected
-                                ? "border-primary bg-primary/10 shadow-[inset_0_0_0_1px_hsl(var(--primary))]"
-                                : "bg-background",
-                            )}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0 space-y-1">
-                              <div className="flex items-center gap-2">
-                                  <span className="text-xs text-muted-foreground">
-                                    {questionTypeLabel(question.question_type)}
+                <div className="space-y-4">
+                  {[
+                    { key: "pending", label: "待确定试卷", exams: orderedExamGroups.pending, completed: false },
+                    { key: "completed", label: "已确定试卷", exams: orderedExamGroups.completed, completed: true },
+                  ].map((section) =>
+                    section.exams.length > 0 ? (
+                      <div key={section.key} className="space-y-2">
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">
+                          {section.label}
+                        </p>
+                        <div className="space-y-0">
+                          {section.exams.map((exam: GradingInboxExamGroup) => {
+                            const examKey = exam.exam_id ?? "standalone";
+                            const isExpanded = expandedExamGroups.has(examKey);
+
+                            return (
+                              <div
+                                key={examKey}
+                                className="space-y-2 border-b border-border/70 py-3 first:pt-0 last:border-b-0 last:pb-0"
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setExpandedExamGroups((current) => {
+                                      const next = new Set(current);
+                                      if (next.has(examKey)) {
+                                        next.delete(examKey);
+                                      } else {
+                                        next.add(examKey);
+                                      }
+                                      return next;
+                                    })
+                                  }
+                                  className="flex w-full items-start justify-between gap-3 rounded-md text-left transition-colors hover:bg-accent/20"
+                                >
+                                  <div className="space-y-1">
+                                    <div className="flex items-center gap-2">
+                                      <h3 className="text-sm text-foreground/90">{exam.exam_label}</h3>
+                                      {section.completed ? (
+                                        <span className="rounded-md bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                                          已确定
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                    <p className="text-xs text-muted-foreground">
+                                      {new Date(exam.exam_date).toLocaleDateString("zh-CN")}
+                                    </p>
+                                  </div>
+                                  <span className="mt-0.5 shrink-0 text-muted-foreground">
+                                    {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                                   </span>
-                                  <span className="text-xs text-muted-foreground">
-                                    总分 {question.max_score}
-                                  </span>
-                              </div>
-                                <p className="truncate text-xs text-muted-foreground">
-                                  {question.question_content}
-                                </p>
-                              </div>
-                              <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-                                {question.pending_count > 0 ? (
-                                  <span className="rounded-md bg-amber-50 px-2 py-0.5 font-medium text-amber-700">
-                                    {question.pending_count}
-                                  </span>
+                                </button>
+
+                                {isExpanded ? (
+                                  <div className="space-y-2">
+                                    {exam.questions.map((question: GradingInboxQuestionItem) => {
+                                      const selected = selectedQuestionRef === buildQuestionRef(exam.exam_id, question.question_id);
+                                      return (
+                                        <button
+                                          key={question.question_key}
+                                          type="button"
+                                          onClick={() =>
+                                            setSelectedQuestionRef(buildQuestionRef(exam.exam_id, question.question_id))
+                                          }
+                                          className={cn(
+                                            "w-full rounded-lg border border-transparent px-3 py-3 text-left transition-all hover:border-border hover:bg-accent/30",
+                                            selected
+                                              ? "border-primary bg-primary/10 shadow-[inset_0_0_0_1px_hsl(var(--primary))]"
+                                              : "bg-background",
+                                          )}
+                                        >
+                                          <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0 space-y-1">
+                                              <div className="flex items-center gap-2">
+                                                <span className="text-xs text-muted-foreground">
+                                                  {questionTypeLabel(question.question_type)}
+                                                </span>
+                                                <span className="text-xs text-muted-foreground">
+                                                  总分 {question.max_score}
+                                                </span>
+                                              </div>
+                                              <p className="truncate text-xs text-muted-foreground">
+                                                {question.question_content}
+                                              </p>
+                                            </div>
+                                            <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+                                              {question.pending_count > 0 ? (
+                                                <TooltipProvider delayDuration={120}>
+                                                  <Tooltip>
+                                                    <TooltipTrigger asChild>
+                                                      <span className="rounded-md bg-amber-50 px-2 py-0.5 font-medium text-amber-700">
+                                                        {question.pending_count}
+                                                      </span>
+                                                    </TooltipTrigger>
+                                                    <TooltipContent>待处理人数</TooltipContent>
+                                                  </Tooltip>
+                                                </TooltipProvider>
+                                              ) : null}
+                                              {question.completed_count > 0 ? (
+                                                <TooltipProvider delayDuration={120}>
+                                                  <Tooltip>
+                                                    <TooltipTrigger asChild>
+                                                      <span className="rounded-md bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700">
+                                                        {question.completed_count}
+                                                      </span>
+                                                    </TooltipTrigger>
+                                                    <TooltipContent>已完成人数</TooltipContent>
+                                                  </Tooltip>
+                                                </TooltipProvider>
+                                              ) : null}
+                                            </div>
+                                          </div>
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
                                 ) : null}
-                                {question.completed_count > 0 ? (
-                                  <span className="rounded-md bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700">
-                                    {question.completed_count}
-                                  </span>
-                                ) : null}
                               </div>
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : null,
+                  )}
+                </div>
               )}
             </div>
           </div>
@@ -720,18 +816,18 @@ export function GradingCenterPage() {
               </div>
             </div>
           ) : (
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 pt-6 pb-0">
-            <section className="space-y-4 border-b border-border/70 pb-4">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 pt-2 pb-0">
+            <section className="space-y-2 border-b border-border/70 py-3">
               <div className="flex items-start justify-between gap-4">
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-muted-foreground">
+                <div className="space-y-1">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
                     {(questionDetail?.knowledge_tags ?? []).map((tag) => (
                       <span key={tag} className="text-xs text-muted-foreground/90">
                         {tag}
                       </span>
                     ))}
                   </div>
-                  <p className="text-sm leading-6 text-muted-foreground">{questionSummary}</p>
+                  <p className="text-sm leading-6 text-muted-foreground">题目：{questionSummary}</p>
                 </div>
                 <TooltipProvider delayDuration={150}>
                   <Tooltip>
@@ -751,7 +847,7 @@ export function GradingCenterPage() {
               </div>
 
               {questionExpanded && questionDetail ? (
-                <div className="rounded-lg border border-border/70 bg-muted/20 p-4">
+                <div className="rounded-lg border border-border/70 bg-muted/20 p-3">
                   {questionPreview ? (
                     <QuestionPreviewCard
                       question={questionPreview}
@@ -774,8 +870,25 @@ export function GradingCenterPage() {
             >
               {showCandidateList ? (
                 <section className="flex min-h-0 flex-col border-r border-border/70 pr-6 dark:border-white/15">
-                <div className="pt-6 pb-4">
+                <div className="flex items-center justify-between pt-6 pb-4">
                   <h3 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">考生列表</h3>
+                  <TooltipProvider delayDuration={150}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 gap-1.5 px-2 text-xs text-muted-foreground"
+                          onClick={() => setShowCandidateList(false)}
+                          aria-label="隐藏考生列表"
+                        >
+                          <PanelLeftClose className="h-4 w-4" />
+                          隐藏
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>隐藏考生列表</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 </div>
                 <div className="flex min-h-0 flex-1 flex-wrap align-top content-start gap-2 overflow-y-auto pr-3 pb-6">
                   {loadingQuestion ? (
@@ -854,61 +967,80 @@ export function GradingCenterPage() {
                   )}
                 >
                 <div className="border-b border-border/70 pt-6 pb-5">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3 text-sm text-foreground/80">
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-4">
+                    <div className="flex min-w-0 items-center gap-3 text-sm text-foreground/80">
                       <span className="font-medium">{candidateDetail?.candidate_name ?? "-"}</span>
-                      {candidateDetail?.candidate_code ? (
-                        <>
-                          <span className="text-muted-foreground/40">/</span>
-                          <span className="text-muted-foreground">{candidateDetail.candidate_code}</span>
-                        </>
-                      ) : null}
-                      <TooltipProvider delayDuration={150}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-8 px-2 text-xs"
-                              onClick={() => setShowCandidateList((current) => !current)}
-                            >
-                              {showCandidateList ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>{showCandidateList ? "隐藏考生列表" : "显示考生列表"}</TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
                       {!showCandidateList ? (
-                        <div className="flex items-center gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 px-2 text-xs"
-                            onClick={() => void handleStepCandidate(-1)}
-                            disabled={activeCandidateIndex <= 0}
-                          >
-                            上一个
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 px-2 text-xs"
-                            onClick={() => void handleStepCandidate(1)}
-                            disabled={
-                              activeCandidateIndex < 0 ||
-                              activeCandidateIndex >= sortedCandidates.length - 1
-                            }
-                          >
-                            下一个
-                          </Button>
-                        </div>
+                        <TooltipProvider delayDuration={150}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 gap-1.5 px-2 text-xs"
+                                onClick={() => setShowCandidateList(true)}
+                              >
+                                <PanelLeftOpen className="h-4 w-4" />
+                                显示
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>显示考生列表</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
                       ) : null}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-muted-foreground">建议分数</span>
-                      <span className="flex h-8 min-w-[40px] items-center justify-center rounded-lg bg-primary px-3 text-sm font-bold text-primary-foreground shadow-sm">
-                        {candidateDetail?.suggested_score ?? "-"}
-                      </span>
+                    <div className="flex items-center justify-center">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 px-2 text-xs"
+                        onClick={() => {
+                          setShowFollowUpWorkspace(true);
+                        }}
+                      >
+                        追加 Prompt 复评
+                      </Button>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      <div className="flex items-center gap-2">
+                        <label className="text-sm text-muted-foreground" htmlFor="manual-score-inline">
+                          分数
+                        </label>
+                        <Input
+                          id="manual-score-inline"
+                          type="number"
+                          value={manualScore}
+                          onChange={(event) => setManualScore(event.target.value)}
+                          className="h-8 w-24 rounded-lg"
+                        />
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => void handleConfirmScore()}
+                        disabled={(actionLoading === "manual" || actionLoading === "confirm") || !selectedTaskId}
+                      >
+                        <CheckCircle2 className="h-4 w-4" />
+                        {actionLoading === "manual" || actionLoading === "confirm" ? "提交中..." : "确定分数"}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void handleStepCandidate(-1)}
+                        disabled={activeCandidateIndex <= 0}
+                      >
+                        上一个考生
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void handleStepCandidate(1)}
+                        disabled={
+                          activeCandidateIndex < 0 ||
+                          activeCandidateIndex >= sortedCandidates.length - 1
+                        }
+                      >
+                        下一个考生
+                      </Button>
                     </div>
                   </div>
                   {reportError ? (
@@ -923,7 +1055,11 @@ export function GradingCenterPage() {
                     <section className="space-y-3">
                       <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">考生答案</p>
                       <div className="rounded-xl border border-border/50 bg-muted/10 p-4 shadow-sm">
-                        {candidateDetail?.question_type === "code" ? (
+                        {!candidateDetail?.student_answer_raw?.trim() ? (
+                          <p className="text-sm leading-relaxed text-muted-foreground">
+                            该考生本题未提供答案。
+                          </p>
+                        ) : candidateDetail?.question_type === "code" ? (
                           <CodeBlock code={candidateDetail.student_answer_raw} language="python" />
                         ) : (
                           <p className="text-sm leading-relaxed text-foreground/90">
@@ -1003,7 +1139,7 @@ export function GradingCenterPage() {
                                   </div>
                                 </div>
                                 <div className="flex items-center gap-4">
-                                  <span className="text-sm font-bold text-primary">{model.score}</span>
+                                  <span className="text-sm font-bold text-primary">建议分数 {model.score}</span>
                                   {expandedStages[stage] ? (
                                     <ChevronUp className="h-4 w-4 text-muted-foreground" />
                                   ) : (
@@ -1066,54 +1202,6 @@ export function GradingCenterPage() {
               </section>
             </div>
 
-            <section className="sticky bottom-0 space-y-3 border-t border-border/70 bg-background pt-3 pb-0">
-              <div className="flex flex-wrap items-center justify-center gap-2">
-                <div className="flex items-center gap-2">
-                  <label className="text-sm text-muted-foreground" htmlFor="manual-score">
-                    分数
-                  </label>
-                  <Input
-                    id="manual-score"
-                    type="number"
-                    value={manualScore}
-                    onChange={(event) => setManualScore(event.target.value)}
-                    className="h-10 w-24 rounded-lg"
-                  />
-                </div>
-                <Button
-                  onClick={() => void handleConfirmScore()}
-                  disabled={(actionLoading === "manual" || actionLoading === "confirm") || !selectedTaskId}
-                >
-                  <CheckCircle2 className="h-4 w-4" />
-                  {actionLoading === "manual" || actionLoading === "confirm" ? "提交中..." : "确定分数"}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => void handleStepCandidate(-1)}
-                  disabled={activeCandidateIndex <= 0}
-                >
-                  上一个考生
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => void handleStepCandidate(1)}
-                  disabled={
-                    activeCandidateIndex < 0 ||
-                    activeCandidateIndex >= sortedCandidates.length - 1
-                  }
-                >
-                  下一个考生
-                </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => {
-                    setShowFollowUpWorkspace(true);
-                  }}
-                >
-                  追加 Prompt 复评
-                </Button>
-              </div>
-            </section>
           </div>
           )}
         </section>
@@ -1127,7 +1215,6 @@ export function GradingCenterPage() {
                 <p className="truncate text-sm font-medium text-foreground/90">
                   {candidateDetail?.candidate_name ?? "-"}
                   {candidateDetail?.candidate_code ? ` ｜ ${candidateDetail.candidate_code}` : ""}
-                  {candidateDetail?.suggested_score != null ? ` ｜ 建议分数 ${candidateDetail.suggested_score}` : ""}
                 </p>
                 <p className="truncate text-xs text-muted-foreground">
                   {questionSummary || questionDetail?.question_label || "当前题目"}
@@ -1255,7 +1342,7 @@ export function GradingCenterPage() {
                                       {entry.pending ? (
                                         <span className="text-xs text-muted-foreground">等待回复</span>
                                       ) : (
-                                        <span className="text-sm text-primary">{model.score}</span>
+                                        <span className="text-sm text-primary">建议分数 {model.score}</span>
                                       )}
                                     </div>
                                   </div>

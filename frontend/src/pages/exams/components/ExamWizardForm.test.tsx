@@ -351,6 +351,39 @@ describe("ExamWizardForm", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it("moves from step 3 to step 4 without submitting when students are already selected", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+
+    render(
+      <ExamWizardForm
+        mode="create"
+        initialValues={{
+          ...createInitialValues(),
+          start_time: "2026-04-20T10:00",
+          end_time: "2026-04-20T12:00",
+          student_ids: ["student-1"],
+        }}
+        isPending={false}
+        submitError={null}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+
+    expect(screen.getByText("第 3 步：选择考试考生")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "下一步" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("第 4 步：考试设置")).toBeInTheDocument();
+    });
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it("guards against accidental form submit before the last step in create mode", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
@@ -524,6 +557,70 @@ describe("ExamWizardForm", () => {
       expect(
         screen.getByLabelText("考试分数", { selector: "#embedded-exam-question-score-question-3" }),
       ).toHaveValue(20);
+    });
+  });
+
+  it("creates and publishes the exam from the last step in create mode", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+
+    render(
+      <ExamWizardForm
+        mode="create"
+        initialValues={{
+          ...createInitialValues(),
+          start_time: "2026-04-20T10:00",
+          end_time: "2026-04-20T12:00",
+        }}
+        isPending={false}
+        submitError={null}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "创建并发布" }));
+
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: "upcoming",
+        }),
+      );
+    });
+  });
+
+  it("can save the exam as draft from the last step in create mode", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+
+    render(
+      <ExamWizardForm
+        mode="create"
+        initialValues={{
+          ...createInitialValues(),
+          start_time: "2026-04-20T10:00",
+          end_time: "2026-04-20T12:00",
+        }}
+        isPending={false}
+        submitError={null}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "保存到草稿" }));
+
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: "draft",
+        }),
+      );
     });
   });
 });

@@ -18,8 +18,10 @@ from app.common.pagination import (
     parse_pagination,
 )
 from app.database import get_db
-from app.exams.models import Exam, ExamQuestion, ExamStudent
+from app.exams.models import Exam, ExamQuestion, ExamStudent, StudentExamAnswer
 from app.exams.schemas import (
+    AnalysisOverall,
+    ExamAnalysisResponse,
     ExamCreate,
     ExamDetailResponse,
     ExamQuestionItem,
@@ -27,6 +29,10 @@ from app.exams.schemas import (
     ExamResponse,
     ExamStudentResponse,
     ExamUpdate,
+    KnowledgePointStatRow,
+    QuestionStatRow,
+    ScoreBucket,
+    StudentResultRow,
 )
 
 router = APIRouter()
@@ -495,3 +501,169 @@ async def remove_exam_students(
             )
         )
         await db.commit()
+
+
+# ── Analysis ──
+
+
+_SCORE_BUCKETS: list[tuple[str, float, float]] = [
+    ("不及格", 0.0, 60.0),
+    ("及格", 60.0, 70.0),
+    ("中等", 70.0, 80.0),
+    ("良好", 80.0, 90.0),
+    ("优秀", 90.0, 100.0001),
+]
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2 == 1:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2
+
+
+def _build_analysis_response(
+    exam: Exam, answers: list[StudentExamAnswer]
+) -> ExamAnalysisResponse:
+    total_score = exam.total_score or 0.0
+    students = list(exam.exam_students)
+    exam_questions = sorted(exam.exam_questions, key=lambda q: q.order)
+
+    submitted = [s for s in students if s.submitted_at is not None]
+    graded_scores = [s.score for s in students if s.score is not None]
+    pass_threshold = total_score * 0.6
+    pass_count = sum(1 for score in graded_scores if score >= pass_threshold)
+
+    overall = AnalysisOverall(
+        total_students=len(students),
+        submitted_count=len(submitted),
+        graded_count=len(graded_scores),
+        average_score=(sum(graded_scores) / len(graded_scores)) if graded_scores else None,
+        median_score=_median(graded_scores),
+        highest_score=max(graded_scores) if graded_scores else None,
+        lowest_score=min(graded_scores) if graded_scores else None,
+        pass_count=pass_count,
+        pass_rate=(pass_count / len(graded_scores)) if graded_scores else None,
+        total_score=total_score,
+    )
+
+    buckets: list[ScoreBucket] = []
+    for label, lo, hi in _SCORE_BUCKETS:
+        count = 0
+        for score in graded_scores:
+            percent = (score / total_score * 100.0) if total_score > 0 else 0.0
+            if lo <= percent < hi:
+                count += 1
+        buckets.append(ScoreBucket(label=label, min_percent=lo, max_percent=min(hi, 100.0), count=count))
+
+    student_rows: list[StudentResultRow] = []
+    for es in students:
+        percent = (es.score / total_score * 100.0) if (es.score is not None and total_score > 0) else None
+        student_rows.append(
+            StudentResultRow(
+                student_id=es.student_id,
+                full_name=es.student.full_name if es.student else None,
+                username=es.student.username if es.student else None,
+                submitted_at=es.submitted_at,
+                grading_status=es.grading_status,
+                objective_score=es.objective_score,
+                subjective_score=es.subjective_score,
+                score=es.score,
+                percent=percent,
+            )
+        )
+    student_rows.sort(key=lambda r: (r.score is None, -(r.score or 0.0)))
+
+    answers_by_question: dict[uuid.UUID, list[StudentExamAnswer]] = {}
+    for ans in answers:
+        answers_by_question.setdefault(ans.question_id, []).append(ans)
+
+    question_rows: list[QuestionStatRow] = []
+    for eq in exam_questions:
+        q_answers = answers_by_question.get(eq.question_id, [])
+        attempt_count = len(q_answers)
+        correct_count = sum(1 for a in q_answers if a.is_correct)
+        avg_score = (
+            sum(a.score_awarded for a in q_answers) / attempt_count if attempt_count else None
+        )
+        max_score = eq.score_override if eq.score_override is not None else (
+            eq.question.score if eq.question else 0.0
+        )
+        question_rows.append(
+            QuestionStatRow(
+                question_id=eq.question_id,
+                order=eq.order,
+                title=eq.question.title if eq.question else None,
+                type=eq.question.type.value if eq.question else None,
+                max_score=max_score or 0.0,
+                attempt_count=attempt_count,
+                correct_count=correct_count,
+                correct_rate=(correct_count / attempt_count) if attempt_count else None,
+                average_score=avg_score,
+            )
+        )
+
+    kp_accumulator: dict[uuid.UUID, dict[str, object]] = {}
+    for eq in exam_questions:
+        question = eq.question
+        if not question:
+            continue
+        q_answers = answers_by_question.get(eq.question_id, [])
+        if not q_answers:
+            rate = None
+        else:
+            rate = sum(1 for a in q_answers if a.is_correct) / len(q_answers)
+        for kp in question.knowledge_points or []:
+            bucket = kp_accumulator.setdefault(
+                kp.id, {"name": kp.name, "count": 0, "rate_sum": 0.0, "rate_n": 0}
+            )
+            bucket["count"] = int(bucket["count"]) + 1
+            if rate is not None:
+                bucket["rate_sum"] = float(bucket["rate_sum"]) + rate
+                bucket["rate_n"] = int(bucket["rate_n"]) + 1
+
+    knowledge_points: list[KnowledgePointStatRow] = []
+    for kp_id, data in kp_accumulator.items():
+        rate_n = int(data["rate_n"])
+        avg_rate = (float(data["rate_sum"]) / rate_n) if rate_n else None
+        knowledge_points.append(
+            KnowledgePointStatRow(
+                knowledge_point_id=kp_id,
+                name=str(data["name"]),
+                question_count=int(data["count"]),
+                average_correct_rate=avg_rate,
+            )
+        )
+    knowledge_points.sort(key=lambda r: r.name)
+
+    return ExamAnalysisResponse(
+        exam_id=exam.id,
+        title=exam.title,
+        overall=overall,
+        score_distribution=buckets,
+        students=student_rows,
+        questions=question_rows,
+        knowledge_points=knowledge_points,
+    )
+
+
+@router.get("/{exam_id}/analysis", response_model=ExamAnalysisResponse)
+async def get_exam_analysis(
+    exam_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+) -> ExamAnalysisResponse:
+    if await _is_student_user(db, user.id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Students cannot view analysis")
+    exam = await _get_writable_exam_or_404(db, exam_id, user)
+
+    answer_rows = (
+        await db.execute(
+            select(StudentExamAnswer).where(StudentExamAnswer.exam_id == exam_id)
+        )
+    ).scalars().all()
+
+    return _build_analysis_response(exam, list(answer_rows))

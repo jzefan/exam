@@ -18,7 +18,9 @@ from app.common.resource_access import teacher_visible_resource_filter
 from app.config import settings
 from app.learning.models import Direction, KnowledgePoint, KnowledgePointPrerequisite, Major
 from app.learning.schemas import (
+    CatalogPhotoRecognizeRequest,
     DirectionCreate,
+    CatalogPhotoRecognizeResponse,
     KnowledgePointCreate,
     KnowledgePointUpdate,
     MajorCreate,
@@ -482,6 +484,112 @@ def _extract_json_payload(content: str) -> list[dict[str, str]]:
 
 def _strip_html(value: str) -> str:
     return re.sub(r"<[^>]+>", "", value).strip()
+
+
+def _normalize_catalog_paths(payload: object) -> list[list[str]]:
+    paths = payload.get("paths", []) if isinstance(payload, dict) else payload
+    if not isinstance(paths, list):
+        raise ValueError("AI 返回格式不正确")
+
+    normalized: list[list[str]] = []
+    seen: set[str] = set()
+    for path in paths:
+        if not isinstance(path, list):
+            continue
+        cleaned = [str(part).strip() for part in path if str(part).strip()]
+        if not cleaned:
+            continue
+        key = " > ".join(cleaned)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(cleaned)
+
+    if not normalized:
+        raise ValueError("没有识别到可导入的目录结构")
+    return normalized
+
+
+async def recognize_catalog_structure_from_images(
+    request: CatalogPhotoRecognizeRequest,
+) -> CatalogPhotoRecognizeResponse:
+    config = MODEL_CONFIGS[request.model]
+    api_key = cast(str | None, getattr(settings, config["api_key"]))
+    if not api_key:
+        raise RuntimeError(f"未配置 {request.model} 的 API Key")
+
+    base_url = cast(str, getattr(settings, config["base_url"])).rstrip("/")
+    model_name = cast(str, getattr(settings, config["model_name"]))
+
+    prompt = f"""
+你是一名中文教材目录识别助手。请阅读用户上传的书籍目录照片或扫描页，只输出合法 JSON。
+
+任务：
+1. 识别图片中的目录结构。
+2. 提取每一条目录路径，按层级输出。
+3. 忽略页码、页眉、页脚、装饰性文字。
+4. 保留章节标题中的编号，例如“第1章”“1.1”“（一）”。
+5. 不要杜撰不存在的目录项。
+
+输出格式：
+{{
+  "paths": [
+    ["第1章 数据库系统概述", "1.1 数据模型", "1.1.1 关系模型"],
+    ["第1章 数据库系统概述", "1.2 数据独立性"]
+  ]
+}}
+
+文件名：{request.file_name}
+"""
+
+    content: list[dict[str, object]] = [{"type": "text", "text": prompt.strip()}]
+    for image in request.images:
+        content.append({"type": "image_url", "image_url": {"url": image}})
+
+    async with httpx.AsyncClient(timeout=45.0) as client:
+        response = await client.post(
+            f"{base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": "你只输出合法 JSON。"},
+                    {"role": "user", "content": content},
+                ],
+                "temperature": 0.2,
+            },
+        )
+    if response.status_code >= 400:
+        detail = response.text.strip() or "AI 服务请求失败"
+        raise RuntimeError(detail)
+
+    raw_content = (
+        response.json()
+        .get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+    )
+    if not isinstance(raw_content, str) or not raw_content.strip():
+        raise RuntimeError("AI 服务没有返回内容")
+
+    payload = raw_content.strip()
+    if "```" in payload:
+        start = payload.find("```")
+        end = payload.rfind("```")
+        if start != -1 and end != -1 and end > start:
+            payload = payload[start + 3 : end].strip()
+            if payload.startswith("json"):
+                payload = payload[4:].strip()
+
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("目录结构解析失败，请重试") from exc
+
+    try:
+        return CatalogPhotoRecognizeResponse(paths=_normalize_catalog_paths(parsed))
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
 
 
 async def _search_bilibili_videos(query: str) -> list[RecommendationItem]:

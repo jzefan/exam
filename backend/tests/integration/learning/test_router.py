@@ -101,3 +101,30 @@ async def test_soft_delete_cascades_to_children(admin_client: AsyncClient):
 
     tree = (await admin_client.get(f"/api/knowledge/directions/{did}/tree")).json()
     assert tree["nodes"] == []
+
+
+@pytest.mark.asyncio
+async def test_catalog_photo_recognize_returns_paths(admin_client: AsyncClient, monkeypatch):
+    from app.learning.schemas import CatalogPhotoRecognizeResponse
+
+    async def fake_recognize(_request):
+        return CatalogPhotoRecognizeResponse(
+            paths=[
+                ["第1章 数据库系统概述", "1.1 数据模型"],
+                ["第1章 数据库系统概述", "1.2 数据独立性"],
+            ]
+        )
+
+    monkeypatch.setattr("app.learning.service.recognize_catalog_structure_from_images", fake_recognize)
+
+    response = await admin_client.post(
+        "/api/knowledge/catalog-photo/recognize",
+        json={
+            "file_name": "catalog.png",
+            "images": ["data:image/png;base64,ZmFrZQ=="],
+            "model": "qwen",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["paths"][0] == ["第1章 数据库系统概述", "1.1 数据模型"]

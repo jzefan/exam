@@ -1070,81 +1070,150 @@ async def seed() -> None:
             print("ERROR: No users found. Create a user first.")
             return
 
-        # Check if already seeded (look for a known major)
-        existing = await session.execute(
-            select(Major).where(Major.name == "计算机科学与技术").limit(1)
-        )
-        if existing.scalar_one_or_none():
-            print("Knowledge base seed data already exists, skipping.")
-            return
-
         print(f"Using owner: {user.full_name} ({user.id})")
 
-        total_skills = 0
-        total_kps = 0
+        created_majors = 0
+        created_directions = 0
+        created_skills = 0
+        created_kps = 0
 
-        for major_name, directions_data in CURRICULUM.items():
+        async def get_or_create_major(major_name: str) -> Major:
+            result = await session.execute(
+                select(Major).where(Major.name == major_name, Major.deleted_at.is_(None)).limit(1)
+            )
+            major = result.scalar_one_or_none()
+            if major is not None:
+                return major
+
             major = Major(name=major_name, description=f"{major_name}专业标准课程体系")
             session.add(major)
             await session.flush()
+            nonlocal created_majors
+            created_majors += 1
+            print(f"\n[专业] {major_name} ({major.id}) [新增]")
+            return major
+
+        async def get_or_create_direction(major: Major, direction_name: str) -> Direction:
+            result = await session.execute(
+                select(Direction).where(
+                    Direction.major_id == major.id,
+                    Direction.name == direction_name,
+                    Direction.deleted_at.is_(None),
+                ).limit(1)
+            )
+            direction = result.scalar_one_or_none()
+            if direction is not None:
+                return direction
+
+            direction = Direction(
+                major_id=major.id,
+                name=direction_name,
+                description=f"{major.name} - {direction_name}",
+            )
+            session.add(direction)
+            await session.flush()
+            nonlocal created_directions
+            created_directions += 1
+            print(f"  [方向] {direction_name} [新增]")
+            return direction
+
+        async def get_or_create_knowledge_point(
+            *,
+            direction_id,
+            parent_id,
+            name: str,
+            description: str | None,
+            difficulty: str | None = None,
+        ) -> KnowledgePoint:
+            result = await session.execute(
+                select(KnowledgePoint).where(
+                    KnowledgePoint.direction_id == direction_id,
+                    KnowledgePoint.parent_id == parent_id,
+                    KnowledgePoint.name == name,
+                    KnowledgePoint.deleted_at.is_(None),
+                ).limit(1)
+            )
+            kp = result.scalar_one_or_none()
+            if kp is not None:
+                return kp
+
+            kp = KnowledgePoint(
+                name=name,
+                direction_id=direction_id,
+                parent_id=parent_id,
+                description=description,
+                owner_id=user.id,
+                visibility=VisibilityScope.PLATFORM,
+                difficulty=difficulty,
+            )
+            session.add(kp)
+            await session.flush()
+            return kp
+
+        for major_name, directions_data in CURRICULUM.items():
+            major = await get_or_create_major(major_name)
             print(f"\n[专业] {major_name} ({major.id})")
 
             for direction_name, courses_data in directions_data.items():
-                direction = Direction(
-                    major_id=major.id,
-                    name=direction_name,
-                    description=f"{major_name} - {direction_name}",
-                )
-                session.add(direction)
-                await session.flush()
+                direction = await get_or_create_direction(major, direction_name)
                 print(f"  [方向] {direction_name}")
 
                 for course_name, skills_data in courses_data.items():
-                    # Course is a top-level KP under the direction
-                    course_kp = KnowledgePoint(
-                        name=course_name,
+                    course_kp = await get_or_create_knowledge_point(
                         direction_id=direction.id,
                         parent_id=None,
+                        name=course_name,
                         description=f"{course_name}课程",
-                        owner_id=user.id,
-                        visibility=VisibilityScope.PLATFORM,
                         difficulty="中级",
                     )
-                    session.add(course_kp)
-                    await session.flush()
                     print(f"    [课程] {course_name}")
 
                     for skill_name, kp_names in skills_data.items():
-                        # Skill/chapter is a child KP of course
-                        skill_kp = KnowledgePoint(
-                            name=skill_name,
-                            direction_id=direction.id,
-                            parent_id=course_kp.id,
-                            description=f"{course_name} - {skill_name}",
-                            owner_id=user.id,
-                            visibility=VisibilityScope.PLATFORM,
-                            difficulty="中级",
+                        skill_result = await session.execute(
+                            select(KnowledgePoint).where(
+                                KnowledgePoint.direction_id == direction.id,
+                                KnowledgePoint.parent_id == course_kp.id,
+                                KnowledgePoint.name == skill_name,
+                                KnowledgePoint.deleted_at.is_(None),
+                            ).limit(1)
                         )
-                        session.add(skill_kp)
-                        await session.flush()
-                        total_skills += 1
+                        skill_kp = skill_result.scalar_one_or_none()
+                        if skill_kp is None:
+                            skill_kp = await get_or_create_knowledge_point(
+                                direction_id=direction.id,
+                                parent_id=course_kp.id,
+                                name=skill_name,
+                                description=f"{course_name} - {skill_name}",
+                                difficulty="中级",
+                            )
+                            created_skills += 1
 
                         for kp_name in kp_names:
-                            kp = KnowledgePoint(
-                                name=kp_name,
-                                direction_id=direction.id,
-                                parent_id=skill_kp.id,
-                                description=f"{skill_name} - {kp_name}",
-                                owner_id=user.id,
-                                visibility=VisibilityScope.PLATFORM,
+                            kp_result = await session.execute(
+                                select(KnowledgePoint).where(
+                                    KnowledgePoint.direction_id == direction.id,
+                                    KnowledgePoint.parent_id == skill_kp.id,
+                                    KnowledgePoint.name == kp_name,
+                                    KnowledgePoint.deleted_at.is_(None),
+                                ).limit(1)
                             )
-                            session.add(kp)
-                            total_kps += 1
-
-                        await session.flush()
+                            if kp_result.scalar_one_or_none() is None:
+                                await get_or_create_knowledge_point(
+                                    direction_id=direction.id,
+                                    parent_id=skill_kp.id,
+                                    name=kp_name,
+                                    description=f"{skill_name} - {kp_name}",
+                                )
+                                created_kps += 1
 
         await session.commit()
-        print(f"\n✅ Done! Created {total_skills} skills, {total_kps} knowledge points.")
+        print(
+            "\n✅ Done! "
+            f"Created {created_majors} majors, "
+            f"{created_directions} directions, "
+            f"{created_skills} skills, "
+            f"{created_kps} knowledge points."
+        )
 
 
 if __name__ == "__main__":

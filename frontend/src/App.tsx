@@ -36,6 +36,7 @@ import { ExamList } from "./pages/exams/list";
 import { ExamCreate } from "./pages/exams/create";
 import { ExamEdit } from "./pages/exams/edit";
 import { ExamStudentsPage } from "./pages/exams/students";
+import { ExamAnalysisPage } from "./pages/exams/analysis";
 import { ExamTaking } from "./pages/student/exam-taking";
 import { EditorPage } from "./pages/job-models/editor"
 import { JobModelList } from "./pages/job-models/list"
@@ -43,7 +44,6 @@ import { JobModelCreate } from "./pages/job-models/create"
 import { JobModelFastCreate } from "./pages/job-models/fast-create";
 import { StandardLibraryPage } from "./pages/job-models/standard-library";
 import { JobModelUploadAI } from "./pages/job-models/upload-ai";
-import { GradingAnalyticsPage } from "./pages/grading/analytics";
 import { ModelConfigPage } from "./pages/settings/model-config";
 import { GradingCenterPage } from "./pages/grading";
 import { GwmxLanding } from "./pages/gwmx/landing";
@@ -180,13 +180,13 @@ function App() {
                 <Route path="/exams">
                   <Route index element={<ExamList />} />
                   <Route path="create" element={<ExamCreate />} />
+                  <Route path=":id/analysis" element={<ExamAnalysisPage />} />
                   <Route path="edit/:id" element={<ExamEdit />} />
                   <Route path="students" element={<ExamStudentsPage />} />
                 </Route>
                 <Route path="/tags" element={<TagList />} />
                 <Route path="/knowledge" element={<KnowledgeManagementPage />} />
                 <Route path="/grading" element={<GradingCenterPage />} />
-                <Route path="/grading/analytics" element={<GradingAnalyticsPage />} />
                 <Route path="/students" element={<StudentManagementPage />} />
                 <Route path="/settings/model" element={<ModelConfigPage />} />
               </Route>

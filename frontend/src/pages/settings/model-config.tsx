@@ -27,16 +27,21 @@ api.interceptors.request.use((config) => {
 });
 
 interface SettingsData {
-  ai_provider: string;
-  ai_api_key_masked: string | null;
-  ai_model_name: string | null;
-  ai_base_url: string | null;
-  has_custom_key: boolean;
-  updated_at: string | null;
+  providers: Array<{
+    provider: string;
+    enabled: boolean;
+    ai_api_key_masked: string | null;
+    ai_model_name: string | null;
+    ai_base_url: string | null;
+    has_custom_key: boolean;
+    updated_at: string | null;
+  }>;
+  priority: string[];
 }
 
 interface SettingsPayload {
-  ai_provider?: string;
+  provider: string;
+  enabled?: boolean;
   ai_api_key?: string;
   ai_model_name?: string;
   ai_base_url?: string;
@@ -72,27 +77,38 @@ export function ModelConfigPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [showKey, setShowKey] = useState(false);
-  const [provider, setProvider] = useState("qwen");
+  const [providers, setProviders] = useState<SettingsData["providers"]>([]);
+  const [priority, setPriority] = useState<string[]>(["qwen", "deepseek", "claude"]);
   const [apiKey, setApiKey] = useState("");
   const [modelName, setModelName] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
-  const [hasCustomKey, setHasCustomKey] = useState(false);
-  const [maskedKey, setMaskedKey] = useState<string | null>(null);
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
 
-  const activeProviderMeta = useMemo(
-    () => PROVIDERS.find((item) => item.value === provider) ?? PROVIDERS[0],
-    [provider],
+  const activeProviderMeta = useMemo(() => {
+    const activeSetting = priority
+      .map((providerKey) => providers.find((item) => item.provider === providerKey && item.enabled))
+      .find(Boolean);
+    return PROVIDERS.find((item) => item.value === activeSetting?.provider) ?? PROVIDERS[0];
+  }, [priority, providers]);
+
+  const activeProviderSetting = useMemo(
+    () =>
+      priority
+        .map((providerKey) => providers.find((item) => item.provider === providerKey && item.enabled))
+        .find(Boolean) ?? null,
+    [priority, providers],
+  );
+
+  const providerSettingsMap = useMemo(
+    () => Object.fromEntries(providers.map((item) => [item.provider, item])),
+    [providers],
   );
 
   useEffect(() => {
     api.get<SettingsData>("/api/auth/me/settings")
       .then(({ data }) => {
-        setProvider(data.ai_provider);
-        setMaskedKey(data.ai_api_key_masked);
-        setModelName(data.ai_model_name ?? "");
-        setBaseUrl(data.ai_base_url ?? "");
-        setHasCustomKey(data.has_custom_key);
+        setProviders(data.providers);
+        setPriority(data.priority);
       })
       .finally(() => setLoading(false));
   }, []);
@@ -101,11 +117,8 @@ export function ModelConfigPage() {
     setSaving(true);
     try {
       const { data } = await api.put<SettingsData>("/api/auth/me/settings", payload);
-      setProvider(data.ai_provider);
-      setMaskedKey(data.ai_api_key_masked);
-      setModelName(data.ai_model_name ?? "");
-      setBaseUrl(data.ai_base_url ?? "");
-      setHasCustomKey(data.has_custom_key);
+      setProviders(data.providers);
+      setPriority(data.priority);
       setApiKey("");
       toast({ description: successMessage });
       return data;
@@ -119,15 +132,12 @@ export function ModelConfigPage() {
 
   const openEditor = (targetProvider: string) => {
     const meta = PROVIDERS.find((item) => item.value === targetProvider) ?? PROVIDERS[0];
+    const setting = providerSettingsMap[targetProvider];
     setEditingProvider(targetProvider);
     setShowKey(false);
-    if (targetProvider === provider) {
-      setModelName((current) => current || meta.defaultModel);
-      return;
-    }
+    setModelName(setting?.ai_model_name ?? meta.defaultModel);
+    setBaseUrl(setting?.ai_base_url ?? "");
     setApiKey("");
-    setModelName(meta.defaultModel);
-    setBaseUrl("");
   };
 
   const handleSave = async () => {
@@ -135,7 +145,7 @@ export function ModelConfigPage() {
       return;
     }
     const payload: SettingsPayload = {
-      ai_provider: editingProvider,
+      provider: editingProvider,
       ai_model_name: modelName.trim() || "",
       ai_base_url: baseUrl.trim() || "",
     };
@@ -150,7 +160,7 @@ export function ModelConfigPage() {
 
   const handleEnable = async (targetProvider: string) => {
     const data = await applySettings(
-      { ai_provider: targetProvider },
+      { provider: targetProvider, enabled: true },
       "模型已启用",
     );
     if (data) {
@@ -159,23 +169,9 @@ export function ModelConfigPage() {
   };
 
   const handleDisable = async (targetProvider: string) => {
-    if (targetProvider !== provider) {
-      toast({ description: "该模型当前未启用" });
-      return;
-    }
-
-    if (provider === "qwen") {
-      await applySettings(
-        { ai_provider: "qwen", ai_model_name: "", ai_base_url: "", clear_api_key: true },
-        "已恢复默认通义千问配置",
-      );
-      setEditingProvider(null);
-      return;
-    }
-
     const data = await applySettings(
-      { ai_provider: "qwen", ai_model_name: "", ai_base_url: "", clear_api_key: true },
-      "当前模型已禁用，已切换回默认通义千问",
+      { provider: targetProvider, enabled: false },
+      "当前模型已禁用",
     );
     if (data) {
       setEditingProvider(null);
@@ -183,8 +179,9 @@ export function ModelConfigPage() {
   };
 
   const handleClearKey = async () => {
+    const targetProvider = editingProvider ?? activeProviderMeta.value;
     const data = await applySettings(
-      { ai_provider: provider, clear_api_key: true },
+      { provider: targetProvider, clear_api_key: true },
       "API Key 已清除，将使用默认配置",
     );
     if (data) {
@@ -194,13 +191,14 @@ export function ModelConfigPage() {
 
   const handleTestConnection = (targetProvider: string) => {
     const meta = PROVIDERS.find((item) => item.value === targetProvider) ?? PROVIDERS[0];
-    if (targetProvider !== provider && editingProvider !== targetProvider) {
+    const targetSetting = providerSettingsMap[targetProvider];
+    if (!targetSetting?.enabled && editingProvider !== targetProvider) {
       toast({ description: "请先启用或编辑该模型后再测试连接" });
       return;
     }
     toast({
       description:
-        targetProvider === provider
+        targetSetting?.enabled
           ? `已验证 ${meta.title} 的当前配置格式，可继续实际调用测试。`
           : `已打开 ${meta.title} 编辑态，可保存后进行实际调用。`,
     });
@@ -221,11 +219,12 @@ export function ModelConfigPage() {
 
       <div className="space-y-4 rounded-[28px] border border-border/70 bg-card/80 p-4 shadow-sm">
         {PROVIDERS.map((item) => {
-          const isActive = provider === item.value;
+          const providerSetting = providerSettingsMap[item.value];
+          const isActive = Boolean(providerSetting?.enabled);
           const isEditing = editingProvider === item.value;
-          const effectiveModelName = isActive
-            ? modelName.trim() || item.defaultModel
-            : item.defaultModel;
+          const effectiveModelName = providerSetting?.ai_model_name?.trim() || item.defaultModel;
+          const maskedKey = providerSetting?.ai_api_key_masked ?? null;
+          const hasCustomKey = providerSetting?.has_custom_key ?? false;
 
           return (
             <Card
@@ -264,7 +263,7 @@ export function ModelConfigPage() {
                           {tag}
                         </Badge>
                       ))}
-                      {isActive && hasCustomKey && (
+                      {hasCustomKey && (
                         <Badge variant="outline" className="rounded-full px-3 py-1 text-sm">
                           自定义 Key
                         </Badge>
@@ -392,7 +391,7 @@ export function ModelConfigPage() {
       </div>
 
       <p className="text-xs text-muted-foreground">
-        当前生效提供商：{activeProviderMeta.title}，模型名称：{modelName.trim() || activeProviderMeta.defaultModel}
+        非阅卷场景默认优先顺序：阿里百炼 → DeepSeek → Anthropic。当前优先命中的可用提供商：{activeProviderMeta.title}，模型名称：{activeProviderSetting?.ai_model_name?.trim() || activeProviderMeta.defaultModel}
       </p>
     </div>
   );

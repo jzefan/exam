@@ -174,23 +174,20 @@ async def _get_model_config(
     db: AsyncSession,
     user_id: uuid.UUID,
     model: AIModelProvider,
-) -> tuple[str, str, str]:
-    """Return (api_key, base_url, model_name). Prefer user custom key, fallback to system."""
+) -> tuple[str, str, str, str]:
+    """Return (provider, api_key, base_url, model_name)."""
     try:
-        provider, api_key, model_name, base_url = await get_user_ai_config(db, user_id)
-        if api_key:
-            # Use system defaults for base_url/model_name if user didn't override
-            sys_key, sys_url, sys_model = _get_system_model_config(
-                AIModelProvider(provider) if provider else model
-            )
-            return (
-                api_key,
-                base_url or sys_url,
-                model_name or sys_model,
-            )
+        provider, api_key, model_name, base_url = await get_user_ai_config(
+            db,
+            user_id,
+            preferred_provider=model.value,
+        )
+        if provider and api_key and base_url and model_name:
+            return provider, api_key, base_url, model_name
     except Exception:
         logger.warning("Failed to load user AI settings, using system defaults")
-    return _get_system_model_config(model)
+    api_key, base_url, model_name = _get_system_model_config(model)
+    return model.value, api_key, base_url, model_name
 
 
 def _build_system_prompt(
@@ -279,9 +276,9 @@ async def generate_questions_stream(
 
     system_prompt = _build_system_prompt(request, knowledge_point_names)
 
-    api_key, base_url, model_name = await _get_model_config(db, user_id, request.model)
+    provider_name, api_key, base_url, model_name = await _get_model_config(db, user_id, request.model)
     if not api_key:
-        yield {"type": "error", "message": f"{request.model.value} API key is not configured"}
+        yield {"type": "error", "message": f"{provider_name} API key is not configured"}
         return
 
     payload = {

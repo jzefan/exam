@@ -22,6 +22,25 @@ export interface ExamFormValues {
   student_ids: string[];
 }
 
+export function getPublishedExamStatus(
+  form: Pick<ExamFormValues, "start_time" | "end_time">,
+  now: Date = new Date(),
+): "upcoming" | "ongoing" | "completed" {
+  const start = form.start_time ? new Date(form.start_time).getTime() : NaN;
+  const end = form.end_time ? new Date(form.end_time).getTime() : NaN;
+  const current = now.getTime();
+
+  if (Number.isFinite(end) && end <= current) {
+    return "completed";
+  }
+
+  if (Number.isFinite(start) && start <= current) {
+    return "ongoing";
+  }
+
+  return "upcoming";
+}
+
 interface ValidateExamFormOptions {
   allowPastStartTime?: boolean;
   startTimeGraceMinutes?: number;

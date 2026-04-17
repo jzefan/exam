@@ -10,12 +10,12 @@ import {
   ClipboardList,
   UserCheck,
   Eye,
-  Send,
   Lock,
   Search,
   Filter,
   Check,
   ChevronsUpDown,
+  BarChart3,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,10 +45,12 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { ExamStatusBadge, examStatusOptions } from "./components/ExamStatusBadge";
 import { getEffectiveExamStatus } from "./utils";
 import type { ExamStatus, IExam } from "@/types";
+import { getErrorMessage } from "./components/exam-form-utils";
 
 type FilterKey = "all" | ExamStatus;
 
@@ -62,13 +64,13 @@ function formatDateTime(iso: string | null) {
 function ExamCard({
   exam,
   onView,
-  onPublish,
+  onAnalysis,
   onClose,
   onDelete,
 }: {
   exam: IExam;
   onView: () => void;
-  onPublish: () => void;
+  onAnalysis: () => void;
   onClose: () => void;
   onDelete: () => void;
 }) {
@@ -114,18 +116,15 @@ function ExamCard({
         {/* Actions Section */}
         <div className="flex items-center gap-1 self-end md:self-center">
           {/* 查看 — all statuses */}
-          <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold" onClick={onView}>
-            <Eye size={14} className="mr-1" />
-            查看
+          <Button variant="ghost" size="sm" className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold" onClick={onView}>
+            <Eye size={14} />
+            <span>查看</span>
           </Button>
 
-          {/* 发布 — draft only */}
-          {effectiveStatus === "draft" && (
-            <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-primary hover:text-primary hover:bg-primary/5" onClick={onPublish}>
-              <Send size={14} className="mr-1" />
-              发布
-            </Button>
-          )}
+          <Button variant="ghost" size="sm" className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold" onClick={onAnalysis}>
+            <BarChart3 size={14} />
+            <span>结果分析</span>
+          </Button>
 
           {/* 关闭 — draft(no), upcoming, ongoing(conditional), completed */}
           {(effectiveStatus === "upcoming" || effectiveStatus === "ongoing" || effectiveStatus === "completed") && (
@@ -136,12 +135,12 @@ function ExamCard({
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-8 px-2 text-xs font-semibold text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                      className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold text-amber-600 hover:bg-amber-50 hover:text-amber-700"
                       disabled={!canClose}
                       onClick={onClose}
                     >
-                      <Lock size={14} className="mr-1" />
-                      关闭
+                      <Lock size={14} />
+                      <span>关闭</span>
                     </Button>
                   </span>
                 </TooltipTrigger>
@@ -159,11 +158,11 @@ function ExamCard({
             <Button
               variant="ghost"
               size="sm"
-              className="h-8 px-2 text-xs font-semibold text-destructive hover:text-destructive hover:bg-destructive/5"
+              className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold text-destructive hover:bg-destructive/5 hover:text-destructive"
               onClick={onDelete}
             >
-              <Trash2 size={14} className="mr-1" />
-              删除
+              <Trash2 size={14} />
+              <span>删除</span>
             </Button>
           )}
         </div>
@@ -194,16 +193,36 @@ export function ExamList() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [deleteTarget, setDeleteTarget] = useState<IExam | null>(null);
-  const [publishTarget, setPublishTarget] = useState<IExam | null>(null);
   const [closeTarget, setCloseTarget] = useState<IExam | null>(null);
 
   const { mutate: deleteExam } = useDelete();
   const { mutate: updateExam } = useUpdate();
+  const { toast } = useToast();
 
-  const changeStatus = (examId: string, status: string) => {
+  const changeStatus = (examId: string, status: string, title?: string) => {
+    const successTitle = status === "closed" ? "关闭成功" : "状态更新成功";
+    const successDescription =
+      status === "closed"
+        ? `考试「${title ?? "未命名考试"}」已关闭。`
+        : `考试「${title ?? "未命名考试"}」状态已更新。`;
     updateExam(
       { resource: "exams", id: examId, values: { status } },
-      { onSuccess: () => query.refetch() },
+      {
+        onSuccess: () => {
+          query.refetch();
+          toast({
+            title: successTitle,
+            description: successDescription,
+          });
+        },
+        onError: (error) => {
+          toast({
+            title: status === "closed" ? "关闭失败" : "状态更新失败",
+            description: getErrorMessage(error, "操作失败，请稍后重试。"),
+            variant: "destructive",
+          });
+        },
+      },
     );
   };
 
@@ -366,7 +385,7 @@ export function ExamList() {
               key={exam.id}
               exam={exam}
               onView={() => navigate(`/exams/edit/${exam.id}`)}
-              onPublish={() => setPublishTarget(exam)}
+              onAnalysis={() => navigate(`/exams/${exam.id}/analysis`)}
               onClose={() => setCloseTarget(exam)}
               onDelete={() => setDeleteTarget(exam)}
             />
@@ -417,33 +436,6 @@ export function ExamList() {
         </div>
       )}
 
-      {/* Publish confirmation */}
-      <AlertDialog
-        open={!!publishTarget}
-        onOpenChange={(open) => { if (!open) setPublishTarget(null); }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>发布考试</AlertDialogTitle>
-            <AlertDialogDescription>
-              确定要发布考试「{publishTarget?.title}」吗？发布后考试状态将变为"未开始"，考生可以看到该考试。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                if (!publishTarget) return;
-                changeStatus(publishTarget.id, "upcoming");
-                setPublishTarget(null);
-              }}
-            >
-              确认发布
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
       {/* Close confirmation */}
       <AlertDialog
         open={!!closeTarget}
@@ -462,8 +454,9 @@ export function ExamList() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => {
                 if (!closeTarget) return;
-                changeStatus(closeTarget.id, "closed");
+                const target = closeTarget;
                 setCloseTarget(null);
+                changeStatus(target.id, "closed", target.title);
               }}
             >
               确认关闭
@@ -490,9 +483,26 @@ export function ExamList() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => {
                 if (!deleteTarget) return;
+                const target = deleteTarget;
+                setDeleteTarget(null);
                 deleteExam(
-                  { resource: "exams", id: deleteTarget.id },
-                  { onSuccess: () => { setDeleteTarget(null); query.refetch(); } },
+                  { resource: "exams", id: target.id },
+                  {
+                    onSuccess: () => {
+                      query.refetch();
+                      toast({
+                        title: "删除成功",
+                        description: `考试「${target.title}」已删除。`,
+                      });
+                    },
+                    onError: (error) => {
+                      toast({
+                        title: "删除失败",
+                        description: getErrorMessage(error, "删除考试失败，请稍后重试。"),
+                        variant: "destructive",
+                      });
+                    },
+                  },
                 );
               }}
             >

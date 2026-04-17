@@ -12,17 +12,17 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Dict, List
+from typing import Any
 
-import PyPDF2
+import pdfplumber
 from anthropic import AsyncAnthropic
 
 
 async def extract_job_models_with_claude(
     pdf_text: str,
     industry: str,
-    client: AsyncAnthropic
-) -> Dict:
+    client: AsyncAnthropic,
+) -> dict[str, Any]:
     """Use Claude to extract complete job model data from PDF text."""
 
     prompt = f"""你是一个专业的文档分析助手。请从以下中文产业标准文档中提取岗位能力要求信息。
@@ -94,14 +94,17 @@ async def extract_job_models_with_claude(
 
 请返回完整的JSON数据："""
 
-    message = await client.messages.create(
-        model="claude-opus-4-20250514",
+    async with client.messages.stream(
+        model="claude-sonnet-4-6",
         max_tokens=16000,
         temperature=0,
-        messages=[{"role": "user", "content": prompt}]
-    )
+        messages=[{"role": "user", "content": prompt}],
+    ) as stream:
+        message = await stream.get_final_message()
 
-    response_text = message.content[0].text
+    response_text = "".join(
+        block.text for block in message.content if getattr(block, "type", None) == "text"
+    )
 
     # Extract JSON from response
     json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
@@ -120,8 +123,8 @@ async def process_pdf_file(
     pdf_path: Path,
     industry: str,
     source: str,
-    client: AsyncAnthropic
-) -> Dict:
+    client: AsyncAnthropic,
+) -> dict[str, Any]:
     """Process a single PDF file and extract all job models."""
 
     print(f"\n{'='*80}")
@@ -130,14 +133,14 @@ async def process_pdf_file(
     print(f"{'='*80}\n")
 
     # Extract text from PDF
-    with open(pdf_path, 'rb') as file:
-        reader = PyPDF2.PdfReader(file)
-        full_text = ""
-        for i, page in enumerate(reader.pages):
-            text = page.extract_text()
+    full_text = ""
+    with pdfplumber.open(pdf_path) as pdf:
+        total_pages = len(pdf.pages)
+        for i, page in enumerate(pdf.pages):
+            text = page.extract_text() or ""
             full_text += text + "\n"
             if i % 10 == 0:
-                print(f"  Extracted page {i+1}/{len(reader.pages)}")
+                print(f"  Extracted page {i + 1}/{total_pages}")
 
     print(f"  Total text length: {len(full_text)} characters")
 
@@ -194,10 +197,25 @@ async def process_pdf_file(
             "source": source,
             "industry": industry,
             "version_note": f"来源：{source}",
-            "model_type": "standard"
+            "model_type": "standard",
         },
         "models": all_jobs
     }
+
+
+def resolve_pdf_path(base_dir: Path, filename: str) -> Path:
+    """Resolve a configured PDF filename against known on-disk naming variants."""
+
+    candidates = [
+        base_dir / filename,
+        base_dir / f"《{filename.removesuffix('.pdf')}》.pdf",
+    ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return candidates[0]
 
 
 async def main():
@@ -210,7 +228,7 @@ async def main():
 
     client = AsyncAnthropic(api_key=api_key)
 
-    pdf_dir = Path("docs/MIITEC_PDFs")
+    pdf_dir = Path("docs/miitec_pdfs")
     output_dir = Path("backend/scripts/data/extracted")
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -220,30 +238,42 @@ async def main():
             "file": "人工智能产业人才岗位能力要求.pdf",
             "industry": "人工智能产业",
             "output": "ai_industry_complete.json",
-            "source": "T/MIITEC 001-2023《人工智能产业人才岗位能力要求》"
+            "source": "T/MIITEC 001-2023《人工智能产业人才岗位能力要求》",
         },
         {
             "file": "大数据产业人才岗位能力要求.pdf",
             "industry": "大数据产业",
             "output": "big_data_complete.json",
-            "source": "T/MIITEC《大数据产业人才岗位能力要求》"
+            "source": "T/MIITEC《大数据产业人才岗位能力要求》",
         },
         {
             "file": "集成电路产业人才岗位能力要求.pdf",
             "industry": "集成电路产业",
             "output": "ic_industry_complete.json",
-            "source": "T/MIITEC《集成电路产业人才岗位能力要求》"
+            "source": "T/MIITEC《集成电路产业人才岗位能力要求》",
         },
         {
             "file": "数据标注产业人才岗位能力要求.pdf",
             "industry": "数据标注产业",
             "output": "data_annotation_complete.json",
-            "source": "T/MIITEC《数据标注产业人才岗位能力要求》"
+            "source": "T/MIITEC《数据标注产业人才岗位能力要求》",
+        },
+        {
+            "file": "新材料产业人才岗位能力要求.pdf",
+            "industry": "新材料产业",
+            "output": "new_materials_complete.json",
+            "source": "《新材料产业人才岗位能力要求》",
+        },
+        {
+            "file": "制造业可靠性人才岗位能力要求.pdf",
+            "industry": "制造业可靠性",
+            "output": "manufacturing_reliability_complete.json",
+            "source": "《制造业可靠性人才岗位能力要求》",
         },
     ]
 
     for config in pdf_configs:
-        pdf_path = pdf_dir / config["file"]
+        pdf_path = resolve_pdf_path(pdf_dir, config["file"])
         if not pdf_path.exists():
             print(f"Skipping {config['file']} - file not found")
             continue

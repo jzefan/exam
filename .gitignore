@@ -6,3 +6,10 @@
 
 docs/miitec_pdfs
 miitec_pdfs
+
+.remember/
+tasks/
+
+backend/test.db
+backend/test_job_models_router.db
+backend/test_job_models_service.db

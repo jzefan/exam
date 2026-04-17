@@ -34,6 +34,7 @@ export function ExamCreate() {
 
   const handleSubmit = (values: ExamFormValues) => {
     setSubmitError(null);
+    const isDraft = values.status === "draft";
     create(
       {
         resource: "exams",
@@ -50,16 +51,16 @@ export function ExamCreate() {
       {
         onSuccess: () => {
           toast({
-            title: "创建成功",
-            description: "考试已创建，正在返回考试列表。",
+            title: isDraft ? "草稿已保存" : "创建成功",
+            description: isDraft ? "考试已保存到草稿。" : "考试已创建并发布，正在返回考试列表。",
           });
           navigate("/exams");
         },
         onError: (error) => {
-          const message = getErrorMessage(error, "创建考试失败，请稍后重试。");
+          const message = getErrorMessage(error, isDraft ? "保存草稿失败，请稍后重试。" : "创建考试失败，请稍后重试。");
           setSubmitError(message);
           toast({
-            title: "创建失败",
+            title: isDraft ? "保存草稿失败" : "创建失败",
             description: message,
             variant: "destructive",
           });

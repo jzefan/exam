@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import { normalizeJobModelsResponse } from "./list-utils"
 import {
   Edit2,
@@ -167,31 +166,6 @@ export function JobModelList() {
       </Button>
     </div>
   )
-
-  const getSourceBadge = (sourceType: string) => {
-    switch (sourceType) {
-      case "ai_generated":
-        return (
-          <Badge className="border-0 gap-1 bg-gradient-to-r from-primary/15 via-primary/10 to-sky-500/10 text-primary">
-            <Sparkles className="h-3 w-3" />
-            AI 生成
-          </Badge>
-        )
-      case "template":
-        return (
-          <Badge className="border-0 gap-1 bg-gradient-to-r from-violet-500/15 via-violet-500/10 to-fuchsia-500/10 text-violet-700 dark:text-violet-300">
-            <Layers className="h-3 w-3" />
-            模板
-          </Badge>
-        )
-      default:
-        return (
-          <Badge className="border-0 bg-gradient-to-r from-slate-500/12 via-slate-500/8 to-zinc-500/12 text-foreground/80 dark:text-foreground/75">
-            手动创建
-          </Badge>
-        )
-    }
-  }
 
   if (isLoading) {
     return (
@@ -369,12 +343,7 @@ export function JobModelList() {
                       <div className="flex min-w-0 flex-1 flex-col justify-between gap-4">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 space-y-1">
-                            <div className="flex items-center gap-2">
-                              <h3 className="truncate text-sm font-semibold text-foreground">{model.job_role}</h3>
-                              <div className="shrink-0">
-                                {getSourceBadge(model.current_version?.source_type ?? "manual")}
-                              </div>
-                            </div>
+                            <h3 className="truncate text-sm font-semibold text-foreground">{model.job_role}</h3>
                             <p className="truncate text-xs text-muted-foreground">
                               {[model.industry_name, model.direction_name].filter(Boolean).join(" / ") || "未分类"}
                             </p>
@@ -397,9 +366,6 @@ export function JobModelList() {
                           <div className="flex items-center gap-2">
                             <GitBranch className="h-3.5 w-3.5 shrink-0" />
                             <span>v{model.current_version?.version ?? 1}</span>
-                            {model.current_version?.version_note ? (
-                              <span className="truncate text-muted-foreground">{model.current_version.version_note}</span>
-                            ) : null}
                           </div>
                           <div className="flex items-center gap-2">
                             <Clock className="h-3.5 w-3.5 shrink-0" />
@@ -434,22 +400,14 @@ export function JobModelList() {
                     </div>
 
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2.5">
-                        <h3 className="text-base font-semibold text-foreground truncate">
-                          {model.job_role}
-                        </h3>
-                        {getSourceBadge(model.current_version?.source_type ?? "manual")}
-                      </div>
+                      <h3 className="text-base font-semibold text-foreground truncate">
+                        {model.job_role}
+                      </h3>
                       <div className="flex items-center gap-4 mt-1.5 text-xs text-foreground/70">
                         <span className="flex items-center gap-1">
                           <GitBranch className="h-3.5 w-3.5" />
                           v{model.current_version?.version ?? 1}
                         </span>
-                        {model.current_version?.version_note && (
-                          <span className="truncate max-w-[200px]">
-                            {model.current_version.version_note}
-                          </span>
-                        )}
                         <span className="flex items-center gap-1">
                           <Clock className="h-3.5 w-3.5" />
                           {formatDistanceToNow(new Date(model.updated_at), {

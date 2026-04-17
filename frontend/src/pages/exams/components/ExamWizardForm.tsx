@@ -75,6 +75,7 @@ import {
 import { AIGenerateLoadingOverlay } from "@/pages/questions/components/ai-generate-loading-overlay";
 import {
   DEFAULT_NOTES,
+  getPublishedExamStatus,
   type ExamFormValues as ExamForm,
   validateExamForm,
 } from "./exam-form-utils";
@@ -114,6 +115,7 @@ type QuestionTypeSummary = {
   questionIds: string[];
 };
 type PreviewMode = "order" | "type";
+type CreateSubmitIntent = "draft" | "publish";
 
 const stepItems: {
   id: StepId;
@@ -162,15 +164,6 @@ const questionTypeLabels: Record<string, string> = {
   short_answer: "简答题",
   essay: "论述题",
   code: "编程题",
-};
-
-const questionTypePreviewGroupClasses: Record<QuestionType, string> = {
-  choice: "border-sky-200/80 bg-gradient-to-br from-sky-50 via-white to-cyan-50 dark:border-sky-900/50 dark:from-sky-950/40 dark:via-background dark:to-cyan-950/30",
-  true_false: "border-emerald-200/80 bg-gradient-to-br from-emerald-50 via-white to-green-50 dark:border-emerald-900/50 dark:from-emerald-950/40 dark:via-background dark:to-green-950/30",
-  fill_in: "border-amber-200/80 bg-gradient-to-br from-amber-50 via-white to-yellow-50 dark:border-amber-900/50 dark:from-amber-950/40 dark:via-background dark:to-yellow-950/30",
-  short_answer: "border-violet-200/80 bg-gradient-to-br from-violet-50 via-white to-fuchsia-50 dark:border-violet-900/50 dark:from-violet-950/40 dark:via-background dark:to-fuchsia-950/30",
-  essay: "border-rose-200/80 bg-gradient-to-br from-rose-50 via-white to-pink-50 dark:border-rose-900/50 dark:from-rose-950/40 dark:via-background dark:to-pink-950/30",
-  code: "border-slate-200/80 bg-gradient-to-br from-slate-100 via-white to-zinc-100 dark:border-slate-800/60 dark:from-slate-950/70 dark:via-background dark:to-zinc-950/50",
 };
 
 const ALL_BANKS = "__all_banks__";
@@ -284,6 +277,7 @@ export function ExamWizardForm({
   const [questionStepFullscreenOpen, setQuestionStepFullscreenOpen] = useState(false);
   const [previewFullscreenOpen, setPreviewFullscreenOpen] = useState(false);
   const [previewMode, setPreviewMode] = useState<PreviewMode>("order");
+  const [createSubmitIntent, setCreateSubmitIntent] = useState<CreateSubmitIntent>("publish");
   const [typeScoreDrafts, setTypeScoreDrafts] = useState<Partial<Record<QuestionType, string>>>({});
   const aiAbortRef = useRef<AbortController | null>(null);
 
@@ -574,56 +568,55 @@ export function ExamWizardForm({
                 </div>
               );
             })
-          : questionItemsByType.map(({ summary, items }) => (
-              <div key={summary.type} className="px-4 py-4">
-                <div
-                  className={cn(
-                    "space-y-3 rounded-2xl border p-4 shadow-sm",
-                    questionTypePreviewGroupClasses[summary.type],
-                  )}
-                >
-                  <div className="rounded-xl bg-background/80 p-3 ring-1 ring-border/40 backdrop-blur-sm">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="flex min-w-0 flex-wrap items-center gap-3">
-                        <Badge variant="outline">{questionTypeLabels[summary.type]}</Badge>
-                        <span className="text-xs text-muted-foreground">{summary.count} 题</span>
-                        <span className="text-xs text-muted-foreground">
-                          当前合计 {summary.totalScore} 分
-                        </span>
-                      </div>
-                      <div className="flex flex-wrap items-center justify-end gap-2">
-                        <Label
-                          htmlFor={`type-total-score-${summary.type}`}
-                          className="text-xs text-muted-foreground"
-                        >
-                          题型总分
-                        </Label>
-                        <Input
-                          id={`type-total-score-${summary.type}`}
-                          type="number"
-                          min={0.01}
-                          step={0.01}
-                          value={typeScoreDrafts[summary.type] ?? ""}
-                          onChange={(e) =>
-                            setTypeScoreDrafts((prev) => ({
-                              ...prev,
-                              [summary.type]: e.target.value,
-                            }))
-                          }
-                          className="h-8 w-20 bg-white px-2 text-right text-xs shadow-sm"
-                        />
-                        <span className="text-xs text-muted-foreground">分</span>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="h-8 px-2 text-xs"
-                          aria-label={`将${questionTypeLabels[summary.type]}总分均分到每题`}
-                          onClick={() => applyTypeScoreAllocation(summary)}
-                        >
-                          均分到每题
-                        </Button>
-                      </div>
+          : questionItemsByType.map(({ summary, items }, groupIndex) => (
+              <div
+                key={summary.type}
+                className={cn(
+                  "px-4 py-4",
+                  groupIndex > 0 && "border-t border-dashed border-border/70",
+                )}
+              >
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex min-w-0 flex-wrap items-center gap-3">
+                      <Badge variant="outline">{questionTypeLabels[summary.type]}</Badge>
+                      <span className="text-xs text-muted-foreground">{summary.count} 题</span>
+                      <span className="text-xs text-muted-foreground">
+                        当前合计 {summary.totalScore} 分
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      <Label
+                        htmlFor={`type-total-score-${summary.type}`}
+                        className="text-xs text-muted-foreground"
+                      >
+                        题型总分
+                      </Label>
+                      <Input
+                        id={`type-total-score-${summary.type}`}
+                        type="number"
+                        min={0.01}
+                        step={0.01}
+                        value={typeScoreDrafts[summary.type] ?? ""}
+                        onChange={(e) =>
+                          setTypeScoreDrafts((prev) => ({
+                            ...prev,
+                            [summary.type]: e.target.value,
+                          }))
+                        }
+                        className="h-8 w-20 bg-white px-2 text-right text-xs shadow-sm"
+                      />
+                      <span className="text-xs text-muted-foreground">分</span>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 px-2 text-xs"
+                        aria-label={`将${questionTypeLabels[summary.type]}总分均分到每题`}
+                        onClick={() => applyTypeScoreAllocation(summary)}
+                      >
+                        均分到每题
+                      </Button>
                     </div>
                   </div>
 
@@ -856,6 +849,11 @@ export function ExamWizardForm({
     if (currentStep > 0) {
       setCurrentStep((prev) => prev - 1);
     }
+  };
+
+  const handleNextStepClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    goNext();
   };
 
   const handleAutoDifficultyChange = (level: number, checked: boolean) => {
@@ -1315,7 +1313,22 @@ export function ExamWizardForm({
       return;
     }
 
-    onSubmit({ ...form, question_mode: questionMode });
+    setCreateSubmitIntent("publish");
+    onSubmit({
+      ...form,
+      status: mode === "create" ? getPublishedExamStatus(form, now) : form.status,
+      question_mode: questionMode,
+    });
+  };
+
+  const handleSaveDraft = () => {
+    setFlowError(null);
+    setCreateSubmitIntent("draft");
+    onSubmit({
+      ...form,
+      status: "draft",
+      question_mode: questionMode,
+    });
   };
 
   const currentStepId = stepItems[currentStep].id;
@@ -1328,6 +1341,40 @@ export function ExamWizardForm({
     { label: "考试时长", value: `${form.duration_minutes} 分钟` },
     { label: "总分", value: `${form.total_score} 分` },
   ];
+  const previewModeToggleGroup = (
+    <div
+      role="group"
+      aria-label="试卷预览展示方式"
+      className="inline-flex items-center rounded-lg border border-border/70 bg-background p-0.5 shadow-sm"
+    >
+      <button
+        type="button"
+        aria-pressed={previewMode === "order"}
+        className={cn(
+          "h-8 rounded-md px-3 text-xs font-medium transition-colors",
+          previewMode === "order"
+            ? "bg-primary text-primary-foreground shadow-sm"
+            : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+        )}
+        onClick={() => setPreviewMode("order")}
+      >
+        按顺序展示
+      </button>
+      <button
+        type="button"
+        aria-pressed={previewMode === "type"}
+        className={cn(
+          "h-8 rounded-md px-3 text-xs font-medium transition-colors",
+          previewMode === "type"
+            ? "bg-primary text-primary-foreground shadow-sm"
+            : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+        )}
+        onClick={() => setPreviewMode("type")}
+      >
+        按题型展示
+      </button>
+    </div>
+  );
 
   const renderQuestionStepContent = (variant: "embedded" | "fullscreen" = "embedded") => (
     <div className="space-y-5">
@@ -2075,6 +2122,7 @@ export function ExamWizardForm({
                       </div>
                       <div className="flex items-center gap-2">
                         <Badge variant="secondary">卷面总分 {form.total_score} 分</Badge>
+                        {previewModeToggleGroup}
                         <Button
                           type="button"
                           variant="outline"
@@ -2086,27 +2134,6 @@ export function ExamWizardForm({
                           <Maximize2 size={14} />
                         </Button>
                       </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant={previewMode === "order" ? "default" : "outline"}
-                        className="h-8 px-3 text-xs"
-                        onClick={() => setPreviewMode("order")}
-                      >
-                        按顺序展示
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant={previewMode === "type" ? "default" : "outline"}
-                        className="h-8 px-3 text-xs"
-                        onClick={() => setPreviewMode("type")}
-                      >
-                        按题型展示
-                      </Button>
                     </div>
 
                     {renderQuestionPreviewList("embedded")}
@@ -2168,25 +2195,43 @@ export function ExamWizardForm({
               )}
 
               {currentStep < stepItems.length - 1 ? (
-                <Button type="button" className="w-full sm:w-auto" onClick={goNext}>
+                <Button type="button" className="w-full sm:w-auto" onClick={handleNextStepClick}>
                   {currentStepId === "students" && form.student_ids.length === 0 ? "跳过并继续" : "下一步"}
                   <ArrowRight size={16} className="ml-1" />
                 </Button>
               ) : mode === "create" ? (
-                <Button
-                  type="submit"
-                  className="w-full sm:w-auto"
-                  disabled={!form.title.trim() || isPending}
-                >
-                  {isPending ? (
-                    <span className="flex items-center gap-2">
-                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                      创建中...
-                    </span>
-                  ) : (
-                    "创建考试"
-                  )}
-                </Button>
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full sm:w-auto"
+                    disabled={!form.title.trim() || isPending}
+                    onClick={handleSaveDraft}
+                  >
+                    {isPending && createSubmitIntent === "draft" ? (
+                      <span className="flex items-center gap-2">
+                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-foreground/20 border-t-foreground" />
+                        保存中...
+                      </span>
+                    ) : (
+                      "保存到草稿"
+                    )}
+                  </Button>
+                  <Button
+                    type="submit"
+                    className="w-full sm:w-auto"
+                    disabled={!form.title.trim() || isPending}
+                  >
+                    {isPending && createSubmitIntent === "publish" ? (
+                      <span className="flex items-center gap-2">
+                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                        发布中...
+                      </span>
+                    ) : (
+                      "创建并发布"
+                    )}
+                  </Button>
+                </>
               ) : null
               }
             </div>
@@ -2292,27 +2337,8 @@ export function ExamWizardForm({
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant={previewMode === "order" ? "default" : "outline"}
-                      className="h-8 px-3 text-xs"
-                      onClick={() => setPreviewMode("order")}
-                    >
-                      按顺序展示
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant={previewMode === "type" ? "default" : "outline"}
-                      className="h-8 px-3 text-xs"
-                      onClick={() => setPreviewMode("type")}
-                    >
-                      按题型展示
-                    </Button>
-                  </div>
                   <Badge variant="secondary">卷面总分 {form.total_score} 分</Badge>
+                  {previewModeToggleGroup}
                   <Button
                     type="button"
                     variant="outline"

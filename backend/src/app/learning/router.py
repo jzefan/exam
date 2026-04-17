@@ -12,6 +12,8 @@ from app.common.resource_access import can_write_owned_resource
 from app.database import get_db
 from app.learning import service
 from app.learning.schemas import (
+    CatalogPhotoRecognizeRequest,
+    CatalogPhotoRecognizeResponse,
     DirectionCreate,
     DirectionResponse,
     FlowData,
@@ -180,6 +182,21 @@ async def remove_prereq(kp_id: uuid.UUID, prereq_id: uuid.UUID, db: DB, user: Wr
     kp = await _get_visible_kp_or_404(db, kp_id, user, False)
     _ensure_can_write_kp(kp, user, False)
     await service.remove_prerequisite(db, kp_id, prereq_id)
+
+
+@router.post(
+    "/catalog-photo/recognize",
+    response_model=CatalogPhotoRecognizeResponse,
+)
+async def recognize_catalog_photo(
+    data: CatalogPhotoRecognizeRequest,
+    user: WriteUser,
+) -> CatalogPhotoRecognizeResponse:
+    del user
+    try:
+        return await service.recognize_catalog_structure_from_images(data)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.post(
