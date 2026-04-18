@@ -99,6 +99,7 @@ def _build_exam_response(exam: Exam, student_id: uuid.UUID | None = None) -> Exa
     )
     return ExamResponse(
         id=exam.id,
+        category=exam.category,
         title=exam.title,
         description=exam.description,
         start_time=exam.start_time,
@@ -258,6 +259,7 @@ async def create_exam(
     user: CurrentUser,
 ) -> ExamDetailResponse:
     exam = Exam(
+        category=body.category,
         title=body.title,
         description=body.description,
         start_time=body.start_time,

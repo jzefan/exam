@@ -47,6 +47,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await seed_prompt_templates(db)
         await assign_unowned_students_to_single_teacher(db)
         await db.commit()
+
     yield
 
 

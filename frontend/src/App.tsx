@@ -35,6 +35,7 @@ import { TagList } from "./pages/tags/list";
 import { ExamList } from "./pages/exams/list";
 import { ExamCreate } from "./pages/exams/create";
 import { ExamEdit } from "./pages/exams/edit";
+import { PracticeCreate } from "./pages/exams/practice-create";
 import { ExamStudentsPage } from "./pages/exams/students";
 import { ExamAnalysisPage } from "./pages/exams/analysis";
 import { ExamTaking } from "./pages/student/exam-taking";
@@ -180,6 +181,8 @@ function App() {
                 <Route path="/exams">
                   <Route index element={<ExamList />} />
                   <Route path="create" element={<ExamCreate />} />
+                  <Route path="practice/create" element={<PracticeCreate />} />
+                  <Route path="practice/edit/:id" element={<PracticeCreate />} />
                   <Route path=":id/analysis" element={<ExamAnalysisPage />} />
                   <Route path="edit/:id" element={<ExamEdit />} />
                   <Route path="students" element={<ExamStudentsPage />} />

@@ -1,5 +1,5 @@
 import { useMemo, useState, type ChangeEvent } from "react";
-import { Camera, FileImage } from "lucide-react";
+import { Camera, FileImage, GripVertical, Loader2, Trash2, UploadCloud } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -11,9 +11,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { extractCatalogPhotoImages } from "./import-knowledge-photo-utils";
-import { summarizeKnowledgeImportPaths, type KnowledgeImportPath } from "./import-knowledge-utils";
+import { extractCatalogPhotoImages, type CatalogPhotoImage } from "./import-knowledge-photo-utils";
+import type { KnowledgeImportPath, KnowledgeImportPreviewNode } from "./import-knowledge-utils";
+import { KnowledgeImportTreePreview } from "./KnowledgeImportTreePreview";
 
 type KnowledgeCatalogPhotoDialogProps = {
   open: boolean;
@@ -30,24 +32,32 @@ export function KnowledgeCatalogPhotoDialog({
   onImport,
   selectedDirectionName,
 }: KnowledgeCatalogPhotoDialogProps) {
-  const [fileName, setFileName] = useState<string | null>(null);
-  const [images, setImages] = useState<string[]>([]);
+  const [images, setImages] = useState<CatalogPhotoImage[]>([]);
   const [paths, setPaths] = useState<KnowledgeImportPath[]>([]);
+  const [rootName, setRootName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [recognizing, setRecognizing] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [draggingImageId, setDraggingImageId] = useState<string | null>(null);
+  const [previewImage, setPreviewImage] = useState<CatalogPhotoImage | null>(null);
 
-  const summary = useMemo(() => summarizeKnowledgeImportPaths(paths), [paths]);
+  const trimmedRootName = rootName.trim();
+  const effectivePaths = useMemo<KnowledgeImportPath[]>(
+    () => (trimmedRootName ? paths.map((path) => [trimmedRootName, ...path]) : paths),
+    [paths, trimmedRootName],
+  );
 
   const reset = () => {
-    setFileName(null);
     setImages([]);
     setPaths([]);
+    setRootName("");
     setError(null);
     setLoading(false);
     setRecognizing(false);
     setImporting(false);
+    setDraggingImageId(null);
+    setPreviewImage(null);
   };
 
   const handleOpenChange = (nextOpen: boolean) => {
@@ -58,18 +68,15 @@ export function KnowledgeCatalogPhotoDialog({
   };
 
   const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
     setLoading(true);
     setError(null);
-    setPaths([]);
     try {
-      const nextImages = await extractCatalogPhotoImages(file);
-      setFileName(file.name);
-      setImages(nextImages);
+      const nextImages = await extractCatalogPhotoImages(files);
+      setImages((current) => [...current, ...nextImages]);
+      setPaths([]);
     } catch (nextError) {
-      setFileName(file.name);
-      setImages([]);
       setError(nextError instanceof Error ? nextError.message : "文件解析失败");
     } finally {
       setLoading(false);
@@ -78,11 +85,16 @@ export function KnowledgeCatalogPhotoDialog({
   };
 
   const handleRecognize = async () => {
-    if (!fileName || images.length === 0) return;
+    if (images.length === 0) return;
     setRecognizing(true);
     setError(null);
     try {
-      setPaths(await onRecognize({ fileName, images }));
+      setPaths(
+        await onRecognize({
+          fileName: images.length === 1 ? images[0].name : `目录照片共 ${images.length} 张`,
+          images: images.map((image) => image.src),
+        }),
+      );
     } catch (nextError) {
       setPaths([]);
       setError(nextError instanceof Error ? nextError.message : "目录识别失败");
@@ -92,11 +104,15 @@ export function KnowledgeCatalogPhotoDialog({
   };
 
   const handleImport = async () => {
-    if (paths.length === 0) return;
+    if (effectivePaths.length === 0) return;
+    if (!trimmedRootName) {
+      setError("请填写主知识点名称。");
+      return;
+    }
     setImporting(true);
     setError(null);
     try {
-      await onImport(paths);
+      await onImport(effectivePaths);
       handleOpenChange(false);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "导入失败");
@@ -104,87 +120,224 @@ export function KnowledgeCatalogPhotoDialog({
     }
   };
 
+  const moveImage = (sourceId: string, targetId: string) => {
+    if (sourceId === targetId) return;
+    setImages((current) => {
+      const sourceIndex = current.findIndex((item) => item.id === sourceId);
+      const targetIndex = current.findIndex((item) => item.id === targetId);
+      if (sourceIndex < 0 || targetIndex < 0) return current;
+      const next = [...current];
+      const [moved] = next.splice(sourceIndex, 1);
+      next.splice(targetIndex, 0, moved);
+      return next;
+    });
+    setPaths([]);
+  };
+
+  const removeImage = (imageId: string) => {
+    setImages((current) => current.filter((image) => image.id !== imageId));
+    setPaths([]);
+    if (draggingImageId === imageId) {
+      setDraggingImageId(null);
+    }
+  };
+
+  const removeTreeNode = (node: KnowledgeImportPreviewNode) => {
+    if (trimmedRootName && node.depth === 0) {
+      return;
+    }
+    const pathIndexes = new Set(node.pathIndexes);
+    setPaths((current) => current.filter((_, index) => !pathIndexes.has(index)));
+  };
+
+  const canImport = !recognizing && !importing && paths.length > 0 && Boolean(trimmedRootName);
+
   return (
     <Dialog onOpenChange={handleOpenChange} open={open}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-w-[1100px] w-[95vw]">
         <DialogHeader>
           <DialogTitle>书籍目录拍照导入</DialogTitle>
           <DialogDescription>
             {selectedDirectionName ? `将目录识别结果导入到“${selectedDirectionName}”方向。` : "请先选择方向。"}
-            支持上传目录照片或扫描版 PDF，系统会先识别目录层级，再由你确认导入。
+            上传目录照片或扫描版 PDF，系统按章、节识别后以层级树方式显示。
           </DialogDescription>
         </DialogHeader>
 
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100">
-          提醒：一级知识点会作为当前方向下的主知识创建；对于课程来说，就是一门课的课程名称。
-        </div>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[340px_1fr]">
+          {/* 左栏：上传与排序 */}
+          <div className="flex flex-col gap-3">
+            <label className="flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-2xl border-2 border-dashed border-primary/60 px-6 py-6 text-center transition hover:border-primary">
+              <UploadCloud className="h-7 w-7 text-primary" />
+              <span className="text-base font-semibold text-primary">点击添加图片或 PDF</span>
+              <span className="text-xs text-stone-500 dark:text-stone-400">
+                支持 PNG / JPG / WEBP / HEIC / PDF，可一次选择多张
+              </span>
+              <Input
+                accept=".png,.jpg,.jpeg,.webp,.heic,.pdf"
+                className="hidden"
+                multiple
+                onChange={handleFileChange}
+                type="file"
+              />
+            </label>
 
-        <div className="rounded-2xl border border-dashed border-stone-300 bg-stone-50/80 p-5 dark:border-stone-700 dark:bg-stone-900/40">
-          <div className="flex flex-wrap items-center gap-3">
-            <Button asChild className="rounded-full" size="sm" type="button" variant="outline">
-              <label className="cursor-pointer">
-                <Camera className="mr-2 h-4 w-4" />
-                选择图片或 PDF
-                <Input accept=".png,.jpg,.jpeg,.webp,.heic,.pdf" className="hidden" onChange={handleFileChange} type="file" />
-              </label>
-            </Button>
-            {fileName ? (
-              <span className="inline-flex items-center gap-2 text-sm text-stone-600 dark:text-stone-300">
+            <div className="flex items-center justify-between text-xs text-stone-600 dark:text-stone-300">
+              <span className="inline-flex items-center gap-1">
                 <FileImage className="h-4 w-4" />
-                {fileName}
-                {images.length > 1 ? ` · 已提取 ${images.length} 页` : ""}
+                {images.length > 0 ? `已添加 ${images.length} 张` : "尚未添加文件"}
               </span>
-            ) : (
-              <span className="text-sm text-stone-500 dark:text-stone-400">
-                建议上传目录页清晰、层级完整的照片或扫描版 PDF。
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-stone-200 dark:border-stone-800">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 px-4 py-3 dark:border-stone-800">
-            <div className="text-sm font-medium">目录识别预览</div>
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="rounded-full bg-stone-100 px-3 py-1 text-stone-600 dark:bg-stone-900 dark:text-stone-300">
-                知识路径 {summary.totalPaths}
-              </span>
-              <span className="rounded-full bg-stone-100 px-3 py-1 text-stone-600 dark:bg-stone-900 dark:text-stone-300">
-                最大层级 {summary.maxDepth}
-              </span>
-              <span className="rounded-full bg-stone-100 px-3 py-1 text-stone-600 dark:bg-stone-900 dark:text-stone-300">
-                一级知识点 {summary.rootCount}
-              </span>
+              {images.length > 0 && <span>拖动调整识别顺序</span>}
             </div>
+
+            <ScrollArea className="h-[380px] rounded-2xl border border-stone-200/80 bg-white/80 dark:border-stone-800 dark:bg-stone-950/60">
+              <div className="space-y-2 p-3">
+                {images.length === 0 ? (
+                  <p className="py-10 text-center text-sm text-stone-400">
+                    上传后，图片会按顺序显示在这里。
+                  </p>
+                ) : (
+                  images.map((image, index) => (
+                    <div
+                      className="flex items-center gap-3 rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm dark:border-stone-800 dark:bg-stone-900"
+                      draggable
+                      key={image.id}
+                      onDragEnd={() => setDraggingImageId(null)}
+                      onDragOver={(event) => event.preventDefault()}
+                      onDragStart={() => setDraggingImageId(image.id)}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        if (draggingImageId) {
+                          moveImage(draggingImageId, image.id);
+                        }
+                        setDraggingImageId(null);
+                      }}
+                    >
+                      <div className="flex items-center gap-2 text-stone-400">
+                        <GripVertical className="h-4 w-4" />
+                        <span className="text-xs font-medium text-stone-500 dark:text-stone-400">{index + 1}</span>
+                      </div>
+                      <button
+                        aria-label="查看大图"
+                        className="shrink-0 overflow-hidden rounded-lg border border-stone-200 transition hover:ring-2 hover:ring-primary dark:border-stone-800"
+                        onClick={() => setPreviewImage(image)}
+                        type="button"
+                      >
+                        <img
+                          alt={image.name}
+                          className="h-14 w-14 cursor-zoom-in object-cover"
+                          src={image.src}
+                        />
+                      </button>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-stone-700 dark:text-stone-200">
+                          {image.name}
+                        </p>
+                      </div>
+                      <Button
+                        className="h-8 w-8 rounded-full text-stone-500 hover:text-red-600 dark:text-stone-400 dark:hover:text-red-400"
+                        onClick={() => removeImage(image.id)}
+                        size="icon"
+                        type="button"
+                        variant="ghost"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </ScrollArea>
           </div>
-          <ScrollArea className="h-[420px]">
-            <div className="space-y-2 p-4">
-              {!paths.length && !error && (
-                <p className="text-sm text-stone-500 dark:text-stone-400">
-                  选择文件后点击“开始识别”，系统会在这里展示识别出的目录层级路径。
-                </p>
-              )}
-              {paths.map((path, index) => (
-                <div
-                  className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm dark:border-stone-800 dark:bg-stone-900"
-                  key={`${path.join(" > ")}-${index}`}
-                >
-                  {path.join(" > ")}
+
+          {/* 右栏：识别结果 */}
+          <div className="flex flex-col gap-3">
+            <div className="space-y-2">
+              <Label htmlFor="catalog-root-name">
+                主知识点名称 <span className="text-red-500">*</span>
+              </Label>
+              <Input
+                id="catalog-root-name"
+                onChange={(event) => setRootName(event.target.value)}
+                placeholder="例如：高等数学上册 / 数据结构导论"
+                value={rootName}
+              />
+              <p className="text-xs text-stone-500 dark:text-stone-400">
+                识别出的全部章节会作为该主知识点的子节点导入。
+              </p>
+            </div>
+
+            <div className="relative flex-1 rounded-2xl border border-stone-200 dark:border-stone-800">
+              <ScrollArea className="h-[420px]">
+                <div className="p-4">
+                  {error ? (
+                    <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+                  ) : (
+                    <KnowledgeImportTreePreview
+                      emptyText={
+                        images.length === 0
+                          ? "左侧上传目录照片后，点击“开始识别”即可在此预览层级。"
+                          : "点击“开始识别”，等待后端识别目录层级。"
+                      }
+                      onRemoveNode={removeTreeNode}
+                      paths={effectivePaths}
+                      showCounts={false}
+                      showTypeBadge={false}
+                    />
+                  )}
                 </div>
-              ))}
-              {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+              </ScrollArea>
+
+              {recognizing && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 rounded-2xl bg-background/85 backdrop-blur-sm">
+                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                  <p className="text-sm font-medium">正在识别目录，请稍候…</p>
+                  <p className="max-w-xs text-center text-xs text-stone-500 dark:text-stone-400">
+                    后端会对每张图片进行 OCR 并整理层级，首次识别较慢，通常需要 10 秒至 1 分钟。
+                  </p>
+                </div>
+              )}
             </div>
-          </ScrollArea>
+          </div>
         </div>
 
-        <DialogFooter>
+        {previewImage && (
+          <button
+            aria-label="关闭大图"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6"
+            onClick={() => setPreviewImage(null)}
+            type="button"
+          >
+            <img
+              alt={previewImage.name}
+              className="max-h-full max-w-full rounded-lg object-contain"
+              src={previewImage.src}
+            />
+          </button>
+        )}
+
+        <DialogFooter className="gap-2">
           <Button onClick={() => handleOpenChange(false)} type="button" variant="outline">
             取消
           </Button>
-          <Button disabled={loading || recognizing || images.length === 0} onClick={() => void handleRecognize()} type="button" variant="outline">
-            {recognizing ? "识别中…" : "开始识别"}
+          <Button
+            disabled={loading || recognizing || images.length === 0}
+            onClick={() => void handleRecognize()}
+            type="button"
+            variant="outline"
+          >
+            {recognizing ? (
+              <>
+                <Camera className="mr-2 h-4 w-4 animate-pulse" />
+                识别中…
+              </>
+            ) : (
+              <>
+                <Camera className="mr-2 h-4 w-4" />
+                开始识别
+              </>
+            )}
           </Button>
-          <Button disabled={recognizing || importing || paths.length === 0} onClick={() => void handleImport()} type="button">
+          <Button disabled={!canImport} onClick={() => void handleImport()} type="button">
             {importing ? "导入中…" : "确认导入"}
           </Button>
         </DialogFooter>

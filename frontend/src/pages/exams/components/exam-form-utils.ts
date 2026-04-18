@@ -5,6 +5,7 @@ export interface ExamQuestionFormItem {
 }
 
 export interface ExamFormValues {
+  category: "exam" | "practice";
   title: string;
   description: string;
   start_time: string;

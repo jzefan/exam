@@ -128,6 +128,7 @@ vi.mock("@/pages/grading/api", () => ({
 
 function createInitialValues(): ExamFormValues {
   return {
+    category: "exam",
     title: "Java 后端岗位笔试",
     description: "",
     start_time: "2026-04-10T10:00",

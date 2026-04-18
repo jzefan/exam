@@ -1,5 +1,5 @@
 import { useId, useState, useRef, useEffect } from "react";
-import { Search, Check, Upload, Plus, X, Users } from "lucide-react";
+import { Search, Check, Upload, Plus, Users } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";

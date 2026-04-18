@@ -24,6 +24,7 @@ function toLocalDatetime(iso: string | null): string {
 
 function toExamForm(exam: ExamDetail): ExamFormValues {
   return {
+    category: exam.category ?? "exam",
     title: exam.title,
     description: exam.description || "",
     start_time: toLocalDatetime(exam.start_time),
@@ -70,6 +71,7 @@ function ExamEditForm({ id, exam }: { id: string; exam: ExamDetail }) {
           end_time: values.end_time || null,
           notes_template: values.notes_template || null,
           position_id: values.position_id || null,
+          category: values.category,
           question_mode: values.question_mode,
           question_items: values.question_items,
         },

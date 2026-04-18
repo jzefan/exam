@@ -15,9 +15,10 @@ import {
   Filter,
   Check,
   ChevronsUpDown,
-  BarChart3,
+  PieChart,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -53,6 +54,7 @@ import type { ExamStatus, IExam } from "@/types";
 import { getErrorMessage } from "./components/exam-form-utils";
 
 type FilterKey = "all" | ExamStatus;
+type CategoryKey = "all" | "exam" | "practice";
 
 function formatDateTime(iso: string | null) {
   if (!iso) return "—";
@@ -77,6 +79,15 @@ function ExamCard({
   const effectiveStatus = getEffectiveExamStatus(exam);
   const canClose =
     effectiveStatus !== "ongoing" || exam.submitted_count >= exam.total_students;
+  const canViewAnalysis =
+    effectiveStatus !== "draft" &&
+    effectiveStatus !== "upcoming" &&
+    exam.submitted_count > 0;
+  const categoryLabel = exam.category === "practice" ? "练习" : "考试";
+  const categoryBadgeClass =
+    exam.category === "practice"
+      ? "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+      : "border-blue-500/20 bg-blue-500/10 text-blue-700 dark:text-blue-300";
 
   return (
     <div className="group relative overflow-hidden rounded-xl border border-border/50 bg-card p-0 transition-all hover:border-primary/20 hover:shadow-xl hover:shadow-primary/[0.03]">
@@ -87,6 +98,9 @@ function ExamCard({
             <h3 className="text-base font-bold text-foreground tracking-tight truncate">
               {exam.title}
             </h3>
+            <Badge variant="outline" className={categoryBadgeClass}>
+              {categoryLabel}
+            </Badge>
             <ExamStatusBadge status={effectiveStatus} />
           </div>
 
@@ -121,10 +135,17 @@ function ExamCard({
             <span>查看</span>
           </Button>
 
-          <Button variant="ghost" size="sm" className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold" onClick={onAnalysis}>
-            <BarChart3 size={14} />
-            <span>结果分析</span>
-          </Button>
+          {canViewAnalysis && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold"
+              onClick={onAnalysis}
+            >
+              <PieChart size={14} />
+              <span>结果分析</span>
+            </Button>
+          )}
 
           {/* 关闭 — draft(no), upcoming, ongoing(conditional), completed */}
           {(effectiveStatus === "upcoming" || effectiveStatus === "ongoing" || effectiveStatus === "completed") && (
@@ -177,8 +198,8 @@ function EmptyState() {
       <div className="h-16 w-16 rounded-2xl bg-muted/50 flex items-center justify-center mb-4">
         <ClipboardList size={32} className="text-muted-foreground/30" />
       </div>
-      <p className="text-sm font-medium text-muted-foreground">暂无考试记录</p>
-      <p className="text-xs text-muted-foreground/60 mt-1">点击右上角按钮创建你的第一场考试</p>
+      <p className="text-sm font-medium text-muted-foreground">暂无考试或练习记录</p>
+      <p className="text-xs text-muted-foreground/60 mt-1">可以先创建考试，或按知识点发布一套练习</p>
     </div>
   );
 }
@@ -186,6 +207,7 @@ function EmptyState() {
 export function ExamList() {
   const navigate = useNavigate();
   const [filter, setFilter] = useState<FilterKey>("all");
+  const [category, setCategory] = useState<CategoryKey>("all");
   const [filterOpen, setFilterOpen] = useState(false);
   const [searchText, setSearchText] = useState("");
   const [timeFrom, setTimeFrom] = useState<Date | undefined>(undefined);
@@ -227,6 +249,7 @@ export function ExamList() {
   };
 
   const activeFilters: CrudFilters = [];
+  if (category !== "all") activeFilters.push({ field: "category", operator: "eq", value: category });
   if (filter !== "all") activeFilters.push({ field: "status", operator: "eq", value: filter });
   if (searchText.trim()) activeFilters.push({ field: "title", operator: "contains", value: searchText.trim() });
   if (timeFrom) activeFilters.push({ field: "start_time", operator: "gte", value: timeFrom.toISOString() });
@@ -251,6 +274,8 @@ export function ExamList() {
     filter === "all"
       ? "所有状态"
       : examStatusOptions.find((option) => option.value === filter)?.label ?? "所有状态";
+  const closeTargetLabel = closeTarget?.category === "practice" ? "练习" : "考试";
+  const deleteTargetLabel = deleteTarget?.category === "practice" ? "练习" : "考试";
 
   return (
     <div className="space-y-8 max-w-[1200px] mx-auto">
@@ -258,20 +283,51 @@ export function ExamList() {
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
         <div className="space-y-1">
           <h1 className="text-xl font-bold text-foreground tracking-tight">
-            考试管理
+            考试与练习管理
           </h1>
           <p className="text-sm text-muted-foreground">
-            规划、发布并实时监控全校考试进度与阅卷状态
+            统一管理考试与练习的发布、参与和进度状态
           </p>
         </div>
-        <Button className="h-9 w-fit shrink-0 px-4 font-medium self-start sm:self-auto" onClick={() => navigate("/exams/create")}>
-          <Plus size={16} className="mr-1.5" />
-          创建考试
-        </Button>
+        <div className="flex flex-wrap gap-2 self-start sm:self-auto">
+          <Button variant="outline" className="h-9 w-fit shrink-0 px-4 font-medium" onClick={() => navigate("/exams/practice/create")}>
+            <Plus size={16} className="mr-1.5" />
+            发布练习
+          </Button>
+          <Button className="h-9 w-fit shrink-0 px-4 font-medium" onClick={() => navigate("/exams/create")}>
+            <Plus size={16} className="mr-1.5" />
+            创建考试
+          </Button>
+        </div>
       </div>
 
       {/* Filters Bar */}
       <div className="flex flex-wrap items-center gap-3 p-4 rounded-xl border border-border/40 bg-muted/5">
+        <div className="inline-flex items-center rounded-lg border border-border/60 bg-background p-1">
+          {[
+            { value: "all", label: "全部" },
+            { value: "exam", label: "考试" },
+            { value: "practice", label: "练习" },
+          ].map((item) => (
+            <button
+              key={item.value}
+              type="button"
+              className={cn(
+                "h-8 rounded-md px-3 text-xs font-semibold transition-colors",
+                category === item.value
+                  ? "bg-primary text-primary-foreground shadow-sm"
+                  : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+              )}
+              onClick={() => {
+                setCategory(item.value as CategoryKey);
+                setPage(1);
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+
         <div className="flex items-center gap-2">
           <Filter size={14} className="text-muted-foreground/60 ml-1" />
           <Popover open={filterOpen} onOpenChange={setFilterOpen}>
@@ -332,7 +388,7 @@ export function ExamList() {
         <div className="relative">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/40" />
           <Input
-            placeholder="搜索考试..."
+            placeholder={category === "practice" ? "搜索练习..." : "搜索考试 / 练习..."}
             value={searchText}
             onChange={(e) => { setSearchText(e.target.value); setPage(1); }}
             className="h-9 pl-9 w-[240px] text-xs font-medium border-border/60 focus-visible:ring-primary/20"
@@ -357,12 +413,12 @@ export function ExamList() {
           />
         </div>
 
-        {(filter !== "all" || searchText || timeFrom || timeTo) && (
+        {(category !== "all" || filter !== "all" || searchText || timeFrom || timeTo) && (
           <Button
             variant="ghost"
             size="sm"
             className="h-9 px-3 text-xs font-bold text-muted-foreground hover:text-foreground"
-            onClick={() => { setFilter("all"); setSearchText(""); setTimeFrom(undefined); setTimeTo(undefined); setPage(1); }}
+            onClick={() => { setCategory("all"); setFilter("all"); setSearchText(""); setTimeFrom(undefined); setTimeTo(undefined); setPage(1); }}
           >
             清除筛选
           </Button>
@@ -384,7 +440,13 @@ export function ExamList() {
             <ExamCard
               key={exam.id}
               exam={exam}
-              onView={() => navigate(`/exams/edit/${exam.id}`)}
+              onView={() =>
+                navigate(
+                  exam.category === "practice"
+                    ? `/exams/practice/edit/${exam.id}`
+                    : `/exams/edit/${exam.id}`,
+                )
+              }
               onAnalysis={() => navigate(`/exams/${exam.id}/analysis`)}
               onClose={() => setCloseTarget(exam)}
               onDelete={() => setDeleteTarget(exam)}
@@ -443,9 +505,9 @@ export function ExamList() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>关闭考试</AlertDialogTitle>
+            <AlertDialogTitle>关闭{closeTargetLabel}</AlertDialogTitle>
             <AlertDialogDescription>
-              确定要关闭考试「{closeTarget?.title}」吗？关闭后考生将无法继续作答。
+              确定要关闭{closeTargetLabel}「{closeTarget?.title}」吗？关闭后学生将无法继续作答。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -472,9 +534,9 @@ export function ExamList() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>删除考试</AlertDialogTitle>
+            <AlertDialogTitle>删除{deleteTargetLabel}</AlertDialogTitle>
             <AlertDialogDescription>
-              确定要删除考试「{deleteTarget?.title}」吗？此操作无法撤销。
+              确定要删除{deleteTargetLabel}「{deleteTarget?.title}」吗？此操作无法撤销。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -492,13 +554,13 @@ export function ExamList() {
                       query.refetch();
                       toast({
                         title: "删除成功",
-                        description: `考试「${target.title}」已删除。`,
+                        description: `${target.category === "practice" ? "练习" : "考试"}「${target.title}」已删除。`,
                       });
                     },
                     onError: (error) => {
                       toast({
                         title: "删除失败",
-                        description: getErrorMessage(error, "删除考试失败，请稍后重试。"),
+                        description: getErrorMessage(error, "删除记录失败，请稍后重试。"),
                         variant: "destructive",
                       });
                     },

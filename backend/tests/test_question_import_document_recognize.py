@@ -333,6 +333,34 @@ def test_build_import_draft_marks_choice_with_missing_options_as_issue() -> None
     assert "选择题选项不完整" in draft.issues
 
 
+def test_build_import_draft_collects_multiline_answer_until_next_field() -> None:
+    draft = build_import_draft_from_segment(
+        """
+        [简答题]简述MySQL的事务隔离级别有哪些？
+        [答案]
+        - READ UNCOMMITTED 是事务中最低的级别，也称为脏读
+        - READ COMMITTED 只能读取其它事务已经提交的内容，可以避免脏读。
+        - REPEATABLE READ 是 MySQL 默认的事务隔离级别。
+        - SERIALIZABLE 是事务的最高隔离级别。
+        [预期时间]
+        """
+    )
+
+    assert draft.answer_text is not None
+    assert "READ UNCOMMITTED" in draft.answer_text
+    assert "SERIALIZABLE" in draft.answer_text
+    assert "[预期时间]" not in draft.answer_text
+
+
+def test_build_import_draft_recognizes_inline_bracket_answer_between_fields() -> None:
+    draft = build_import_draft_from_segment(
+        "[判断题]在MySQL中,数据表在创建以后,就不允许对表进行修改操作。 [答案]错误 [难度]简单"
+    )
+
+    assert draft.answer_text == "错误"
+    assert draft.type == "true_false"
+
+
 def test_build_import_draft_does_not_keep_standalone_question_type_in_content() -> None:
     draft = build_import_draft_from_segment(
         "选择题\n我国首都是哪里？\nA. 北京\nB. 上海\n答案：A"

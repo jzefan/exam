@@ -100,8 +100,7 @@ RecommendationModel = Literal["deepseek", "qwen", "kimi"]
 
 class CatalogPhotoRecognizeRequest(BaseModel):
     file_name: str = Field(min_length=1, max_length=255)
-    images: list[str] = Field(min_length=1)
-    model: RecommendationModel = "qwen"
+    images: list[str] = Field(min_length=1, max_length=30)
 
 
 class CatalogPhotoRecognizeResponse(BaseModel):

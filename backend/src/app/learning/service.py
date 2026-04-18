@@ -1,5 +1,6 @@
 """Service layer for knowledge management."""
 
+import asyncio
 import json
 import re
 import uuid
@@ -510,43 +511,109 @@ def _normalize_catalog_paths(payload: object) -> list[list[str]]:
     return normalized
 
 
-async def recognize_catalog_structure_from_images(
-    request: CatalogPhotoRecognizeRequest,
-) -> CatalogPhotoRecognizeResponse:
-    config = MODEL_CONFIGS[request.model]
-    api_key = cast(str | None, getattr(settings, config["api_key"]))
+_CATALOG_LINE_PREFIX = re.compile(
+    r"^(?P<prefix>"
+    r"第[一二三四五六七八九十百千万\d]+[章节篇编]"
+    r"|[一二三四五六七八九十]+[、.]"
+    r"|[（(][一二三四五六七八九十\d]+[）)]"
+    r"|\d+(?:\.\d+)*[、.]?"
+    r")\s*(?P<title>.+)$"
+)
+
+
+def _clean_catalog_line(line: str) -> str:
+    cleaned = re.sub(r"\s+", " ", line.strip())
+    cleaned = re.sub(r"[.·。．…]{2,}\s*\d+\s*$", "", cleaned).strip()
+    cleaned = re.sub(r"[-—_]{2,}\s*\d+\s*$", "", cleaned).strip()
+    cleaned = re.sub(r"\s*[.·。．…]\s*\d+\s*$", "", cleaned).strip()
+    cleaned = re.sub(r"\s+\d+\s*$", "", cleaned).strip()
+    return cleaned.strip(" \t-—")
+
+
+def _catalog_line_level(line: str) -> tuple[int, str] | None:
+    match = _CATALOG_LINE_PREFIX.match(line)
+    if not match:
+        return None
+
+    prefix = match.group("prefix").rstrip("、.")
+    title = _clean_catalog_line(match.group("title"))
+    if not title:
+        return None
+    text = f"{prefix} {title}".strip()
+
+    if prefix.startswith("第") and prefix[-1] in {"章", "篇", "编"}:
+        return 1, text
+    if prefix.startswith("第") and prefix[-1] == "节":
+        return 2, text
+    if re.match(r"^\d+(?:\.\d+)+$", prefix):
+        return prefix.count(".") + 1, text
+    if re.match(r"^\d+$", prefix):
+        return 1, text
+    if re.match(r"^[一二三四五六七八九十]+$", prefix):
+        return 1, text
+    if re.match(r"^[（(][一二三四五六七八九十\d]+[）)]$", prefix):
+        return 2, text
+    return None
+
+
+def _parse_catalog_paths_from_text(text: str) -> list[list[str]]:
+    stack: list[str] = []
+    paths: list[list[str]] = []
+    seen: set[str] = set()
+
+    for raw_line in text.splitlines():
+        line = _clean_catalog_line(raw_line)
+        if not line or len(line) <= 1:
+            continue
+        if re.fullmatch(r"\d+", line):
+            continue
+        parsed = _catalog_line_level(line)
+        if not parsed:
+            continue
+
+        level, title = parsed
+        stack = stack[: max(level - 1, 0)]
+        stack.append(title)
+        key = " > ".join(stack)
+        if key not in seen:
+            seen.add(key)
+            paths.append(stack.copy())
+
+    if not paths:
+        raise ValueError("已识别到文字，但未能整理出目录层级，请调整图片顺序后重试。")
+    return paths
+
+
+def _ensure_data_url(image: str) -> str:
+    if image.strip().lower().startswith("data:"):
+        return image
+    return f"data:image/jpeg;base64,{image}"
+
+
+_CATALOG_VL_PROMPT = """你是图书目录结构化助手。请仔细阅读用户提供的一张或多张书籍目录照片，按从上到下、从第一张到最后一张的顺序，完整提取所有目录条目并还原层级关系（章、节、小节等）。
+
+要求：
+1. 只输出合法 JSON，不要任何解释、不要 Markdown 代码块。
+2. JSON 格式：{"paths": [["第一章 xxx", "1.1 xxx", "1.1.1 xxx"], ["第一章 xxx", "1.2 xxx"], ...]}。
+3. 每个 path 是一条从最顶层到某个叶子节点的完整层级数组。
+4. 去除页码、前后空白；保留书名号、顿号等正文符号。
+5. 同一目录条目跨页出现时仅输出一次，不要重复。
+6. 不要编造目录中不存在的内容。"""
+
+
+async def _recognize_catalog_with_qwen_vl(images: list[str]) -> list[list[str]]:
+    api_key = settings.qwen_api_key
     if not api_key:
-        raise RuntimeError(f"未配置 {request.model} 的 API Key")
+        raise RuntimeError("未配置 Qwen API Key，请联系管理员。")
 
-    base_url = cast(str, getattr(settings, config["base_url"])).rstrip("/")
-    model_name = cast(str, getattr(settings, config["model_name"]))
+    base_url = settings.qwen_base_url.rstrip("/")
+    model_name = settings.qwen_vl_model_name
 
-    prompt = f"""
-你是一名中文教材目录识别助手。请阅读用户上传的书籍目录照片或扫描页，只输出合法 JSON。
+    content: list[dict[str, Any]] = [{"type": "text", "text": _CATALOG_VL_PROMPT}]
+    for image in images:
+        content.append({"type": "image_url", "image_url": {"url": _ensure_data_url(image)}})
 
-任务：
-1. 识别图片中的目录结构。
-2. 提取每一条目录路径，按层级输出。
-3. 忽略页码、页眉、页脚、装饰性文字。
-4. 保留章节标题中的编号，例如“第1章”“1.1”“（一）”。
-5. 不要杜撰不存在的目录项。
-
-输出格式：
-{{
-  "paths": [
-    ["第1章 数据库系统概述", "1.1 数据模型", "1.1.1 关系模型"],
-    ["第1章 数据库系统概述", "1.2 数据独立性"]
-  ]
-}}
-
-文件名：{request.file_name}
-"""
-
-    content: list[dict[str, object]] = [{"type": "text", "text": prompt.strip()}]
-    for image in request.images:
-        content.append({"type": "image_url", "image_url": {"url": image}})
-
-    async with httpx.AsyncClient(timeout=45.0) as client:
+    async with httpx.AsyncClient(timeout=90.0) as client:
         response = await client.post(
             f"{base_url}/chat/completions",
             headers={"Authorization": f"Bearer {api_key}"},
@@ -556,40 +623,63 @@ async def recognize_catalog_structure_from_images(
                     {"role": "system", "content": "你只输出合法 JSON。"},
                     {"role": "user", "content": content},
                 ],
-                "temperature": 0.2,
+                "temperature": 0.1,
             },
         )
+
     if response.status_code >= 400:
         detail = response.text.strip() or "AI 服务请求失败"
-        raise RuntimeError(detail)
+        raise RuntimeError(f"目录识别失败：{detail[:200]}")
 
-    raw_content = (
+    raw = (
         response.json()
         .get("choices", [{}])[0]
         .get("message", {})
         .get("content", "")
     )
-    if not isinstance(raw_content, str) or not raw_content.strip():
-        raise RuntimeError("AI 服务没有返回内容")
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("未识别到目录内容，请换一张更清晰的照片。")
 
-    payload = raw_content.strip()
-    if "```" in payload:
-        start = payload.find("```")
-        end = payload.rfind("```")
-        if start != -1 and end != -1 and end > start:
-            payload = payload[start + 3 : end].strip()
-            if payload.startswith("json"):
-                payload = payload[4:].strip()
+    text = raw.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
+        text = re.sub(r"\s*```\s*$", "", text)
 
     try:
-        parsed = json.loads(payload)
+        payload = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("目录结构解析失败，请重试") from exc
+        raise ValueError("目录识别结果格式异常，请重试。") from exc
 
+    raw_paths = payload.get("paths") if isinstance(payload, dict) else None
+    if not isinstance(raw_paths, list):
+        raise ValueError("未识别到目录层级，请换一张更清晰的照片。")
+
+    cleaned: list[list[str]] = []
+    for item in raw_paths:
+        if not isinstance(item, list):
+            continue
+        segs = [str(seg).strip() for seg in item if str(seg).strip()]
+        if segs:
+            cleaned.append(segs)
+
+    if not cleaned:
+        raise ValueError("未识别到目录层级，请换一张更清晰的照片。")
+    return cleaned
+
+
+async def recognize_catalog_structure_from_images(
+    request: CatalogPhotoRecognizeRequest,
+) -> CatalogPhotoRecognizeResponse:
     try:
-        return CatalogPhotoRecognizeResponse(paths=_normalize_catalog_paths(parsed))
-    except ValueError as exc:
-        raise RuntimeError(str(exc)) from exc
+        paths = await asyncio.wait_for(
+            _recognize_catalog_with_qwen_vl(request.images),
+            timeout=120.0,
+        )
+        return CatalogPhotoRecognizeResponse(paths=paths)
+    except asyncio.TimeoutError as exc:
+        raise RuntimeError("目录识别超时，请减少图片数量或稍后重试。") from exc
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"目录识别网络错误：{exc}") from exc
 
 
 async def _search_bilibili_videos(query: str) -> list[RecommendationItem]:

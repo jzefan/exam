@@ -12,9 +12,11 @@ import {
   validateTypeAllocation,
 } from "./ai-generate-utils";
 import {
-  AIQuestionConfigPanel,
   AI_TYPE_LABELS,
   type AIModelProvider,
+} from "@/components/questions/ai-question-config-constants";
+import {
+  AIQuestionConfigPanel,
   type SelectedKnowledgePoint,
 } from "@/components/questions/ai-question-config-panel";
 
@@ -34,7 +36,7 @@ interface GeneratedQuestion {
   selected: boolean;
 }
 
-interface TypeAllocation extends Record<QuestionType, number> {}
+type TypeAllocation = Record<QuestionType, number>;
 
 const TYPE_COLORS: Record<keyof TypeAllocation, string> = {
   choice: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",

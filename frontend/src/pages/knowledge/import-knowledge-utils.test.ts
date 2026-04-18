@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { utils, write } from "xlsx";
 
-import { extractKnowledgeImportPaths, summarizeKnowledgeImportPaths } from "./import-knowledge-utils";
+import {
+  buildKnowledgeImportPreviewTree,
+  extractKnowledgeImportPaths,
+  summarizeKnowledgeImportPaths,
+} from "./import-knowledge-utils";
 
 function buildExcelFile(rows: string[][], name = "knowledge.xlsx") {
   const workbook = utils.book_new();
@@ -58,5 +62,41 @@ describe("knowledge import utils", () => {
       maxDepth: 3,
       rootCount: 2,
     });
+  });
+
+  it("builds a merged tree for graphical preview", () => {
+    expect(
+      buildKnowledgeImportPreviewTree([
+        ["数据库基础", "关系模型", "候选键"],
+        ["数据库基础", "关系模型", "外键"],
+        ["数据库基础", "SQL"],
+        ["事务管理"],
+      ]),
+    ).toEqual([
+      {
+        label: "数据库基础",
+        pathIndexes: [0, 1, 2],
+        children: [
+          {
+            label: "关系模型",
+            pathIndexes: [0, 1],
+            children: [
+              { label: "候选键", pathIndexes: [0], children: [] },
+              { label: "外键", pathIndexes: [1], children: [] },
+            ],
+          },
+          {
+            label: "SQL",
+            pathIndexes: [2],
+            children: [],
+          },
+        ],
+      },
+      {
+        label: "事务管理",
+        pathIndexes: [3],
+        children: [],
+      },
+    ]);
   });
 });

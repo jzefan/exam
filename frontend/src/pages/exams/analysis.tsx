@@ -1,6 +1,6 @@
 import { useOne } from "@refinedev/core";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, BarChart3, Loader2 } from "lucide-react";
+import { ArrowLeft, Loader2, PieChart } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -134,7 +134,7 @@ function EmptyState({ message }: { message: string }) {
   return (
     <div className="flex min-h-[200px] flex-col items-center justify-center rounded-lg border border-dashed border-border/60 bg-muted/10 px-6 py-10 text-center">
       <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-muted/60">
-        <BarChart3 size={24} className="text-muted-foreground/50" />
+        <PieChart size={24} className="text-muted-foreground/50" />
       </div>
       <p className="text-sm text-muted-foreground">{message}</p>
     </div>

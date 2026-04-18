@@ -27,6 +27,8 @@ interface Props {
   onCreateRootKnowledge: (direction: IDirection) => void;
   onEditDirection: (direction: IDirection) => void;
   onDeleteDirection: (direction: IDirection) => void;
+  onEditRootKnowledge: (knowledge: IKnowledgePointDetail) => void;
+  onDeleteRootKnowledge: (knowledge: IKnowledgePointDetail) => void;
 }
 
 export function MajorDirectionSidebar({
@@ -44,8 +46,12 @@ export function MajorDirectionSidebar({
   onCreateRootKnowledge,
   onEditDirection,
   onDeleteDirection,
+  onEditRootKnowledge,
+  onDeleteRootKnowledge,
 }: Props) {
   const [collapsedMajors, setCollapsedMajors] = useState<Set<string>>(new Set());
+  const addActionClassName =
+    "flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-stone-500 transition-colors hover:bg-amber-50/80 hover:text-amber-800 dark:text-stone-400 dark:hover:bg-amber-950/30 dark:hover:text-amber-200";
 
   const toggleMajor = (id: string) =>
     setCollapsedMajors((prev) => {
@@ -67,11 +73,11 @@ export function MajorDirectionSidebar({
         </p>
         <Button
           className="h-7 rounded-full px-2.5 text-[11px]"
-          size="sm"
           onClick={onCreateMajor}
+          size="sm"
           type="button"
         >
-          + 专业
+          添加专业
         </Button>
       </div>
       <div className="space-y-2">
@@ -214,29 +220,44 @@ export function MajorDirectionSidebar({
                               {isSelectedDirection && (
                                 <div className="ml-3 space-y-0.5 border-l border-stone-200 pl-2 dark:border-stone-800">
                                   {rootKnowledgePoints.map((knowledge) => (
-                                    <Button
-                                      key={knowledge.id}
-                                      className={`h-8 w-full justify-start rounded-md border px-2 text-left text-[11px] shadow-sm transition-colors ${
-                                        selectedRootKnowledgeId === knowledge.id
-                                          ? "border-amber-200 bg-amber-50/90 text-amber-900 shadow-[0_6px_16px_rgba(217,119,6,0.12)] hover:bg-amber-100/90 dark:border-amber-800/70 dark:bg-amber-950/35 dark:text-amber-100 dark:hover:bg-amber-900/40"
-                                          : "border-transparent bg-white/45 text-stone-500 hover:border-stone-200 hover:bg-white/75 hover:text-stone-800 dark:bg-stone-950/20 dark:text-stone-400 dark:hover:border-stone-800 dark:hover:bg-stone-900/60 dark:hover:text-stone-200"
-                                      }`}
-                                      onClick={() => onSelectRootKnowledge(direction.id, knowledge.id)}
-                                      type="button"
-                                      variant="ghost"
-                                    >
-                                      <span className="truncate">{knowledge.name}</span>
-                                    </Button>
+                                    <ContextMenu key={knowledge.id}>
+                                      <ContextMenuTrigger asChild>
+                                        <Button
+                                          className={`h-8 w-full justify-start rounded-md border px-2 text-left text-[11px] shadow-sm transition-colors ${
+                                            selectedRootKnowledgeId === knowledge.id
+                                              ? "border-amber-200 bg-amber-50/90 text-amber-900 shadow-[0_6px_16px_rgba(217,119,6,0.12)] hover:bg-amber-100/90 dark:border-amber-800/70 dark:bg-amber-950/35 dark:text-amber-100 dark:hover:bg-amber-900/40"
+                                              : "border-transparent bg-white/45 text-stone-500 hover:border-stone-200 hover:bg-white/75 hover:text-stone-800 dark:bg-stone-950/20 dark:text-stone-400 dark:hover:border-stone-800 dark:hover:bg-stone-900/60 dark:hover:text-stone-200"
+                                          }`}
+                                          onClick={() => onSelectRootKnowledge(direction.id, knowledge.id)}
+                                          type="button"
+                                          variant="ghost"
+                                        >
+                                          <span className="truncate">{knowledge.name}</span>
+                                        </Button>
+                                      </ContextMenuTrigger>
+                                      <ContextMenuContent className="w-auto min-w-0">
+                                        <ContextMenuItem inset onSelect={() => onEditRootKnowledge(knowledge)}>
+                                          编辑主知识/技能
+                                        </ContextMenuItem>
+                                        <ContextMenuSeparator />
+                                        <ContextMenuItem
+                                          className="text-destructive focus:text-destructive"
+                                          inset
+                                          onSelect={() => onDeleteRootKnowledge(knowledge)}
+                                        >
+                                          删除主知识/技能
+                                        </ContextMenuItem>
+                                      </ContextMenuContent>
+                                    </ContextMenu>
                                   ))}
-                                  {rootKnowledgePoints.length === 0 && (
-                                    <button
-                                      className="w-full rounded-md border border-dashed border-stone-200 bg-white/35 px-2 py-2 text-left text-[11px] text-stone-400 transition-colors hover:border-amber-200 hover:bg-amber-50/60 hover:text-amber-800 dark:border-stone-800 dark:bg-stone-950/20 dark:text-stone-500 dark:hover:border-amber-900/60 dark:hover:bg-amber-950/25 dark:hover:text-amber-200"
-                                      onClick={() => onCreateRootKnowledge(direction)}
-                                      type="button"
-                                    >
-                                      + 添加主知识/技能
-                                    </button>
-                                  )}
+                                  <button
+                                    className={addActionClassName}
+                                    onClick={() => onCreateRootKnowledge(direction)}
+                                    type="button"
+                                  >
+                                    <Plus className="h-3 w-3" />
+                                    添加主知识/技能
+                                  </button>
                                 </div>
                               )}
                             </div>
@@ -263,6 +284,16 @@ export function MajorDirectionSidebar({
                       {directions.length === 0 && (
                         <p className="px-2 py-2 text-[11px] text-stone-400 dark:text-stone-500">暂无方向</p>
                       )}
+                      <div className="py-0.5">
+                        <button
+                          className={addActionClassName}
+                          onClick={() => onCreateDirection(major)}
+                          type="button"
+                        >
+                          <Plus className="h-3 w-3" />
+                          添加方向
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>

@@ -344,22 +344,27 @@ export function hasBlockingImportIssues(draft: QuestionImportDraft): boolean {
 export function buildImportableQuestions(drafts: QuestionImportDraft[], questionBankId: string | null) {
   return drafts
     .filter((draft) => draft.review_status === "approved" && !hasBlockingImportIssues(draft))
-    .map((draft) => ({
-      type: draft.type,
-      title: draft.title || generateImportQuestionTitle(draft.content_text),
-      content: {
-        text: stripHtmlForTitle(draft.content_text),
-        html: importTextToHtml(draft.content_text),
-      },
-      options: draft.type === "choice" ? draft.options : null,
-      answer: buildAnswerPayload(draft.type, draft.answer_text),
-      analysis: draft.analysis || null,
-      difficulty: draft.difficulty,
-      score: 10,
-      tag_ids: [],
-      knowledge_point_ids: [],
-      question_bank_id: questionBankId,
-    }));
+    .map((draft) => {
+      const rawTitle = (draft.title || generateImportQuestionTitle(draft.content_text)).trim();
+      const title = (rawTitle || "未命名题目").slice(0, 500);
+      const clampedDifficulty = Math.min(5, Math.max(1, Math.round(draft.difficulty || 3)));
+      return {
+        type: draft.type,
+        title,
+        content: {
+          text: stripHtmlForTitle(draft.content_text),
+          html: importTextToHtml(draft.content_text),
+        },
+        options: draft.type === "choice" ? draft.options : null,
+        answer: buildAnswerPayload(draft.type, draft.answer_text),
+        analysis: draft.analysis || null,
+        difficulty: clampedDifficulty,
+        score: 10,
+        tag_ids: [],
+        knowledge_point_ids: [],
+        question_bank_id: questionBankId,
+      };
+    });
 }
 
 export function generateImportQuestionTitle(contentText: string): string {
@@ -435,14 +440,21 @@ export function getDraftPreviewText(draft: QuestionImportDraft): string {
   return draft.content_text?.trim() || draft.title?.trim() || "未命名题目";
 }
 
+export function isEligibleForBulkApprove(draft: QuestionImportDraft): boolean {
+  return (
+    draft.review_status === "pending" &&
+    !hasBlockingImportIssues(draft) &&
+    !draft.issues.some(isMissingAnswerIssue)
+  );
+}
+
 export function canApproveAllDrafts(drafts: QuestionImportDraft[]): boolean {
-  const pendingDrafts = drafts.filter((draft) => draft.review_status === "pending");
-  return pendingDrafts.length > 0 && pendingDrafts.every((draft) => !hasBlockingImportIssues(draft));
+  return drafts.some(isEligibleForBulkApprove);
 }
 
 export function approveAllPendingDrafts(drafts: QuestionImportDraft[]): QuestionImportDraft[] {
   return drafts.map((draft) => {
-    if (draft.review_status !== "pending") return draft;
+    if (!isEligibleForBulkApprove(draft)) return draft;
     return {
       ...draft,
       title: generateImportQuestionTitle(draft.content_text),

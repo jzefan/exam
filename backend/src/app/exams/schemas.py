@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 ExamStatus = Literal["draft", "upcoming", "ongoing", "completed", "closed"]
 ExamQuestionMode = Literal["manual", "auto", "ai"]
+ExamCategory = Literal["exam", "practice"]
 
 
 # ── Position ──
@@ -68,6 +69,7 @@ class ExamStudentResponse(BaseModel):
 
 
 class ExamCreate(BaseModel):
+    category: ExamCategory = "exam"
     title: str = Field(max_length=200)
     description: str | None = None
     start_time: datetime | None = None
@@ -86,6 +88,7 @@ class ExamCreate(BaseModel):
 
 
 class ExamUpdate(BaseModel):
+    category: ExamCategory | None = None
     title: str | None = Field(default=None, max_length=200)
     description: str | None = None
     start_time: datetime | None = None
@@ -107,6 +110,7 @@ class ExamResponse(BaseModel):
     model_config = {"from_attributes": True}
 
     id: uuid.UUID
+    category: ExamCategory = "exam"
     title: str
     description: str | None
     start_time: datetime | None

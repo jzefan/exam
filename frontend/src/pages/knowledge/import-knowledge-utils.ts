@@ -2,6 +2,12 @@ import { read, utils } from "xlsx";
 
 export type KnowledgeImportPath = string[];
 
+export type KnowledgeImportPreviewNode = {
+  label: string;
+  pathIndexes: number[];
+  children: KnowledgeImportPreviewNode[];
+};
+
 const HEADER_HINT_RE = /(知识点|子知识|目录|章节|章|节|一级|二级|三级|四级|level)/i;
 const SINGLE_CELL_SPLIT_RE = /\s*(?:>|＞|\/|／|→|➜|⟶)\s*/;
 
@@ -90,4 +96,34 @@ export function summarizeKnowledgeImportPaths(paths: KnowledgeImportPath[]) {
     maxDepth: paths.reduce((max, path) => Math.max(max, path.length), 0),
     rootCount: new Set(paths.map((path) => path[0])).size,
   };
+}
+
+export function buildKnowledgeImportPreviewTree(
+  paths: KnowledgeImportPath[],
+): KnowledgeImportPreviewNode[] {
+  const roots: KnowledgeImportPreviewNode[] = [];
+
+  const findOrCreate = (
+    siblings: KnowledgeImportPreviewNode[],
+    label: string,
+    pathIndex: number,
+  ) => {
+    let node = siblings.find((item) => item.label === label);
+    if (!node) {
+      node = { label, pathIndexes: [], children: [] };
+      siblings.push(node);
+    }
+    node.pathIndexes.push(pathIndex);
+    return node;
+  };
+
+  paths.forEach((path, pathIndex) => {
+    let siblings = roots;
+    path.forEach((label) => {
+      const node = findOrCreate(siblings, label, pathIndex);
+      siblings = node.children;
+    });
+  });
+
+  return roots;
 }

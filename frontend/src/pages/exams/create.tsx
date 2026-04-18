@@ -9,6 +9,7 @@ import {
 } from "./components/exam-form-utils";
 
 const initialForm: ExamFormValues = {
+  category: "exam",
   title: "",
   description: "",
   start_time: "",
@@ -44,6 +45,7 @@ export function ExamCreate() {
           end_time: values.end_time || null,
           notes_template: values.notes_template || null,
           position_id: values.position_id || null,
+          category: values.category,
           question_mode: values.question_mode,
           question_items: values.question_items,
         },

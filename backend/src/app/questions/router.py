@@ -22,6 +22,8 @@ from app.questions.schemas import (
     QuestionBankResponse,
     QuestionBulkCreateRequest,
     QuestionBulkCreateResponse,
+    QuestionImportMatchCreateRequest,
+    QuestionImportMatchCreateResponse,
     QuestionImportDocumentRecognizeRequest,
     QuestionImportDocumentRecognizeResponse,
     QuestionImportDraft,
@@ -38,6 +40,7 @@ from app.questions.schemas import (
 )
 from app.questions.service import (
     bulk_create_questions,
+    match_and_create_import_question,
     create_knowledge_point,
     create_question,
     create_question_bank,
@@ -380,6 +383,26 @@ async def bulk_create_questions_endpoint(
     await _ensure_can_read_knowledge_points(db, list(knowledge_point_ids), user, is_admin)
     created = await bulk_create_questions(db, data.questions, user.id)
     return QuestionBulkCreateResponse(created=created)
+
+
+@questions_router.post(
+    "/import/match-create",
+    response_model=QuestionImportMatchCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def import_match_create_endpoint(
+    data: QuestionImportMatchCreateRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
+) -> QuestionImportMatchCreateResponse:
+    is_admin = await _is_question_admin(db, user)
+    await _ensure_can_write_question_bank(db, data.question.question_bank_id, user, is_admin)
+    question, matched = await match_and_create_import_question(db, data.question, data.course_id, user.id)
+    return QuestionImportMatchCreateResponse(
+        question_id=question.id,
+        matched_knowledge_point_ids=[kp.id for kp in matched],
+        matched_knowledge_point_names=[kp.name for kp in matched],
+    )
 
 
 # --- Tags ---

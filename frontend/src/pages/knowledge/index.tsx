@@ -85,7 +85,23 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail ?? "Request failed");
+    const detail = error?.detail;
+    let message: string;
+    if (typeof detail === "string") {
+      message = detail;
+    } else if (Array.isArray(detail)) {
+      message = detail
+        .map((item: { loc?: unknown[]; msg?: string }) => {
+          const msg = typeof item?.msg === "string" ? item.msg : "";
+          const loc = Array.isArray(item?.loc) ? item.loc.slice(1).join(".") : "";
+          return loc ? `${loc}: ${msg}` : msg;
+        })
+        .filter(Boolean)
+        .join("；") || "Request failed";
+    } else {
+      message = "Request failed";
+    }
+    throw new Error(message);
   }
 
   if (response.status === 204) {
@@ -365,7 +381,6 @@ export function KnowledgeManagementPage() {
         body: JSON.stringify({
           file_name: payload.fileName,
           images: payload.images,
-          model: "qwen",
         }),
       });
       return response.paths;
@@ -922,8 +937,10 @@ export function KnowledgeManagementPage() {
         onCreateRootKnowledge={handleCreateRootKnowledge}
         onDeleteDirection={handleDeleteDirection}
         onDeleteMajor={handleDeleteMajor}
+        onDeleteRootKnowledge={(knowledge) => void handleDelete(knowledge.id, knowledge.name)}
         onEditDirection={handleEditDirection}
         onEditMajor={handleEditMajor}
+        onEditRootKnowledge={(knowledge) => handleEdit(knowledge.id)}
         onSelect={handleSelectDirection}
         onSelectRootKnowledge={handleSelectRootKnowledge}
         selectedDirectionId={selectedDirectionId}
@@ -1003,6 +1020,25 @@ export function KnowledgeManagementPage() {
                 {rootKnowledgePoints.length > 0
                   ? "在左侧选择一个主知识/技能后，右侧会展示它下面的子知识结构。"
                   : "当前方向还没有主知识/技能，先创建一个主知识/技能，再维护它的子知识。"}
+              </p>
+              <p className="mt-3 flex flex-wrap items-center justify-center gap-1 text-xs text-stone-500 dark:text-stone-400">
+                <span>也可以直接</span>
+                <button
+                  type="button"
+                  className="font-medium text-primary transition-colors hover:underline"
+                  onClick={() => setImportDialogOpen(true)}
+                >
+                  导入知识点
+                </button>
+                <span>或从书本中的</span>
+                <button
+                  type="button"
+                  className="font-medium text-primary transition-colors hover:underline"
+                  onClick={() => setCatalogPhotoDialogOpen(true)}
+                >
+                  目录拍照导入
+                </button>
+                <span>。</span>
               </p>
               <Button
                 className="mt-5 rounded-full"

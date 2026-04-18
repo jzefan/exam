@@ -1,5 +1,5 @@
 import type { HTMLAttributes, ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { GraduationCap, Tag } from "lucide-react";
 
@@ -93,6 +93,7 @@ export function QuestionPreviewCard({
   hideTypeBadge = false,
   hideAnswer = false,
   expandOnHover = false,
+  hoverDetailDelay = 180,
   ...props
 }: {
   question: IQuestion;
@@ -106,16 +107,46 @@ export function QuestionPreviewCard({
   hideTypeBadge?: boolean;
   hideAnswer?: boolean;
   expandOnHover?: boolean;
+  hoverDetailDelay?: number;
 } & HTMLAttributes<HTMLDivElement>) {
   const [isHovered, setIsHovered] = useState(false);
+  const [isHoverExpanded, setIsHoverExpanded] = useState(false);
+  const hoverExpandTimerRef = useRef<number | null>(null);
   const diff = questionDifficultyConfig[question.difficulty] ?? {
     label: String(question.difficulty),
     variant: "outline" as const,
   };
   const answerText = getQuestionAnswerText(question);
   const isExpanded = expanded ?? defaultExpanded;
-  const showDetails = expandOnHover ? isHovered : mode === "detailed" ? isExpanded : defaultExpanded;
+  const showDetails = expandOnHover ? isHoverExpanded : mode === "detailed" ? isExpanded : defaultExpanded;
   const html = getQuestionContentHtml(question);
+
+  useEffect(() => {
+    if (!expandOnHover) {
+      setIsHoverExpanded(false);
+      return;
+    }
+
+    if (hoverExpandTimerRef.current) {
+      window.clearTimeout(hoverExpandTimerRef.current);
+      hoverExpandTimerRef.current = null;
+    }
+
+    if (isHovered) {
+      hoverExpandTimerRef.current = window.setTimeout(() => {
+        setIsHoverExpanded(true);
+      }, hoverDetailDelay);
+    } else {
+      setIsHoverExpanded(false);
+    }
+
+    return () => {
+      if (hoverExpandTimerRef.current) {
+        window.clearTimeout(hoverExpandTimerRef.current);
+        hoverExpandTimerRef.current = null;
+      }
+    };
+  }, [expandOnHover, hoverDetailDelay, isHovered]);
 
   return (
     <div
@@ -172,7 +203,7 @@ export function QuestionPreviewCard({
           <div
             className={cn(
               "grid transition-all duration-500 ease-out",
-              showDetails ? "grid-rows-[1fr] opacity-100 mt-2" : "grid-rows-[0fr] opacity-0",
+              showDetails ? "mt-2 grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
             )}
           >
             <div className="overflow-hidden">

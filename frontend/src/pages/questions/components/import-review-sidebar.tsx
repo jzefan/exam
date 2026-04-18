@@ -4,7 +4,6 @@ import { CheckCircle2, Circle, Filter, Search, SkipForward, Trash2 } from "lucid
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import type { ImportFilter, QuestionImportDraft } from "../import-types";
 import { getBlockingImportIssues, getDraftPreviewText, getQuestionTypeLabel, isMissingAnswerIssue } from "../import-utils";
@@ -67,6 +66,14 @@ export function ImportReviewSidebar({
 }) {
   const [query, setQuery] = useState("");
   const visibleDrafts = useMemo(() => filterImportDrafts(drafts, filter, query), [drafts, filter, query]);
+  const issueCount = useMemo(
+    () => drafts.filter((draft) => getBlockingImportIssues(draft).length > 0).length,
+    [drafts],
+  );
+  const missingAnswerCount = useMemo(
+    () => drafts.filter((draft) => !draft.answer_text?.trim() || draft.issues.some(isMissingAnswerIssue)).length,
+    [drafts],
+  );
 
   return (
     <aside className="flex h-full min-h-0 flex-col bg-white">
@@ -94,7 +101,7 @@ export function ImportReviewSidebar({
                 size="sm"
                 variant={filter === item.value ? "default" : "secondary"}
                 className={cn(
-                  "h-7 rounded-md px-2.5 text-xs font-bold transition-all",
+                  "relative h-7 rounded-md px-2.5 text-xs font-bold transition-all",
                   filter === item.value 
                     ? "bg-primary text-white shadow-sm shadow-primary/20" 
                     : "bg-slate-100 hover:bg-slate-200 text-slate-500 border-none"
@@ -102,14 +109,30 @@ export function ImportReviewSidebar({
                 onClick={() => onFilterChange(item.value)}
               >
                 {item.label}
+                {item.value === "issues" && issueCount > 0 && (
+                  <Badge
+                    variant="destructive"
+                    className="absolute -right-1.5 -top-1.5 h-4 min-w-4 justify-center rounded-full border border-white px-1 text-[10px] font-bold leading-none shadow-sm dark:border-slate-950"
+                  >
+                    {issueCount}
+                  </Badge>
+                )}
+                {item.value === "missing_answer" && missingAnswerCount > 0 && (
+                  <Badge
+                    variant="warning"
+                    className="absolute -right-1.5 -top-1.5 h-4 min-w-4 justify-center rounded-full border border-white px-1 text-[10px] font-bold leading-none shadow-sm dark:border-slate-950"
+                  >
+                    {missingAnswerCount}
+                  </Badge>
+                )}
               </Button>
             ))}
           </div>
         </div>
       </div>
 
-      <ScrollArea className="flex-1 w-full">
-        <div className="space-y-2 py-3 pl-4 pr-5">
+      <div className="flex-1 overflow-y-auto">
+        <div className="space-y-2 py-3 pl-4 pr-4">
           {visibleDrafts.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 px-6 text-center">
               <div className="size-12 rounded-2xl bg-slate-50 flex items-center justify-center text-slate-300 mb-4">
@@ -218,7 +241,7 @@ export function ImportReviewSidebar({
             })
           )}
         </div>
-      </ScrollArea>
+      </div>
     </aside>
   );
 }

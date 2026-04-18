@@ -13,6 +13,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { extractKnowledgeImportPaths, summarizeKnowledgeImportPaths, type KnowledgeImportPath } from "./import-knowledge-utils";
+import { KnowledgeImportTreePreview } from "./KnowledgeImportTreePreview";
+import type { KnowledgeImportPreviewNode } from "./import-knowledge-utils";
 
 type KnowledgeImportDialogProps = {
   open: boolean;
@@ -85,6 +87,11 @@ export function KnowledgeImportDialog({
     }
   };
 
+  const removeTreeNode = (node: KnowledgeImportPreviewNode) => {
+    const pathIndexes = new Set(node.pathIndexes);
+    setPaths((current) => current.filter((_, index) => !pathIndexes.has(index)));
+  };
+
   return (
     <Dialog onOpenChange={handleOpenChange} open={open}>
       <DialogContent className="max-w-3xl">
@@ -140,22 +147,15 @@ export function KnowledgeImportDialog({
             </div>
           </div>
           <ScrollArea className="h-[420px]">
-            <div className="space-y-2 p-4">
+            <div className="p-4">
               {loading && <p className="text-sm text-stone-500 dark:text-stone-400">正在解析文件…</p>}
-              {!loading && paths.length === 0 && !error && (
-                <p className="text-sm text-stone-500 dark:text-stone-400">
-                  上传后会在这里预览识别出的知识路径。
-                </p>
+              {!loading && !error && (
+                <KnowledgeImportTreePreview
+                  paths={paths}
+                  emptyText="上传后会在这里以层级树方式预览识别出的知识路径。"
+                  onRemoveNode={removeTreeNode}
+                />
               )}
-              {!loading &&
-                paths.map((path, index) => (
-                  <div
-                    className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm dark:border-stone-800 dark:bg-stone-900"
-                    key={`${path.join(" > ")}-${index}`}
-                  >
-                    {path.join(" > ")}
-                  </div>
-                ))}
               {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
             </div>
           </ScrollArea>

@@ -111,6 +111,7 @@ export function Layout() {
   const isKnowledgePage = location.pathname.startsWith("/knowledge");
   const isGradingPage = location.pathname.startsWith("/grading");
   const isQuestionImportPage = location.pathname === "/questions/import";
+  const isExamWorkflowPage = location.pathname === "/exams/practice/create";
   const isFullScreenPage = isKnowledgePage || isGradingPage || isQuestionImportPage;
   const [examMenuOpen, setExamMenuOpen] = useState(false);
   const [questionMenuOpen, setQuestionMenuOpen] = useState(false);
@@ -205,11 +206,14 @@ export function Layout() {
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="start" className="mt-1.5 w-[440px] rounded-md border border-border p-2 shadow-lg">
                         <ul className="grid gap-1 md:grid-cols-2">
-                          <NavItem href="/exams" title="考试列表" icon={<ListChecks size={14} />} onNavigate={() => setExamMenuOpen(false)}>
-                            查看所有考试及状态
+                          <NavItem href="/exams" title="考试与练习" icon={<ListChecks size={14} />} onNavigate={() => setExamMenuOpen(false)}>
+                            查看所有考试、练习及状态
                           </NavItem>
                           <NavItem href="/exams/create" title="创建考试" icon={<FilePlus size={14} />} onNavigate={() => setExamMenuOpen(false)}>
                             新建考试、组卷、设置时间
+                          </NavItem>
+                          <NavItem href="/exams/practice/create" title="发布练习" icon={<FilePlus size={14} />} onNavigate={() => setExamMenuOpen(false)}>
+                            按知识点、题目和学生快速发布练习
                           </NavItem>
                           <NavItem href="/exams/students" title="考试考生" icon={<Send size={14} />} onNavigate={() => setExamMenuOpen(false)}>
                             查看各场考试下的考生列表
@@ -315,6 +319,8 @@ export function Layout() {
           className={cn(
             isFullScreenPage
               ? "h-full min-h-0 w-full px-0 py-0"
+              : isExamWorkflowPage
+                ? "w-full px-4 py-6 sm:px-6"
               : "mx-auto w-full max-w-screen-xl px-4 py-6 sm:px-6",
           )}
         >

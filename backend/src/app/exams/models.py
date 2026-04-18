@@ -175,6 +175,7 @@ class StudentNotification(BaseModel):
 class Exam(OwnerMixin, BaseModel):
     __tablename__ = "exams"
 
+    category: Mapped[str] = mapped_column(String(20), nullable=False, default="exam")
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

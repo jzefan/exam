@@ -65,13 +65,13 @@ import { apiRequest } from "@/pages/grading/api";
 import { validateTypeAllocation } from "@/pages/questions/ai-generate-utils";
 import type { IKnowledgePoint, IQuestion, IQuestionBank, QuestionType } from "@/types";
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
+import { AIQuestionConfigPanel } from "@/components/questions/ai-question-config-panel";
 import {
-  AIQuestionConfigPanel,
   AI_MODEL_OPTIONS,
   AI_TYPE_LABELS,
   type AIModelProvider,
-  type SelectedKnowledgePoint,
-} from "@/components/questions/ai-question-config-panel";
+} from "@/components/questions/ai-question-config-constants";
+import type { SelectedKnowledgePoint } from "@/components/questions/knowledge-point-selector";
 import { AIGenerateLoadingOverlay } from "@/pages/questions/components/ai-generate-loading-overlay";
 import {
   DEFAULT_NOTES,
@@ -279,6 +279,7 @@ export function ExamWizardForm({
   const [previewMode, setPreviewMode] = useState<PreviewMode>("order");
   const [createSubmitIntent, setCreateSubmitIntent] = useState<CreateSubmitIntent>("publish");
   const [typeScoreDrafts, setTypeScoreDrafts] = useState<Partial<Record<QuestionType, string>>>({});
+  const typeScoreDraftDefaultsRef = useRef<Partial<Record<QuestionType, string>>>({});
   const aiAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -470,8 +471,12 @@ export function ExamWizardForm({
       .map((type) => grouped.get(type))
       .filter((item): item is QuestionTypeSummary => Boolean(item));
   }, [selectedQuestionMap, sortedQuestionItems]);
-  const questionTypeSummarySyncKey = useMemo(
-    () => JSON.stringify(questionTypeSummaries.map((summary) => [summary.type, summary.totalScore, summary.count])),
+  const questionTypeDraftDefaults = useMemo(
+    () =>
+      questionTypeSummaries.reduce<Partial<Record<QuestionType, string>>>((acc, summary) => {
+        acc[summary.type] = String(summary.totalScore);
+        return acc;
+      }, {}),
     [questionTypeSummaries],
   );
   const questionItemsByType = useMemo(
@@ -512,9 +517,9 @@ export function ExamWizardForm({
               return (
                 <div
                   key={item.question_id}
-                  className="px-4 py-4"
+                  className="px-4 py-2"
                 >
-                  <div className="space-y-2.5">
+                  <div className="space-y-1">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="flex min-w-0 flex-wrap items-center gap-3">
                         <Badge variant="outline">第 {index + 1} 题</Badge>
@@ -555,8 +560,8 @@ export function ExamWizardForm({
                         mode="detailed"
                         hideTypeBadge
                         hideAnswer
-                        expandOnHover
-                        className="w-full border-0 bg-white/80 p-4 shadow-sm ring-1 ring-border/50 transition-all hover:bg-white hover:shadow-md hover:ring-primary/20"
+                        defaultExpanded
+                        className="w-full border-0 bg-transparent p-0 shadow-none"
                       />
                     ) : (
                       <p className="text-sm font-medium text-foreground">题目 {index + 1}</p>
@@ -572,11 +577,11 @@ export function ExamWizardForm({
               <div
                 key={summary.type}
                 className={cn(
-                  "px-4 py-4",
+                  "px-4 py-3",
                   groupIndex > 0 && "border-t border-dashed border-border/70",
                 )}
               >
-                <div className="space-y-4">
+                <div className="space-y-2">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex min-w-0 flex-wrap items-center gap-3">
                       <Badge variant="outline">{questionTypeLabels[summary.type]}</Badge>
@@ -627,7 +632,7 @@ export function ExamWizardForm({
                     const scoreInputId = `${variant}-exam-question-score-${item.question_id}`;
 
                     return (
-                      <div key={item.question_id} className="space-y-2.5 rounded-xl bg-background/70 p-3 ring-1 ring-border/30">
+                      <div key={item.question_id} className="space-y-1 rounded-xl bg-background/70 p-2">
                         <div className="flex flex-wrap items-center justify-between gap-3">
                           <div className="flex min-w-0 flex-wrap items-center gap-3">
                             <Badge variant="outline">{questionTypeLabels[summary.type]} 第 {index + 1} 题</Badge>
@@ -667,7 +672,7 @@ export function ExamWizardForm({
                             hideTypeBadge
                             hideAnswer
                             expandOnHover
-                            className="w-full border-0 bg-white/80 p-4 shadow-sm ring-1 ring-border/50 transition-all hover:bg-white hover:shadow-md hover:ring-primary/20"
+                            className="w-full border-0 bg-transparent p-4 shadow-none transition-all"
                           />
                         ) : (
                           <p className="text-sm font-medium text-foreground">题目 {index + 1}</p>
@@ -750,15 +755,26 @@ export function ExamWizardForm({
   }, [form.question_items]);
 
   useEffect(() => {
+    const previousDefaults = typeScoreDraftDefaultsRef.current;
+
     setTypeScoreDrafts((prev) => {
       const next = questionTypeSummaries.reduce<Partial<Record<QuestionType, string>>>((acc, summary) => {
-        acc[summary.type] = String(summary.totalScore);
+        const defaultValue = questionTypeDraftDefaults[summary.type] ?? "";
+        const previousDefaultValue = previousDefaults[summary.type];
+        const currentValue = prev[summary.type];
+
+        acc[summary.type] =
+          currentValue === undefined || currentValue === previousDefaultValue
+            ? defaultValue
+            : currentValue;
         return acc;
       }, {});
 
       return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
     });
-  }, [questionTypeSummarySyncKey]);
+
+    typeScoreDraftDefaultsRef.current = questionTypeDraftDefaults;
+  }, [questionTypeDraftDefaults, questionTypeSummaries]);
 
   const updateField = <K extends keyof ExamForm>(key: K, value: ExamForm[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -2113,32 +2129,28 @@ export function ExamWizardForm({
                   </div>
                 </div>
 
-                <div className="space-y-4 border-t border-border/70 pt-7">
-                  <div className="space-y-4 rounded-xl bg-background p-1">
+                {form.question_ids.length > 0 && (
+                  <div className="space-y-2 border-t border-border/70 pt-7">
                     <div className="flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-2">
-                        <ListChecks size={18} className="text-primary" />
+                      <div className="min-w-0">
                         <p className="text-sm font-semibold text-foreground">试卷预览与考试分数</p>
+                        <p className="text-xs text-muted-foreground">
+                          点击查看试卷完整内容，并为每道题设置考试分数。
+                        </p>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <Badge variant="secondary">卷面总分 {form.total_score} 分</Badge>
-                        {previewModeToggleGroup}
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => setPreviewFullscreenOpen(true)}
-                          aria-label="全屏预览试卷"
-                        >
-                          <Maximize2 size={14} />
-                        </Button>
-                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setPreviewFullscreenOpen(true)}
+                      >
+                        <ListChecks size={16} className="mr-2" />
+                        预览与设置分数
+                      </Button>
                     </div>
-
-                    {renderQuestionPreviewList("embedded")}
                   </div>
+                )}
 
+                <div className="space-y-4 border-t border-border/70 pt-7">
                   <div className="flex items-center justify-between">
                     <Button
                       type="button"

@@ -27,6 +27,7 @@ export function renderLatex(text: string): string {
       return katex.renderToString(formula, {
         displayMode: isBlock,
         throwOnError: false,
+        strict: "ignore",
         output: "html",
       });
     } catch {

@@ -30,5 +30,5 @@ export function QuestionRenderer({ question, answer, onChange }: Props) {
       </p>
     );
   }
-  return <Component question={question} answer={answer} onChange={onChange} />;
+  return <Component key={question.question_id} question={question} answer={answer} onChange={onChange} />;
 }

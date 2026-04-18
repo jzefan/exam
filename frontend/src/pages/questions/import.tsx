@@ -1,7 +1,18 @@
 import { useList } from "@refinedev/core";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AlertCircle, ArrowLeft, Download, FileUp, LoaderCircle, Upload } from "lucide-react";
+
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 import type { IQuestionBank } from "@/types";
 import { Button } from "@/components/ui/button";
@@ -38,6 +49,7 @@ import {
   generateImportQuestionTitle,
   getNextDraftIdAfterRemoval,
   hasBlockingImportIssues,
+  isEligibleForBulkApprove,
 } from "./import-utils";
 
 async function questionApiFetch<T>(url: string, options?: RequestInit): Promise<T> {
@@ -53,7 +65,15 @@ async function questionApiFetch<T>(url: string, options?: RequestInit): Promise<
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail ?? "请求失败");
+    const detail = error.detail;
+    if (Array.isArray(detail)) {
+      const messages = detail.map((item: { loc?: unknown[]; msg?: string }) => {
+        const loc = Array.isArray(item.loc) ? item.loc.slice(1).join(".") : "";
+        return loc ? `${loc}: ${item.msg ?? ""}` : item.msg ?? "";
+      });
+      throw new Error(messages.join("；") || "请求失败");
+    }
+    throw new Error(typeof detail === "string" ? detail : "请求失败");
   }
 
   return response.json() as Promise<T>;
@@ -90,6 +110,60 @@ export function QuestionImportPage() {
     pagination: { currentPage: 1, pageSize: 1000 },
   });
   const banks = banksQuery.data?.data ?? [];
+
+  const [courseDialogOpen, setCourseDialogOpen] = useState(false);
+  const [majors, setMajors] = useState<Array<{ id: string; name: string }>>([]);
+  const [directions, setDirections] = useState<Array<{ id: string; name: string }>>([]);
+  const [courses, setCourses] = useState<Array<{ id: string; name: string }>>([]);
+  const [selectedMajorId, setSelectedMajorId] = useState<string>("");
+  const [selectedDirectionId, setSelectedDirectionId] = useState<string>("");
+  const [selectedCourseId, setSelectedCourseId] = useState<string>("");
+  const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null);
+  const [importNotice, setImportNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!courseDialogOpen || majors.length > 0) return;
+    questionApiFetch<Array<{ id: string; name: string }>>("/api/knowledge/majors")
+      .then(setMajors)
+      .catch((error: unknown) => {
+        setParseError(error instanceof Error ? error.message : "加载专业列表失败");
+      });
+  }, [courseDialogOpen, majors.length]);
+
+  useEffect(() => {
+    if (!selectedMajorId) {
+      setDirections([]);
+      setSelectedDirectionId("");
+      return;
+    }
+    questionApiFetch<Array<{ id: string; name: string }>>(
+      `/api/knowledge/majors/${selectedMajorId}/directions`,
+    )
+      .then(setDirections)
+      .catch((error: unknown) => {
+        setParseError(error instanceof Error ? error.message : "加载方向列表失败");
+      });
+  }, [selectedMajorId]);
+
+  useEffect(() => {
+    if (!selectedDirectionId) {
+      setCourses([]);
+      setSelectedCourseId("");
+      return;
+    }
+    questionApiFetch<{ nodes: Array<{ id: string; data: { name: string; parent_id: string | null } }> }>(
+      `/api/knowledge/directions/${selectedDirectionId}/tree`,
+    )
+      .then((data) => {
+        const topLevel = data.nodes
+          .filter((node) => !node.data.parent_id)
+          .map((node) => ({ id: node.id, name: node.data.name }));
+        setCourses(topLevel);
+      })
+      .catch((error: unknown) => {
+        setParseError(error instanceof Error ? error.message : "加载课程列表失败");
+      });
+  }, [selectedDirectionId]);
 
   const selectedDraft = useMemo(
     () => drafts.find((draft) => draft.draft_id === selectedDraftId) ?? null,
@@ -252,27 +326,101 @@ export function QuestionImportPage() {
     }
   };
 
-  const importApprovedDrafts = async () => {
+  const bulkApproveEligibleDrafts = () => {
+    const eligibleDrafts = drafts.filter(isEligibleForBulkApprove);
+    if (eligibleDrafts.length === 0) {
+      setParseError("没有可一键确定的题目，请先人工修正异常或补全答案。");
+      return;
+    }
+    setParseError(null);
+    setDrafts((current) => approveAllPendingDrafts(current));
+    toast({ title: `已确定 ${eligibleDrafts.length} 道题目，可直接点击"正式导入"` });
+  };
+
+  const openImportCourseDialog = () => {
+    const readyCount = drafts.filter(
+      (draft) => draft.review_status === "approved" && !hasBlockingImportIssues(draft),
+    ).length;
+    if (readyCount === 0) {
+      setParseError("请先人工确认至少一道题目后再导入。");
+      return;
+    }
+    setParseError(null);
+    setImportNotice(null);
+    setCourseDialogOpen(true);
+  };
+
+  const runImportWithCourse = async (courseId: string) => {
+    const importableDraftIds = drafts
+      .filter((draft) => draft.review_status === "approved" && !hasBlockingImportIssues(draft))
+      .map((draft) => draft.draft_id);
     const bankId = questionBankId === "__none__" ? null : questionBankId;
     const questions = buildImportableQuestions(drafts, bankId);
-    if (questions.length === 0) {
+    if (questions.length === 0 || questions.length !== importableDraftIds.length) {
       setParseError("请先人工确认至少一道题目后再导入。");
       return;
     }
 
     setImporting(true);
     setParseError(null);
-    try {
-      await questionApiFetch<{ created: number }>("/api/questions/bulk", {
-        method: "POST",
-        body: JSON.stringify({ questions }),
-      });
-      navigate("/questions");
-    } catch (error) {
-      setParseError(error instanceof Error ? error.message : "导入失败");
-    } finally {
-      setImporting(false);
+    setImportProgress({ current: 0, total: questions.length });
+    const successfulIds: string[] = [];
+    let unmatchedCount = 0;
+    let failedCount = 0;
+
+    for (let index = 0; index < questions.length; index += 1) {
+      const draftId = importableDraftIds[index];
+      try {
+        const result = await questionApiFetch<{
+          question_id: string;
+          matched_knowledge_point_ids: string[];
+        }>("/api/questions/import/match-create", {
+          method: "POST",
+          body: JSON.stringify({ question: questions[index], course_id: courseId }),
+        });
+        successfulIds.push(draftId);
+        if (result.matched_knowledge_point_ids.length === 0) {
+          unmatchedCount += 1;
+        }
+      } catch (error) {
+        failedCount += 1;
+        setParseError(
+          `第 ${index + 1} 题导入失败：${error instanceof Error ? error.message : "未知错误"}`,
+        );
+      }
+      setImportProgress({ current: index + 1, total: questions.length });
     }
+
+    setImporting(false);
+    setImportProgress(null);
+
+    if (successfulIds.length > 0) {
+      const successSet = new Set(successfulIds);
+      setDrafts((current) => current.filter((draft) => !successSet.has(draft.draft_id)));
+      setSourceEdits((current) => {
+        const rest = { ...current };
+        successSet.forEach((id) => delete rest[id]);
+        return rest;
+      });
+      setSelectedDraftId((current) => {
+        if (current && !successSet.has(current)) return current;
+        const nextDraft = drafts.find((draft) => !successSet.has(draft.draft_id));
+        return nextDraft?.draft_id ?? null;
+      });
+    }
+
+    const summaryLines = [`已导入 ${successfulIds.length} 道题目`];
+    if (unmatchedCount > 0) summaryLines.push(`其中 ${unmatchedCount} 道未匹配到知识点`);
+    if (failedCount > 0) summaryLines.push(`${failedCount} 道导入失败`);
+    toast({ title: summaryLines.join("，") });
+    setImportNotice(unmatchedCount > 0 ? `有 ${unmatchedCount} 道题目未匹配到知识点，可在题库中手工补充。` : null);
+  };
+
+  const confirmImportWithCourse = async () => {
+    if (!selectedCourseId) return;
+    const courseId = selectedCourseId;
+    setCourseDialogOpen(false);
+    await runImportWithCourse(courseId);
   };
 
   const showReviewer = drafts.length > 0 && !loading;
@@ -389,7 +537,7 @@ export function QuestionImportPage() {
 
                 <Button
                   disabled={approvedCount === 0 || importing}
-                  onClick={() => void importApprovedDrafts()}
+                  onClick={openImportCourseDialog}
                   className="h-9 rounded-lg px-4 text-sm font-bold shadow-sm shadow-primary/20 transition-all hover:scale-[1.01] active:scale-[0.98]"
                 >
                   {importing ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <FileUp className="mr-2 h-4 w-4" />}
@@ -547,13 +695,7 @@ export function QuestionImportPage() {
                         selectNextReviewTarget(selectedDraft.draft_id);
                       }
                     }}
-                    onApproveAll={() => {
-                      if (!allowApproveAll) {
-                        setParseError("存在异常题目，暂不能全部确定，请先修正异常。");
-                        return;
-                      }
-                      setDrafts((current) => approveAllPendingDrafts(current));
-                    }}
+                    onApproveAll={bulkApproveEligibleDrafts}
 	                    onReRecognize={() => void reRecognizeSelectedDraft()}
                     onAnalyzeDocument={() => void analyzeWholeImportedDocument()}
 	                    onEditSource={openSourceEditor}
@@ -563,6 +705,90 @@ export function QuestionImportPage() {
           </div>
         )}
       </main>
+
+      {importNotice && (
+        <div className="pointer-events-none fixed bottom-6 right-6 z-40">
+          <Alert className="pointer-events-auto max-w-sm rounded-2xl border-amber-200 bg-amber-50 text-amber-800 shadow-lg">
+            <AlertCircle size={16} />
+            <AlertDescription className="text-xs">{importNotice}</AlertDescription>
+          </Alert>
+        </div>
+      )}
+
+      {importProgress && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-3 rounded-3xl border border-slate-200 bg-white px-10 py-8 shadow-xl">
+            <LoaderCircle className="h-8 w-8 animate-spin text-primary" />
+            <p className="text-base font-bold text-slate-900">
+              正在导入第 {importProgress.current} / {importProgress.total} 题
+            </p>
+            <p className="text-xs text-slate-500">AI 正在为每题匹配课程知识点，请稍候</p>
+          </div>
+        </div>
+      )}
+
+      <AlertDialog open={courseDialogOpen} onOpenChange={setCourseDialogOpen}>
+        <AlertDialogContent className="max-w-lg">
+          <AlertDialogHeader>
+            <AlertDialogTitle>选择所属课程</AlertDialogTitle>
+            <AlertDialogDescription>
+              题目将按照所选课程进行 AI 知识点匹配；未匹配到的题目会在导入后提示。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="grid gap-3 py-2">
+            <div className="space-y-1">
+              <Label className="text-xs font-bold text-slate-500">专业</Label>
+              <Select value={selectedMajorId} onValueChange={(value) => { setSelectedMajorId(value); setSelectedDirectionId(""); setSelectedCourseId(""); }}>
+                <SelectTrigger><SelectValue placeholder="请选择专业" /></SelectTrigger>
+                <SelectContent>
+                  {majors.map((major) => (
+                    <SelectItem key={major.id} value={major.id}>{major.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs font-bold text-slate-500">方向</Label>
+              <Select value={selectedDirectionId} disabled={!selectedMajorId} onValueChange={(value) => { setSelectedDirectionId(value); setSelectedCourseId(""); }}>
+                <SelectTrigger><SelectValue placeholder={selectedMajorId ? "请选择方向" : "请先选择专业"} /></SelectTrigger>
+                <SelectContent>
+                  {directions.map((direction) => (
+                    <SelectItem key={direction.id} value={direction.id}>{direction.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs font-bold text-slate-500">课程（主技能）</Label>
+              <Select value={selectedCourseId} disabled={!selectedDirectionId} onValueChange={setSelectedCourseId}>
+                <SelectTrigger><SelectValue placeholder={selectedDirectionId ? "请选择课程" : "请先选择方向"} /></SelectTrigger>
+                <SelectContent>
+                  {courses.map((course) => (
+                    <SelectItem key={course.id} value={course.id}>{course.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {selectedCourseId && (
+              <p className="text-xs text-slate-500">
+                确认用户已选择课程"{courses.find((course) => course.id === selectedCourseId)?.name ?? ""}"
+              </p>
+            )}
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={!selectedCourseId || importing}
+              onClick={(event) => {
+                event.preventDefault();
+                void confirmImportWithCourse();
+              }}
+            >
+              确认并导入
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

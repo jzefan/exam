@@ -263,6 +263,50 @@ async def test_teacher_keeps_full_exam_list(client: AsyncClient, db_session) -> 
 
 
 @pytest.mark.asyncio
+async def test_teacher_can_create_and_filter_practice_items(client: AsyncClient, db_session) -> None:
+    org = await _create_org_with_roles(db_session)
+
+    teacher = await create_user(
+        db_session,
+        UserCreate(
+            username="teacher-practice",
+            email="teacher-practice@example.com",
+            password="teacherpass123",
+            full_name="Teacher Practice",
+            role_name="teacher",
+            org_id=org.id,
+        ),
+    )
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    create_response = await client.post(
+        "/api/exams",
+        json={
+            "category": "practice",
+            "title": "数组基础练习",
+            "duration_minutes": 45,
+            "total_score": 20,
+            "status": "ongoing",
+            "question_ids": [],
+            "student_ids": [],
+        },
+    )
+
+    assert create_response.status_code == 201
+    assert create_response.json()["category"] == "practice"
+
+    list_response = await client.get(
+        "/api/exams",
+        params={"filters": '[{"field":"category","operator":"eq","value":"practice"}]'},
+    )
+
+    assert list_response.status_code == 200
+    payload = list_response.json()
+    assert [item["title"] for item in payload] == ["数组基础练习"]
+    assert payload[0]["category"] == "practice"
+
+
+@pytest.mark.asyncio
 async def test_student_exam_list_includes_submission_state(client: AsyncClient, db_session) -> None:
     org = await _create_org_with_roles(db_session)
 

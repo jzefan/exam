@@ -151,6 +151,13 @@ async def list_question_banks(
     )
     if not is_platform_admin:
         stmt = stmt.where(teacher_visible_resource_filter(QuestionBank, user.id))
+    else:
+        stmt = stmt.where(
+            or_(
+                QuestionBank.visibility == VisibilityScope.PLATFORM,
+                QuestionBank.owner_id == user.id,
+            )
+        )
     stmt = stmt.order_by(QuestionBank.name)
     result = await db.execute(stmt)
     rows = result.all()
@@ -204,7 +211,7 @@ async def soft_delete_question_bank(db: AsyncSession, bank: QuestionBank) -> Non
 
 def _question_scope_query(*, user: User | None, is_platform_admin: bool) -> Select:
     query = select(Question).where(Question.deleted_at.is_(None))
-    if not is_platform_admin and user is not None:
+    if user is not None:
         query = query.outerjoin(QuestionBank, Question.question_bank_id == QuestionBank.id).where(
             or_(
                 teacher_owned_resource_filter(Question, user.id),
@@ -725,6 +732,14 @@ def _is_standalone_question_type_line(line: str) -> bool:
     )
 
 
+def _normalize_inline_tail_fields(raw_text: str) -> str:
+    return re.sub(
+        r"(?<!\n)\s*(\[(?:答案|参考答案|解析|分析|难度|难易度|预计时间|预期时间)\])",
+        r"\n\1",
+        raw_text,
+    )
+
+
 def build_import_draft_from_segment(
     raw_text: str,
     *,
@@ -733,28 +748,66 @@ def build_import_draft_from_segment(
     images: list[QuestionImportImageInput] | None = None,
     comparison_flags: list[str] | None = None,
 ) -> QuestionImportDraft:
-    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+    normalized_raw_text = _normalize_inline_tail_fields(raw_text)
+    lines = [line.strip() for line in normalized_raw_text.splitlines() if line.strip()]
     options = _extract_options(lines)
     answer_text = ""
     analysis = ""
     difficulty_text = ""
     content_lines: list[str] = []
+    collecting_field: str | None = None
+    answer_lines: list[str] = []
+    analysis_lines: list[str] = []
+
+    def flush_collecting_field() -> None:
+        nonlocal answer_text, analysis, collecting_field
+        if collecting_field == "answer" and answer_lines:
+            answer_text = "\n".join(answer_lines).strip()
+        elif collecting_field == "analysis" and analysis_lines:
+            analysis = "\n".join(analysis_lines).strip()
+        collecting_field = None
 
     for line in lines:
         answer_match = re.match(r"^(?:\[(答案|参考答案)\]|(答案|参考答案|answer))[:：]?\s*(.+)$", line, re.IGNORECASE)
         analysis_match = re.match(r"^(?:\[(解析|分析)\]|(解析|分析|analysis))[:：]?\s*(.+)$", line, re.IGNORECASE)
         difficulty_match = re.match(r"^(?:\[(难度|难易度)\]|(难度|难易度|difficulty))[:：]?\s*(.+)$", line, re.IGNORECASE)
+        blank_answer_field = re.match(r"^(?:\[(答案|参考答案)\]|(答案|参考答案|answer))[:：]?\s*$", line, re.IGNORECASE)
+        blank_analysis_field = re.match(r"^(?:\[(解析|分析)\]|(解析|分析|analysis))[:：]?\s*$", line, re.IGNORECASE)
+        blank_difficulty_field = re.match(r"^(?:\[(难度|难易度)\]|(难度|难易度|difficulty))[:：]?\s*$", line, re.IGNORECASE)
+        time_field = re.match(r"^(?:\[(预计时间|预期时间)\]|(预计时间|预期时间|expected.?time))[:：]?\s*(.*)$", line, re.IGNORECASE)
         option_match = re.match(r"^([A-H])[\.．、\)]\s*(.+)$", line, re.IGNORECASE)
-        if answer_match:
+        if blank_answer_field:
+            flush_collecting_field()
+            answer_lines = []
+            collecting_field = "answer"
+        elif answer_match:
+            flush_collecting_field()
             answer_text = answer_match.group(3).strip()
+        elif blank_analysis_field:
+            flush_collecting_field()
+            analysis_lines = []
+            collecting_field = "analysis"
         elif analysis_match:
+            flush_collecting_field()
             analysis = analysis_match.group(3).strip()
+        elif blank_difficulty_field:
+            flush_collecting_field()
         elif difficulty_match:
+            flush_collecting_field()
             difficulty_text = difficulty_match.group(3).strip()
+        elif time_field:
+            flush_collecting_field()
         elif _is_standalone_question_type_line(line):
+            flush_collecting_field()
             continue
+        elif collecting_field == "answer":
+            answer_lines.append(line)
+        elif collecting_field == "analysis":
+            analysis_lines.append(line)
         elif not option_match:
             content_lines.append(_strip_question_start_prefix(line))
+
+    flush_collecting_field()
 
     content_text = "\n".join(line for line in content_lines if line).strip()
     question_type, type_confidence = _detect_question_type(content_text or raw_text, options, answer_text)
@@ -1140,6 +1193,100 @@ async def bulk_create_questions(
     for data in questions:
         await create_question(db, data, user_id)
     return len(questions)
+
+
+async def _load_course_descendant_knowledge_points(
+    db: AsyncSession, course_id: uuid.UUID
+) -> list[KnowledgePoint]:
+    """Return all descendants of a course-level knowledge point (non-recursive BFS)."""
+    result: list[KnowledgePoint] = []
+    frontier: list[uuid.UUID] = [course_id]
+    visited: set[uuid.UUID] = {course_id}
+    while frontier:
+        rows = await db.execute(
+            select(KnowledgePoint).where(KnowledgePoint.parent_id.in_(frontier))
+        )
+        children = list(rows.scalars().all())
+        if not children:
+            break
+        next_frontier: list[uuid.UUID] = []
+        for child in children:
+            if child.id in visited:
+                continue
+            visited.add(child.id)
+            result.append(child)
+            next_frontier.append(child.id)
+        frontier = next_frontier
+    return result
+
+
+async def match_knowledge_points_with_ai(
+    question: QuestionCreate, candidates: list[KnowledgePoint]
+) -> list[uuid.UUID]:
+    """Use AI to pick the most relevant knowledge points; returns ids (possibly empty)."""
+    if not candidates:
+        return []
+    candidates_payload = [
+        {
+            "id": str(kp.id),
+            "name": kp.name,
+            "description": (kp.description or "").strip()[:200],
+        }
+        for kp in candidates
+    ]
+    content_text = ""
+    if isinstance(question.content, dict):
+        content_text = str(question.content.get("text") or question.content.get("html") or "").strip()
+    prompt = f"""
+你是教研知识点匹配助手。给你一道题目和一组候选知识点，请选出与题目内容最相关的知识点。
+
+题目类型：{question.type}
+题目标题：{question.title}
+题目内容：{content_text[:1500]}
+选项：{json.dumps(question.options or {}, ensure_ascii=False)}
+候选知识点（JSON 列表）：
+{json.dumps(candidates_payload, ensure_ascii=False)}
+
+要求：
+1. 从候选中选出 0 到 3 个最相关的知识点；若没有明显相关的，返回空数组。
+2. 只能使用候选 id，不要编造新 id。
+3. 只返回合法 JSON，字段为 matched_ids: string[]。
+""".strip()
+
+    try:
+        data = await _request_deepseek_json(prompt)
+    except Exception:
+        return []
+    raw_ids = data.get("matched_ids") if isinstance(data, dict) else None
+    if not isinstance(raw_ids, list):
+        return []
+    valid_ids = {kp.id for kp in candidates}
+    matched: list[uuid.UUID] = []
+    for raw in raw_ids:
+        try:
+            kp_id = uuid.UUID(str(raw))
+        except (TypeError, ValueError):
+            continue
+        if kp_id in valid_ids and kp_id not in matched:
+            matched.append(kp_id)
+    return matched
+
+
+async def match_and_create_import_question(
+    db: AsyncSession,
+    question_data: QuestionCreate,
+    course_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> tuple[Question, list[KnowledgePoint]]:
+    """Match knowledge points under the course via AI, then create the question."""
+    candidates = await _load_course_descendant_knowledge_points(db, course_id)
+    matched_ids = await match_knowledge_points_with_ai(question_data, candidates)
+    question_payload = question_data.model_copy(
+        update={"knowledge_point_ids": list({*question_data.knowledge_point_ids, *matched_ids})}
+    )
+    question = await create_question(db, question_payload, user_id)
+    matched_kps = [kp for kp in candidates if kp.id in matched_ids]
+    return question, matched_kps
 
 
 async def get_or_create_ai_question_bank(

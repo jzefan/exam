@@ -75,9 +75,11 @@ export interface IQuestionBank {
 
 export type ExamStatus = "draft" | "upcoming" | "ongoing" | "completed" | "closed";
 export type ExamGradingStatus = "pending_ai" | "ai_scored" | "reviewed";
+export type ExamCategory = "exam" | "practice";
 
 export interface IExam {
   id: string;
+  category: ExamCategory;
   title: string;
   description: string | null;
   start_time: string | null;

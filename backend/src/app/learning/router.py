@@ -195,6 +195,8 @@ async def recognize_catalog_photo(
     del user
     try:
         return await service.recognize_catalog_structure_from_images(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

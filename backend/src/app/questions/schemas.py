@@ -256,8 +256,19 @@ class QuestionImportDocumentRecognizeResponse(BaseModel):
 
 
 class QuestionBulkCreateRequest(BaseModel):
-    questions: list[QuestionCreate] = Field(min_length=1, max_length=200)
+    questions: list[QuestionCreate] = Field(min_length=1, max_length=2000)
 
 
 class QuestionBulkCreateResponse(BaseModel):
     created: int
+
+
+class QuestionImportMatchCreateRequest(BaseModel):
+    question: QuestionCreate
+    course_id: uuid.UUID
+
+
+class QuestionImportMatchCreateResponse(BaseModel):
+    question_id: uuid.UUID
+    matched_knowledge_point_ids: list[uuid.UUID]
+    matched_knowledge_point_names: list[str]

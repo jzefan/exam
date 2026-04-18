@@ -4,6 +4,7 @@ import { DEFAULT_NOTES, validateExamForm, type ExamFormValues } from "./exam-for
 
 function createForm(overrides: Partial<ExamFormValues> = {}): ExamFormValues {
   return {
+    category: "exam",
     title: "期中考试",
     description: "",
     start_time: "2026-04-09T10:00",
@@ -15,6 +16,7 @@ function createForm(overrides: Partial<ExamFormValues> = {}): ExamFormValues {
     max_switch_count: 3,
     show_result: false,
     notes_template: DEFAULT_NOTES,
+    question_mode: "manual",
     question_ids: ["question-1"],
     question_items: [{ question_id: "question-1", order: 0, score_override: 100 }],
     student_ids: ["student-1"],
