@@ -120,10 +120,10 @@ export function ModelConfigPage() {
       setProviders(data.providers);
       setPriority(data.priority);
       setApiKey("");
-      toast({ description: successMessage });
+      toast({ title: "操作成功", description: successMessage });
       return data;
     } catch {
-      toast({ description: "操作失败，请重试", variant: "destructive" });
+      toast({ title: "操作失败", description: "操作失败，请重试", variant: "destructive" });
       return null;
     } finally {
       setSaving(false);
@@ -193,10 +193,11 @@ export function ModelConfigPage() {
     const meta = PROVIDERS.find((item) => item.value === targetProvider) ?? PROVIDERS[0];
     const targetSetting = providerSettingsMap[targetProvider];
     if (!targetSetting?.enabled && editingProvider !== targetProvider) {
-      toast({ description: "请先启用或编辑该模型后再测试连接" });
+      toast({ title: "无法测试连接", description: "请先启用或编辑该模型后再测试连接" });
       return;
     }
     toast({
+      title: "连接检查完成",
       description:
         targetSetting?.enabled
           ? `已验证 ${meta.title} 的当前配置格式，可继续实际调用测试。`

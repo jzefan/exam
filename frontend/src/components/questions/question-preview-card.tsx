@@ -15,6 +15,7 @@ import {
   getQuestionContentHtml,
   getQuestionTitle,
   isMultiChoice,
+  normalizeQuestionType,
   questionDifficultyConfig,
   questionTypeChar,
   questionTypeColorClass,
@@ -120,10 +121,10 @@ export function QuestionPreviewCard({
   const isExpanded = expanded ?? defaultExpanded;
   const showDetails = expandOnHover ? isHoverExpanded : mode === "detailed" ? isExpanded : defaultExpanded;
   const html = getQuestionContentHtml(question);
+  const normalizedType = normalizeQuestionType(question.type);
 
   useEffect(() => {
     if (!expandOnHover) {
-      setIsHoverExpanded(false);
       return;
     }
 
@@ -136,8 +137,6 @@ export function QuestionPreviewCard({
       hoverExpandTimerRef.current = window.setTimeout(() => {
         setIsHoverExpanded(true);
       }, hoverDetailDelay);
-    } else {
-      setIsHoverExpanded(false);
     }
 
     return () => {
@@ -152,7 +151,10 @@ export function QuestionPreviewCard({
     <div
       className={cn("rounded-lg border border-border bg-card p-3 sm:p-4", className)}
       onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
+      onMouseLeave={() => {
+        setIsHovered(false);
+        setIsHoverExpanded(false);
+      }}
       {...props}
     >
       <div className="flex gap-2">
@@ -175,16 +177,20 @@ export function QuestionPreviewCard({
                   <div
                     className={cn(
                       "flex h-6 w-6 items-center justify-center rounded text-[11px] font-bold",
-                      question.type === "choice" && isMultiChoice(question)
+                      normalizedType === "choice" && isMultiChoice(question)
                         ? "bg-cyan-500 text-white"
-                        : questionTypeColorClass[question.type],
+                        : normalizedType
+                          ? questionTypeColorClass[normalizedType]
+                          : "bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
                     )}
                   >
-                    {question.type === "choice"
+                    {normalizedType === "choice"
                       ? isMultiChoice(question)
                         ? "多"
                         : "单"
-                      : questionTypeChar[question.type]}
+                      : normalizedType
+                        ? questionTypeChar[normalizedType]
+                        : "题"}
                   </div>
                 ) : null}
                 {trailing}
@@ -195,7 +201,7 @@ export function QuestionPreviewCard({
           {renderOptions(question)}
           {!hideAnswer && answerText !== "" ? (
             <p className="mt-2 text-sm text-muted-foreground">
-              {question.type === "short_answer" || question.type === "essay" ? "答案要点：" : "答案："}
+              {normalizedType === "short_answer" || normalizedType === "essay" ? "答案要点：" : "答案："}
               <LatexText>{answerText}</LatexText>
             </p>
           ) : null}

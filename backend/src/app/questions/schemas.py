@@ -8,7 +8,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.common.data_visibility import VisibilityScope
-from app.questions.models import QuestionType, TagType
+from app.questions.models import QuestionImportJobStatus, QuestionType, TagType
 
 
 # --- Tag ---
@@ -261,6 +261,43 @@ class QuestionBulkCreateRequest(BaseModel):
 
 class QuestionBulkCreateResponse(BaseModel):
     created: int
+
+
+class QuestionImportBulkCreateJobRequest(BaseModel):
+    questions: list[QuestionCreate] = Field(min_length=1, max_length=2000)
+    course_id: uuid.UUID
+
+
+class QuestionImportBulkCreateJobResponse(BaseModel):
+    job_id: uuid.UUID
+    created: int
+    status: QuestionImportJobStatus
+
+
+class QuestionImportJobResponse(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: uuid.UUID
+    user_id: uuid.UUID
+    status: QuestionImportJobStatus
+    total_count: int
+    processed_count: int
+    matched_count: int
+    unmatched_count: int
+    failed_count: int
+    created_question_ids: list[str] = Field(default_factory=list)
+    error_message: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None
+
+
+class QuestionBulkDeleteRequest(BaseModel):
+    question_ids: list[uuid.UUID] = Field(min_length=1, max_length=200)
+
+
+class QuestionBulkDeleteResponse(BaseModel):
+    deleted: int
 
 
 class QuestionImportMatchCreateRequest(BaseModel):

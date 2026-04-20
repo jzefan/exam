@@ -48,6 +48,7 @@ import { JobModelUploadAI } from "./pages/job-models/upload-ai";
 import { ModelConfigPage } from "./pages/settings/model-config";
 import { GradingCenterPage } from "./pages/grading";
 import { GwmxLanding } from "./pages/gwmx/landing";
+import { GwmxWorkbench } from "./pages/gwmx/workbench";
 import StudentManagementPage from "./pages/students";
 
 import { ENTERPRISE_ROLES, getHomeRoute, TEACHER_ROLES } from "@/utils/role-routing";
@@ -201,12 +202,13 @@ function App() {
             {/* GWMX authenticated routes */}
             <Route
               element={
-                <Authenticated key="gwmx-auth" fallback={<CatchAllNavigate to="/login" />}>
+                <Authenticated key="gwmx-auth" fallback={<Navigate to="/login?brand=gwmx" replace />}>
                   <RoleGuard allow={ENTERPRISE_ROLES} />
                 </Authenticated>
               }
             >
               <Route element={<Layout />}>
+                <Route path="/gwmx/workbench" element={<GwmxWorkbench />} />
                 <Route path="/gwmx/job-models" element={<JobModelList />} />
                 <Route path="/gwmx/job-models/standard-library" element={<StandardLibraryPage />} />
                 <Route path="/gwmx/job-models/create" element={<JobModelCreate />} />
@@ -219,7 +221,7 @@ function App() {
             <Route
               path="/gwmx/job-models/:jobModelId/versions/:versionId/editor"
               element={
-                <Authenticated key="editor" fallback={<CatchAllNavigate to="/login" />}>
+                <Authenticated key="editor" fallback={<Navigate to="/login?brand=gwmx" replace />}>
                   <RoleGuard allow={ENTERPRISE_ROLES} />
                 </Authenticated>
               }

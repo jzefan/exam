@@ -102,6 +102,7 @@ export function TreeView({
           type="skill"
           name={skill.name}
           level={skill.level}
+          itemSource={skill.itemSource}
             depth={depth}
             isExpanded={isExpanded}
           childCount={kpCount}
@@ -149,6 +150,7 @@ export function TreeView({
           type="kp"
           name={kp.name}
           difficulty={kp.difficulty}
+          itemSource={kp.itemSource}
           depth={depth}
           isExpanded={false}
           onToggleExpand={() => {}}
@@ -165,7 +167,7 @@ export function TreeView({
 
   return (
     <div className="flex flex-col h-full">
-      <div className="p-3 border-b">
+      <div className="p-3 border-b border-border/40">
         <Input placeholder="搜索节点..." className="h-8" data-testid="tree-search" />
       </div>
       <div className="flex-1 overflow-auto">
@@ -182,7 +184,7 @@ export function TreeView({
       </div>
       {/* Add dimension button - always visible at bottom */}
       {onAddNode && (
-        <div className="p-3 border-t">
+        <div className="p-3 border-t border-border/40">
           <Button
             size="sm"
             variant="outline"

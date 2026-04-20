@@ -16,7 +16,6 @@ import {
   Settings2,
   Sparkles,
   StopCircle,
-  Trash2,
   Users,
   Wand2,
 } from "lucide-react";
@@ -60,15 +59,15 @@ import {
 } from "@/components/ui/tooltip";
 import { PositionSelector } from "./PositionSelector";
 import { QuestionSelector } from "./QuestionSelector";
-import { StudentSelector } from "./StudentSelector";
+import { ClassStudentSelector } from "./ClassStudentSelector";
 import { apiRequest } from "@/pages/grading/api";
 import { validateTypeAllocation } from "@/pages/questions/ai-generate-utils";
 import type { IKnowledgePoint, IQuestion, IQuestionBank, QuestionType } from "@/types";
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
 import { AIQuestionConfigPanel } from "@/components/questions/ai-question-config-panel";
+import { AIGeneratedQuestionCard } from "@/components/questions/ai-generated-question-card";
 import {
   AI_MODEL_OPTIONS,
-  AI_TYPE_LABELS,
   type AIModelProvider,
 } from "@/components/questions/ai-question-config-constants";
 import type { SelectedKnowledgePoint } from "@/components/questions/knowledge-point-selector";
@@ -308,7 +307,11 @@ export function ExamWizardForm({
   const basicInfoValidationErrors = Object.fromEntries(
     Object.entries(validationErrors).filter(([key]) => key !== "total_score"),
   );
-  const fieldErrors = showValidationErrors ? validationErrors : {};
+  const fieldErrors = showValidationErrors
+    ? currentStep === 0
+      ? basicInfoValidationErrors
+      : validationErrors
+    : {};
   const isDirty = JSON.stringify(form) !== JSON.stringify(initialValues);
 
   // Per-user title uniqueness check (create mode only).
@@ -1369,7 +1372,7 @@ export function ExamWizardForm({
         className={cn(
           "h-8 rounded-md px-3 text-xs font-medium transition-colors",
           previewMode === "order"
-            ? "bg-primary text-primary-foreground shadow-sm"
+            ? "exam-primary-soft-active shadow-sm"
             : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
         )}
         onClick={() => setPreviewMode("order")}
@@ -1382,7 +1385,7 @@ export function ExamWizardForm({
         className={cn(
           "h-8 rounded-md px-3 text-xs font-medium transition-colors",
           previewMode === "type"
-            ? "bg-primary text-primary-foreground shadow-sm"
+            ? "exam-primary-soft-active shadow-sm"
             : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
         )}
         onClick={() => setPreviewMode("type")}
@@ -1400,10 +1403,10 @@ export function ExamWizardForm({
           onClick={() => {
             requestQuestionModeChange("manual");
           }}
-          className={`rounded-lg border px-3 py-2 text-left transition-colors bg-background ${
+          className={`rounded-lg border px-3 py-2 text-left transition-colors ${
             questionMode === "manual"
-              ? "border-primary ring-1 ring-primary/40 shadow-sm"
-              : "border-border hover:border-primary/40"
+              ? "exam-primary-soft-active shadow-sm"
+              : "border-border bg-background hover:border-primary/40"
           }`}
         >
           <div className="flex items-center gap-2">
@@ -1411,8 +1414,8 @@ export function ExamWizardForm({
               size={14}
               className={questionMode === "manual" ? "text-primary" : "text-muted-foreground"}
             />
-            <p className="text-sm font-semibold text-foreground">手动选题</p>
-            <span className="ml-auto text-xs text-muted-foreground line-clamp-1">
+            <p className={cn("text-sm font-semibold", questionMode === "manual" ? "text-primary" : "text-foreground")}>手动选题</p>
+            <span className={cn("ml-auto text-xs line-clamp-1", questionMode === "manual" ? "text-primary/70" : "text-muted-foreground")}>
               精确控制题目内容、题型和顺序
             </span>
           </div>
@@ -1422,10 +1425,10 @@ export function ExamWizardForm({
           onClick={() => {
             requestQuestionModeChange("auto");
           }}
-          className={`rounded-lg border px-3 py-2 text-left transition-colors bg-background ${
+          className={`rounded-lg border px-3 py-2 text-left transition-colors ${
             questionMode === "auto"
-              ? "border-primary ring-1 ring-primary/40 shadow-sm"
-              : "border-border hover:border-primary/40"
+              ? "exam-primary-soft-active shadow-sm"
+              : "border-border bg-background hover:border-primary/40"
           }`}
         >
           <div className="flex items-center gap-2">
@@ -1433,8 +1436,8 @@ export function ExamWizardForm({
               size={14}
               className={questionMode === "auto" ? "text-primary" : "text-muted-foreground"}
             />
-            <p className="text-sm font-semibold text-foreground">自动出卷</p>
-            <span className="ml-auto text-xs text-muted-foreground line-clamp-1">
+            <p className={cn("text-sm font-semibold", questionMode === "auto" ? "text-primary" : "text-foreground")}>自动出卷</p>
+            <span className={cn("ml-auto text-xs line-clamp-1", questionMode === "auto" ? "text-primary/70" : "text-muted-foreground")}>
               按题库与难度随机抽题
             </span>
           </div>
@@ -1444,10 +1447,10 @@ export function ExamWizardForm({
           onClick={() => {
             requestQuestionModeChange("ai");
           }}
-          className={`rounded-lg border px-3 py-2 text-left transition-colors bg-background ${
+          className={`rounded-lg border px-3 py-2 text-left transition-colors ${
             questionMode === "ai"
-              ? "border-primary ring-1 ring-primary/40 shadow-sm"
-              : "border-border hover:border-primary/40"
+              ? "exam-primary-soft-active shadow-sm"
+              : "border-border bg-background hover:border-primary/40"
           }`}
         >
           <div className="flex items-center gap-2">
@@ -1455,8 +1458,8 @@ export function ExamWizardForm({
               size={14}
               className={questionMode === "ai" ? "text-primary" : "text-muted-foreground"}
             />
-            <p className="text-sm font-semibold text-foreground">AI出题</p>
-            <span className="ml-auto text-xs text-muted-foreground line-clamp-1">
+            <p className={cn("text-sm font-semibold", questionMode === "ai" ? "text-primary" : "text-foreground")}>AI出题</p>
+            <span className={cn("ml-auto text-xs line-clamp-1", questionMode === "ai" ? "text-primary/70" : "text-muted-foreground")}>
               按配置生成新题并直接加入考试
             </span>
           </div>
@@ -1730,39 +1733,12 @@ export function ExamWizardForm({
 
                 <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
                   {aiQuestions.map((question) => (
-                    <div key={question.index} className="rounded-xl border border-border/70 bg-card p-4">
-                      <div className="mb-3 flex items-center gap-2">
-                        <Checkbox checked={question.selected} onCheckedChange={() => toggleAIQuestionSelection(question.index)} />
-                        <span className="text-sm font-medium text-muted-foreground">#{question.index + 1}</span>
-                        <Badge variant="secondary">{AI_TYPE_LABELS[question.type] ?? question.type}</Badge>
-                        <Badge variant="outline">难度 {question.difficulty}</Badge>
-                        <div className="flex-1" />
-                        <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive" onClick={() => removeAIQuestion(question.index)}>
-                          <Trash2 size={14} />
-                        </Button>
-                      </div>
-                      <p className="text-sm font-semibold text-foreground">{question.title}</p>
-                      {question.content.text && question.content.text !== question.title && (
-                        <p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">{question.content.text}</p>
-                      )}
-                      {question.options && Object.keys(question.options).length > 0 && (
-                        <div className="mt-3 grid gap-1 text-sm text-foreground">
-                          {Object.entries(question.options).map(([key, value]) => (
-                            <p key={key}><span className="mr-1 font-medium">{key}.</span>{value}</p>
-                          ))}
-                        </div>
-                      )}
-                      <div className="mt-3 rounded-lg bg-muted/40 p-3 text-sm">
-                        <span className="font-medium text-primary">答案：</span>
-                        {String(question.answer.correct ?? question.answer.text ?? "—")}
-                      </div>
-                      {question.analysis && (
-                        <div className="mt-2 rounded-lg bg-muted/20 p-3 text-sm text-muted-foreground">
-                          <span className="font-medium text-foreground">解析：</span>
-                          {question.analysis}
-                        </div>
-                      )}
-                    </div>
+                    <AIGeneratedQuestionCard
+                      key={question.index}
+                      question={question}
+                      onToggleSelected={() => toggleAIQuestionSelection(question.index)}
+                      onRemove={() => removeAIQuestion(question.index)}
+                    />
                   ))}
                 </div>
               </div>
@@ -1835,7 +1811,7 @@ export function ExamWizardForm({
                       }}
                       className={`rounded-xl border px-3 py-2.5 text-left transition-colors ${
                         isActive
-                          ? "border-primary/70 bg-primary text-primary-foreground shadow-sm"
+                          ? "exam-primary-soft-active shadow-sm"
                           : isDone
                             ? "border-emerald-500/25 bg-emerald-500/5"
                             : "border-border bg-background"
@@ -1845,7 +1821,7 @@ export function ExamWizardForm({
                         <span
                           className={`flex items-center justify-center rounded-full border font-semibold transition-all ${
                             isActive
-                              ? "h-7 w-7 text-sm border-2 border-white bg-white text-primary shadow-md ring-2 ring-white/60"
+                              ? "h-7 w-7 text-sm border-2 border-primary-foreground/60 bg-primary-foreground text-primary shadow-md ring-2 ring-primary-foreground/40"
                               : isDone
                                 ? "h-6 w-6 text-xs border-emerald-600 bg-emerald-600 text-white"
                                 : "h-6 w-6 text-xs border-border bg-muted text-muted-foreground"
@@ -1856,20 +1832,20 @@ export function ExamWizardForm({
                         <Icon
                           size={14}
                           className={
-                            isActive ? "text-primary-foreground/90" : "text-muted-foreground"
+                            isActive ? "text-primary" : "text-muted-foreground"
                           }
                         />
                       </div>
                       <p
                         className={`text-sm font-semibold ${
-                          isActive ? "text-primary-foreground" : "text-foreground"
+                          isActive ? "text-primary" : "text-foreground"
                         }`}
                       >
                         {step.title}
                       </p>
                       <p
                         className={`mt-0.5 text-xs leading-tight line-clamp-1 ${
-                          isActive ? "text-primary-foreground/80" : "text-muted-foreground"
+                          isActive ? "text-primary/70" : "text-muted-foreground"
                         }`}
                       >
                         {step.description}
@@ -2068,7 +2044,7 @@ export function ExamWizardForm({
                 </p>
               </CardHeader>
               <CardContent className="space-y-4">
-                <StudentSelector
+                <ClassStudentSelector
                   selectedIds={form.student_ids}
                   onChange={(ids) => updateField("student_ids", ids)}
                 />

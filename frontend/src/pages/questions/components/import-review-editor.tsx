@@ -1,4 +1,5 @@
 import { AlertTriangle, Bot, CheckCircle2, Pencil, RotateCcw, Settings2 } from "lucide-react";
+import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -22,27 +23,43 @@ const typeOptions: Array<{ value: QuestionType; label: string }> = [
 
 export function ImportReviewEditor({
   draft,
+  reviewMode,
   isRecognizing,
   isAnalyzingDocument,
   canApproveAll,
+  fastImportEligibleCount,
+  totalDraftCount,
+  blockingIssueCount,
+  missingAnswerCount,
+  onReviewModeChange,
   onChange,
   onApprove,
   onApproveAll,
+  onFastImport,
   onReRecognize,
   onAnalyzeDocument,
   onEditSource,
 }: {
   draft: QuestionImportDraft | null;
+  reviewMode: "fast" | "review";
   isRecognizing: boolean;
   isAnalyzingDocument: boolean;
   canApproveAll: boolean;
+  fastImportEligibleCount: number;
+  totalDraftCount: number;
+  blockingIssueCount: number;
+  missingAnswerCount: number;
+  onReviewModeChange: (mode: "fast" | "review") => void;
   onChange: (patch: Partial<QuestionImportDraft>) => void;
   onApprove: () => void;
   onApproveAll: () => void;
+  onFastImport: () => void;
   onReRecognize: () => void;
   onAnalyzeDocument: () => void;
   onEditSource: () => void;
 }) {
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
+
   if (!draft) {
     return (
       <div className="flex h-[600px] flex-col items-center justify-center rounded-[32px] border-2 border-dashed border-slate-200 bg-white/50 text-center p-12">
@@ -89,7 +106,7 @@ export function ImportReviewEditor({
           <section className="space-y-3">
             <Label className="text-[11px] font-bold uppercase tracking-widest text-slate-400">题目内容</Label>
             <Textarea
-              className="min-h-[220px] w-full rounded-2xl border-slate-200 bg-white p-5 text-sm font-semibold leading-relaxed shadow-sm focus-visible:ring-1 focus-visible:ring-primary/20"
+              className="min-h-[220px] w-full rounded-2xl border-slate-200 bg-white p-5 text-sm font-medium leading-relaxed text-slate-700 shadow-sm focus-visible:ring-1 focus-visible:ring-primary/20"
               value={draft.content_text}
               placeholder="请输入题干内容..."
               onChange={(event) => onChange({ content_text: event.target.value })}
@@ -158,50 +175,142 @@ export function ImportReviewEditor({
       </div>
 
       <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start">
-        <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-          <Button
-            onClick={onApprove}
-            disabled={hasBlockingIssues}
-            className="h-10 w-full rounded-xl text-sm font-bold shadow-sm shadow-primary/20"
-          >
-            <CheckCircle2 size={15} className="mr-2" />
-            确认并下一题
-          </Button>
-          <div className="mt-2 grid grid-cols-2 gap-2">
+        <div className="rounded-2xl border border-slate-100 bg-white p-2 shadow-sm">
+          <div className="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1">
             <Button
-              variant="secondary"
+              type="button"
               size="sm"
-              disabled={isRecognizing}
-              onClick={onReRecognize}
-              className="h-9 rounded-lg border-none bg-indigo-50 text-sm font-bold text-indigo-600 hover:bg-indigo-100"
+              variant={reviewMode === "fast" ? "default" : "ghost"}
+              data-state={reviewMode === "fast" ? "active" : "inactive"}
+              className={cn(
+                "h-9 rounded-lg text-xs font-bold",
+                reviewMode !== "fast" && "text-slate-500 hover:bg-white/70 hover:text-slate-900",
+              )}
+              onClick={() => onReviewModeChange("fast")}
             >
-              {isRecognizing ? <RotateCcw size={14} className="mr-2 animate-spin" /> : <Bot size={14} className="mr-2" />}
-              AI 补全
+              快速导入（推荐）
             </Button>
             <Button
-              variant="outline"
+              type="button"
               size="sm"
-              disabled={isAnalyzingDocument}
-              className="h-9 rounded-lg border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50"
-              onClick={onAnalyzeDocument}
+              variant={reviewMode === "review" ? "default" : "ghost"}
+              data-state={reviewMode === "review" ? "active" : "inactive"}
+              className={cn(
+                "h-9 rounded-lg text-xs font-bold",
+                reviewMode !== "review" && "text-slate-500 hover:bg-white/70 hover:text-slate-900",
+              )}
+              onClick={() => onReviewModeChange("review")}
             >
-              {isAnalyzingDocument ? <RotateCcw size={14} className="mr-2 animate-spin" /> : <Bot size={14} className="mr-2" />}
-              AI 一键分析
-            </Button>
-          </div>
-          <div className="mt-2 grid grid-cols-1 gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={!canApproveAll}
-              className="h-9 rounded-lg border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50"
-              onClick={onApproveAll}
-            >
-              <CheckCircle2 size={14} className="mr-2" />
-              确定全部
+              逐题审核
             </Button>
           </div>
         </div>
+
+        {reviewMode === "fast" ? (
+          <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+            <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50/70 p-3">
+              <p className="text-sm font-bold text-slate-900">快速导入适合大多数场景</p>
+              <p className="mt-1 text-xs font-medium leading-relaxed text-slate-500">
+                系统会导入可入库题目；异常题会保留在列表中，方便之后处理。
+              </p>
+            </div>
+            <div className="mb-4 grid grid-cols-2 gap-2">
+              <div className="rounded-xl bg-slate-50 p-3">
+                <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400">共识别</p>
+                <p className="mt-1 text-lg font-black text-slate-900">{totalDraftCount}</p>
+              </div>
+              <div className="rounded-xl bg-emerald-50 p-3">
+                <p className="text-[11px] font-bold uppercase tracking-widest text-emerald-500">可导入</p>
+                <p className="mt-1 text-lg font-black text-emerald-600">{fastImportEligibleCount}</p>
+              </div>
+              <div className="rounded-xl bg-red-50 p-3">
+                <p className="text-[11px] font-bold uppercase tracking-widest text-red-500">异常</p>
+                <p className="mt-1 text-lg font-black text-red-600">{blockingIssueCount}</p>
+              </div>
+              <div className="rounded-xl bg-amber-50 p-3">
+                <p className="text-[11px] font-bold uppercase tracking-widest text-amber-500">缺答案</p>
+                <p className="mt-1 text-lg font-black text-amber-600">{missingAnswerCount}</p>
+              </div>
+            </div>
+            <Button
+              onClick={onFastImport}
+              disabled={fastImportEligibleCount === 0}
+              className="h-11 w-full rounded-xl text-sm font-bold shadow-sm shadow-primary/20"
+            >
+              <CheckCircle2 size={15} className="mr-2" />
+              {fastImportEligibleCount > 0 ? `导入 ${fastImportEligibleCount} 道题` : "暂无可导入题目"}
+            </Button>
+            <Button
+              variant="outline"
+              className="mt-2 h-10 w-full rounded-xl border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50"
+              onClick={() => onReviewModeChange("review")}
+            >
+              进入逐题审核
+            </Button>
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+            <Button
+              onClick={onApprove}
+              disabled={hasBlockingIssues}
+              className="h-10 w-full rounded-xl text-sm font-bold shadow-sm shadow-primary/20"
+            >
+              <CheckCircle2 size={15} className="mr-2" />
+              确认并下一题
+            </Button>
+            <div className="mt-2 grid grid-cols-1 gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!canApproveAll}
+                className="h-9 rounded-lg border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50"
+                onClick={onApproveAll}
+              >
+                <CheckCircle2 size={14} className="mr-2" />
+                确定全部
+              </Button>
+            </div>
+            <div className="mt-2 overflow-hidden rounded-xl border border-slate-100 bg-slate-50/70 p-2">
+              <button
+                type="button"
+                className="flex w-full cursor-pointer items-center justify-between px-2 py-1.5 text-sm font-bold text-slate-700 transition-colors hover:text-slate-900"
+                onClick={() => setAiPanelOpen((current) => !current)}
+              >
+                <span className="flex items-center gap-2">
+                  <Bot size={14} className="text-indigo-500" />
+                  AI 辅助
+                </span>
+                <span className="text-xs font-medium text-slate-400">{aiPanelOpen ? "收起" : "展开"}</span>
+              </button>
+              {aiPanelOpen && (
+                <div className="mt-2 grid gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={isRecognizing}
+                    title="补全当前题的答案、解析或题型"
+                    onClick={onReRecognize}
+                    className="h-9 rounded-lg border-none bg-indigo-50 text-sm font-bold text-indigo-600 hover:bg-indigo-100"
+                  >
+                    {isRecognizing ? <RotateCcw size={14} className="mr-2 animate-spin" /> : <Bot size={14} className="mr-2" />}
+                    AI 补全当前题
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={isAnalyzingDocument}
+                    title="重新分析整份导入文件，适合识别结果明显不准时使用"
+                    className="h-9 rounded-lg border-slate-200 text-sm font-bold text-slate-700 hover:bg-white"
+                    onClick={onAnalyzeDocument}
+                  >
+                    {isAnalyzingDocument ? <RotateCcw size={14} className="mr-2 animate-spin" /> : <Bot size={14} className="mr-2" />}
+                    AI 分析整份导入内容
+                  </Button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
           <Label className="text-[11px] font-bold uppercase tracking-widest text-slate-400">难度系数</Label>

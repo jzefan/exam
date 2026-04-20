@@ -28,8 +28,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
+import { useBrand } from "@/lib/brand";
 import { UserDropdown } from "./user-dropdown";
 import { ThemeCustomizer } from "./theme-customizer";
+import { NotificationCenter } from "./notifications/notification-center";
 import { useTheme } from "./theme-provider";
 import { cn } from "@/lib/utils";
 import React, { useState } from "react";
@@ -102,6 +104,7 @@ export function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
   const { resolved: themeMode } = useTheme();
+  const brand = useBrand();
 
   const isActive = (prefix: string) => location.pathname.startsWith(prefix);
   const role = identity ? getUserRole(identity) : "";
@@ -111,7 +114,9 @@ export function Layout() {
   const isKnowledgePage = location.pathname.startsWith("/knowledge");
   const isGradingPage = location.pathname.startsWith("/grading");
   const isQuestionImportPage = location.pathname === "/questions/import";
-  const isExamWorkflowPage = location.pathname === "/exams/practice/create";
+  const isExamWorkflowPage =
+    location.pathname === "/exams/practice/create" ||
+    location.pathname.startsWith("/exams/practice/edit/");
   const isFullScreenPage = isKnowledgePage || isGradingPage || isQuestionImportPage;
   const [examMenuOpen, setExamMenuOpen] = useState(false);
   const [questionMenuOpen, setQuestionMenuOpen] = useState(false);
@@ -140,7 +145,7 @@ export function Layout() {
               <GraduationCap size={18} className="text-white" />
             </div>
             <span className="text-base font-bold text-foreground tracking-tight hidden sm:inline">
-              智评云
+              {brand.name}
             </span>
           </Link>
 
@@ -224,13 +229,32 @@ export function Layout() {
                   </NavigationMenuItem>
                 )}
 
+                {/* ---- 工作台 (企业、学校管理员) ---- */}
+                {isEnterprise && (
+                  <NavigationMenuItem>
+                    <NavigationMenuLink
+                      className={cn(
+                        navigationMenuTriggerStyle(),
+                        isActive("/gwmx/workbench") ? "bg-accent/50 text-accent-foreground" : "",
+                      )}
+                      onClick={(e: React.MouseEvent) => {
+                        e.preventDefault();
+                        navigate("/gwmx/workbench");
+                      }}
+                    >
+                      <LayoutDashboard size={16} className="mr-1.5" />
+                      工作台
+                    </NavigationMenuLink>
+                  </NavigationMenuItem>
+                )}
+
                 {/* ---- 岗位模型 (企业、学校管理员、管理员) ---- */}
                 {(isEnterprise || isAdmin) && (
                   <NavigationMenuItem>
                     <NavigationMenuLink
                       className={cn(
                         navigationMenuTriggerStyle(),
-                        isActive("/gwmx") ? "bg-accent/50 text-accent-foreground" : "",
+                        isActive("/gwmx/job-models") ? "bg-accent/50 text-accent-foreground" : "",
                       )}
                       onClick={(e: React.MouseEvent) => {
                         e.preventDefault();
@@ -305,9 +329,10 @@ export function Layout() {
             </NavigationMenu>
           </div>
 
-          {/* 右侧：主题 + 用户 */}
+          {/* 右侧：主题 + 通知 + 用户 */}
           <div className="flex items-center gap-1 shrink-0">
             <ThemeCustomizer />
+            {(isTeacher || isAdmin) && <NotificationCenter />}
             <Separator orientation="vertical" className="mx-1 h-5" />
             <UserDropdown name={identity?.name ?? "用户"} role={identity ? getUserRole(identity) : undefined} onLogout={() => logout()} />
           </div>

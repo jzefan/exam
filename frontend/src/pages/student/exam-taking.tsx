@@ -561,16 +561,27 @@ export function ExamTaking() {
                     })}
                   </div>
 
-                  <button
-                    disabled={currentIndex === questions.length - 1}
-                    onClick={() => {
-                      void navigateToQuestion(currentIndex + 1);
-                    }}
-                    className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                  >
-                    下一题
-                    <ChevronRight size={16} />
-                  </button>
+                  {currentIndex === questions.length - 1 ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowSubmitDialog(true)}
+                      className="flex items-center gap-1 text-sm font-medium text-primary hover:text-primary/80 transition-colors"
+                    >
+                      交卷
+                      <Send size={16} />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void navigateToQuestion(currentIndex + 1);
+                      }}
+                      className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      下一题
+                      <ChevronRight size={16} />
+                    </button>
+                  )}
                 </div>
               </div>
             ) : null}

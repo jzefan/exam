@@ -1,3 +1,35 @@
+@import "tailwindcss";
+@config "../tailwind.config.cjs";
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --radius-sm: max(0px, calc(var(--radius) - 4px));
+  --radius-md: max(0px, calc(var(--radius) - 2px));
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+}
+
 :root {
   --background: 0 0% 100%;
   --foreground: 240 10% 3.9%;
@@ -73,6 +105,41 @@ body {
   background-color: hsl(var(--background));
   color: hsl(var(--foreground));
   transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* Harden shadcn/Tailwind semantic color utilities in production builds.
+   These rules are intentionally loaded after Tailwind utilities so primary
+   actions do not lose their solid background when utility generation or
+   class merging changes between dev and deployment builds. */
+.bg-primary,
+[data-ui-button][data-variant="default"] {
+  background-color: hsl(var(--primary));
+}
+
+.hover\:bg-primary\/90:hover,
+[data-ui-button][data-variant="default"]:hover:not(:disabled) {
+  background-color: hsl(var(--primary) / 0.9);
+}
+
+.text-primary-foreground,
+[data-ui-button][data-variant="default"] {
+  color: hsl(var(--primary-foreground));
+}
+
+.border-primary {
+  border-color: hsl(var(--primary));
+}
+
+.exam-primary-soft-active {
+  border-color: hsl(var(--primary) / 0.55);
+  background-color: hsl(var(--primary) / 0.1);
+  color: hsl(var(--primary));
+  box-shadow: 0 1px 2px hsl(var(--primary) / 0.12);
+}
+
+.exam-primary-soft-active:hover {
+  border-color: hsl(var(--primary) / 0.7);
+  background-color: hsl(var(--primary) / 0.14);
 }
 
 /* TipTap rich text editor */
@@ -305,7 +372,7 @@ pre.rounded-md {
   background-color: hsl(var(--muted-foreground));
 }
 
-/* Magic UI — dialog animations (pure CSS, UnoCSS-safe) */
+/* Magic UI — dialog animations (pure CSS, Tailwind-safe) */
 
 /* Use independent scale/opacity/filter so they don't conflict with translate positioning */
 .magic-overlay {

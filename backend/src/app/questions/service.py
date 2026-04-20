@@ -14,8 +14,9 @@ from sqlalchemy.orm import joinedload, selectinload
 from app.auth.models import User
 from app.common.data_visibility import VisibilityScope
 from app.common.resource_access import teacher_owned_resource_filter, teacher_visible_resource_filter
+from app.database import async_session
 from app.config import settings
-from app.questions.models import KnowledgePoint, Question, QuestionBank, Tag, question_tags
+from app.questions.models import KnowledgePoint, Question, QuestionBank, QuestionImportJob, QuestionImportJobStatus, Tag, question_tags
 from app.questions.schemas import (
     ImportConfidence,
     ImportRecognitionMode,
@@ -1193,6 +1194,238 @@ async def bulk_create_questions(
     for data in questions:
         await create_question(db, data, user_id)
     return len(questions)
+
+
+async def bulk_create_questions_fast(
+    db: AsyncSession, questions: list[QuestionCreate], user_id: uuid.UUID
+) -> list[uuid.UUID]:
+    """Create many questions in one flush while preserving provided relations."""
+    tag_ids = {tag_id for data in questions for tag_id in data.tag_ids}
+    knowledge_point_ids = {
+        knowledge_point_id for data in questions for knowledge_point_id in data.knowledge_point_ids
+    }
+
+    tags_by_id: dict[uuid.UUID, Tag] = {}
+    knowledge_points_by_id: dict[uuid.UUID, KnowledgePoint] = {}
+
+    if tag_ids:
+        tag_rows = await db.execute(select(Tag).where(Tag.id.in_(tag_ids)))
+        tags_by_id = {tag.id: tag for tag in tag_rows.scalars().all()}
+    if knowledge_point_ids:
+        kp_rows = await db.execute(select(KnowledgePoint).where(KnowledgePoint.id.in_(knowledge_point_ids)))
+        knowledge_points_by_id = {kp.id: kp for kp in kp_rows.scalars().all()}
+
+    created_questions: list[Question] = []
+    for data in questions:
+        question = Question(
+            type=data.type,
+            title=data.title,
+            content=data.content,
+            options=data.options,
+            answer=data.answer,
+            analysis=data.analysis,
+            difficulty=data.difficulty,
+            score=data.score,
+            created_by=user_id,
+            owner_id=user_id,
+            question_bank_id=data.question_bank_id,
+        )
+        if data.tag_ids:
+            question.tags = [tags_by_id[tag_id] for tag_id in data.tag_ids if tag_id in tags_by_id]
+        if data.knowledge_point_ids:
+            question.knowledge_points = [
+                knowledge_points_by_id[knowledge_point_id]
+                for knowledge_point_id in data.knowledge_point_ids
+                if knowledge_point_id in knowledge_points_by_id
+            ]
+        created_questions.append(question)
+
+    db.add_all(created_questions)
+    await db.flush()
+    return [question.id for question in created_questions]
+
+
+async def create_question_import_job(
+    db: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    total_count: int,
+) -> QuestionImportJob:
+    job = QuestionImportJob(
+        user_id=user_id,
+        status=QuestionImportJobStatus.PENDING,
+        total_count=total_count,
+        processed_count=0,
+        matched_count=0,
+        unmatched_count=0,
+        failed_count=0,
+        created_question_ids=[],
+        error_message=None,
+        completed_at=None,
+    )
+    db.add(job)
+    await db.flush()
+    return job
+
+
+async def get_question_import_job_by_id(
+    db: AsyncSession,
+    job_id: uuid.UUID,
+    *,
+    user_id: uuid.UUID,
+) -> QuestionImportJob | None:
+    result = await db.execute(
+        select(QuestionImportJob).where(
+            QuestionImportJob.id == job_id,
+            QuestionImportJob.user_id == user_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def _load_questions_for_import_job(
+    db: AsyncSession,
+    question_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, Question]:
+    if not question_ids:
+        return {}
+    result = await db.execute(
+        select(Question)
+        .options(selectinload(Question.knowledge_points))
+        .where(Question.id.in_(question_ids))
+    )
+    return {question.id: question for question in result.scalars().all()}
+
+
+async def _send_question_import_notification(
+    db: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    job_id: uuid.UUID,
+    total_count: int,
+    matched_count: int,
+    unmatched_count: int,
+    failed_count: int,
+) -> None:
+    try:
+        from app.notifications.service import create_notification
+    except ImportError:
+        return
+
+    content = (
+        f"共导入 {total_count} 道题，"
+        f"成功匹配 {matched_count} 道，"
+        f"未匹配 {unmatched_count} 道，"
+        f"失败 {failed_count} 道。"
+    )
+    await create_notification(
+        db,
+        user_id,
+        "question_import_completed",
+        "题目知识点识别完成",
+        content=content,
+        link_url=f"/questions?import_job_id={job_id}",
+        payload={
+            "job_id": str(job_id),
+            "total_count": total_count,
+            "matched_count": matched_count,
+            "unmatched_count": unmatched_count,
+            "failed_count": failed_count,
+        },
+    )
+
+
+async def process_question_import_job(
+    *,
+    job_id: uuid.UUID,
+    user_id: uuid.UUID,
+    course_id: uuid.UUID,
+    questions: list[dict],
+) -> None:
+    async with async_session() as db:
+        job = await get_question_import_job_by_id(db, job_id, user_id=user_id)
+        if job is None:
+            return
+
+        job.status = QuestionImportJobStatus.RUNNING
+        await db.commit()
+
+        processed_count = 0
+        matched_count = 0
+        unmatched_count = 0
+        failed_count = 0
+        final_status = QuestionImportJobStatus.COMPLETED
+        error_message: str | None = None
+
+        try:
+            candidates = await _load_course_descendant_knowledge_points(db, course_id)
+            question_payloads = [QuestionCreate.model_validate(question) for question in questions]
+            question_ids = [uuid.UUID(question_id) for question_id in job.created_question_ids]
+            questions_by_id = await _load_questions_for_import_job(db, question_ids)
+
+            for question_id, question_data in zip(question_ids, question_payloads):
+                question = questions_by_id.get(question_id)
+                if question is None:
+                    failed_count += 1
+                    processed_count += 1
+                    error_message = error_message or f"question {question_id} not found"
+                    continue
+
+                try:
+                    matched_ids = await match_knowledge_points_with_ai(question_data, candidates)
+                    existing_ids = {kp.id for kp in question.knowledge_points}
+                    merged_ids = list(dict.fromkeys([*existing_ids, *matched_ids]))
+                    if merged_ids:
+                        matched_kps_result = await db.execute(
+                            select(KnowledgePoint).where(KnowledgePoint.id.in_(merged_ids))
+                        )
+                        question.knowledge_points = list(matched_kps_result.scalars().all())
+                    if matched_ids:
+                        matched_count += 1
+                    else:
+                        unmatched_count += 1
+                except Exception as exc:  # noqa: BLE001
+                    failed_count += 1
+                    error_message = str(exc)
+                finally:
+                    processed_count += 1
+                    job.processed_count = processed_count
+                    job.matched_count = matched_count
+                    job.unmatched_count = unmatched_count
+                    job.failed_count = failed_count
+                    job.created_question_ids = [str(question_id) for question_id in question_ids]
+                    await db.commit()
+
+            if failed_count > 0:
+                final_status = (
+                    QuestionImportJobStatus.PARTIAL_FAILED if processed_count > failed_count else QuestionImportJobStatus.FAILED
+                )
+        except Exception as exc:  # noqa: BLE001
+            final_status = QuestionImportJobStatus.FAILED if processed_count == 0 else QuestionImportJobStatus.PARTIAL_FAILED
+            error_message = str(exc)
+        finally:
+            job.status = final_status
+            job.processed_count = processed_count
+            job.matched_count = matched_count
+            job.unmatched_count = unmatched_count
+            job.failed_count = failed_count
+            job.error_message = error_message
+            job.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+
+            try:
+                await _send_question_import_notification(
+                    db,
+                    user_id=user_id,
+                    job_id=job_id,
+                    total_count=job.total_count,
+                    matched_count=matched_count,
+                    unmatched_count=unmatched_count,
+                    failed_count=failed_count,
+                )
+                await db.commit()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 async def _load_course_descendant_knowledge_points(

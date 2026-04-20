@@ -2,15 +2,13 @@ import { useState, useEffect } from "react";
 import { useList } from "@refinedev/core";
 import { useNavigate } from "react-router-dom";
 import {
-  ArrowRight,
-  Timer,
   FileText,
   ChevronRight,
-  Play,
   Calendar,
   Award,
   CheckCircle2,
   BookOpen,
+  Timer,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,6 +24,7 @@ import {
 import { cn } from "@/lib/utils";
 import { getEffectiveStudentExamStatus } from "./utils";
 import { getStudentDateLocale, getStudentLocale, tStudent } from "./i18n";
+import { StudentPendingExamCard } from "./components/student-pending-exam-card";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -51,6 +50,7 @@ interface IMyExam {
   grading_status?: "pending_ai" | "ai_scored" | "reviewed" | null;
   participated: boolean;
   submitted_at: string | null;
+  created_by_name?: string | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -70,14 +70,16 @@ function formatDateShort(iso: string | null): string {
 
 function useRelativeTime(iso: string | null): string {
   const locale = getStudentLocale();
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState<number | null>(null);
 
   useEffect(() => {
-    const interval = setInterval(() => setNow(Date.now()), 60_000);
+    const updateNow = () => setNow(Date.now());
+    updateNow();
+    const interval = setInterval(updateNow, 60_000);
     return () => clearInterval(interval);
   }, []);
 
-  if (!iso) return "";
+  if (!iso || now === null) return "";
   const target = new Date(iso).getTime();
   const diff = target - now;
 
@@ -90,57 +92,13 @@ function useRelativeTime(iso: string | null): string {
   return tStudent("my_exams_days_later", { count: days }, locale);
 }
 
+function formatTeacherName(name: string | null | undefined): string {
+  return name?.trim() ? `发布老师：${name}` : "发布老师：未注明";
+}
+
 /* ------------------------------------------------------------------ */
 /*  Components                                                         */
 /* ------------------------------------------------------------------ */
-
-function OngoingExamHero({ exam, onClick }: { exam: IMyExam; onClick: () => void }) {
-  const locale = getStudentLocale();
-  return (
-    <div className="group relative overflow-hidden rounded-2xl border border-primary/20 bg-primary/[0.04] px-6 py-5 transition-all hover:shadow-lg hover:shadow-primary/10">
-      <div className="absolute top-0 right-0 p-6 opacity-5 transition-transform group-hover:scale-110">
-        <Play size={96} className="fill-primary" />
-      </div>
-
-      <div className="relative flex flex-col gap-4">
-        <div className="flex flex-wrap items-center gap-2.5">
-          <Badge className="rounded-full border-none bg-primary px-2.5 py-1 hover:bg-primary/90">
-            {tStudent("my_exams_ongoing", undefined, locale)}
-          </Badge>
-          <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
-            {tStudent("my_exams_remaining_minutes", { minutes: exam.duration_minutes }, locale)}
-          </span>
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          <h3 className="text-lg font-extrabold text-foreground tracking-tight transition-colors group-hover:text-primary">
-            {exam.title}
-          </h3>
-          {exam.description && (
-            <p className="max-w-2xl text-sm leading-6 text-muted-foreground line-clamp-2">
-              {exam.description}
-            </p>
-          )}
-        </div>
-
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
-          <div className="flex items-center gap-2 font-semibold">
-            <FileText size={16} className="text-primary/60" />
-            <span>{tStudent("my_exams_questions", { count: exam.total_questions }, locale)}</span>
-          </div>
-          <div className="flex items-center gap-2 font-semibold">
-            <Award size={16} className="text-primary/60" />
-            <span>{tStudent("my_exams_total_score", { score: exam.total_score }, locale)}</span>
-          </div>
-        </div>
-
-        <Button onClick={onClick} className="h-10 w-fit rounded-lg px-5 font-semibold shadow-sm shadow-primary/20">
-          {tStudent("my_exams_enter_exam", undefined, locale)} <ArrowRight size={20} className="ml-2" />
-        </Button>
-      </div>
-    </div>
-  );
-}
 
 function UpcomingExamRow({ exam, onClick }: { exam: IMyExam; onClick: () => void }) {
   const locale = getStudentLocale();
@@ -157,6 +115,8 @@ function UpcomingExamRow({ exam, onClick }: { exam: IMyExam; onClick: () => void
         <div className="flex min-w-0 flex-col gap-1 text-left">
           <h4 className="truncate text-sm font-semibold text-foreground">{exam.title}</h4>
           <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span>{formatTeacherName(exam.created_by_name)}</span>
+            <span>•</span>
             <span>{tStudent("my_exams_start_time", { time: formatDateShort(exam.start_time) }, locale)}</span>
             <span>•</span>
             <span className="font-semibold text-primary">{timeUntil}</span>
@@ -314,8 +274,20 @@ export function MyExams() {
               <p className="text-sm font-bold text-muted-foreground">{tStudent("my_exams_pending_empty", undefined, locale)}</p>
             </div>
           ) : (
-            <div className="flex flex-col gap-6">
-              {ongoingExams.map(e => <OngoingExamHero key={e.id} exam={e} onClick={() => setNoticeExam(e)} />)}
+              <div className="flex flex-col gap-6">
+              {ongoingExams.map((e) => (
+                <StudentPendingExamCard
+                  key={e.id}
+                  title={e.title}
+                  startTime={e.start_time}
+                  endTime={e.end_time}
+                  durationMinutes={e.duration_minutes}
+                  createdByName={e.created_by_name}
+                  status="ongoing"
+                  actionLabel={tStudent("my_exams_enter_exam", undefined, locale)}
+                  onAction={() => setNoticeExam(e)}
+                />
+              ))}
               {upcomingExams.length > 0 && (
                 <div className="flex flex-col gap-3">
                   <h3 className="px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{locale === "en" ? "Starting Soon" : "即将开始"}</h3>
@@ -356,7 +328,17 @@ export function MyExams() {
   );
 }
 
-function ExamNoticeDialog({ exam, open, onConfirm, onCancel }: any) {
+function ExamNoticeDialog({
+  exam,
+  open,
+  onConfirm,
+  onCancel,
+}: {
+  exam: IMyExam | null;
+  open: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
   if (!exam) return null;
   const locale = getStudentLocale();
   return (

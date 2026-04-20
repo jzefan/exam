@@ -19,14 +19,21 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.drop_table("skill_kp_mappings")
-    op.drop_table("skill_knowledge_points")
-    op.drop_table("skills")
-    op.drop_table("competency_dimensions")
-    op.drop_table("source_documents")
-    op.drop_table("job_model_versions")
-    op.drop_table("job_models")
-    op.drop_table("job_model_projects")
+    # Production databases may already be partially migrated or may have been
+    # created from a schema that skipped some of the legacy job-model tables.
+    # Keep this destructive rebuild idempotent so missing old tables do not
+    # block unrelated schema upgrades.
+    for table_name in (
+        "skill_kp_mappings",
+        "skill_knowledge_points",
+        "skills",
+        "competency_dimensions",
+        "source_documents",
+        "job_model_versions",
+        "job_models",
+        "job_model_projects",
+    ):
+        op.execute(sa.text(f'DROP TABLE IF EXISTS "{table_name}" CASCADE'))
 
     op.create_table(
         "job_models",

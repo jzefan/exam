@@ -1,0 +1,39 @@
+server {
+  listen 3036;
+  server_name _;
+
+  client_max_body_size 50m;
+
+  # Current deployment slot is injected by scripts/deploy.sh.
+  # __SLOT__ is replaced with blue or green during release switching.
+
+  location = /healthz {
+    access_log off;
+    add_header Content-Type text/plain;
+    return 200 "ok\n";
+  }
+
+  location /api/ {
+    proxy_pass http://backend___SLOT__:8000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  location / {
+    proxy_pass http://frontend___SLOT__:80;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  # Future domain / HTTPS notes:
+  # 1. Change listen 3036 to listen 80 and add a second TLS server block on 443.
+  # 2. Replace server_name _ with your real domain.
+  # 3. Mount certificate files into the nginx container and configure ssl_certificate / ssl_certificate_key.
+  # 4. Add an HTTP->HTTPS redirect block once the domain is ready.
+}

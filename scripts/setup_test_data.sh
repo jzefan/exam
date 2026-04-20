@@ -1,4 +1,8 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # Wait for backend to be ready
 echo "Waiting for backend to be ready..."
@@ -18,11 +22,13 @@ echo "Creating test job model..."
 # First, get auth token (using default admin credentials if available)
 # For now, we'll use a simple approach to create via direct DB access
 
-python3 << 'PYTHON'
+PROJECT_ROOT="${PROJECT_ROOT}" python3 << 'PYTHON'
 import sys
 import os
-sys.path.insert(0, 'backend/src')
-os.chdir('/Users/jzefan/work/proj/exam')
+
+project_root = os.environ["PROJECT_ROOT"]
+sys.path.insert(0, os.path.join(project_root, 'backend/src'))
+os.chdir(project_root)
 
 import asyncio
 from sqlalchemy import text
@@ -137,4 +143,3 @@ async def setup():
 
 asyncio.run(setup())
 PYTHON
-

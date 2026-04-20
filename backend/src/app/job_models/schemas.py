@@ -22,6 +22,7 @@ class SkillKnowledgePointCreate(BaseModel):
     name: str = Field(max_length=200)
     teaching_suggestion: str | None = None
     difficulty: DifficultyEnum | None = None
+    item_source: str = "manual"
     sort_order: int = 0
 
 
@@ -40,6 +41,7 @@ class SkillKnowledgePointResponse(BaseModel):
     name: str
     teaching_suggestion: str | None
     difficulty: str | None
+    item_source: str = "manual"
     sort_order: int
     created_at: datetime
     updated_at: datetime
@@ -51,6 +53,7 @@ class SkillCreate(BaseModel):
     name: str = Field(max_length=200)
     level: SkillLevelEnum | None = None
     description: str | None = None
+    item_source: str = "manual"
     sort_order: int = 0
     knowledge_points: list[SkillKnowledgePointCreate] = Field(default_factory=list)
 
@@ -70,6 +73,7 @@ class SkillResponse(BaseModel):
     name: str
     level: str | None
     description: str | None
+    item_source: str = "manual"
     sort_order: int
     knowledge_points: list[SkillKnowledgePointResponse] = Field(default_factory=list)
     created_at: datetime
@@ -142,6 +146,10 @@ class JobModelVersionSummary(BaseModel):
 class JobModelVersionResponse(JobModelVersionSummary):
     raw_content: dict | None
     dimensions: list[DimensionResponse] = Field(default_factory=list)
+
+
+class JobModelVersionListItem(JobModelVersionSummary):
+    created_by_name: str | None = None
 
 
 class JobModelResponse(BaseModel):

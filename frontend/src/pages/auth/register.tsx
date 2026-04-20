@@ -5,9 +5,11 @@ import { GraduationCap, Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useBrand } from "@/lib/brand";
 
 export function RegisterPage() {
   const { mutate: register, isPending } = useRegister();
+  const brand = useBrand();
   const [showPassword, setShowPassword] = useState(false);
   const [form, setForm] = useState({
     username: "",
@@ -61,7 +63,7 @@ export function RegisterPage() {
           <div className="h-9 w-9 rounded-lg bg-primary flex items-center justify-center">
             <GraduationCap size={18} className="text-white" />
           </div>
-          <span className="text-lg font-bold text-foreground">智评云</span>
+          <span className="text-lg font-bold text-foreground">{brand.name}</span>
         </div>
 
         <div className="mb-6 text-center">

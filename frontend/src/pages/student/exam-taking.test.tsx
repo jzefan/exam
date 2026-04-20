@@ -173,6 +173,40 @@ describe("ExamTaking", () => {
     expect(setCurrentIndex).toHaveBeenCalledWith(1);
   });
 
+  it("shows a submit button instead of next question on the last question", async () => {
+    const user = userEvent.setup();
+
+    useExamTakingMock.mockReturnValue({
+      answers: { "q-2": { selected: ["A"] } },
+      currentIndex: 1,
+      setCurrentIndex: vi.fn(),
+      showAll: false,
+      setShowAll: vi.fn(),
+      updateAnswer: vi.fn(),
+      flushAnswers: vi.fn(),
+      flushQuestion: vi.fn().mockResolvedValue(undefined),
+      saveState: "idle",
+      saveMessage: "",
+      submitExam: vi.fn(),
+      reportSwitch: vi.fn(),
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/my-exams/exam-1/take"]}>
+        <Routes>
+          <Route path="/my-exams/:id/take" element={<ExamTaking />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const submitButtons = await screen.findAllByRole("button", { name: /交卷/i });
+    expect(submitButtons).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: /下一题/i })).not.toBeInTheDocument();
+
+    await user.click(submitButtons[1]);
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+  });
+
   it("shows the lightweight save feedback message in the header", async () => {
     useExamTakingMock.mockReturnValue({
       answers: { "q-1": { html: "已答" } },

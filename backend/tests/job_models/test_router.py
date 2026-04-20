@@ -256,10 +256,12 @@ async def test_create_enterprise_copy_returns_job_model_and_version(monkeypatch)
     from app.job_models import router as job_model_router
 
     now = datetime.now(timezone.utc)
+    org_id = uuid.uuid4()
     standard = SimpleNamespace(
         id=uuid.uuid4(),
         model_type="standard",
         current_version_id=uuid.uuid4(),
+        org_id=org_id,
     )
     created_model = SimpleNamespace(id=uuid.uuid4())
     created_version = SimpleNamespace(id=uuid.uuid4(), created_at=now, updated_at=now)
@@ -289,7 +291,7 @@ async def test_create_enterprise_copy_returns_job_model_and_version(monkeypatch)
         ),
         db=FakeDB(),
         user=SimpleNamespace(id=uuid.uuid4()),
-        org_id=uuid.uuid4(),
+        org_id=org_id,
     )
 
     assert response.job_model_id == created_model.id

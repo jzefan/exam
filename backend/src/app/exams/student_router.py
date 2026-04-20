@@ -96,6 +96,22 @@ def _extract_answer_text(answer_content: dict[str, Any]) -> str:
     return ""
 
 
+def _extract_attachment_refs(answer_content: dict[str, Any]) -> list[dict[str, str]]:
+    attachments = answer_content.get("attachments")
+    if not isinstance(attachments, list):
+        return []
+
+    normalized: list[dict[str, str]] = []
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        url = item.get("url")
+        if isinstance(name, str) and name.strip() and isinstance(url, str) and url.strip():
+            normalized.append({"name": name.strip(), "url": url.strip()})
+    return normalized
+
+
 def _is_subjective_question_type(question_type: str) -> bool:
     return question_type in {
         QuestionType.SHORT_ANSWER.value,
@@ -142,7 +158,7 @@ def _build_grading_task_payload(
         "fatal_rule_enabled": True,
         "student_answer_raw": _extract_answer_text(answer_content),
         "student_answer_structured": answer_content,
-        "attachment_refs": [],
+        "attachment_refs": _extract_attachment_refs(answer_content),
         "standard_answers": [standard_answer],
         "rubric_definition": {},
         "scoring_points": [],

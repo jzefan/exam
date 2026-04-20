@@ -351,7 +351,7 @@ export function KnowledgeManagementPage() {
             continue;
           }
 
-          const created = await apiFetch<{ id: string; name: string }>(`${API}/knowledge-points`, {
+          const created: { id: string; name: string } = await apiFetch(`${API}/knowledge-points`, {
             method: "POST",
             body: JSON.stringify({
               direction_id: selectedDirectionId,

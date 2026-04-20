@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.questions.schemas import KnowledgePointResponse
+
 
 ExamStatus = Literal["draft", "upcoming", "ongoing", "completed", "closed"]
 ExamQuestionMode = Literal["manual", "auto", "ai"]
@@ -127,6 +129,7 @@ class ExamResponse(BaseModel):
     total_questions: int = 0
     total_students: int = 0
     submitted_count: int = 0
+    knowledge_points: list[KnowledgePointResponse] = Field(default_factory=list)
     participated: bool | None = None
     started_at: datetime | None = None
     submitted_at: datetime | None = None

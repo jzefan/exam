@@ -5,6 +5,7 @@ export type ImportConfidence = "high" | "medium" | "low";
 export type ImportReviewStatus = "pending" | "approved" | "skipped";
 export type ImportFilter = "all" | "pending" | "issues" | "low" | "missing_answer";
 export type QuestionImportAnalysisMode = "fast" | "ai_full";
+export type QuestionImportJobStatus = "pending" | "running" | "completed" | "failed" | "partial_failed";
 
 export interface QuestionImportImageInput {
   image_id: string;
@@ -50,4 +51,26 @@ export interface QuestionImportDocumentRecognizeResponse {
   mode: ImportRecognitionMode;
   summary: QuestionImportDocumentSummary;
   drafts: QuestionImportDraft[];
+}
+
+export interface QuestionImportBulkCreateJobResponse {
+  job_id: string;
+  created: number;
+  status: QuestionImportJobStatus;
+}
+
+export interface QuestionImportJobResponse {
+  id: string;
+  user_id: string;
+  status: QuestionImportJobStatus;
+  total_count: number;
+  processed_count: number;
+  matched_count: number;
+  unmatched_count: number;
+  failed_count: number;
+  created_question_ids: string[];
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
 }

@@ -79,6 +79,21 @@ type ExamAnalysis = {
   knowledge_points: KnowledgePointRow[];
 };
 
+const gradingStatusLabels: Record<string, string> = {
+  pending_ai: "待 AI 评阅",
+  ai_scored: "AI 已评阅",
+  reviewed: "已复核",
+};
+
+const questionTypeLabels: Record<string, string> = {
+  choice: "选择题",
+  true_false: "判断题",
+  fill_in: "填空题",
+  short_answer: "简答题",
+  essay: "论述题",
+  code: "编程题",
+};
+
 const formatScore = (value: number | null): string =>
   value === null || value === undefined ? "—" : value.toFixed(1);
 
@@ -90,6 +105,12 @@ const formatDateTime = (value: string | null): string => {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
 };
+
+const formatGradingStatus = (value: string | null): string =>
+  value ? gradingStatusLabels[value] ?? value : "—";
+
+const formatQuestionType = (value: string | null): string =>
+  value ? questionTypeLabels[value] ?? value : "—";
 
 function StatCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
@@ -263,7 +284,7 @@ export function ExamAnalysisPage() {
                     <TableCell className="text-sm text-muted-foreground">
                       {formatDateTime(s.submitted_at)}
                     </TableCell>
-                    <TableCell className="text-sm">{s.grading_status ?? "—"}</TableCell>
+                    <TableCell className="text-sm">{formatGradingStatus(s.grading_status)}</TableCell>
                     <TableCell className="text-right tabular-nums">
                       {formatScore(s.objective_score)}
                     </TableCell>
@@ -310,7 +331,7 @@ export function ExamAnalysisPage() {
                   <TableRow key={q.question_id}>
                     <TableCell className="text-muted-foreground">{q.order + 1}</TableCell>
                     <TableCell className="max-w-md truncate">{q.title ?? "—"}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{q.type ?? "—"}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{formatQuestionType(q.type)}</TableCell>
                     <TableCell className="text-right tabular-nums">
                       {formatScore(q.max_score)}
                     </TableCell>

@@ -1,6 +1,6 @@
 import path from "node:path";
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import UnoCSS from "unocss/vite";
 import { defineConfig } from "vite";
 
 function getVendorChunkName(id: string): string | undefined {
@@ -19,7 +19,7 @@ function getVendorChunkName(id: string): string | undefined {
 }
 
 export default defineConfig({
-  plugins: [UnoCSS(), react()],
+  plugins: [tailwindcss(), react()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

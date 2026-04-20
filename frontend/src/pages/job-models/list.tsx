@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { normalizeJobModelsResponse } from "./list-utils"
 import {
   Edit2,
+  Trash2,
   Layers,
   GitBranch,
   Clock,
@@ -17,11 +18,22 @@ import {
 import { formatDistanceToNow } from "date-fns"
 import { zhCN } from "date-fns/locale"
 import { cn } from "@/lib/utils"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 
 interface JobModel {
   id: string
   current_version_id?: string | null
   job_role: string
+  model_type?: string
   industry_name?: string | null
   direction_name?: string | null
   current_version?: {
@@ -41,8 +53,17 @@ interface IndustryNode {
 }
 
 type ViewMode = "list" | "card"
+type TypeFilter = "all" | "standard" | "enterprise"
+
+interface Facet {
+  industry_name: string | null
+  direction_name: string | null
+  model_type: string
+  count: number
+}
 
 const VIEW_MODE_STORAGE_KEY = "job-models:view-mode"
+const PAGE_SIZE = 24
 
 function getViewModeFromStorage(): ViewMode {
   if (typeof window === "undefined") return "list"
@@ -53,53 +74,118 @@ function getViewModeFromStorage(): ViewMode {
 export function JobModelList() {
   const navigate = useNavigate()
   const [models, setModels] = useState<JobModel[]>([])
+  const [totalCount, setTotalCount] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
   const [selectedIndustry, setSelectedIndustry] = useState<string | null>(null)
   const [selectedDirection, setSelectedDirection] = useState<string | null>(null)
   const [expandedIndustries, setExpandedIndustries] = useState<Set<string>>(new Set())
   const [viewMode, setViewMode] = useState<ViewMode>(() => getViewModeFromStorage())
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all")
+  const [page, setPage] = useState(1)
+  const [deleteTarget, setDeleteTarget] = useState<JobModel | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
 
+  const handleDelete = async () => {
+    if (!deleteTarget) return
+    setIsDeleting(true)
+    try {
+      const token = localStorage.getItem("access_token")
+      const res = await fetch(`/api/job-models/models/${deleteTarget.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) throw new Error(`Delete failed: ${res.status}`)
+      setModels((prev) => prev.filter((m) => m.id !== deleteTarget.id))
+      setTotalCount((c) => Math.max(0, c - 1))
+      setDeleteTarget(null)
+    } catch (err) {
+      console.error("Failed to delete model:", err)
+    } finally {
+      setIsDeleting(false)
+    }
+  }
+
+  const [facets, setFacets] = useState<Facet[]>([])
+
+  // Facets: cheap aggregate for industry tree + type counts. Fetched once.
   useEffect(() => {
     const token = localStorage.getItem("access_token")
-    fetch("/api/job-models/models?_start=0&_end=200", {
+    fetch("/api/job-models/models/facets", {
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then((res) => res.json())
-      .then((data) => {
-        setModels(normalizeJobModelsResponse(data))
-        setIsLoading(false)
+      .then(async (res) => {
+        if (!res.ok) return
+        const data = (await res.json()) as Facet[]
+        setFacets(Array.isArray(data) ? data : [])
       })
-      .catch((err) => {
-        console.error("Failed to load models:", err)
-        setIsLoading(false)
-      })
+      .catch((err) => console.error("Failed to load facets:", err))
   }, [])
 
-  // Build industry tree from models
-  const industryTree = models.reduce((acc, model) => {
-    const industry = model.industry_name || "未分类"
-    const direction = model.direction_name || "未分类"
+  // Paginated list: re-fetch when page or filters change.
+  useEffect(() => {
+    const token = localStorage.getItem("access_token")
+    const params = new URLSearchParams({
+      _start: String((page - 1) * PAGE_SIZE),
+      _end: String(page * PAGE_SIZE),
+    })
+    if (typeFilter !== "all") params.set("model_type", typeFilter)
+    if (selectedIndustry) params.set("industry_name", selectedIndustry)
+    if (selectedDirection) params.set("direction_name", selectedDirection)
 
-    if (!acc[industry]) {
-      acc[industry] = new Set<string>()
+    setIsLoading(true)
+    fetch(`/api/job-models/models?${params}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async (res) => {
+        const header = res.headers.get("X-Total-Count")
+        const data = await res.json()
+        const list = normalizeJobModelsResponse<JobModel>(data)
+        setModels(list)
+        setTotalCount(header ? Number(header) : list.length)
+      })
+      .catch((err) => console.error("Failed to load models:", err))
+      .finally(() => setIsLoading(false))
+  }, [page, typeFilter, selectedIndustry, selectedDirection])
+
+  // Build industry tree from facets (one row per industry/direction/type).
+  const industries = useMemo<IndustryNode[]>(() => {
+    const tree = new Map<string, Set<string>>()
+    for (const f of facets) {
+      const ind = f.industry_name || "未分类"
+      const dir = f.direction_name || "未分类"
+      if (!tree.has(ind)) tree.set(ind, new Set())
+      tree.get(ind)!.add(dir)
     }
-    acc[industry].add(direction)
+    return Array.from(tree.entries())
+      .map(([name, directions]) => ({ name, directions: Array.from(directions).sort() }))
+      .sort((a, b) => a.name.localeCompare(b.name, "zh-CN"))
+  }, [facets])
 
-    return acc
-  }, {} as Record<string, Set<string>>)
+  const directionCounts = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const f of facets) {
+      const key = `${f.industry_name || "未分类"}::${f.direction_name || "未分类"}`
+      m.set(key, (m.get(key) ?? 0) + f.count)
+    }
+    return m
+  }, [facets])
 
-  const industries: IndustryNode[] = Object.entries(industryTree).map(([name, directions]) => ({
-    name,
-    directions: Array.from(directions).sort(),
-  })).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+  const typeCounts = useMemo(() => {
+    let standard = 0
+    let enterprise = 0
+    let all = 0
+    for (const f of facets) {
+      all += f.count
+      if (f.model_type === "enterprise") enterprise += f.count
+      else standard += f.count
+    }
+    return { standard, enterprise, all }
+  }, [facets])
 
-  // Filter models by selected direction
-  const filteredModels = selectedDirection
-    ? models.filter(m =>
-        (m.industry_name || "未分类") === selectedIndustry &&
-        (m.direction_name || "未分类") === selectedDirection
-      )
-    : models
+  // Server already paginates + filters; frontend just renders.
+  const pagedModels = models
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE))
+  const safePage = Math.min(page, totalPages)
 
   const toggleIndustry = (industryName: string) => {
     const newExpanded = new Set(expandedIndustries)
@@ -122,7 +208,12 @@ export function JobModelList() {
   const clearSelection = () => {
     setSelectedIndustry(null)
     setSelectedDirection(null)
+    setPage(1)
   }
+
+  useEffect(() => {
+    setPage(1)
+  }, [typeFilter, selectedDirection, selectedIndustry])
 
   const handleViewModeChange = (mode: ViewMode) => {
     setViewMode(mode)
@@ -167,10 +258,10 @@ export function JobModelList() {
     </div>
   )
 
-  if (isLoading) {
+  if (isLoading && facets.length === 0 && models.length === 0) {
     return (
       <div className="space-y-6">
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex items-center justify-between gap-4">
           <div>
             <h1 className="text-base font-bold text-foreground">岗位模型管理</h1>
             <p className="mt-1 text-sm text-muted-foreground">标准岗位库与企业快速生成统一入口</p>
@@ -197,10 +288,10 @@ export function JobModelList() {
     )
   }
 
-  if (models.length === 0) {
+  if (!isLoading && totalCount === 0 && facets.length === 0) {
     return (
       <div className="space-y-6">
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex items-center justify-between gap-4">
           <div>
             <h1 className="text-base font-bold text-foreground">岗位模型管理</h1>
             <p className="mt-1 text-sm text-muted-foreground">标准岗位库与企业快速生成统一入口</p>
@@ -229,20 +320,20 @@ export function JobModelList() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-base font-bold text-foreground">岗位模型管理</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            标准岗位库与企业快速生成统一入口，共 {models.length} 个模型
+            标准岗位库与企业快速生成统一入口，共 {totalCount} 个模型
           </p>
         </div>
         {renderEntryActions()}
       </div>
 
       {/* Left-Right Layout */}
-      <div className="grid grid-cols-[280px_1fr] gap-6">
-        {/* Left: Industry & Direction Tree */}
-        <div className="space-y-2">
+      <div className="grid grid-cols-[280px_1fr] gap-6 items-start">
+        {/* Left: Industry & Direction Tree — sticky with hover-only scrollbar */}
+        <div className="exam-result-nav-scroll sticky top-4 max-h-[calc(100vh-6rem)] overflow-y-auto pr-1 space-y-2">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold text-foreground">产业与方向</h2>
             {selectedDirection && (
@@ -299,11 +390,7 @@ export function JobModelList() {
                       >
                         <span className="truncate">{direction}</span>
                         <span className="ml-auto text-xs text-muted-foreground">
-                          {models.filter(
-                            (m) =>
-                              (m.industry_name || "未分类") === industry.name &&
-                              (m.direction_name || "未分类") === direction
-                          ).length}
+                          {directionCounts.get(`${industry.name}::${direction}`) ?? 0}
                         </span>
                       </button>
                     ))}
@@ -316,17 +403,37 @@ export function JobModelList() {
 
         {/* Right: Model Cards */}
         <div className="space-y-3">
-          {selectedDirection && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <span>{selectedIndustry}</span>
-              <ChevronRight className="h-4 w-4" />
-              <span className="text-foreground font-medium">{selectedDirection}</span>
-              <span className="ml-2">({filteredModels.length} 个岗位)</span>
+          <div className="flex items-center justify-between gap-3">
+            <div className="inline-flex items-center rounded-lg border border-border bg-background p-1">
+              {([
+                { key: "all", label: `全部 ${typeCounts.all}` },
+                { key: "standard", label: `标准 ${typeCounts.standard}` },
+                { key: "enterprise", label: `企业 ${typeCounts.enterprise}` },
+              ] as const).map((opt) => (
+                <Button
+                  key={opt.key}
+                  variant={typeFilter === opt.key ? "secondary" : "ghost"}
+                  size="sm"
+                  className="h-7 px-3 text-xs"
+                  onClick={() => setTypeFilter(opt.key)}
+                >
+                  {opt.label}
+                </Button>
+              ))}
             </div>
-          )}
+            {selectedDirection && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span>{selectedIndustry}</span>
+                <ChevronRight className="h-4 w-4" />
+                <span className="text-foreground font-medium">{selectedDirection}</span>
+                <span className="ml-1">({totalCount})</span>
+              </div>
+            )}
+          </div>
+
           {viewMode === "card" ? (
             <div className="grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
-              {filteredModels.map((model) => {
+              {pagedModels.map((model) => {
                 return (
                   <div
                     key={model.id}
@@ -343,24 +450,41 @@ export function JobModelList() {
                       <div className="flex min-w-0 flex-1 flex-col justify-between gap-4">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 space-y-1">
-                            <h3 className="truncate text-sm font-semibold text-foreground">{model.job_role}</h3>
+                            <div className="flex items-center gap-2">
+                              <h3 className="truncate text-sm font-semibold text-foreground">{model.job_role}</h3>
+                              <TypeTag modelType={model.model_type} />
+                            </div>
                             <p className="truncate text-xs text-muted-foreground">
                               {[model.industry_name, model.direction_name].filter(Boolean).join(" / ") || "未分类"}
                             </p>
                           </div>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 shrink-0 px-2 text-xs opacity-0 transition-opacity group-hover:opacity-100"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              if (!model.current_version_id) return
-                              navigate(`/gwmx/job-models/${model.id}/versions/${model.current_version_id}/editor`)
-                            }}
-                          >
-                            <Edit2 className="mr-1.5 h-3.5 w-3.5" />
-                            编辑
-                          </Button>
+                          <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 px-2 text-xs"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                if (!model.current_version_id) return
+                                navigate(`/gwmx/job-models/${model.id}/versions/${model.current_version_id}/editor`)
+                              }}
+                            >
+                              <Edit2 className="mr-1.5 h-3.5 w-3.5" />
+                              编辑
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 w-8 p-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                              aria-label="删除岗位"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setDeleteTarget(model)
+                              }}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
                         </div>
                         <div className="grid gap-1 text-xs text-foreground/70">
                           <div className="flex items-center gap-2">
@@ -385,7 +509,7 @@ export function JobModelList() {
             </div>
           ) : (
             <div className="grid gap-3">
-              {filteredModels.map((model) => (
+              {pagedModels.map((model) => (
                 <div
                   key={model.id}
                   className="group rounded-[var(--radius)] border border-border bg-card p-4 transition-all hover:border-primary/30 hover:bg-primary/[0.02] hover:shadow-md cursor-pointer"
@@ -400,9 +524,12 @@ export function JobModelList() {
                     </div>
 
                     <div className="flex-1 min-w-0">
-                      <h3 className="text-base font-semibold text-foreground truncate">
-                        {model.job_role}
-                      </h3>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-base font-semibold text-foreground truncate">
+                          {model.job_role}
+                        </h3>
+                        <TypeTag modelType={model.model_type} />
+                      </div>
                       <div className="flex items-center gap-4 mt-1.5 text-xs text-foreground/70">
                         <span className="flex items-center gap-1">
                           <GitBranch className="h-3.5 w-3.5" />
@@ -418,26 +545,108 @@ export function JobModelList() {
                       </div>
                     </div>
 
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-xs"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        if (!model.current_version_id) return
-                        navigate(`/gwmx/job-models/${model.id}/versions/${model.current_version_id}/editor`)
-                      }}
-                    >
-                      <Edit2 className="mr-1.5 h-3.5 w-3.5" />
-                      编辑
-                    </Button>
+                    <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-xs"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          if (!model.current_version_id) return
+                          navigate(`/gwmx/job-models/${model.id}/versions/${model.current_version_id}/editor`)
+                        }}
+                      >
+                        <Edit2 className="mr-1.5 h-3.5 w-3.5" />
+                        编辑
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 w-8 p-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                        aria-label="删除岗位"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setDeleteTarget(model)
+                        }}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
                   </div>
                 </div>
               ))}
             </div>
           )}
+
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between pt-2 text-xs text-muted-foreground">
+              <span>
+                共 {totalCount} 个 · 第 {safePage} / {totalPages} 页
+              </span>
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2"
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={safePage <= 1}
+                >
+                  上一页
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2"
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={safePage >= totalPages}
+                >
+                  下一页
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认删除岗位模型</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定要删除岗位"{deleteTarget?.job_role}"及其所有版本吗？此操作不可恢复。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                handleDelete()
+              }}
+              disabled={isDeleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isDeleting ? "删除中..." : "删除"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
+  )
+}
+
+function TypeTag({ modelType }: { modelType?: string }) {
+  const isEnterprise = modelType === "enterprise"
+  return (
+    <span
+      className={cn(
+        "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium",
+        isEnterprise
+          ? "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300"
+          : "bg-primary/10 text-primary",
+      )}
+    >
+      {isEnterprise ? "企业" : "标准"}
+    </span>
   )
 }

@@ -1,7 +1,7 @@
 import { useList } from "@refinedev/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertCircle, ArrowLeft, Download, FileUp, LoaderCircle, Upload } from "lucide-react";
+import { AlertCircle, ArrowLeft, Download, LoaderCircle, Upload } from "lucide-react";
 
 import {
   AlertDialog,
@@ -33,9 +33,11 @@ import { ImportReviewSidebar } from "./components/import-review-sidebar";
 import { ImportSourceEditor } from "./components/import-source-editor";
 import type {
   ImportFilter,
+  QuestionImportBulkCreateJobResponse,
   QuestionImportImageInput,
   QuestionImportDocumentRecognizeResponse,
   QuestionImportDraft,
+  QuestionImportJobResponse,
 } from "./import-types";
 import {
   approveAllPendingDrafts,
@@ -44,12 +46,16 @@ import {
   buildStandardImportTemplate,
   buildImportSummary,
   canApproveAllDrafts,
+  countFastImportEligibleDrafts,
   emptyImportSummary,
   extractQuestionImportPayload,
   generateImportQuestionTitle,
   getNextDraftIdAfterRemoval,
+  getBlockingImportIssues,
   hasBlockingImportIssues,
   isEligibleForBulkApprove,
+  isEligibleForFastImport,
+  isMissingAnswerIssue,
 } from "./import-utils";
 
 async function questionApiFetch<T>(url: string, options?: RequestInit): Promise<T> {
@@ -81,6 +87,10 @@ async function questionApiFetch<T>(url: string, options?: RequestInit): Promise<
 
 const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024;
 
+function isTerminalImportJobStatus(status: QuestionImportJobResponse["status"]) {
+  return status === "completed" || status === "failed" || status === "partial_failed";
+}
+
 export function QuestionImportPage() {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -98,6 +108,7 @@ export function QuestionImportPage() {
   const [filter, setFilter] = useState<ImportFilter>("pending");
   const [duplicatesRemoved, setDuplicatesRemoved] = useState(0);
   const [mode, setMode] = useState<"review" | "source-edit">("review");
+  const [reviewMode, setReviewMode] = useState<"fast" | "review">("fast");
   const [sourceEdits, setSourceEdits] = useState<Record<string, string>>({});
   const [sourceImportPayload, setSourceImportPayload] = useState<{
     rawText: string;
@@ -118,8 +129,9 @@ export function QuestionImportPage() {
   const [selectedMajorId, setSelectedMajorId] = useState<string>("");
   const [selectedDirectionId, setSelectedDirectionId] = useState<string>("");
   const [selectedCourseId, setSelectedCourseId] = useState<string>("");
-  const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null);
   const [importNotice, setImportNotice] = useState<string | null>(null);
+  const [activeImportJobId, setActiveImportJobId] = useState<string | null>(null);
+  const [activeImportJob, setActiveImportJob] = useState<QuestionImportJobResponse | null>(null);
 
   useEffect(() => {
     if (!courseDialogOpen || majors.length > 0) return;
@@ -165,14 +177,72 @@ export function QuestionImportPage() {
       });
   }, [selectedDirectionId]);
 
+  useEffect(() => {
+    if (!activeImportJobId) return;
+
+    let cancelled = false;
+    let timer: number | null = null;
+
+    const pollJobStatus = async () => {
+      try {
+        const job = await questionApiFetch<QuestionImportJobResponse>(
+          `/api/questions/import/jobs/${activeImportJobId}`,
+        );
+        if (cancelled) return;
+
+        setActiveImportJob(job);
+        if (isTerminalImportJobStatus(job.status)) {
+          setActiveImportJobId(null);
+          const summary = `知识点识别完成：成功匹配 ${job.matched_count} 道，未匹配 ${job.unmatched_count} 道，失败 ${job.failed_count} 道`;
+          setImportNotice(summary);
+          toast({ title: "题目知识点识别完成", description: summary });
+          return;
+        }
+
+        setImportNotice(
+          `题目已导入，知识点正在后台识别（${job.processed_count}/${job.total_count}）`,
+        );
+        timer = window.setTimeout(pollJobStatus, 2000);
+      } catch (error) {
+        if (cancelled) return;
+        setImportNotice(null);
+        setActiveImportJobId(null);
+        toast({
+          title: "知识点识别状态查询失败",
+          description: error instanceof Error ? error.message : "请稍后在题目列表中刷新查看结果",
+          variant: "destructive",
+        });
+      }
+    };
+
+    void pollJobStatus();
+
+    return () => {
+      cancelled = true;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [activeImportJobId, toast]);
+
   const selectedDraft = useMemo(
     () => drafts.find((draft) => draft.draft_id === selectedDraftId) ?? null,
     [drafts, selectedDraftId],
   );
   const summary = drafts.length > 0 ? buildImportSummary(drafts) : emptyImportSummary;
-  const approvedCount = summary.approved;
   const completionPercent = summary.total > 0 ? Math.round((summary.approved / summary.total) * 100) : 0;
   const allowApproveAll = canApproveAllDrafts(drafts);
+  const fastImportEligibleCount = countFastImportEligibleDrafts(drafts);
+  const blockingIssueCount = drafts.filter((draft) => getBlockingImportIssues(draft).length > 0).length;
+  const missingAnswerCount = drafts.filter(
+    (draft) => !draft.answer_text?.trim() || draft.issues.some(isMissingAnswerIssue),
+  ).length;
+
+  useEffect(() => {
+    if (drafts.length === 0) {
+      setReviewMode("fast");
+    }
+  }, [drafts.length]);
 
   const selectNextReviewTarget = (currentDraftId: string) => {
     const nextPending = drafts.find(
@@ -338,11 +408,11 @@ export function QuestionImportPage() {
   };
 
   const openImportCourseDialog = () => {
-    const readyCount = drafts.filter(
-      (draft) => draft.review_status === "approved" && !hasBlockingImportIssues(draft),
-    ).length;
+    const readyCount = reviewMode === "fast"
+      ? fastImportEligibleCount
+      : drafts.filter((draft) => draft.review_status === "approved" && !hasBlockingImportIssues(draft)).length;
     if (readyCount === 0) {
-      setParseError("请先人工确认至少一道题目后再导入。");
+      setParseError(reviewMode === "fast" ? "暂无可直接导入的题目，请先处理异常题。" : "请先人工确认至少一道题目后再导入。");
       return;
     }
     setParseError(null);
@@ -351,69 +421,62 @@ export function QuestionImportPage() {
   };
 
   const runImportWithCourse = async (courseId: string) => {
-    const importableDraftIds = drafts
+    const importDrafts = reviewMode === "fast"
+      ? drafts.map((draft) =>
+          isEligibleForFastImport(draft)
+            ? {
+                ...draft,
+                title: draft.title || generateImportQuestionTitle(draft.content_text),
+                review_status: "approved" as const,
+                review_required: false,
+              }
+            : draft,
+        )
+      : drafts;
+    const importableDraftIds = importDrafts
       .filter((draft) => draft.review_status === "approved" && !hasBlockingImportIssues(draft))
       .map((draft) => draft.draft_id);
     const bankId = questionBankId === "__none__" ? null : questionBankId;
-    const questions = buildImportableQuestions(drafts, bankId);
+    const questions = buildImportableQuestions(importDrafts, bankId);
     if (questions.length === 0 || questions.length !== importableDraftIds.length) {
-      setParseError("请先人工确认至少一道题目后再导入。");
+      setParseError(reviewMode === "fast" ? "暂无可直接导入的题目，请先处理异常题。" : "请先人工确认至少一道题目后再导入。");
       return;
     }
 
     setImporting(true);
     setParseError(null);
-    setImportProgress({ current: 0, total: questions.length });
-    const successfulIds: string[] = [];
-    let unmatchedCount = 0;
-    let failedCount = 0;
-
-    for (let index = 0; index < questions.length; index += 1) {
-      const draftId = importableDraftIds[index];
-      try {
-        const result = await questionApiFetch<{
-          question_id: string;
-          matched_knowledge_point_ids: string[];
-        }>("/api/questions/import/match-create", {
+    try {
+      const response = await questionApiFetch<QuestionImportBulkCreateJobResponse>(
+        "/api/questions/import/bulk-create-job",
+        {
           method: "POST",
-          body: JSON.stringify({ question: questions[index], course_id: courseId }),
-        });
-        successfulIds.push(draftId);
-        if (result.matched_knowledge_point_ids.length === 0) {
-          unmatchedCount += 1;
-        }
-      } catch (error) {
-        failedCount += 1;
-        setParseError(
-          `第 ${index + 1} 题导入失败：${error instanceof Error ? error.message : "未知错误"}`,
-        );
-      }
-      setImportProgress({ current: index + 1, total: questions.length });
-    }
-
-    setImporting(false);
-    setImportProgress(null);
-
-    if (successfulIds.length > 0) {
-      const successSet = new Set(successfulIds);
-      setDrafts((current) => current.filter((draft) => !successSet.has(draft.draft_id)));
+          body: JSON.stringify({ questions, course_id: courseId }),
+        },
+      );
+      setActiveImportJobId(response.job_id);
+      setActiveImportJob(null);
+      const successfulIds = new Set(importableDraftIds);
+      setDrafts((current) => current.filter((draft) => !successfulIds.has(draft.draft_id)));
       setSourceEdits((current) => {
         const rest = { ...current };
-        successSet.forEach((id) => delete rest[id]);
+        successfulIds.forEach((draftId) => {
+          delete rest[draftId];
+        });
         return rest;
       });
       setSelectedDraftId((current) => {
-        if (current && !successSet.has(current)) return current;
-        const nextDraft = drafts.find((draft) => !successSet.has(draft.draft_id));
+        if (current && !successfulIds.has(current)) return current;
+        const nextDraft = drafts.find((draft) => !successfulIds.has(draft.draft_id));
         return nextDraft?.draft_id ?? null;
       });
+      const importedCount = response.created;
+      toast({ title: `已导入 ${importedCount} 道题，知识点正在后台识别` });
+      setImportNotice(`已导入 ${importedCount} 道题，知识点正在后台识别`);
+    } catch (error) {
+      setParseError(error instanceof Error ? error.message : "导入失败");
+    } finally {
+      setImporting(false);
     }
-
-    const summaryLines = [`已导入 ${successfulIds.length} 道题目`];
-    if (unmatchedCount > 0) summaryLines.push(`其中 ${unmatchedCount} 道未匹配到知识点`);
-    if (failedCount > 0) summaryLines.push(`${failedCount} 道导入失败`);
-    toast({ title: summaryLines.join("，") });
-    setImportNotice(unmatchedCount > 0 ? `有 ${unmatchedCount} 道题目未匹配到知识点，可在题库中手工补充。` : null);
   };
 
   const confirmImportWithCourse = async () => {
@@ -535,14 +598,6 @@ export function QuestionImportPage() {
                   </Select>
                 </div>
 
-                <Button
-                  disabled={approvedCount === 0 || importing}
-                  onClick={openImportCourseDialog}
-                  className="h-9 rounded-lg px-4 text-sm font-bold shadow-sm shadow-primary/20 transition-all hover:scale-[1.01] active:scale-[0.98]"
-                >
-                  {importing ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <FileUp className="mr-2 h-4 w-4" />}
-                  正式导入 {approvedCount} 题
-                </Button>
               </>
             )}
           </div>
@@ -674,56 +729,54 @@ export function QuestionImportPage() {
                   </div>
                 )}
                 <ImportReviewEditor
-                    draft={selectedDraft}
-                    isRecognizing={recognizingDraftId === selectedDraft?.draft_id}
-                    isAnalyzingDocument={isAnalyzingDocument}
-                    canApproveAll={allowApproveAll}
-                    onChange={(patch) => {
-                      if (selectedDraft) updateDraft(selectedDraft.draft_id, patch);
-                    }}
-                    onApprove={() => {
-                      if (selectedDraft) {
-                        if (hasBlockingImportIssues(selectedDraft)) {
-                          setParseError("当前题存在异常，请先修正异常后再确认。");
-                          return;
-                        }
-                        updateDraft(selectedDraft.draft_id, {
-                          title: generateImportQuestionTitle(selectedDraft.content_text),
-                          review_status: "approved",
-                          review_required: false,
-                        });
-                        selectNextReviewTarget(selectedDraft.draft_id);
+                  draft={selectedDraft}
+                  reviewMode={reviewMode}
+                  isRecognizing={recognizingDraftId === selectedDraft?.draft_id}
+                  isAnalyzingDocument={isAnalyzingDocument}
+                  canApproveAll={allowApproveAll}
+                  fastImportEligibleCount={fastImportEligibleCount}
+                  totalDraftCount={summary.total}
+                  blockingIssueCount={blockingIssueCount}
+                  missingAnswerCount={missingAnswerCount}
+                  onReviewModeChange={setReviewMode}
+                  onChange={(patch) => {
+                    if (selectedDraft) updateDraft(selectedDraft.draft_id, patch);
+                  }}
+                  onApprove={() => {
+                    if (selectedDraft) {
+                      if (hasBlockingImportIssues(selectedDraft)) {
+                        setParseError("当前题存在异常，请先修正异常后再确认。");
+                        return;
                       }
-                    }}
-                    onApproveAll={bulkApproveEligibleDrafts}
-	                    onReRecognize={() => void reRecognizeSelectedDraft()}
-                    onAnalyzeDocument={() => void analyzeWholeImportedDocument()}
-	                    onEditSource={openSourceEditor}
-	                  />
+                      updateDraft(selectedDraft.draft_id, {
+                        title: generateImportQuestionTitle(selectedDraft.content_text),
+                        review_status: "approved",
+                        review_required: false,
+                      });
+                      selectNextReviewTarget(selectedDraft.draft_id);
+                    }
+                  }}
+                  onApproveAll={bulkApproveEligibleDrafts}
+                  onFastImport={openImportCourseDialog}
+                  onReRecognize={() => void reRecognizeSelectedDraft()}
+                  onAnalyzeDocument={() => void analyzeWholeImportedDocument()}
+                  onEditSource={openSourceEditor}
+                />
                </div>
             </section>
           </div>
         )}
       </main>
 
-      {importNotice && (
+      {(importNotice || (activeImportJob && !isTerminalImportJobStatus(activeImportJob.status))) && (
         <div className="pointer-events-none fixed bottom-6 right-6 z-40">
           <Alert className="pointer-events-auto max-w-sm rounded-2xl border-amber-200 bg-amber-50 text-amber-800 shadow-lg">
             <AlertCircle size={16} />
-            <AlertDescription className="text-xs">{importNotice}</AlertDescription>
+            <AlertDescription className="text-xs">
+              {importNotice ??
+                `题目已导入，知识点正在后台识别（${activeImportJob?.processed_count ?? 0}/${activeImportJob?.total_count ?? 0}）`}
+            </AlertDescription>
           </Alert>
-        </div>
-      )}
-
-      {importProgress && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm">
-          <div className="flex flex-col items-center gap-3 rounded-3xl border border-slate-200 bg-white px-10 py-8 shadow-xl">
-            <LoaderCircle className="h-8 w-8 animate-spin text-primary" />
-            <p className="text-base font-bold text-slate-900">
-              正在导入第 {importProgress.current} / {importProgress.total} 题
-            </p>
-            <p className="text-xs text-slate-500">AI 正在为每题匹配课程知识点，请稍候</p>
-          </div>
         </div>
       )}
 

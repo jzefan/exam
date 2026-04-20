@@ -1,8 +1,15 @@
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { ArrowLeft, LayoutList, Network, Save, Upload } from "lucide-react"
+import { ArrowLeft, History, LayoutList, Network, Save, Upload } from "lucide-react"
+import { format } from "date-fns"
+import { zhCN } from "date-fns/locale"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -16,12 +23,33 @@ import {
 } from "@/components/ui/alert-dialog"
 import { useEditor } from "./context"
 
+interface VersionItem {
+  id: string
+  version: number
+  version_note: string | null
+  is_current: boolean
+  created_by_name: string | null
+  published_at: string | null
+  updated_at: string
+}
+
 interface ToolbarProps {
   onSave: () => Promise<void>
   onPublish: () => Promise<void>
+  versions?: VersionItem[]
+  activeVersionId?: string | null
+  isHistoricalView?: boolean
+  onSwitchVersion?: (versionId: string) => void
 }
 
-export function Toolbar({ onSave, onPublish }: ToolbarProps) {
+export function Toolbar({
+  onSave,
+  onPublish,
+  versions = [],
+  activeVersionId = null,
+  isHistoricalView = false,
+  onSwitchVersion,
+}: ToolbarProps) {
   const navigate = useNavigate()
   const { viewMode, setViewMode, isDirty, isSaving } = useEditor()
   const [showPublishDialog, setShowPublishDialog] = useState(false)
@@ -62,6 +90,70 @@ export function Toolbar({ onSave, onPublish }: ToolbarProps) {
         </Button>
       </div>
 
+      {/* Center: version switcher */}
+      {versions.length > 0 && (
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="outline" size="sm" className="gap-1.5" data-testid="version-switcher">
+              <History className="h-4 w-4" />
+              <span>
+                v{versions.find((v) => v.id === activeVersionId)?.version ?? "?"}
+              </span>
+              {isHistoricalView && (
+                <span className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">
+                  历史 · 只读
+                </span>
+              )}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="center" className="w-80 p-0">
+            <div className="border-b px-3 py-2 text-xs font-semibold text-foreground">版本历史</div>
+            <ul className="max-h-80 overflow-auto py-1">
+              {versions.map((v) => {
+                const active = v.id === activeVersionId
+                const published = v.published_at || v.updated_at
+                return (
+                  <li key={v.id}>
+                    <button
+                      type="button"
+                      onClick={() => onSwitchVersion?.(v.id)}
+                      className={`w-full px-3 py-2 text-left text-xs transition-colors hover:bg-muted ${
+                        active ? "bg-primary/10" : ""
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium text-foreground">v{v.version}</span>
+                        <div className="flex items-center gap-1">
+                          {v.is_current && (
+                            <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300">
+                              当前
+                            </span>
+                          )}
+                          {active && !v.is_current && (
+                            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                              查看中
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="mt-0.5 text-muted-foreground">
+                        {v.created_by_name || "未知"} ·{" "}
+                        {published
+                          ? format(new Date(published), "yyyy-MM-dd HH:mm", { locale: zhCN })
+                          : "—"}
+                      </div>
+                      {v.version_note && (
+                        <div className="mt-0.5 truncate text-foreground/70">{v.version_note}</div>
+                      )}
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          </PopoverContent>
+        </Popover>
+      )}
+
       {/* Right side: back + save/publish buttons */}
       <div className="flex gap-2">
         <Button
@@ -75,7 +167,7 @@ export function Toolbar({ onSave, onPublish }: ToolbarProps) {
         <Button
           size="sm"
           onClick={onSave}
-          disabled={!isDirty || isSaving}
+          disabled={!isDirty || isSaving || isHistoricalView}
           variant={isDirty && !isSaving ? "default" : "outline"}
           aria-label={isSaving ? "保存中" : "保存更改"}
           className={isDirty && !isSaving ? "bg-green-600 hover:bg-green-700 text-white shadow-md" : ""}
@@ -88,7 +180,7 @@ export function Toolbar({ onSave, onPublish }: ToolbarProps) {
           <AlertDialogTrigger asChild>
             <Button
               size="sm"
-              disabled={isDirty}
+              disabled={isDirty || isHistoricalView}
               aria-label="发布新版本"
               className={!isDirty ? "shadow-md" : ""}
             >

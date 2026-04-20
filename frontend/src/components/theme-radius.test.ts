@@ -1,24 +1,21 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createGenerator } from "unocss";
-
-import unoConfig from "../../uno.config";
 
 describe("theme radius utilities", () => {
-  it("maps common rounded classes to the configurable radius token", async () => {
-    const uno = await createGenerator(unoConfig);
-    const { css } = await uno.generate("rounded-sm rounded-md rounded-lg rounded-xl rounded-2xl rounded-3xl");
+  it("keeps common rounded classes mapped to the configurable radius token", () => {
+    const styles = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
+    const radiusTokens = {
+      sm: "max(0px, calc(var(--radius) - 4px))",
+      md: "max(0px, calc(var(--radius) - 2px))",
+      lg: "var(--radius)",
+      xl: "calc(var(--radius) + 4px)",
+      "2xl": "calc(var(--radius) + 8px)",
+      "3xl": "calc(var(--radius) + 12px)",
+    };
 
-    expect(css).toContain(".rounded-sm");
-    expect(css).toContain("max(0px, calc(var(--radius) - 4px))");
-    expect(css).toContain(".rounded-md");
-    expect(css).toContain("max(0px, calc(var(--radius) - 2px))");
-    expect(css).toContain(".rounded-lg");
-    expect(css).toContain("border-radius:var(--radius)");
-    expect(css).toContain(".rounded-xl");
-    expect(css).toContain("calc(var(--radius) + 4px)");
-    expect(css).toContain(".rounded-2xl");
-    expect(css).toContain("calc(var(--radius) + 8px)");
-    expect(css).toContain(".rounded-3xl");
-    expect(css).toContain("calc(var(--radius) + 12px)");
+    for (const [name, value] of Object.entries(radiusTokens)) {
+      expect(styles).toContain(`--radius-${name}: ${value};`);
+    }
   });
 });

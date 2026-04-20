@@ -1,4 +1,12 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react"
+import { Minus, Plus, Layers, Lightbulb, Target, Zap } from "lucide-react"
+import type { ComponentType } from "react"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 
 interface GraphNodeData {
   label: string
@@ -6,102 +14,149 @@ interface GraphNodeData {
   level?: string
   difficulty?: string
   count?: number
+  collapsed?: boolean
+  hasChildren?: boolean
   [key: string]: unknown
 }
 
-const TYPE_CONFIG: Record<string, { bg: string; border: string; text: string; icon: string }> = {
+interface TypeStyle {
+  bg: string
+  border: string
+  text: string
+  iconBg: string
+  iconColor: string
+  Icon: ComponentType<{ className?: string }>
+}
+
+const TYPE_CONFIG: Record<string, TypeStyle> = {
   root: {
     bg: "bg-primary",
     border: "border-primary",
     text: "text-primary-foreground",
-    icon: "🎯",
+    iconBg: "bg-white/15",
+    iconColor: "text-primary-foreground",
+    Icon: Target,
   },
   dimension: {
-    bg: "bg-blue-50",
-    border: "border-blue-200",
-    text: "text-blue-800",
-    icon: "📐",
+    bg: "bg-sky-50/80 dark:bg-sky-950/30",
+    border: "border-sky-200/70 dark:border-sky-800/60",
+    text: "text-sky-900 dark:text-sky-200",
+    iconBg: "bg-sky-100 dark:bg-sky-900/60",
+    iconColor: "text-sky-600 dark:text-sky-300",
+    Icon: Layers,
   },
   skill: {
-    bg: "bg-amber-50",
-    border: "border-amber-200",
-    text: "text-amber-800",
-    icon: "⚡",
+    bg: "bg-amber-50/80 dark:bg-amber-950/30",
+    border: "border-amber-200/70 dark:border-amber-800/60",
+    text: "text-amber-900 dark:text-amber-200",
+    iconBg: "bg-amber-100 dark:bg-amber-900/60",
+    iconColor: "text-amber-600 dark:text-amber-300",
+    Icon: Zap,
   },
   kp: {
-    bg: "bg-violet-50",
-    border: "border-violet-200",
-    text: "text-violet-800",
-    icon: "💡",
+    bg: "bg-violet-50/70 dark:bg-violet-950/30",
+    border: "border-violet-200/60 dark:border-violet-800/60",
+    text: "text-violet-900 dark:text-violet-200",
+    iconBg: "bg-violet-100 dark:bg-violet-900/60",
+    iconColor: "text-violet-600 dark:text-violet-300",
+    Icon: Lightbulb,
   },
 }
 
 const LEVEL_BADGE: Record<string, string> = {
-  L1: "bg-gray-100 text-gray-600",
-  L2: "bg-blue-100 text-blue-700",
-  L3: "bg-amber-100 text-amber-700",
-  L4: "bg-orange-100 text-orange-700",
-  L5: "bg-red-100 text-red-700",
+  L1: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300",
+  L2: "bg-sky-100 text-sky-700 dark:bg-sky-900/60 dark:text-sky-300",
+  L3: "bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-300",
+  L4: "bg-orange-100 text-orange-700 dark:bg-orange-900/60 dark:text-orange-300",
+  L5: "bg-red-100 text-red-700 dark:bg-red-900/60 dark:text-red-300",
 }
 
 export function GraphNode({ data }: NodeProps) {
   const d = data as GraphNodeData
   const config = TYPE_CONFIG[d.type] ?? TYPE_CONFIG.kp
   const isRoot = d.type === "root"
+  const Icon = config.Icon
+
+  const rightBadge =
+    d.type === "kp" && d.difficulty ? (
+      <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-300">
+        {d.difficulty}
+      </span>
+    ) : d.type === "skill" && d.level ? (
+      <span
+        className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold ${
+          LEVEL_BADGE[d.level] ?? "bg-gray-100 text-gray-600"
+        }`}
+      >
+        {d.level}
+      </span>
+    ) : d.count !== undefined && d.count > 0 ? (
+      <span
+        className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+          isRoot ? "bg-white/20 text-primary-foreground" : "bg-muted text-muted-foreground"
+        }`}
+      >
+        {d.count}
+      </span>
+    ) : null
 
   return (
     <div
-      className={`rounded-[var(--radius)] border ${config.border} ${config.bg} shadow-sm hover:shadow-md transition-shadow`}
-      style={{ minWidth: isRoot ? 160 : d.type === "kp" ? 130 : 150, maxWidth: 200 }}
+      className={`relative rounded-xl border ${config.border} ${config.bg} shadow-sm backdrop-blur-[1px] hover:shadow-md hover:-translate-y-[1px] transition-all`}
+      style={{
+        minWidth: isRoot ? 180 : 170,
+        maxWidth: 240,
+      }}
     >
-      {!isRoot && (
-        <Handle type="target" position={Position.Left} className="!bg-gray-300 !w-2 !h-2 !border-0" />
+      {d.hasChildren && !isRoot && (
+        <TooltipProvider delayDuration={150}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                data-graph-toggle
+                aria-label={d.collapsed ? "展开子节点" : "收起子节点"}
+                className="absolute -right-3 top-1/2 -translate-y-1/2 z-10 flex h-6 w-6 items-center justify-center rounded-full border border-primary/40 bg-background text-primary shadow-md ring-2 ring-background hover:bg-primary hover:text-primary-foreground hover:border-primary hover:scale-110 active:scale-95 transition-all cursor-pointer"
+              >
+                {d.collapsed ? (
+                  <Plus className="h-3.5 w-3.5 stroke-[2.5]" />
+                ) : (
+                  <Minus className="h-3.5 w-3.5 stroke-[2.5]" />
+                )}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right" className="text-xs">
+              {d.collapsed
+                ? `展开子节点（${d.count ?? ""}）`
+                : "收起子节点"}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       )}
 
-      <div className="px-3 py-2">
-        {/* KP nodes: icon + name + difficulty all in one line */}
-        {d.type === "kp" ? (
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs shrink-0">{config.icon}</span>
-            <span className={`text-xs font-semibold ${config.text} truncate`}>
-              {d.label}
-            </span>
-            {d.difficulty && (
-              <span className="text-[10px] px-1 py-0.5 rounded bg-violet-100 text-violet-600 font-medium shrink-0 ml-auto">
-                {d.difficulty}
-              </span>
-            )}
-          </div>
-        ) : (
-          <>
-            {/* Header: icon + label */}
-            <div className="flex items-center gap-1.5">
-              {!isRoot && <span className="text-sm shrink-0">{config.icon}</span>}
-              <span className={`text-xs font-bold leading-tight ${config.text} line-clamp-2`}>
-                {d.label}
-              </span>
-            </div>
+      {!isRoot && (
+        <Handle
+          type="target"
+          position={Position.Left}
+          className="!bg-gray-300 !w-2 !h-2 !border-0"
+        />
+      )}
 
-            {/* Badges row for non-KP */}
-            {(d.level || (d.count !== undefined && d.count > 0)) && (
-              <div className="flex items-center gap-1.5 mt-1.5">
-                {d.level && (
-                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${LEVEL_BADGE[d.level] ?? "bg-gray-100 text-gray-600"}`}>
-                    {d.level}
-                  </span>
-                )}
-                {d.count !== undefined && d.count > 0 && (
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${isRoot ? "bg-white/20 text-primary-foreground" : "bg-gray-100 text-gray-500"}`}>
-                    {d.count} 项
-                  </span>
-                )}
-              </div>
-            )}
-          </>
-        )}
+      <div className="flex items-center gap-2 px-3 py-2">
+        <span
+          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${config.iconBg}`}
+        >
+          <Icon className={`h-3.5 w-3.5 ${config.iconColor}`} />
+        </span>
+        <span className={`flex-1 truncate text-xs font-semibold ${config.text}`}>{d.label}</span>
+        {rightBadge}
       </div>
 
-      <Handle type="source" position={Position.Right} className="!bg-gray-300 !w-2 !h-2 !border-0" />
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="!bg-gray-300 !w-2 !h-2 !border-0"
+      />
     </div>
   )
 }

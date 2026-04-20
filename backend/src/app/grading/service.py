@@ -788,6 +788,7 @@ async def get_grading_candidate_detail(
         "max_score": task.max_score,
         "question_type": task.question_type,
         "student_answer_raw": task.student_answer_raw,
+        "attachment_refs": task.attachment_refs,
         "knowledge_tags": task.knowledge_tags,
         "student_feedback": feedback["student_feedback"] if feedback else None,
         "teacher_feedback_reply": feedback["teacher_feedback_reply"] if feedback else None,

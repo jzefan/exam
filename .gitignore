@@ -13,3 +13,7 @@ tasks/
 backend/test.db
 backend/test_job_models_router.db
 backend/test_job_models_service.db
+
+deploy/env/*.env
+*.tar.gz
+.deploy-check/

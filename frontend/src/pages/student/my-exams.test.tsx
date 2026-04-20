@@ -24,46 +24,50 @@ vi.mock("react-router-dom", async () => {
 describe("MyExams", () => {
   it("puts already-started exams into the ongoing section even if backend status is upcoming", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-09T09:00:00.000Z"));
-    navigateMock.mockReset();
+    try {
+      vi.setSystemTime(new Date("2026-04-09T09:00:00.000Z"));
+      navigateMock.mockReset();
 
-    useListMock.mockReturnValue({
-      query: {
-        data: {
-          data: [
-            {
-              id: "started-1",
-              title: "[测试] 已开考考试",
-              description: "当前可进入",
-              status: "upcoming",
-              start_time: "2026-04-09T08:00:00.000Z",
-              end_time: "2026-04-09T10:00:00.000Z",
-              started_at: null,
-              duration_minutes: 120,
-              total_score: 100,
-              max_switch_count: 0,
-              notes_template: null,
-              total_questions: 20,
-              score: null,
-              participated: false,
-              submitted_at: null,
-            },
-          ],
+      useListMock.mockReturnValue({
+        query: {
+          data: {
+            data: [
+              {
+                id: "started-1",
+                title: "[测试] 已开考考试",
+                description: "当前可进入",
+                status: "upcoming",
+                start_time: "2026-04-09T08:00:00.000Z",
+                end_time: "2026-04-09T10:00:00.000Z",
+                started_at: null,
+                duration_minutes: 120,
+                total_score: 100,
+                max_switch_count: 0,
+                notes_template: null,
+                total_questions: 20,
+                score: null,
+                participated: false,
+                submitted_at: null,
+                created_by_name: "张老师",
+              },
+            ],
+          },
+          isLoading: false,
         },
-        isLoading: false,
-      },
-    });
+      });
 
-    render(
-      <MemoryRouter>
-        <MyExams />
-      </MemoryRouter>,
-    );
+      render(
+        <MemoryRouter>
+          <MyExams />
+        </MemoryRouter>,
+      );
 
-    expect(screen.getByText("正在进行中")).toBeInTheDocument();
-    expect(screen.queryByText("即将开始")).not.toBeInTheDocument();
-
-    vi.useRealTimers();
+      expect(screen.getByText("发布老师：张老师")).toBeInTheDocument();
+      expect(screen.queryByText("即将开始")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /立即进入考场/i })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows empty states for both pending and completed tabs", async () => {

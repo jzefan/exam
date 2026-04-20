@@ -52,6 +52,7 @@ describe("StudentDashboard", () => {
               score: null,
               participated: false,
               submitted_at: null,
+              created_by_name: "张老师",
             },
             {
               id: "upcoming-1",
@@ -69,6 +70,7 @@ describe("StudentDashboard", () => {
               score: null,
               participated: false,
               submitted_at: null,
+              created_by_name: "李老师",
             },
             {
               id: "completed-1",
@@ -86,6 +88,7 @@ describe("StudentDashboard", () => {
               score: 86,
               participated: true,
               submitted_at: "2026-04-01T09:00:00.000Z",
+              created_by_name: "王老师",
             },
           ],
         },
@@ -104,6 +107,8 @@ describe("StudentDashboard", () => {
     expect(screen.getByRole("heading", { name: "已参加考试" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "高效提分秘籍" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /查看全部/i })).toBeInTheDocument();
+    expect(screen.getByText("发布老师：张老师")).toBeInTheDocument();
+    expect(screen.getByText("发布老师：李老师")).toBeInTheDocument();
     const enterExamButton = screen.getByRole("button", { name: /进入考试/i });
     expect(enterExamButton).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "全部" })).toBeInTheDocument();

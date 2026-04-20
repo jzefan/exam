@@ -36,21 +36,34 @@ export function QuestionSelector({
   selectedIds,
   onChange,
   knowledgePointOptions,
+  showSummary = true,
+  isFullscreen: controlledIsFullscreen,
+  onFullscreenChange,
 }: {
   selectedIds: string[];
   onChange: (ids: string[]) => void;
   knowledgePointOptions?: SelectedKnowledgePoint[];
+  showSummary?: boolean;
+  isFullscreen?: boolean;
+  onFullscreenChange?: (next: boolean) => void;
 }) {
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [bankFilter, setBankFilter] = useState<string | null>(null);
   const [knowledgePointFilter, setKnowledgePointFilter] = useState<string | null>(null);
   const [page, setPage] = useState(1);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [internalIsFullscreen, setInternalIsFullscreen] = useState(false);
   const [previewTooltip, setPreviewTooltip] = useState<{ questionId: string; x: number; y: number } | null>(null);
   const previewOpenTimerRef = useRef<number | null>(null);
   const pendingPreviewRef = useRef<{ questionId: string; x: number; y: number } | null>(null);
+  const isFullscreen = controlledIsFullscreen ?? internalIsFullscreen;
   const pageSize = isFullscreen ? 500 : 20;
+  const setIsFullscreen = (next: boolean) => {
+    onFullscreenChange?.(next);
+    if (controlledIsFullscreen === undefined) {
+      setInternalIsFullscreen(next);
+    }
+  };
 
   const selectedSet = new Set(selectedIds);
 
@@ -245,8 +258,10 @@ export function QuestionSelector({
               tabIndex={0}
               aria-pressed={isSelected}
               aria-label={questionText}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors border-l-2 hover:bg-muted/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
-                isSelected ? "border-l-primary" : "border-l-transparent"
+              className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors border-l-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+                isSelected
+                  ? "border-l-primary bg-primary text-primary-foreground hover:bg-primary/90"
+                  : "border-l-transparent hover:bg-muted/50"
               }`}
               onPointerEnter={(event) => schedulePreviewAtPoint(q.id, event.clientX, event.clientY)}
               onPointerMove={(event) => {
@@ -269,16 +284,23 @@ export function QuestionSelector({
               <div
                 className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${
                   isSelected
-                    ? "bg-primary border-primary text-primary-foreground"
+                    ? "bg-primary-foreground border-primary-foreground text-primary"
                     : "border-input"
                 }`}
               >
                 {isSelected && <Check size={12} />}
               </div>
-              <Badge variant="outline" className={`text-xs shrink-0 ${t.className}`}>
+              <Badge
+                variant="outline"
+                className={`text-xs shrink-0 ${
+                  isSelected
+                    ? "border-primary-foreground/30 bg-primary-foreground/15 text-primary-foreground"
+                    : t.className
+                }`}
+              >
                 {t.label}
               </Badge>
-              <div className={`min-w-0 flex-1 text-sm ${isSelected ? "text-primary font-medium" : "text-foreground"}`}>
+              <div className={`min-w-0 flex-1 text-sm ${isSelected ? "font-medium text-primary-foreground" : "text-foreground"}`}>
                 {questionHtml ? (
                   <RichContent
                     html={questionHtml}
@@ -290,7 +312,7 @@ export function QuestionSelector({
                   </span>
                 )}
               </div>
-              <span className="text-xs shrink-0 text-muted-foreground">
+              <span className={`text-xs shrink-0 ${isSelected ? "text-primary-foreground/85" : "text-muted-foreground"}`}>
                 {q.score}分 · 难度{q.difficulty}
               </span>
             </div>
@@ -395,22 +417,24 @@ export function QuestionSelector({
   return (
     <div className="space-y-4">
       {/* Summary */}
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          已选 <span className="font-semibold text-foreground">{selectedIds.length}</span> 题
-        </p>
-        <div className="flex items-center gap-2">
-          {selectedIds.length > 0 && (
-            <Button type="button" variant="ghost" size="sm" onClick={() => onChange([])}>
-              清空选择
+      {showSummary && (
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-muted-foreground">
+            已选 <span className="font-semibold text-foreground">{selectedIds.length}</span> 题
+          </p>
+          <div className="flex items-center gap-2">
+            {selectedIds.length > 0 && (
+              <Button type="button" variant="ghost" size="sm" onClick={() => onChange([])}>
+                清空选择
+              </Button>
+            )}
+            <Button type="button" variant="outline" size="sm" onClick={() => setIsFullscreen(true)}>
+              <Maximize2 size={14} />
+              全屏展示
             </Button>
-          )}
-          <Button type="button" variant="outline" size="sm" onClick={() => setIsFullscreen(true)}>
-            <Maximize2 size={14} />
-            全屏展示
-          </Button>
+          </div>
         </div>
-      </div>
+      )}
 
       {renderFilters()}
 

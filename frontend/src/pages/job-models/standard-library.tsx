@@ -81,15 +81,6 @@ export function StandardLibraryPage() {
       .then((data) => {
         const loaded = normalizeJobModelsResponse<StandardModel>(data)
         setModels(loaded)
-        // Auto-expand all industries and directions
-        const industries = new Set<string>()
-        const directions = new Set<string>()
-        for (const m of loaded) {
-          industries.add(m.industry_name || "未分类")
-          directions.add(`${m.industry_name || "未分类"}::${m.direction_name || "未分类"}`)
-        }
-        setExpandedIndustries(industries)
-        setExpandedDirections(directions)
         setIsLoading(false)
       })
       .catch(() => {

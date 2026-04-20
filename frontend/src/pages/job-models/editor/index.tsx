@@ -12,10 +12,22 @@ import { resolveNodeType, buildUpdatePayload } from "@/utils/editor-utils"
 import { ContentPanel } from "./content-panel"
 import { Toaster } from "@/components/ui/toaster"
 
+interface VersionItem {
+  id: string
+  version: number
+  version_note: string | null
+  is_current: boolean
+  created_by_name: string | null
+  published_at: string | null
+  updated_at: string
+}
+
 interface ModelData {
   id: string
   version_id: string
   job_role: string
+  model_type: string
+  origin_standard_model_id: string | null
   version: number
   version_note: string | null
   is_current: boolean
@@ -30,12 +42,14 @@ interface ModelData {
       name: string
       level: string | null
       description: string | null
+      item_source: string
       sort_order: number
       knowledge_points: Array<{
         id: string
         name: string
         difficulty: string | null
         teaching_suggestion: string | null
+        item_source: string
         sort_order: number
       }>
     }>
@@ -65,8 +79,9 @@ export function EditorPage() {
   const { toast } = useToast()
 
   const [model, setModel] = useState<ModelData | null>(null)
+  const [versions, setVersions] = useState<VersionItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
-  const [viewMode, setViewMode] = useState<"tree" | "graph">("tree")
+  const [viewMode, setViewMode] = useState<"tree" | "graph">("graph")
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [isDirty, setIsDirty] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
@@ -105,13 +120,18 @@ export function EditorPage() {
   // Fetch model data
   const fetchModel = useCallback(async () => {
     try {
-      const res = await fetch(`/api/job-models/models/${jobModelId}`, {
+      const url = versionId
+        ? `/api/job-models/models/${jobModelId}/versions/${versionId}`
+        : `/api/job-models/models/${jobModelId}`
+      const res = await fetch(url, {
         headers: authHeaders(),
       })
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
       const data = await res.json() as {
         id: string
         job_role: string
+        model_type?: string
+        origin_standard_model_id?: string | null
         current_version_id?: string | null
         current_version?: {
           id: string
@@ -126,6 +146,8 @@ export function EditorPage() {
         id: data.id,
         version_id: data.current_version?.id ?? data.current_version_id ?? versionId ?? "",
         job_role: data.job_role,
+        model_type: data.model_type ?? "standard",
+        origin_standard_model_id: data.origin_standard_model_id ?? null,
         version: data.current_version?.version ?? 1,
         version_note: data.current_version?.version_note ?? null,
         is_current: data.current_version?.is_current ?? true,
@@ -148,6 +170,26 @@ export function EditorPage() {
     fetchModel()
   }, [fetchModel])
 
+  useEffect(() => {
+    if (!jobModelId) return
+    fetch(`/api/job-models/models/${jobModelId}/versions`, { headers: authHeaders() })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: VersionItem[]) => setVersions(Array.isArray(data) ? data : []))
+      .catch(() => setVersions([]))
+  }, [jobModelId, model?.version])
+
+  const activeVersionId = model?.version_id ?? versionId ?? null
+  const activeVersion = versions.find((v) => v.id === activeVersionId) ?? null
+  const isHistoricalView = !!activeVersion && !activeVersion.is_current
+
+  const handleSwitchVersion = useCallback(
+    (vid: string) => {
+      if (!jobModelId || vid === activeVersionId) return
+      navigate(`/gwmx/job-models/${jobModelId}/versions/${vid}/editor`)
+    },
+    [jobModelId, activeVersionId, navigate]
+  )
+
   const nodeCount = model
     ? model.dimensions.reduce(
         (acc, dim) =>
@@ -155,6 +197,22 @@ export function EditorPage() {
         0
       )
     : 0
+
+  const sourceBreakdown = (() => {
+    const counts = { standard: 0, enterprise_added: 0, manual: 0 }
+    if (!model) return counts
+    for (const dim of model.dimensions) {
+      for (const skill of dim.skills) {
+        const key = (skill.item_source as keyof typeof counts) in counts
+          ? (skill.item_source as keyof typeof counts)
+          : "manual"
+        counts[key] += 1
+      }
+    }
+    return counts
+  })()
+  const isEnterpriseCopy =
+    !!model && model.model_type === "enterprise" && !!model.origin_standard_model_id
 
   // Save a single node update
   const saveNodeUpdate = useCallback(
@@ -360,7 +418,14 @@ export function EditorPage() {
   return (
     <EditorContext.Provider value={contextValue}>
       <div className="flex flex-col h-screen bg-white">
-        <Toolbar onSave={handleSave} onPublish={handlePublish} />
+        <Toolbar
+          onSave={handleSave}
+          onPublish={handlePublish}
+          versions={versions}
+          activeVersionId={activeVersionId}
+          isHistoricalView={isHistoricalView}
+          onSwitchVersion={handleSwitchVersion}
+        />
 
         <div className="flex flex-1 overflow-hidden">
           {/* Tree view (left panel) - resizable */}
@@ -394,6 +459,9 @@ export function EditorPage() {
                 onNodeSelect={(nodeId) => {
                   setSelectedNodeId(nodeId)
                 }}
+                onAddNode={handleAddNode}
+                onDeleteNode={handleNodeDelete}
+                onRenameNode={handleNodeNameChange}
               />
             </div>
           ) : (
@@ -413,7 +481,9 @@ export function EditorPage() {
           )}
         </div>
 
-        <StatusBar />
+        <StatusBar
+          sourceBreakdown={isEnterpriseCopy ? sourceBreakdown : null}
+        />
       </div>
       <Toaster />
     </EditorContext.Provider>

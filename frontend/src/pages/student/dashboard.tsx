@@ -1,16 +1,7 @@
 import { useState } from "react";
 import { useList, useGetIdentity } from "@refinedev/core";
 import { useNavigate } from "react-router-dom";
-import {
-  Clock,
-  Timer,
-  ArrowRight,
-  BookOpen,
-  CalendarClock,
-  Target,
-  Medal,
-  Play,
-} from "lucide-react";
+import { ArrowRight, BookOpen, CalendarClock, Target, Medal } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -24,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { getEffectiveStudentExamStatus } from "./utils";
 import { getStudentDateLocale, getStudentLocale, tStudent } from "./i18n";
+import { StudentPendingExamCard } from "./components/student-pending-exam-card";
 
 type ExamStatus = "upcoming" | "ongoing" | "completed" | "closed";
 
@@ -44,6 +36,7 @@ interface IMyExam {
   grading_status?: "pending_ai" | "ai_scored" | "reviewed" | null;
   participated: boolean;
   submitted_at: string | null;
+  created_by_name?: string | null;
 }
 
 function formatTimeRange(start: string | null, end: string | null): string {
@@ -211,39 +204,17 @@ export function StudentDashboard() {
             ) : (
               <div className="space-y-4">
                 {pending.slice(0, 2).map((exam) => {
-                  const isOngoing = exam.effectiveStatus === "ongoing";
                   return (
-                    <div 
+                    <StudentPendingExamCard
                       key={exam.id} 
-                      className={cn(
-                        "group flex flex-col md:flex-row md:items-center justify-between gap-6 p-6 rounded-2xl border transition-all duration-300",
-                        isOngoing 
-                          ? "bg-primary/[0.04] border-primary/20 shadow-md shadow-primary/10 hover:border-primary/40" 
-                          : "bg-card border-border/50 hover:border-border"
-                      )}
-                    >
-                      <div className="min-w-0 flex-1 space-y-3">
-                        <div className="flex items-center gap-3">
-                          {isOngoing && <span className="flex h-2 w-2 rounded-full bg-primary animate-pulse" />}
-                          <h4 className="text-base font-bold text-foreground truncate">{exam.title}</h4>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs font-medium text-muted-foreground/70">
-                          <span className="flex items-center gap-1.5"><Clock size={14} className="opacity-50" /> {formatTimeRange(exam.start_time, exam.end_time)}</span>
-                          <span className="flex items-center gap-1.5"><Timer size={14} className="opacity-50" /> {tStudent("dashboard_minutes", { minutes: exam.duration_minutes }, locale)}</span>
-                        </div>
-                      </div>
-                      
-                      <Button
-                        disabled={!isOngoing}
-                        onClick={() => navigate(`/my-exams/${exam.id}/take`)}
-                        className={cn(
-                          "h-10 px-5 rounded-xl font-semibold transition-all active:scale-95",
-                          isOngoing ? "shadow-md shadow-primary/15" : "bg-muted text-muted-foreground/50"
-                        )}
-                      >
-                        {isOngoing ? <><Play size={16} className="mr-2 fill-current" /> {tStudent("dashboard_enter_exam", undefined, locale)}</> : tStudent("dashboard_exam_not_started", undefined, locale)}
-                      </Button>
-                    </div>
+                      title={exam.title}
+                      startTime={exam.start_time}
+                      endTime={exam.end_time}
+                      durationMinutes={exam.duration_minutes}
+                      createdByName={exam.created_by_name}
+                      status={exam.effectiveStatus === "ongoing" ? "ongoing" : "upcoming"}
+                      onAction={() => navigate(`/my-exams/${exam.id}/take`)}
+                    />
                   );
                 })}
               </div>

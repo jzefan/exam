@@ -6,6 +6,7 @@ export interface TreeNode {
   name: string
   level?: string
   difficulty?: string
+  itemSource?: string
   childrenIds: string[]
 }
 
@@ -32,6 +33,7 @@ export function useEditorState(initialModel: any) {
           type: "skill",
           name: skill.name,
           level: skill.level,
+          itemSource: skill.item_source,
           childrenIds: skill.knowledge_points?.map((kp: any) => kp.id) || [],
         })
 
@@ -41,6 +43,7 @@ export function useEditorState(initialModel: any) {
             type: "kp",
             name: kp.name,
             difficulty: kp.difficulty,
+            itemSource: kp.item_source,
             childrenIds: [],
           })
         })

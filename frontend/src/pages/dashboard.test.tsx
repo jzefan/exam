@@ -4,14 +4,12 @@ import { MemoryRouter } from "react-router-dom"
 import { Dashboard } from "./dashboard"
 
 const navigateMock = vi.fn()
+const usePermissionsMock = vi.fn(() => ({ data: "platform_admin" }))
+const useGetIdentityMock = vi.fn(() => ({ data: { name: "平台管理员" } }))
 
 vi.mock("@refinedev/core", () => ({
-  useGetIdentity: () => ({
-    data: { name: "平台管理员" },
-  }),
-  usePermissions: () => ({
-    data: "platform_admin",
-  }),
+  useGetIdentity: () => useGetIdentityMock(),
+  usePermissions: () => usePermissionsMock(),
 }))
 
 vi.mock("react-router-dom", async () => {
@@ -37,6 +35,8 @@ vi.mock("@/pages/grading/api", () => ({
 describe("Dashboard", () => {
   beforeEach(() => {
     navigateMock.mockReset()
+    useGetIdentityMock.mockReturnValue({ data: { name: "平台管理员" } })
+    usePermissionsMock.mockReturnValue({ data: "platform_admin" })
   })
 
   it("navigates platform admin user management actions to /users", async () => {
@@ -55,5 +55,39 @@ describe("Dashboard", () => {
 
     fireEvent.click(screen.getByText("用户管理"))
     expect(navigateMock).toHaveBeenCalledWith("/users")
+  })
+
+  it("shows teacher quick actions in the required order and routes", async () => {
+    useGetIdentityMock.mockReturnValue({ data: { name: "教师" } })
+    usePermissionsMock.mockReturnValue({ data: "teacher" })
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText("学生总数")).toBeInTheDocument()
+    })
+
+    const actions = [
+      ["学生管理", "/students"],
+      ["知识点管理", "/knowledge"],
+      ["导入题目", "/questions/import"],
+      ["创建考试", "/exams/create"],
+      ["发布作业", "/exams/practice/create"],
+      ["考试阅卷", "/grading"],
+    ] as const
+
+    const actionTitles = screen.getAllByRole("button").slice(-actions.length).map((button) => button.textContent)
+    expect(actionTitles).toEqual(
+      actions.map(([title]) => expect.stringContaining(title)),
+    )
+
+    for (const [title, path] of actions) {
+      fireEvent.click(screen.getByText(title))
+      expect(navigateMock).toHaveBeenLastCalledWith(path)
+    }
   })
 })

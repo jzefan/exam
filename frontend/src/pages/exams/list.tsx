@@ -16,6 +16,7 @@ import {
   Check,
   ChevronsUpDown,
   PieChart,
+  GraduationCap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -88,6 +89,8 @@ function ExamCard({
     exam.category === "practice"
       ? "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300"
       : "border-blue-500/20 bg-blue-500/10 text-blue-700 dark:text-blue-300";
+  const visibleKnowledgePoints = exam.knowledge_points.slice(0, 4);
+  const hiddenKnowledgePointCount = Math.max(0, exam.knowledge_points.length - visibleKnowledgePoints.length);
 
   return (
     <div className="group relative overflow-hidden rounded-xl border border-border/50 bg-card p-0 transition-all hover:border-primary/20 hover:shadow-xl hover:shadow-primary/[0.03]">
@@ -125,6 +128,30 @@ function ExamCard({
               </div>
             </div>
           </div>
+
+          {exam.category === "practice" && exam.knowledge_points.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground/80">
+                <GraduationCap size={14} className="text-muted-foreground/40" />
+                <span>知识点</span>
+              </div>
+              {visibleKnowledgePoints.map((knowledgePoint) => (
+                <Badge
+                  key={knowledgePoint.id}
+                  variant="outline"
+                  className="max-w-[160px] truncate border-amber-500/15 bg-amber-500/5 text-[11px] text-amber-700 dark:text-amber-300"
+                  title={knowledgePoint.name}
+                >
+                  {knowledgePoint.name}
+                </Badge>
+              ))}
+              {hiddenKnowledgePointCount > 0 && (
+                <Badge variant="outline" className="border-border/70 text-[11px] text-muted-foreground">
+                  +{hiddenKnowledgePointCount}
+                </Badge>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Actions Section */}

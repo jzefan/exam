@@ -1,6 +1,41 @@
 import type { IQuestion, QuestionType } from "@/types";
 import type { BadgeProps } from "@/components/ui/badge";
 
+const QUESTION_TYPE_ALIASES: Record<string, QuestionType> = {
+  choice: "choice",
+  "选择题": "choice",
+  "单选题": "choice",
+  "单选": "choice",
+  "多选题": "choice",
+  "多选": "choice",
+  true_false: "true_false",
+  truefalse: "true_false",
+  boolean: "true_false",
+  judge: "true_false",
+  judgement: "true_false",
+  judgment: "true_false",
+  "判断题": "true_false",
+  判断: "true_false",
+  fill_in: "fill_in",
+  fillin: "fill_in",
+  fill: "fill_in",
+  blank: "fill_in",
+  "填空题": "fill_in",
+  填空: "fill_in",
+  short_answer: "short_answer",
+  shortanswer: "short_answer",
+  "简答题": "short_answer",
+  简答: "short_answer",
+  essay: "essay",
+  "论述题": "essay",
+  论述: "essay",
+  code: "code",
+  coding: "code",
+  programming: "code",
+  "编程题": "code",
+  编程: "code",
+};
+
 export const questionTypeChar: Record<QuestionType, string> = {
   choice: "选",
   true_false: "判",
@@ -27,6 +62,14 @@ export const questionDifficultyConfig: Record<number, { label: string; variant: 
   5: { label: "很难", variant: "destructive" },
 };
 
+export function normalizeQuestionType(type: string | null | undefined): QuestionType | null {
+  if (!type) {
+    return null;
+  }
+
+  return QUESTION_TYPE_ALIASES[type.trim().toLowerCase()] ?? QUESTION_TYPE_ALIASES[type.trim()] ?? null;
+}
+
 export function getQuestionTitle(question: IQuestion): string {
   if (typeof question.content?.text === "string" && question.content.text.trim()) {
     return question.content.text;
@@ -42,13 +85,14 @@ export function getQuestionContentHtml(question: IQuestion): string | null {
 }
 
 export function isMultiChoice(question: IQuestion): boolean {
-  return question.type === "choice" && Array.isArray(question.answer?.correct);
+  return normalizeQuestionType(question.type) === "choice" && Array.isArray(question.answer?.correct);
 }
 
 export function getQuestionAnswerText(question: IQuestion): string {
   const answer = question.answer;
+  const normalizedType = normalizeQuestionType(question.type);
 
-  if (question.type === "choice") {
+  if (normalizedType === "choice") {
     const correct = answer.correct;
     if (Array.isArray(correct)) {
       return [...correct].sort().join("、") || "-";
@@ -56,11 +100,11 @@ export function getQuestionAnswerText(question: IQuestion): string {
     return String(correct ?? "-");
   }
 
-  if (question.type === "true_false") {
+  if (normalizedType === "true_false") {
     return answer.correct === true ? "正确" : "错误";
   }
 
-  if (question.type === "fill_in") {
+  if (normalizedType === "fill_in") {
     const correct = answer.correct;
     if (Array.isArray(correct)) {
       return correct.map((value, index) => `空${index + 1}: ${value}`).join("；") || "-";
@@ -68,7 +112,7 @@ export function getQuestionAnswerText(question: IQuestion): string {
     return String(correct ?? "-");
   }
 
-  if (question.type === "short_answer" || question.type === "essay") {
+  if (normalizedType === "short_answer" || normalizedType === "essay") {
     const points = (answer.points ?? answer.key_points) as string[] | undefined;
     if (Array.isArray(points) && points.length > 0) {
       return points.join("；");

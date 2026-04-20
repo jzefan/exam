@@ -11,6 +11,9 @@ import {
   FilePlus,
   Briefcase,
   UserCog,
+  Network,
+  Send,
+  Upload,
 } from "lucide-react";
 import { apiRequest } from "@/pages/grading/api";
 import { Card, CardContent } from "@/components/ui/card";
@@ -200,58 +203,90 @@ export function Dashboard() {
       <div>
         <h2 className="text-base font-semibold text-foreground mb-3">快捷操作</h2>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <QuickAction
-            title="新建题目"
-            description="创建选择题、填空题、主观题等"
-            icon={<FilePlus size={18} />}
-            onClick={() => navigate("/questions/create")}
-          />
-          <QuickAction
-            title="题库管理"
-            description="浏览、搜索和管理所有题目"
-            icon={<BookOpen size={18} />}
-            onClick={() => navigate("/questions")}
-          />
           {isAdmin ? (
-            <QuickAction
-              title="用户管理"
-              description="管理平台所有用户与角色"
-              icon={<UserCog size={18} />}
-              onClick={() => navigate("/users")}
-            />
+            <>
+              <QuickAction
+                title="新建题目"
+                description="创建选择题、填空题、主观题等"
+                icon={<FilePlus size={18} />}
+                onClick={() => navigate("/questions/create")}
+              />
+              <QuickAction
+                title="题库管理"
+                description="浏览、搜索和管理所有题目"
+                icon={<BookOpen size={18} />}
+                onClick={() => navigate("/questions")}
+              />
+              <QuickAction
+                title="用户管理"
+                description="管理平台所有用户与角色"
+                icon={<UserCog size={18} />}
+                onClick={() => navigate("/users")}
+              />
+              <QuickAction
+                title="创建考试"
+                description="组卷、设置考试时间与规则"
+                icon={<Plus size={18} />}
+                onClick={() => navigate("/exams/create")}
+              />
+              <QuickAction
+                title="考试管理"
+                description="查看所有考试及当前状态"
+                icon={<ClipboardList size={18} />}
+                onClick={() => navigate("/exams")}
+              />
+              <QuickAction
+                title="阅卷中心"
+                description="人工阅卷与 AI 智能评分"
+                icon={<FileCheck size={18} />}
+                onClick={() => navigate("/grading")}
+              />
+              <QuickAction
+                title="岗位管理"
+                description="管理岗位模型与能力体系"
+                icon={<Briefcase size={18} />}
+                onClick={() => navigate("/gwmx/job-models")}
+              />
+            </>
           ) : (
-            <QuickAction
-              title="学生管理"
-              description="管理考生账号、班级与导入数据"
-              icon={<Users size={18} />}
-              onClick={() => navigate("/students")}
-            />
-          )}
-          <QuickAction
-            title="创建考试"
-            description="组卷、设置考试时间与规则"
-            icon={<Plus size={18} />}
-            onClick={() => navigate("/exams/create")}
-          />
-          <QuickAction
-            title="考试管理"
-            description="查看所有考试及当前状态"
-            icon={<ClipboardList size={18} />}
-            onClick={() => navigate("/exams")}
-          />
-          <QuickAction
-            title="阅卷中心"
-            description="人工阅卷与 AI 智能评分"
-            icon={<FileCheck size={18} />}
-            onClick={() => navigate("/grading")}
-          />
-          {isAdmin && (
-            <QuickAction
-              title="岗位管理"
-              description="管理岗位模型与能力体系"
-              icon={<Briefcase size={18} />}
-              onClick={() => navigate("/gwmx/job-models")}
-            />
+            <>
+              <QuickAction
+                title="学生管理"
+                description="管理学生账号、班级与导入数据"
+                icon={<Users size={18} />}
+                onClick={() => navigate("/students")}
+              />
+              <QuickAction
+                title="知识点管理"
+                description="维护专业方向、主知识/技能与子知识点"
+                icon={<Network size={18} />}
+                onClick={() => navigate("/knowledge")}
+              />
+              <QuickAction
+                title="导入题目"
+                description="从文档识别并导入题目"
+                icon={<Upload size={18} />}
+                onClick={() => navigate("/questions/import")}
+              />
+              <QuickAction
+                title="创建考试"
+                description="组卷、设置考试时间与规则"
+                icon={<Plus size={18} />}
+                onClick={() => navigate("/exams/create")}
+              />
+              <QuickAction
+                title="发布作业"
+                description="按知识点发布练习作业"
+                icon={<Send size={18} />}
+                onClick={() => navigate("/exams/practice/create")}
+              />
+              <QuickAction
+                title="考试阅卷"
+                description="处理待阅卷试卷与评分确认"
+                icon={<FileCheck size={18} />}
+                onClick={() => navigate("/grading")}
+              />
+            </>
           )}
         </div>
       </div>

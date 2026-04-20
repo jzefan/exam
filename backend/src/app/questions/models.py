@@ -2,13 +2,14 @@
 
 import enum
 import uuid
+from datetime import datetime
 
-from sqlalchemy import JSON, Column, Enum, Float, ForeignKey, Integer, String, Table, Text, UniqueConstraint, Uuid
+from sqlalchemy import JSON, Column, DateTime, Enum, Float, ForeignKey, Integer, String, Table, Text, UniqueConstraint, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.common.data_visibility import OwnerMixin, VisibilityMixin
-from app.models import Base, BaseModel
+from app.models import Base, BaseModel, TimestampMixin
 
 
 class QuestionType(str, enum.Enum):
@@ -25,6 +26,14 @@ class TagType(str, enum.Enum):
     SUBJECT = "subject"
     PURPOSE = "purpose"
     CUSTOM = "custom"
+
+
+class QuestionImportJobStatus(str, enum.Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    PARTIAL_FAILED = "partial_failed"
 
 
 # Association tables
@@ -103,3 +112,23 @@ class UserKnowledgePointUsage(BaseModel):
 
     user: Mapped["User"] = relationship("User")  # type: ignore[name-defined]
     knowledge_point: Mapped[KnowledgePoint] = relationship("KnowledgePoint")
+
+
+class QuestionImportJob(Base, TimestampMixin):
+    __tablename__ = "question_import_jobs"
+
+    json_field = JSON().with_variant(JSONB, "postgresql")
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[QuestionImportJobStatus] = mapped_column(
+        Enum(QuestionImportJobStatus), nullable=False, default=QuestionImportJobStatus.PENDING
+    )
+    total_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    processed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    matched_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unmatched_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_question_ids: Mapped[list[str]] = mapped_column(json_field, nullable=False, default=list)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

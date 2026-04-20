@@ -114,13 +114,14 @@ async def test_recommend_standard_model_returns_best_match(
         direction_name="工业软件",
     )
 
-    model = await recommend_standard_model(
+    result = await recommend_standard_model(
         db_session,
         "负责 Java 后端开发，熟悉 Spring Boot、MySQL、接口设计",
         org.id,
     )
 
-    assert model is not None
+    assert result is not None
+    model, _rationale, _confidence, _keywords = result
     assert model.id == expected.id
     assert model.job_role == "Java 后端工程师"
     assert model.direction_name == "工业软件"
@@ -169,6 +170,122 @@ async def test_create_enterprise_model_from_standard_copies_dimensions(
 
 
 @pytest.mark.asyncio
+async def test_create_enterprise_model_filters_selected_skills(
+    db_session: AsyncSession,
+    org: Organization,
+    user_id: uuid.UUID,
+) -> None:
+    standard = await _create_standard_model(
+        db_session,
+        org_id=org.id,
+        user_id=user_id,
+        job_role="Java 后端工程师",
+        industry_name="软件和信息服务",
+        direction_name="工业软件",
+    )
+    # 添加第二个 skill 供过滤
+    reloaded = await get_job_model_by_id(db_session, standard.id)
+    assert reloaded is not None and reloaded.current_version is not None
+    dim = reloaded.current_version.dimensions[0]
+    extra_skill = Skill(
+        dimension_id=dim.id,
+        name="Kafka",
+        level="L2",
+        description="消息队列",
+        sort_order=1,
+    )
+    db_session.add(extra_skill)
+    await db_session.flush()
+    keep_skill_id = dim.skills[0].id
+
+    created, _ = await create_enterprise_model_from_standard(
+        db_session,
+        standard,
+        enterprise_name="企业裁剪版",
+        org_id=org.id,
+        user_id=user_id,
+        selected_standard_skill_ids={keep_skill_id},
+    )
+
+    loaded = await get_job_model_by_id(db_session, created.id)
+    assert loaded is not None and loaded.current_version is not None
+    skills = loaded.current_version.dimensions[0].skills
+    assert {s.name for s in skills} == {"Java"}
+
+
+@pytest.mark.asyncio
+async def test_create_enterprise_model_adds_new_skills(
+    db_session: AsyncSession,
+    org: Organization,
+    user_id: uuid.UUID,
+) -> None:
+    standard = await _create_standard_model(
+        db_session,
+        org_id=org.id,
+        user_id=user_id,
+        job_role="Java 后端工程师",
+        industry_name="软件和信息服务",
+        direction_name="工业软件",
+    )
+    reloaded = await get_job_model_by_id(db_session, standard.id)
+    assert reloaded is not None and reloaded.current_version is not None
+    existing_dim_id = reloaded.current_version.dimensions[0].id
+
+    created, _ = await create_enterprise_model_from_standard(
+        db_session,
+        standard,
+        enterprise_name="企业扩展版",
+        org_id=org.id,
+        user_id=user_id,
+        added_skills=[
+            {"name": "Redis", "level": "L2", "dimension_id": existing_dim_id},
+            {"name": "CI/CD", "level": None, "dimension_id": None, "dimension_name": "工程效能"},
+        ],
+    )
+
+    loaded = await get_job_model_by_id(db_session, created.id)
+    assert loaded is not None and loaded.current_version is not None
+    dims = {dim.name: dim for dim in loaded.current_version.dimensions}
+    assert "核心技能" in dims and "工程效能" in dims
+    assert {s.name for s in dims["核心技能"].skills} == {"Java", "Redis"}
+    assert {s.name for s in dims["工程效能"].skills} == {"CI/CD"}
+
+
+@pytest.mark.asyncio
+async def test_match_skills_endpoint_returns_all_extra_without_llm(
+    admin_client: AsyncClient,
+    router_db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    # 未配置 qwen_api_key 时，service 回退为空 match，所有 skill 应标 extra
+    from app.job_models import service as job_model_service
+
+    monkeypatch.setattr(job_model_service.settings, "qwen_api_key", "")
+
+    org = await _get_router_org(router_db_session)
+    standard = await _create_standard_model(
+        router_db_session,
+        org_id=org.id,
+        user_id=uuid.uuid4(),
+        job_role="Java 后端工程师",
+        industry_name="软件和信息服务",
+        direction_name="工业软件",
+    )
+
+    response = await admin_client.post(
+        f"/api/job-models/models/{standard.id}/match-skills",
+        json={"job_text": "负责 Java 后端开发"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["dimensions"]
+    flat_skills = [s for dim in body["dimensions"] for s in dim["skills"]]
+    assert all(s["status"] == "extra" for s in flat_skills)
+    assert body["missing_skills"] == []
+
+
+@pytest.mark.asyncio
 async def test_recommend_standard_endpoint_returns_best_match(
     admin_client: AsyncClient,
     router_db_session: AsyncSession,
@@ -190,9 +307,12 @@ async def test_recommend_standard_endpoint_returns_best_match(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["job_role"] == "Java 后端工程师"
-    assert body["direction_name"] == "工业软件"
-    assert body["model_type"] == "standard"
+    assert body["model"]["job_role"] == "Java 后端工程师"
+    assert body["model"]["direction_name"] == "工业软件"
+    assert body["model"]["model_type"] == "standard"
+    assert "rationale" in body
+    assert "confidence" in body
+    assert "matched_keywords" in body
 
 
 @pytest.mark.asyncio

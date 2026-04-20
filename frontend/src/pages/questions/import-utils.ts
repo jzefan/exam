@@ -443,13 +443,20 @@ export function getDraftPreviewText(draft: QuestionImportDraft): string {
 export function isEligibleForBulkApprove(draft: QuestionImportDraft): boolean {
   return (
     draft.review_status === "pending" &&
-    !hasBlockingImportIssues(draft) &&
-    !draft.issues.some(isMissingAnswerIssue)
+    !hasBlockingImportIssues(draft)
   );
 }
 
 export function canApproveAllDrafts(drafts: QuestionImportDraft[]): boolean {
   return drafts.some(isEligibleForBulkApprove);
+}
+
+export function isEligibleForFastImport(draft: QuestionImportDraft): boolean {
+  return !hasBlockingImportIssues(draft) && draft.review_status !== "skipped";
+}
+
+export function countFastImportEligibleDrafts(drafts: QuestionImportDraft[]): number {
+  return drafts.filter(isEligibleForFastImport).length;
 }
 
 export function approveAllPendingDrafts(drafts: QuestionImportDraft[]): QuestionImportDraft[] {

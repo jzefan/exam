@@ -16,6 +16,8 @@ from app.job_models.schemas import (
     JobModelResponse,
     JobModelSummary,
     JobModelUpdate,
+    JobModelVersionListItem,
+    JobModelVersionResponse,
     LearningResourceCreate,
     LearningResourceResponse,
     LearningResourceUpdate,
@@ -38,6 +40,7 @@ from app.job_models.editor_service import (
     reorder_skills,
 )
 from app.job_models.service import (
+    build_skill_match,
     create_enterprise_model_from_standard,
     create_dimension,
     create_job_model,
@@ -48,9 +51,12 @@ from app.job_models.service import (
     delete_job_model,
     delete_knowledge_point,
     delete_skill,
+    get_job_model_at_version,
     get_job_model_by_id,
     get_template_by_id,
     list_all_job_models,
+    list_job_model_facets,
+    list_job_model_versions,
     list_templates,
     publish_new_version,
     recommend_standard_model,
@@ -62,7 +68,7 @@ from app.job_models.service import (
     update_template,
 )
 from app.rbac.dependencies import CurrentOrgId
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 model_router = APIRouter()
 template_router = APIRouter()
 
@@ -83,14 +89,84 @@ class RecommendStandardRequest(BaseModel):
     job_text: str
 
 
+class RecommendStandardResponse(BaseModel):
+    model: JobModelSummary
+    rationale: str
+    confidence: float = 0.0
+    matched_keywords: list[str] = []
+
+
+class AddedSkillInput(BaseModel):
+    name: str = Field(max_length=200)
+    level: str | None = None
+    dimension_id: uuid.UUID | None = None
+    dimension_name: str | None = Field(default=None, max_length=200)
+
+
+class AddedKnowledgePointInput(BaseModel):
+    name: str = Field(max_length=200)
+    parent_skill_id: uuid.UUID | None = None
+    parent_skill_name: str | None = Field(default=None, max_length=200)
+
+
 class EnterpriseCopyCreate(BaseModel):
     enterprise_name: str
     version_note: str | None = None
+    selected_standard_skill_ids: list[uuid.UUID] | None = None
+    selected_standard_kp_ids: list[uuid.UUID] | None = None
+    added_skills: list[AddedSkillInput] = []
+    added_knowledge_points: list[AddedKnowledgePointInput] = []
 
 
 class EnterpriseCopyResponse(BaseModel):
     job_model_id: uuid.UUID
     version_id: uuid.UUID
+
+
+class MatchSkillsRequest(BaseModel):
+    job_text: str
+
+
+class MatchedKpItem(BaseModel):
+    id: uuid.UUID
+    name: str
+    difficulty: str | None = None
+    status: str  # "matched" | "extra"
+    jd_kp_name: str | None = None
+
+
+class MatchedSkillItem(BaseModel):
+    id: uuid.UUID
+    name: str
+    level: str | None = None
+    status: str  # "matched" | "extra"
+    jd_skill_name: str | None = None
+    knowledge_points: list[MatchedKpItem] = []
+
+
+class MatchDimensionItem(BaseModel):
+    id: uuid.UUID
+    name: str
+    skills: list[MatchedSkillItem] = []
+
+
+class MissingSkillItem(BaseModel):
+    name: str
+    suggested_level: str | None = None
+    dimension_hint: str | None = None
+    missing_kps: list[str] = []
+
+
+class MissingKpItem(BaseModel):
+    name: str
+    parent_skill_hint_id: uuid.UUID | None = None
+    parent_skill_hint_name: str | None = None
+
+
+class MatchSkillsResponse(BaseModel):
+    dimensions: list[MatchDimensionItem] = []
+    missing_skills: list[MissingSkillItem] = []
+    missing_knowledge_points: list[MissingKpItem] = []
 
 
 @model_router.post("", response_model=JobModelResponse, status_code=status.HTTP_201_CREATED)
@@ -106,6 +182,16 @@ async def create_model(
     return JobModelResponse.model_validate(loaded)
 
 
+@model_router.get("/facets")
+async def list_models_facets(
+    db: DbSession,
+    _user: CurrentUser,
+    org_id: CurrentOrgId,
+) -> list[dict]:
+    """Lightweight aggregate for the filter tree: industry/direction/type counts."""
+    return await list_job_model_facets(db, org_id=org_id)
+
+
 @model_router.get("")
 async def list_all_models(
     db: DbSession,
@@ -114,6 +200,8 @@ async def list_all_models(
     _start: int = Query(0, ge=0),
     _end: int = Query(50, ge=1),
     model_type: str | None = Query(None),
+    industry_name: str | None = Query(None),
+    direction_name: str | None = Query(None),
     response: Response = None,
 ) -> list[JobModelSummary]:
     """List all job models in the organization."""
@@ -125,6 +213,8 @@ async def list_all_models(
         skip=skip,
         limit=limit,
         model_type=model_type,
+        industry_name=industry_name,
+        direction_name=direction_name,
     )
 
     # Set total count header for pagination
@@ -147,17 +237,32 @@ async def delete_model(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@model_router.post("/recommend-standard", response_model=JobModelSummary)
+@model_router.post("/recommend-standard", response_model=RecommendStandardResponse)
 async def recommend_standard(
     body: RecommendStandardRequest,
     db: DbSession,
     _user: CurrentUser,
     org_id: CurrentOrgId,
-) -> JobModelSummary:
-    model = await recommend_standard_model(db, body.job_text, org_id)
-    if model is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No standard model matched")
-    return JobModelSummary.model_validate(model)
+) -> RecommendStandardResponse:
+    text = body.job_text.strip()
+    if len(text) < 4:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="岗位描述太短，请至少输入 4 个字。",
+        )
+    result = await recommend_standard_model(db, text, org_id)
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="未匹配到合适的标准岗位，请补充更具体的岗位职责或技能关键词。",
+        )
+    model, rationale, confidence, keywords = result
+    return RecommendStandardResponse(
+        model=JobModelSummary.model_validate(model),
+        rationale=rationale,
+        confidence=confidence,
+        matched_keywords=keywords,
+    )
 
 
 @model_router.get("/bilibili-cover")
@@ -251,7 +356,22 @@ async def create_enterprise_copy(
 ) -> EnterpriseCopyResponse:
     standard = await get_job_model_by_id(db, model_id)
     if standard is None or standard.model_type != "standard":
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Standard model not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="未找到指定的标准岗位。")
+    if standard.org_id != org_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权从其他组织复制标准岗位。")
+
+    selected_ids: set[uuid.UUID] | None = (
+        set(body.selected_standard_skill_ids)
+        if body.selected_standard_skill_ids is not None
+        else None
+    )
+    selected_kp_ids: set[uuid.UUID] | None = (
+        set(body.selected_standard_kp_ids)
+        if body.selected_standard_kp_ids is not None
+        else None
+    )
+    added_skills_payload = [item.model_dump() for item in body.added_skills]
+    added_kps_payload = [item.model_dump() for item in body.added_knowledge_points]
 
     created_model, created_version = await create_enterprise_model_from_standard(
         db,
@@ -260,12 +380,51 @@ async def create_enterprise_copy(
         org_id=org_id,
         user_id=user.id,
         version_note=body.version_note,
+        selected_standard_skill_ids=selected_ids,
+        selected_standard_kp_ids=selected_kp_ids,
+        added_skills=added_skills_payload,
+        added_knowledge_points=added_kps_payload,
     )
     await db.commit()
     return EnterpriseCopyResponse(
         job_model_id=created_model.id,
         version_id=created_version.id,
     )
+
+
+@model_router.post("/{model_id}/match-skills", response_model=MatchSkillsResponse)
+async def match_skills(
+    model_id: uuid.UUID,
+    body: MatchSkillsRequest,
+    db: DbSession,
+    _user: CurrentUser,
+    org_id: CurrentOrgId,
+) -> MatchSkillsResponse:
+    text = body.job_text.strip()
+    if len(text) < 4:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="岗位描述太短，请至少输入 4 个字。",
+        )
+    standard = await get_job_model_by_id(db, model_id)
+    if standard is None or standard.model_type != "standard":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="未找到指定的标准岗位。",
+        )
+    if standard.org_id != org_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问其他组织的标准岗位。",
+        )
+    try:
+        result = await build_skill_match(db, standard, text)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc) or "标准岗位尚未发布版本，无法进行技能对照。",
+        ) from exc
+    return MatchSkillsResponse(**result)
 
 
 @model_router.get("/{model_id}", response_model=JobModelResponse)
@@ -310,6 +469,51 @@ async def publish_model_version(
     await db.commit()
     loaded = await get_job_model_by_id(db, new_model.id)
     return JobModelResponse.model_validate(loaded)
+
+
+@model_router.get("/{model_id}/versions", response_model=list[JobModelVersionListItem])
+async def list_versions(
+    model_id: uuid.UUID,
+    db: DbSession,
+    _user: CurrentUser,
+) -> list[JobModelVersionListItem]:
+    model = await get_job_model_by_id(db, model_id)
+    if model is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
+    pairs = await list_job_model_versions(db, model_id)
+    return [
+        JobModelVersionListItem(
+            id=ver.id,
+            job_model_id=ver.job_model_id,
+            version=ver.version,
+            version_note=ver.version_note,
+            is_current=ver.is_current,
+            source_type=ver.source_type,
+            created_by=ver.created_by,
+            published_at=ver.published_at,
+            created_at=ver.created_at,
+            updated_at=ver.updated_at,
+            created_by_name=name,
+        )
+        for ver, name in pairs
+    ]
+
+
+@model_router.get("/{model_id}/versions/{version_id}", response_model=JobModelResponse)
+async def get_version(
+    model_id: uuid.UUID,
+    version_id: uuid.UUID,
+    db: DbSession,
+    _user: CurrentUser,
+) -> JobModelResponse:
+    result = await get_job_model_at_version(db, model_id, version_id)
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found")
+    model, version = result
+    payload = JobModelResponse.model_validate(model)
+    return payload.model_copy(
+        update={"current_version": JobModelVersionResponse.model_validate(version)}
+    )
 
 
 @model_router.post("/{model_id}/save-as-template", response_model=TemplateResponse)

@@ -215,6 +215,7 @@ class GradingInboxCandidateDetailRead(BaseModel):
     max_score: int
     question_type: str
     student_answer_raw: str
+    attachment_refs: list = Field(default_factory=list)
     knowledge_tags: list = Field(default_factory=list)
     student_feedback: str | None = None
     teacher_feedback_reply: str | None = None

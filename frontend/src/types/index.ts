@@ -95,6 +95,7 @@ export interface IExam {
   total_questions: number;
   total_students: number;
   submitted_count: number;
+  knowledge_points: IKnowledgePoint[];
   participated?: boolean | null;
   started_at?: string | null;
   submitted_at?: string | null;

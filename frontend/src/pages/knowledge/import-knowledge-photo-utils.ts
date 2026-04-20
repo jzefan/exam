@@ -106,7 +106,7 @@ async function extractImagesFromSingleFile(file: File): Promise<CatalogPhotoImag
     }
     canvas.width = viewport.width;
     canvas.height = viewport.height;
-    await page.render({ canvasContext: context, viewport }).promise;
+    await page.render({ canvas, canvasContext: context, viewport }).promise;
     images.push({
       id: crypto.randomUUID(),
       name: `${file.name} · 第 ${pageNumber} 页`,

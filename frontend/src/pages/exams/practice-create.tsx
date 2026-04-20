@@ -8,16 +8,15 @@ import {
   CheckCircle2,
   Compass,
   Loader2,
+  Maximize2,
   Sparkles,
   StopCircle,
   Wand2,
 } from "lucide-react";
 
 import { AIQuestionConfigPanel } from "@/components/questions/ai-question-config-panel";
-import {
-  AI_TYPE_LABELS,
-  type AIModelProvider,
-} from "@/components/questions/ai-question-config-constants";
+import { type AIModelProvider } from "@/components/questions/ai-question-config-constants";
+import { AIGeneratedQuestionCard } from "@/components/questions/ai-generated-question-card";
 import { KnowledgePointSelector, type SelectedKnowledgePoint } from "@/components/questions/knowledge-point-selector";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -35,7 +34,7 @@ import { validateTypeAllocation } from "@/pages/questions/ai-generate-utils";
 import type { IExamQuestion, IExamStudent, IQuestion, QuestionType } from "@/types";
 
 import { QuestionSelector } from "./components/QuestionSelector";
-import { StudentSelector } from "./components/StudentSelector";
+import { ClassStudentSelector } from "./components/ClassStudentSelector";
 import { getErrorMessage, getPublishedExamStatus } from "./components/exam-form-utils";
 
 type PracticeStepId = "knowledge" | "questions" | "students" | "publish";
@@ -144,6 +143,7 @@ export function PracticeCreate() {
   const [selectedKnowledgePoints, setSelectedKnowledgePoints] = useState<SelectedKnowledgePoint[]>([]);
   const [questionMode, setQuestionMode] = useState<QuestionMode>("manual");
   const [questionIds, setQuestionIds] = useState<string[]>([]);
+  const [isManualQuestionFullscreen, setIsManualQuestionFullscreen] = useState(false);
   const [studentIds, setStudentIds] = useState<string[]>([]);
   const [durationMinutes, setDurationMinutes] = useState(60);
   const [startImmediately, setStartImmediately] = useState(true);
@@ -219,7 +219,7 @@ export function PracticeCreate() {
           .flatMap((question) => question.knowledge_points ?? [])
           .map((knowledgePoint) => [
             knowledgePoint.id,
-            { id: knowledgePoint.id, name: knowledgePoint.name },
+            { id: knowledgePoint.id, name: knowledgePoint.name, path: knowledgePoint.name },
           ]),
       ).values(),
     );
@@ -727,8 +727,24 @@ export function PracticeCreate() {
 
           {currentStepId === "questions" && (
             <Card>
-              <CardHeader>
+              <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
                 <CardTitle>步骤 2：选择题目 / AI出题</CardTitle>
+                {questionMode === "manual" && (
+                  <div className="flex items-center gap-3">
+                    <p className="text-sm text-muted-foreground">
+                      已选 <span className="font-semibold text-foreground">{questionIds.length}</span> 题
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setIsManualQuestionFullscreen(true)}
+                    >
+                      <Maximize2 size={14} />
+                      全屏展示
+                    </Button>
+                  </div>
+                )}
               </CardHeader>
               <CardContent className="space-y-5">
                 <div className="grid gap-3 md:grid-cols-2">
@@ -769,6 +785,9 @@ export function PracticeCreate() {
                     selectedIds={questionIds}
                     onChange={setQuestionIds}
                     knowledgePointOptions={selectedKnowledgePoints}
+                    showSummary={false}
+                    isFullscreen={isManualQuestionFullscreen}
+                    onFullscreenChange={setIsManualQuestionFullscreen}
                   />
                 ) : (
                   <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
@@ -831,36 +850,17 @@ export function PracticeCreate() {
                           </div>
                           <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
                             {aiQuestions.map((question) => (
-                              <div key={question.index} className="rounded-xl border border-border/70 bg-card p-4">
-                                <div className="mb-3 flex items-center gap-2">
-                                  <button
-                                    type="button"
-                                    className={cn(
-                                      "flex h-5 w-5 items-center justify-center rounded border",
-                                      question.selected
-                                        ? "border-primary bg-primary text-primary-foreground"
-                                        : "border-input",
-                                    )}
-                                    aria-pressed={question.selected}
-                                    onClick={() =>
-                                      setAIQuestions((prev) =>
-                                        prev.map((item) =>
-                                          item.index === question.index ? { ...item, selected: !item.selected } : item,
-                                        ),
-                                      )
-                                    }
-                                  >
-                                    {question.selected && <CheckCircle2 size={12} />}
-                                  </button>
-                                  <span className="text-sm font-medium text-muted-foreground">#{question.index + 1}</span>
-                                  <Badge variant="secondary">{AI_TYPE_LABELS[question.type] ?? question.type}</Badge>
-                                  <Badge variant="outline">难度 {question.difficulty}</Badge>
-                                </div>
-                                <p className="text-sm font-semibold text-foreground">{question.title}</p>
-                                {question.content.text && question.content.text !== question.title && (
-                                  <p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">{question.content.text}</p>
-                                )}
-                              </div>
+                              <AIGeneratedQuestionCard
+                                key={question.index}
+                                question={question}
+                                onToggleSelected={() =>
+                                  setAIQuestions((prev) =>
+                                    prev.map((item) =>
+                                      item.index === question.index ? { ...item, selected: !item.selected } : item,
+                                    ),
+                                  )
+                                }
+                              />
                             ))}
                           </div>
                         </div>
@@ -879,7 +879,12 @@ export function PracticeCreate() {
                 <CardTitle>步骤 3：选择班级 / 学生</CardTitle>
               </CardHeader>
               <CardContent>
-                <StudentSelector selectedIds={studentIds} onChange={setStudentIds} />
+                <ClassStudentSelector
+                  selectedIds={studentIds}
+                  onChange={setStudentIds}
+                  summaryLabel="人"
+                  emptySummaryText="还没有选择发布对象，可以优先按班级选择，导入和手动添加作为补充方式。"
+                />
               </CardContent>
             </Card>
           )}

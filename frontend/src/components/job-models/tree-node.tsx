@@ -27,6 +27,7 @@ interface TreeNodeProps {
   name: string
   level?: string
   difficulty?: string
+  itemSource?: string
   childCount?: number
   depth: number
   isExpanded: boolean
@@ -37,6 +38,11 @@ interface TreeNodeProps {
   onLevelChange?: (level: string) => void
   onAddChild?: () => void
   isDragHandle?: boolean
+}
+
+const SOURCE_BADGE: Record<string, { dotClass: string; label: string }> = {
+  standard: { dotClass: "bg-primary", label: "标准库" },
+  enterprise_added: { dotClass: "bg-amber-500", label: "JD 新增" },
 }
 
 const LEVEL_COLORS: Record<string, string> = {
@@ -61,6 +67,7 @@ export function TreeNode({
   name,
   level,
   difficulty,
+  itemSource,
   childCount = 0,
   isExpanded,
   onToggleExpand,
@@ -96,6 +103,8 @@ export function TreeNode({
 
   const levelColor = level ? (LEVEL_COLORS[level] ?? "") : ""
   const difficultyColor = difficulty ? (DIFFICULTY_COLORS[difficulty] ?? "") : ""
+  const sourceBadge =
+    type !== "dimension" && itemSource ? SOURCE_BADGE[itemSource] : undefined
 
   return (
     <div
@@ -135,6 +144,15 @@ export function TreeNode({
 
         {/* Icon */}
         <span className="flex-shrink-0 flex items-center">{icon}</span>
+
+        {/* Source indicator (standard vs JD-added) */}
+        {sourceBadge && (
+          <span
+            className={`flex-shrink-0 h-2 w-2 rounded-full ${sourceBadge.dotClass}`}
+            title={sourceBadge.label}
+            aria-label={sourceBadge.label}
+          />
+        )}
 
         {/* Name (editable) */}
         {isEditing ? (

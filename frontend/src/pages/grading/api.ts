@@ -79,6 +79,10 @@ export interface GradingCandidateDetailResponse {
   max_score: number;
   question_type: "short_answer" | "code";
   student_answer_raw: string;
+  attachment_refs: Array<{
+    name: string;
+    url: string;
+  }>;
   knowledge_tags: string[];
   student_feedback?: string | null;
   teacher_feedback_reply?: string | null;

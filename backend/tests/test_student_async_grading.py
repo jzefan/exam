@@ -108,6 +108,7 @@ async def test_submit_exam_with_subjective_question_enters_pending_ai_and_create
         score=5,
         usage_count=0,
         created_by=teacher.id,
+        owner_id=teacher.id,
     )
     short_question = Question(
         type=QuestionType.SHORT_ANSWER,
@@ -120,6 +121,7 @@ async def test_submit_exam_with_subjective_question_enters_pending_ai_and_create
         score=10,
         usage_count=0,
         created_by=teacher.id,
+        owner_id=teacher.id,
     )
     db_session.add_all([choice_question, short_question])
     await db_session.flush()
@@ -135,6 +137,7 @@ async def test_submit_exam_with_subjective_question_enters_pending_ai_and_create
         max_switch_count=0,
         show_result=True,
         created_by=teacher.id,
+        owner_id=teacher.id,
     )
     db_session.add(exam)
     await db_session.flush()
@@ -178,6 +181,108 @@ async def test_submit_exam_with_subjective_question_enters_pending_ai_and_create
 
 
 @pytest.mark.asyncio
+async def test_submit_exam_preserves_subjective_answer_attachments_in_grading_task(
+    client: AsyncClient, db_session, monkeypatch
+) -> None:
+    async def fake_schedule(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "app.exams.student_router._schedule_subjective_grading_tasks",
+        fake_schedule,
+        raising=False,
+    )
+
+    teacher = await create_user(
+        db_session,
+        UserCreate(
+            username="teacher_async_attachment",
+            email="teacher_async_attachment@example.com",
+            password="teacherpass123",
+            full_name="Teacher Attachment",
+            role_name="teacher",
+        ),
+    )
+    student = await create_user(
+        db_session,
+        UserCreate(
+            username="student_async_attachment",
+            email="student_async_attachment@example.com",
+            password="studentpass123",
+            full_name="Student Attachment",
+            role_name="student",
+        ),
+    )
+    await _seed_role_binding(db_session)
+
+    short_question = Question(
+        type=QuestionType.SHORT_ANSWER,
+        title="请上传设计稿",
+        content={"text": "<p>请结合附件说明设计思路。</p>"},
+        options=None,
+        answer={"points": ["结构清晰"]},
+        analysis="关注附件与文字说明。",
+        difficulty=2,
+        score=10,
+        usage_count=0,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    db_session.add(short_question)
+    await db_session.flush()
+
+    exam = Exam(
+        title="附件阅卷考试",
+        description=None,
+        start_time=datetime.now(timezone.utc) - timedelta(minutes=10),
+        end_time=datetime.now(timezone.utc) + timedelta(minutes=50),
+        duration_minutes=60,
+        total_score=10,
+        status="ongoing",
+        max_switch_count=0,
+        show_result=True,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    db_session.add(exam)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            ExamQuestion(exam_id=exam.id, question_id=short_question.id, order=0),
+            ExamStudent(exam_id=exam.id, student_id=student.id),
+        ]
+    )
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(student.id, '')}"})
+    response = await client.post(
+        f"/api/student/exams/{exam.id}/submit",
+        json={
+            "answers": [
+                {
+                    "question_id": str(short_question.id),
+                    "answer_content": {
+                        "html": "",
+                        "attachments": [
+                            {"name": "设计说明.docx", "url": "/api/uploads/files/design.docx"},
+                            {"name": "草图.png", "url": "/api/uploads/files/sketch.png"},
+                        ],
+                    },
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    tasks = (await db_session.execute(select(GradingTask))).scalars().all()
+    assert len(tasks) == 1
+    assert tasks[0].attachment_refs == [
+        {"name": "设计说明.docx", "url": "/api/uploads/files/design.docx"},
+        {"name": "草图.png", "url": "/api/uploads/files/sketch.png"},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_teacher_can_confirm_ai_scored_exam_and_create_student_notification(
     client: AsyncClient, db_session
 ) -> None:
@@ -214,6 +319,7 @@ async def test_teacher_can_confirm_ai_scored_exam_and_create_student_notificatio
         score=10,
         usage_count=0,
         created_by=teacher.id,
+        owner_id=teacher.id,
     )
     db_session.add(question)
     await db_session.flush()
@@ -229,6 +335,7 @@ async def test_teacher_can_confirm_ai_scored_exam_and_create_student_notificatio
         max_switch_count=0,
         show_result=True,
         created_by=teacher.id,
+        owner_id=teacher.id,
     )
     db_session.add(exam)
     await db_session.flush()

@@ -80,8 +80,6 @@ function TreeLevel({
                     {showCounts && (
                       <p className="text-right text-[11px] text-muted-foreground">
                         {isFolder ? `${node.children.length} 个子项` : "无子项"}
-                        {" · "}
-                        覆盖 {node.pathIndexes.length} 条路径
                       </p>
                     )}
 

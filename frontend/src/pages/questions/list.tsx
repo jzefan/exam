@@ -1,7 +1,7 @@
 import { useList, useCreate, useDelete, useGetIdentity, useInvalidate, useNavigation, useUpdate } from "@refinedev/core";
 import type { CrudFilter } from "@refinedev/core";
 import type { IQuestion, IQuestionBank, ITag, QuestionType } from "../../types";
-import { Search, BookOpen, Pencil, Trash2, Plus, ChevronDown, ChevronUp, Library, Check, PackageOpen, GraduationCap, SlidersHorizontal, ChevronsDownUp, ChevronsUpDown, Link2, Save, ChevronRight, Lock, Upload, Sparkles } from "lucide-react";
+import { Search, BookOpen, Pencil, Trash2, Plus, ChevronDown, ChevronUp, Library, Check, PackageOpen, GraduationCap, SlidersHorizontal, ChevronsDownUp, ChevronsUpDown, Link2, Save, ChevronRight, Lock, Upload, Sparkles, Loader2 } from "lucide-react";
 import { useState, useCallback, useRef, useEffect, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -42,6 +42,14 @@ import {
   QuestionPreviewCard,
 } from "@/components/questions/question-preview-card";
 import { getQuestionTitle } from "@/components/questions/question-preview-utils";
+import { useToast } from "@/hooks/use-toast";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 const difficultyConfig: Record<
   number,
@@ -120,7 +128,7 @@ function ToggleItem({
   );
 }
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE_OPTIONS = [10, 20, 30, 50, 100];
 
 type KnowledgeMajor = {
   id: string;
@@ -160,11 +168,32 @@ async function knowledgeApiFetch<T>(url: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function questionApiFetch<T>(url: string, options?: RequestInit): Promise<T> {
+  const token = localStorage.getItem("access_token");
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options?.headers,
+    },
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.detail ?? "请求失败");
+  }
+
+  return response.json() as Promise<T>;
+}
+
 export function QuestionList() {
+  const { toast } = useToast();
   const { data: identity } = useGetIdentity<{ id?: string; primary_org?: { role_name?: string } | null }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [current, setCurrent] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [filters, setFilters] = useState<CrudFilter[]>([]);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -202,6 +231,8 @@ export function QuestionList() {
   // 删除题库确认对话框
   const [deleteBankTarget, setDeleteBankTarget] = useState<IQuestionBank | null>(null);
   const [deleteQuestionTarget, setDeleteQuestionTarget] = useState<IQuestion | null>(null);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [knowledgeDialogQuestion, setKnowledgeDialogQuestion] = useState<IQuestion | null>(null);
   const [selectedKnowledgePointIds, setSelectedKnowledgePointIds] = useState<Set<string>>(new Set());
   const [knowledgeSearch, setKnowledgeSearch] = useState("");
@@ -284,7 +315,7 @@ export function QuestionList() {
 
   const { query: listQuery } = useList<IQuestion>({
     resource: "questions",
-    pagination: { currentPage: current, pageSize: PAGE_SIZE, mode: "server" },
+    pagination: { currentPage: current, pageSize, mode: "server" },
     sorters: [{ field: "updated_at", order: "desc" }],
     filters,
     queryOptions: { enabled: !hasEmptyFilter },
@@ -304,7 +335,7 @@ export function QuestionList() {
   });
   const data = hasEmptyFilter ? undefined : listQuery.data;
   const isLoading = !hasEmptyFilter && listQuery.isLoading;
-  const pageCount = Math.ceil((data?.total ?? 0) / PAGE_SIZE) || 1;
+  const pageCount = Math.ceil((data?.total ?? 0) / pageSize) || 1;
 
   const { mutate: deleteQuestion } = useDelete();
   const { mutate: createBank } = useCreate();
@@ -329,6 +360,9 @@ export function QuestionList() {
         return activeTypes.has("single_choice");
       })
     : rawQuestions;
+  const visibleQuestionIds = new Set(questions.map((question) => question.id));
+  const selectedQuestionIds = [...selected].filter((id) => visibleQuestionIds.has(id));
+  const selectedQuestionCount = selectedQuestionIds.length;
   const total = hasEmptyFilter ? 0 : (data?.total ?? 0);
   const banks = banksQuery.data?.data ?? [];
   const roleName = identity?.primary_org?.role_name;
@@ -708,10 +742,42 @@ export function QuestionList() {
 
 
   const toggleSelectAll = () => {
-    if (selected.size === questions.length) {
+    if (selectedQuestionCount === questions.length) {
       setSelected(new Set());
     } else {
       setSelected(new Set(questions.map((q) => q.id)));
+    }
+  };
+
+  const handlePageSizeChange = (value: string) => {
+    setPageSize(Number(value));
+    setCurrent(1);
+    setSelected(new Set());
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedQuestionIds.length === 0) {
+      return;
+    }
+    setBulkDeleting(true);
+    try {
+      const result = await questionApiFetch<{ deleted: number }>("/api/questions/bulk-delete", {
+        method: "POST",
+        body: JSON.stringify({ question_ids: selectedQuestionIds }),
+      });
+      toast({ title: `已删除 ${result.deleted} 道题目` });
+      setSelected(new Set());
+      setBulkDeleteOpen(false);
+      refreshQuestions();
+      refreshBanks();
+    } catch (error) {
+      toast({
+        title: "批量删除失败",
+        description: error instanceof Error ? error.message : "请稍后重试",
+        variant: "destructive",
+      });
+    } finally {
+      setBulkDeleting(false);
     }
   };
 
@@ -1094,13 +1160,25 @@ export function QuestionList() {
               <div className="flex items-center gap-2">
                 <Checkbox
                   checked={
-                    selected.size === questions.length && questions.length > 0
+                    selectedQuestionCount === questions.length && questions.length > 0
                   }
                   onCheckedChange={toggleSelectAll}
                 />
                 <span className="text-xs text-muted-foreground">
-                  {selected.size > 0 ? `已选择 ${selected.size} 题` : "全选"}
+                  {selectedQuestionCount > 0 ? `已选择 ${selectedQuestionCount} 题` : "全选"}
                 </span>
+                {selectedQuestionCount > 0 ? (
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => setBulkDeleteOpen(true)}
+                  >
+                    <Trash2 size={13} />
+                    批量删除
+                  </Button>
+                ) : null}
               </div>
             ) : (
               <div />
@@ -1135,7 +1213,7 @@ export function QuestionList() {
           ) : (
             <div className="space-y-3">
               {questions.map((question, idx) => {
-                const globalIndex = (current - 1) * PAGE_SIZE + idx + 1;
+                const globalIndex = (current - 1) * pageSize + idx + 1;
                 return (
                   <QuestionPreviewCard
                     key={question.id}
@@ -1195,56 +1273,73 @@ export function QuestionList() {
           )}
 
           {/* Pagination */}
-          {pageCount > 1 && (
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-xs sm:text-sm text-muted-foreground shrink-0">
-                <span className="hidden sm:inline">显示 {(current - 1) * PAGE_SIZE + 1}–{Math.min(current * PAGE_SIZE, total)} 条，</span>共 {total} 条
-              </p>
-              <Pagination className="w-auto mx-0">
-                <PaginationContent>
-                  <PaginationItem>
-                    <PaginationPrevious
-                      onClick={() => {
-                        if (current > 1) setCurrent(current - 1);
-                      }}
-                      className={
-                        current <= 1
-                          ? "pointer-events-none opacity-50"
-                          : "cursor-pointer"
-                      }
-                    />
-                  </PaginationItem>
-                  {paginationPages.map((page, idx) =>
-                    page === "ellipsis" ? (
-                      <PaginationItem key={`ellipsis-${idx}`}>
-                        <PaginationEllipsis />
-                      </PaginationItem>
-                    ) : (
-                      <PaginationItem key={page}>
-                        <PaginationLink
-                          isActive={page === current}
-                          onClick={() => setCurrent(page)}
-                          className="cursor-pointer"
-                        >
-                          {page}
-                        </PaginationLink>
-                      </PaginationItem>
-                    )
-                  )}
-                  <PaginationItem>
-                    <PaginationNext
-                      onClick={() => {
-                        if (current < pageCount) setCurrent(current + 1);
-                      }}
-                      className={
-                        current >= pageCount
-                          ? "pointer-events-none opacity-50"
-                          : "cursor-pointer"
-                      }
-                    />
-                  </PaginationItem>
-                </PaginationContent>
-              </Pagination>
+          {total > 0 && (
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm text-muted-foreground">
+                <span className="hidden sm:inline">显示 {(current - 1) * pageSize + 1}–{Math.min(current * pageSize, total)} 条，</span>
+                <span>共 {total} 条</span>
+                <span>每页</span>
+                <Select value={String(pageSize)} onValueChange={handlePageSizeChange}>
+                  <SelectTrigger className="h-8 w-[76px] text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PAGE_SIZE_OPTIONS.map((size) => (
+                      <SelectItem key={size} value={String(size)} className="text-xs">
+                        {size}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <span>条</span>
+              </div>
+              {pageCount > 1 ? (
+                <Pagination className="w-auto mx-0">
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        onClick={() => {
+                          if (current > 1) setCurrent(current - 1);
+                        }}
+                        className={
+                          current <= 1
+                            ? "pointer-events-none opacity-50"
+                            : "cursor-pointer"
+                        }
+                      />
+                    </PaginationItem>
+                    {paginationPages.map((page, idx) =>
+                      page === "ellipsis" ? (
+                        <PaginationItem key={`ellipsis-${idx}`}>
+                          <PaginationEllipsis />
+                        </PaginationItem>
+                      ) : (
+                        <PaginationItem key={page}>
+                          <PaginationLink
+                            isActive={page === current}
+                            onClick={() => setCurrent(page)}
+                            className="cursor-pointer"
+                          >
+                            {page}
+                          </PaginationLink>
+                        </PaginationItem>
+                      )
+                    )}
+                    <PaginationItem>
+                      <PaginationNext
+                        onClick={() => {
+                          if (current < pageCount) setCurrent(current + 1);
+                        }}
+                        className={
+                          current >= pageCount
+                            ? "pointer-events-none opacity-50"
+                            : "cursor-pointer"
+                        }
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              ) : null}
             </div>
           )}
         </div>
@@ -1495,6 +1590,31 @@ export function QuestionList() {
               }}
             >
               删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={bulkDeleteOpen} onOpenChange={(open) => { if (!open && !bulkDeleting) setBulkDeleteOpen(false); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>批量删除题目</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定要删除已选择的 {selectedQuestionCount} 道题目吗？此操作无法撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={bulkDeleting}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={bulkDeleting || selectedQuestionCount === 0}
+              onClick={(event) => {
+                event.preventDefault();
+                void handleBulkDelete();
+              }}
+            >
+              {bulkDeleting ? <Loader2 size={14} className="mr-1 animate-spin" /> : null}
+              删除 {selectedQuestionCount} 题
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

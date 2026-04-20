@@ -1,12 +1,15 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 echo "Starting backend and frontend services..."
 echo ""
 
 # Start backend in background
 echo "📦 Starting backend on http://localhost:8000..."
-cd backend
+cd "${PROJECT_ROOT}/backend"
 python -m uvicorn app.main:app --reload &
 BACKEND_PID=$!
 echo "Backend PID: $BACKEND_PID"
@@ -17,7 +20,7 @@ sleep 5
 
 # Start frontend in background
 echo "🎨 Starting frontend on http://localhost:5173..."
-cd ../frontend
+cd "${PROJECT_ROOT}/frontend"
 npm run dev &
 FRONTEND_PID=$!
 echo "Frontend PID: $FRONTEND_PID"

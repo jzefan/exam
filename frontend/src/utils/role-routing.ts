@@ -1,7 +1,7 @@
 /** Map user role to their default home route */
 export function getHomeRoute(role: string): string {
   if (role === "student") return "/student"
-  if (["enterprise_user", "enterprise_admin", "school_admin"].includes(role)) return "/gwmx/job-models"
+  if (["enterprise_user", "enterprise_admin", "school_admin"].includes(role)) return "/gwmx/workbench"
   return "/dashboard"
 }
 

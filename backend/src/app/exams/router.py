@@ -92,6 +92,13 @@ async def _get_writable_exam_or_404(
 
 def _build_exam_response(exam: Exam, student_id: uuid.UUID | None = None) -> ExamResponse:
     submitted = sum(1 for s in exam.exam_students if s.submitted_at is not None)
+    knowledge_points_by_id: dict[uuid.UUID, object] = {}
+    for exam_question in exam.exam_questions:
+        question = exam_question.question
+        if question is None:
+            continue
+        for knowledge_point in question.knowledge_points or []:
+            knowledge_points_by_id.setdefault(knowledge_point.id, knowledge_point)
     exam_student = (
         next((s for s in exam.exam_students if s.student_id == student_id), None)
         if student_id is not None
@@ -116,6 +123,7 @@ def _build_exam_response(exam: Exam, student_id: uuid.UUID | None = None) -> Exa
         total_questions=len(exam.exam_questions),
         total_students=len(exam.exam_students),
         submitted_count=submitted,
+        knowledge_points=list(knowledge_points_by_id.values()),
         participated=(
             exam_student.started_at is not None or exam_student.submitted_at is not None
             if exam_student is not None

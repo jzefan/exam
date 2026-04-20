@@ -4,6 +4,7 @@ export type KnowledgeImportPath = string[];
 
 export type KnowledgeImportPreviewNode = {
   label: string;
+  depth: number;
   pathIndexes: number[];
   children: KnowledgeImportPreviewNode[];
 };
@@ -106,11 +107,12 @@ export function buildKnowledgeImportPreviewTree(
   const findOrCreate = (
     siblings: KnowledgeImportPreviewNode[],
     label: string,
+    depth: number,
     pathIndex: number,
   ) => {
     let node = siblings.find((item) => item.label === label);
     if (!node) {
-      node = { label, pathIndexes: [], children: [] };
+      node = { label, depth, pathIndexes: [], children: [] };
       siblings.push(node);
     }
     node.pathIndexes.push(pathIndex);
@@ -119,8 +121,8 @@ export function buildKnowledgeImportPreviewTree(
 
   paths.forEach((path, pathIndex) => {
     let siblings = roots;
-    path.forEach((label) => {
-      const node = findOrCreate(siblings, label, pathIndex);
+    path.forEach((label, depth) => {
+      const node = findOrCreate(siblings, label, depth, pathIndex);
       siblings = node.children;
     });
   });

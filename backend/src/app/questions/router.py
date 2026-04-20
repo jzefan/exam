@@ -4,7 +4,7 @@ import json
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,11 +22,16 @@ from app.questions.schemas import (
     QuestionBankResponse,
     QuestionBulkCreateRequest,
     QuestionBulkCreateResponse,
+    QuestionBulkDeleteRequest,
+    QuestionBulkDeleteResponse,
     QuestionImportMatchCreateRequest,
     QuestionImportMatchCreateResponse,
     QuestionImportDocumentRecognizeRequest,
     QuestionImportDocumentRecognizeResponse,
     QuestionImportDraft,
+    QuestionImportBulkCreateJobRequest,
+    QuestionImportBulkCreateJobResponse,
+    QuestionImportJobResponse,
     QuestionImportRecognizeRequest,
     QuestionImportRecognizeResponse,
     QuestionCreate,
@@ -40,6 +45,7 @@ from app.questions.schemas import (
 )
 from app.questions.service import (
     bulk_create_questions,
+    bulk_create_questions_fast,
     match_and_create_import_question,
     create_knowledge_point,
     create_question,
@@ -56,6 +62,9 @@ from app.questions.service import (
     recognize_imported_question,
     list_knowledge_points,
     list_question_banks,
+    create_question_import_job,
+    get_question_import_job_by_id,
+    process_question_import_job,
     list_tags,
     soft_delete_question,
     soft_delete_question_bank,
@@ -298,6 +307,33 @@ async def update_question_endpoint(
     return QuestionResponse.from_question(updated)
 
 
+@questions_router.post("/bulk-delete", response_model=QuestionBulkDeleteResponse)
+async def bulk_delete_questions_endpoint(
+    data: QuestionBulkDeleteRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
+) -> QuestionBulkDeleteResponse:
+    is_admin = await _is_question_admin(db, user)
+    question_ids = list(dict.fromkeys(data.question_ids))
+    questions: list[Question] = []
+    for question_id in question_ids:
+        question = await get_question_by_id(db, question_id, user=user, is_platform_admin=is_admin)
+        if question is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Some questions were not found")
+        if not can_write_owned_resource(
+            is_platform_admin=is_admin,
+            current_user_id=user.id,
+            owner_id=question.owner_id,
+        ):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No permission to modify some questions")
+        questions.append(question)
+
+    for question in questions:
+        await soft_delete_question(db, question)
+
+    return QuestionBulkDeleteResponse(deleted=len(questions))
+
+
 @questions_router.delete("/{question_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_question_endpoint(
     question_id: uuid.UUID,
@@ -383,6 +419,57 @@ async def bulk_create_questions_endpoint(
     await _ensure_can_read_knowledge_points(db, list(knowledge_point_ids), user, is_admin)
     created = await bulk_create_questions(db, data.questions, user.id)
     return QuestionBulkCreateResponse(created=created)
+
+
+@questions_router.post(
+    "/import/bulk-create-job",
+    response_model=QuestionImportBulkCreateJobResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def import_bulk_create_job_endpoint(
+    data: QuestionImportBulkCreateJobRequest,
+    background_tasks: BackgroundTasks,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
+) -> QuestionImportBulkCreateJobResponse:
+    is_admin = await _is_question_admin(db, user)
+    bank_ids = {question.question_bank_id for question in data.questions if question.question_bank_id is not None}
+    for bank_id in bank_ids:
+        await _ensure_can_write_question_bank(db, bank_id, user, is_admin)
+    knowledge_point_ids = {data.course_id}
+    knowledge_point_ids.update(
+        knowledge_point_id
+        for question in data.questions
+        for knowledge_point_id in question.knowledge_point_ids
+    )
+    await _ensure_can_read_knowledge_points(db, list(knowledge_point_ids), user, is_admin)
+
+    job = await create_question_import_job(db, user_id=user.id, total_count=len(data.questions))
+    created_question_ids = await bulk_create_questions_fast(db, data.questions, user.id)
+    job.created_question_ids = [str(question_id) for question_id in created_question_ids]
+    await db.flush()
+    await db.commit()
+
+    background_tasks.add_task(
+        process_question_import_job,
+        job_id=job.id,
+        user_id=user.id,
+        course_id=data.course_id,
+        questions=[question.model_dump() for question in data.questions],
+    )
+    return QuestionImportBulkCreateJobResponse(job_id=job.id, created=len(created_question_ids), status=job.status)
+
+
+@questions_router.get("/import/jobs/{job_id}", response_model=QuestionImportJobResponse)
+async def get_question_import_job_endpoint(
+    job_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+) -> QuestionImportJobResponse:
+    job = await get_question_import_job_by_id(db, job_id, user_id=user.id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question import job not found")
+    return QuestionImportJobResponse.model_validate(job)
 
 
 @questions_router.post(

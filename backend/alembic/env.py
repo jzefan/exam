@@ -10,6 +10,7 @@ from app.models import Base
 
 # Import all models so Alembic can detect them
 from app.auth.models import User  # noqa: F401
+from app.notifications.models import Notification  # noqa: F401
 from app.questions.models import KnowledgePoint, Question, QuestionBank, Tag  # noqa: F401
 from app.exams.models import Exam  # noqa: F401
 from app.rbac.models import Organization, Role, Permission  # noqa: F401
@@ -28,24 +29,9 @@ def widen_alembic_version_column(connection) -> None:
     if connection.dialect.name != "postgresql":
         return
 
-    exists = connection.execute(
-        text(
-            """
-            SELECT character_maximum_length
-            FROM information_schema.columns
-            WHERE table_schema = current_schema()
-              AND table_name = 'alembic_version'
-              AND column_name = 'version_num'
-            """
-        )
-    ).scalar_one_or_none()
-
-    if exists is not None and exists < 64:
-        connection.execute(
-            text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(64)")
-        )
-        if connection.in_transaction():
-            connection.commit()
+    connection.execute(
+        text("ALTER TABLE IF EXISTS alembic_version ALTER COLUMN version_num TYPE VARCHAR(128)")
+    )
 
 
 def run_migrations_offline() -> None:

@@ -1,5 +1,12 @@
 import { useMemo, useState, type ChangeEvent } from "react";
-import { Camera, FileImage, GripVertical, Loader2, Trash2, UploadCloud } from "lucide-react";
+import {
+  Camera,
+  FileImage,
+  GripVertical,
+  Loader2,
+  Trash2,
+  UploadCloud,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -13,14 +20,24 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { extractCatalogPhotoImages, type CatalogPhotoImage } from "./import-knowledge-photo-utils";
-import type { KnowledgeImportPath, KnowledgeImportPreviewNode } from "./import-knowledge-utils";
+import { useToast } from "@/hooks/use-toast";
+import {
+  extractCatalogPhotoImages,
+  type CatalogPhotoImage,
+} from "./import-knowledge-photo-utils";
+import type {
+  KnowledgeImportPath,
+  KnowledgeImportPreviewNode,
+} from "./import-knowledge-utils";
 import { KnowledgeImportTreePreview } from "./KnowledgeImportTreePreview";
 
 type KnowledgeCatalogPhotoDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onRecognize: (payload: { fileName: string; images: string[] }) => Promise<KnowledgeImportPath[]>;
+  onRecognize: (payload: {
+    fileName: string;
+    images: string[];
+  }) => Promise<KnowledgeImportPath[]>;
   onImport: (paths: KnowledgeImportPath[]) => Promise<void>;
   selectedDirectionName: string | null;
 };
@@ -32,6 +49,7 @@ export function KnowledgeCatalogPhotoDialog({
   onImport,
   selectedDirectionName,
 }: KnowledgeCatalogPhotoDialogProps) {
+  const { toast } = useToast();
   const [images, setImages] = useState<CatalogPhotoImage[]>([]);
   const [paths, setPaths] = useState<KnowledgeImportPath[]>([]);
   const [rootName, setRootName] = useState("");
@@ -40,11 +58,14 @@ export function KnowledgeCatalogPhotoDialog({
   const [recognizing, setRecognizing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [draggingImageId, setDraggingImageId] = useState<string | null>(null);
-  const [previewImage, setPreviewImage] = useState<CatalogPhotoImage | null>(null);
+  const [previewImage, setPreviewImage] = useState<CatalogPhotoImage | null>(
+    null,
+  );
 
   const trimmedRootName = rootName.trim();
   const effectivePaths = useMemo<KnowledgeImportPath[]>(
-    () => (trimmedRootName ? paths.map((path) => [trimmedRootName, ...path]) : paths),
+    () =>
+      trimmedRootName ? paths.map((path) => [trimmedRootName, ...path]) : paths,
     [paths, trimmedRootName],
   );
 
@@ -91,7 +112,10 @@ export function KnowledgeCatalogPhotoDialog({
     try {
       setPaths(
         await onRecognize({
-          fileName: images.length === 1 ? images[0].name : `目录照片共 ${images.length} 张`,
+          fileName:
+            images.length === 1
+              ? images[0].name
+              : `目录照片共 ${images.length} 张`,
           images: images.map((image) => image.src),
         }),
       );
@@ -115,7 +139,13 @@ export function KnowledgeCatalogPhotoDialog({
       await onImport(effectivePaths);
       handleOpenChange(false);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "导入失败");
+      const message = nextError instanceof Error ? nextError.message : "导入失败";
+      setError(message);
+      toast({
+        title: "目录导入失败",
+        description: message,
+        variant: "destructive",
+      });
       setImporting(false);
     }
   };
@@ -147,10 +177,13 @@ export function KnowledgeCatalogPhotoDialog({
       return;
     }
     const pathIndexes = new Set(node.pathIndexes);
-    setPaths((current) => current.filter((_, index) => !pathIndexes.has(index)));
+    setPaths((current) =>
+      current.filter((_, index) => !pathIndexes.has(index)),
+    );
   };
 
-  const canImport = !recognizing && !importing && paths.length > 0 && Boolean(trimmedRootName);
+  const canImport =
+    !recognizing && !importing && paths.length > 0 && Boolean(trimmedRootName);
 
   return (
     <Dialog onOpenChange={handleOpenChange} open={open}>
@@ -158,19 +191,23 @@ export function KnowledgeCatalogPhotoDialog({
         <DialogHeader>
           <DialogTitle>书籍目录拍照导入</DialogTitle>
           <DialogDescription>
-            {selectedDirectionName ? `将目录识别结果导入到“${selectedDirectionName}”方向。` : "请先选择方向。"}
+            {selectedDirectionName
+              ? `将目录识别结果导入到“${selectedDirectionName}”方向。`
+              : "请先选择方向。"}
             上传目录照片或扫描版 PDF，系统按章、节识别后以层级树方式显示。
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[340px_1fr]">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[350px_1fr]">
           {/* 左栏：上传与排序 */}
           <div className="flex flex-col gap-3">
             <label className="flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-2xl border-2 border-dashed border-primary/60 px-6 py-6 text-center transition hover:border-primary">
               <UploadCloud className="h-7 w-7 text-primary" />
-              <span className="text-base font-semibold text-primary">点击添加图片或 PDF</span>
+              <span className="text-base font-semibold text-primary">
+                点击添加图片或 PDF
+              </span>
               <span className="text-xs text-stone-500 dark:text-stone-400">
-                支持 PNG / JPG / WEBP / HEIC / PDF，可一次选择多张
+                支持 PNG / JPG / HEIC / PDF，可一次选择多张
               </span>
               <Input
                 accept=".png,.jpg,.jpeg,.webp,.heic,.pdf"
@@ -184,7 +221,9 @@ export function KnowledgeCatalogPhotoDialog({
             <div className="flex items-center justify-between text-xs text-stone-600 dark:text-stone-300">
               <span className="inline-flex items-center gap-1">
                 <FileImage className="h-4 w-4" />
-                {images.length > 0 ? `已添加 ${images.length} 张` : "尚未添加文件"}
+                {images.length > 0
+                  ? `已添加 ${images.length} 张`
+                  : "尚未添加文件"}
               </span>
               {images.length > 0 && <span>拖动调整识别顺序</span>}
             </div>
@@ -214,7 +253,9 @@ export function KnowledgeCatalogPhotoDialog({
                     >
                       <div className="flex items-center gap-2 text-stone-400">
                         <GripVertical className="h-4 w-4" />
-                        <span className="text-xs font-medium text-stone-500 dark:text-stone-400">{index + 1}</span>
+                        <span className="text-xs font-medium text-stone-500 dark:text-stone-400">
+                          {index + 1}
+                        </span>
                       </div>
                       <button
                         aria-label="查看大图"
@@ -270,7 +311,9 @@ export function KnowledgeCatalogPhotoDialog({
               <ScrollArea className="h-[420px]">
                 <div className="p-4">
                   {error ? (
-                    <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+                    <p className="text-sm text-red-600 dark:text-red-400">
+                      {error}
+                    </p>
                   ) : (
                     <KnowledgeImportTreePreview
                       emptyText={
@@ -292,7 +335,8 @@ export function KnowledgeCatalogPhotoDialog({
                   <Loader2 className="h-8 w-8 animate-spin text-primary" />
                   <p className="text-sm font-medium">正在识别目录，请稍候…</p>
                   <p className="max-w-xs text-center text-xs text-stone-500 dark:text-stone-400">
-                    后端会对每张图片进行 OCR 并整理层级，首次识别较慢，通常需要 10 秒至 1 分钟。
+                    后端会对每张图片进行 OCR 并整理层级，首次识别较慢，通常需要
+                    10 秒至 1 分钟。
                   </p>
                 </div>
               )}
@@ -316,7 +360,11 @@ export function KnowledgeCatalogPhotoDialog({
         )}
 
         <DialogFooter className="gap-2">
-          <Button onClick={() => handleOpenChange(false)} type="button" variant="outline">
+          <Button
+            onClick={() => handleOpenChange(false)}
+            type="button"
+            variant="outline"
+          >
             取消
           </Button>
           <Button
@@ -337,7 +385,11 @@ export function KnowledgeCatalogPhotoDialog({
               </>
             )}
           </Button>
-          <Button disabled={!canImport} onClick={() => void handleImport()} type="button">
+          <Button
+            disabled={!canImport}
+            onClick={() => void handleImport()}
+            type="button"
+          >
             {importing ? "导入中…" : "确认导入"}
           </Button>
         </DialogFooter>

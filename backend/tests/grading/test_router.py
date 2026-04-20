@@ -843,9 +843,46 @@ async def test_grading_candidate_detail_endpoint_returns_llm_comments(
     assert payload["candidate_code"] == "A-102"
     assert payload["suggested_score"] == 16
     assert payload["student_answer_raw"] == "同一个请求重复执行，结果保持一致。"
+    assert payload["attachment_refs"] == []
     assert [model["stage"] for model in payload["models"]] == ["primary", "review", "arbiter"]
     assert payload["models"][0]["model_label"] == "Qwen Grader / qwen-plus"
     assert payload["models"][0]["process"]
+
+
+@pytest.mark.asyncio
+async def test_grading_candidate_detail_endpoint_returns_attachment_refs(
+    admin_client,
+    db_session: AsyncSession,
+) -> None:
+    create_response = await admin_client.post(
+        "/api/grading/tasks",
+        json={
+            "source_type": "exam_submission",
+            "source_business_id": "exam-java-midterm:essay-q3:A-102",
+            "question_type": "short_answer",
+            "question_content": "请结合附件说明设计思路",
+            "max_score": 20,
+            "knowledge_tags": ["结构化表达"],
+            "student_answer_raw": "",
+            "attachment_refs": [
+                {"name": "设计说明.docx", "url": "/api/uploads/files/design.docx"},
+                {"name": "草图.png", "url": "/api/uploads/files/sketch.png"},
+            ],
+            "standard_answers": [{"summary": "说明设计思路"}],
+            "rubric_definition": {"dimensions": [{"key": "coverage", "weight": 0.5}]},
+            "role_binding_version": 1,
+        },
+    )
+    task_id = create_response.json()["id"]
+
+    response = await admin_client.get(f"/api/grading/inbox/tasks/{task_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["attachment_refs"] == [
+        {"name": "设计说明.docx", "url": "/api/uploads/files/design.docx"},
+        {"name": "草图.png", "url": "/api/uploads/files/sketch.png"},
+    ]
 
 
 @pytest.mark.asyncio

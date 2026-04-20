@@ -23,6 +23,7 @@ from app.rbac.students_router import router as students_router
 from app.analytics.router import router as analytics_router
 from app.ai_pipeline.router import router as ai_pipeline_router
 from app.uploads.router import router as uploads_router
+from app.notifications.router import router as notifications_router
 
 
 @asynccontextmanager
@@ -31,6 +32,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.ai_pipeline.models import seed_prompt_templates
     from app.database import async_session, engine
     from app.grading.seed import seed_grading_defaults
+    from app.notifications.models import Notification  # noqa: F401
     from app.rbac.service import assign_unowned_students_to_single_teacher
     from app.rbac.seed import seed_permissions, seed_roles
 
@@ -85,6 +87,7 @@ app.include_router(job_model_router, prefix="/api/job-models/models", tags=["job
 app.include_router(job_template_router, prefix="/api/job-models/templates", tags=["job-model-templates"])
 app.include_router(ai_pipeline_router, prefix="/api/ai-pipeline", tags=["ai-pipeline"])
 app.include_router(ai_generate_router, prefix="/api/questions/ai-generate", tags=["ai-generate"])
+app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"])
 
 
 @app.get("/api/health")

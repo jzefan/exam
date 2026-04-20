@@ -3,18 +3,25 @@ import {
   ArrowUp,
   CheckCircle2,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
   ChevronUp,
   PanelLeftClose,
   PanelLeftOpen,
+  Paperclip,
   RefreshCw,
   Search,
+  FileText,
   X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { CodeBlock } from "@/components/ui/code-block";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -34,6 +41,121 @@ import {
 } from "./api";
 
 type ExpandedStage = "primary" | "review" | "arbiter";
+type GradingAttachment = {
+  name: string;
+  url: string;
+};
+
+function getAttachmentExtension(nameOrUrl: string) {
+  const match = nameOrUrl.match(/\.([a-zA-Z0-9]+)(?:\?.*)?$/);
+  return match ? match[1].toLowerCase() : "";
+}
+
+function isImageAttachment(attachment: GradingAttachment) {
+  const ext = getAttachmentExtension(attachment.name || attachment.url);
+  return ["png", "jpg", "jpeg", "gif", "webp"].includes(ext);
+}
+
+function isDocxAttachment(attachment: GradingAttachment) {
+  const ext = getAttachmentExtension(attachment.name || attachment.url);
+  return ext === "docx";
+}
+
+function AttachmentPreviewDialog({
+  attachment,
+  open,
+  onOpenChange,
+}: {
+  attachment: GradingAttachment | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [docxHtml, setDocxHtml] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!attachment || !open || !isDocxAttachment(attachment)) {
+      setDocxHtml(null);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    (async () => {
+      try {
+        const response = await fetch(attachment.url, {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("access_token") ?? ""}`,
+          },
+        });
+        if (!response.ok) throw new Error(`文档加载失败: ${response.status}`);
+        const arrayBuffer = await response.arrayBuffer();
+        const mammoth = await import("mammoth");
+        const result = await mammoth.convertToHtml({ arrayBuffer });
+        if (!cancelled) setDocxHtml(result.value);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : "文档预览失败");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [attachment, open]);
+
+  if (!attachment) return null;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-4xl h-[80vh] overflow-hidden">
+        <DialogHeader>
+          <DialogTitle className="truncate">{attachment.name}</DialogTitle>
+        </DialogHeader>
+        <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border/60 bg-muted/10">
+          {isImageAttachment(attachment) ? (
+            <div className="flex h-full items-center justify-center bg-background p-4">
+              <img src={attachment.url} alt={attachment.name} className="max-h-[68vh] max-w-full object-contain" />
+            </div>
+          ) : isDocxAttachment(attachment) ? (
+            loading ? (
+              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                正在加载文档预览...
+              </div>
+            ) : error ? (
+              <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+                <p>{error}</p>
+                <Button variant="outline" onClick={() => window.open(attachment.url, "_blank")}>
+                  在新标签页打开
+                </Button>
+              </div>
+            ) : (
+              <div className="h-full overflow-auto bg-white p-6 dark:bg-background">
+                <div
+                  className="prose prose-sm max-w-none dark:prose-invert"
+                  dangerouslySetInnerHTML={{ __html: docxHtml ?? "" }}
+                />
+              </div>
+            )
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+              <p>该附件格式暂不支持在线预览</p>
+              <Button variant="outline" onClick={() => window.open(attachment.url, "_blank")}>
+                在新标签页打开
+              </Button>
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 function getModelLogoSrc(modelLabel: string) {
   const normalized = modelLabel.toLowerCase();
@@ -44,7 +166,11 @@ function getModelLogoSrc(modelLabel: string) {
 }
 
 function toShortModelName(modelLabel: string) {
-  return modelLabel.split("/")[0]?.trim() || modelLabel;
+  const displayLabel = modelLabel.split("/")[0]?.trim() || modelLabel;
+  return displayLabel
+    .replace(/\bGrader\b/gi, "评分模型")
+    .replace(/\bReviewer\b/gi, "复核模型")
+    .replace(/\bArbiter\b/gi, "仲裁模型");
 }
 
 function buildBaseEvaluationEntry(candidateDetail: GradingCandidateDetailResponse | null) {
@@ -132,34 +258,6 @@ export function GradingCenterPage() {
   const [manualScore, setManualScore] = useState("");
   const [promptDraft, setPromptDraft] = useState("");
   const [showFollowUpWorkspace, setShowFollowUpWorkspace] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [isTransitioning, setIsTransitioning] = useState(false);
-
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      if (!document.fullscreenElement) {
-        setIsFullscreen(false);
-        setShowFollowUpWorkspace(false);
-      }
-    };
-
-    document.addEventListener("fullscreenchange", handleFullscreenChange);
-    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
-  }, []);
-
-  const handleEnterFullscreen = async () => {
-    try {
-      setIsTransitioning(true);
-      await document.documentElement.requestFullscreen();
-      setIsFullscreen(true);
-      setShowFollowUpWorkspace(true);
-      setTimeout(() => setIsTransitioning(false), 300);
-    } catch (err) {
-      console.error("Failed to enter fullscreen:", err);
-      setIsTransitioning(false);
-      setShowFollowUpWorkspace(true);
-    }
-  };
   const [followUpConversation, setFollowUpConversation] = useState<
     Array<{
       prompt: string;
@@ -172,6 +270,7 @@ export function GradingCenterPage() {
   const [showCandidateList, setShowCandidateList] = useState(true);
   const [candidateTransitionDirection, setCandidateTransitionDirection] = useState<"prev" | "next" | "neutral">("neutral");
   const [expandedExamGroups, setExpandedExamGroups] = useState<Set<string>>(new Set());
+  const [previewAttachment, setPreviewAttachment] = useState<GradingAttachment | null>(null);
   const [loadingInbox, setLoadingInbox] = useState(false);
   const [loadingQuestion, setLoadingQuestion] = useState(false);
   const [loadingCandidate, setLoadingCandidate] = useState(false);
@@ -606,9 +705,18 @@ export function GradingCenterPage() {
   const questionSummary = formatQuestionSummary(questionDetail);
   const questionPreview = useMemo(() => toQuestionPreview(questionDetail), [questionDetail]);
   const hasVisibleQuestions = filteredExamGroups.length > 0;
+  const hasAnswerAttachment = (candidateDetail?.attachment_refs?.length ?? 0) > 0;
+  const hasAnswerText = Boolean(candidateDetail?.student_answer_raw?.trim());
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden px-0 py-4">
+      <AttachmentPreviewDialog
+        attachment={previewAttachment}
+        open={!!previewAttachment}
+        onOpenChange={(open) => {
+          if (!open) setPreviewAttachment(null);
+        }}
+      />
       {actionLoading === "run" && !followUpStreaming && (
         <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-background/60 backdrop-blur-[2px]">
           <div className="flex flex-col items-center gap-4 rounded-2xl bg-background px-8 py-10 shadow-2xl border border-border/50">
@@ -909,7 +1017,7 @@ export function GradingCenterPage() {
                               className={cn(
                                 "group flex h-8 items-center gap-2 rounded-full border px-3 text-left transition-all duration-200",
                                 candidate.task_id === activeCandidate?.task_id
-                                  ? "border-primary bg-primary text-primary-foreground shadow-lg shadow-primary/20"
+                                  ? "exam-primary-soft-active shadow-sm"
                                   : "border-transparent bg-muted/40 text-muted-foreground hover:border-border/50 hover:bg-muted hover:text-foreground",
                               )}
                             >
@@ -923,7 +1031,7 @@ export function GradingCenterPage() {
                               <span
                                 className={cn(
                                   "whitespace-nowrap text-xs font-semibold tracking-tight",
-                                  candidate.task_id === activeCandidate?.task_id ? "text-primary-foreground" : "text-foreground/70",
+                                  candidate.task_id === activeCandidate?.task_id ? "text-primary" : "text-foreground/70",
                                 )}
                               >
                                 {candidate.candidate_name}
@@ -1055,16 +1163,50 @@ export function GradingCenterPage() {
                     <section className="space-y-3">
                       <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">考生答案</p>
                       <div className="rounded-xl border border-border/50 bg-muted/10 p-4 shadow-sm">
-                        {!candidateDetail?.student_answer_raw?.trim() ? (
+                        {!hasAnswerText && !hasAnswerAttachment ? (
                           <p className="text-sm leading-relaxed text-muted-foreground">
                             该考生本题未提供答案。
                           </p>
-                        ) : candidateDetail?.question_type === "code" ? (
-                          <CodeBlock code={candidateDetail.student_answer_raw} language="python" />
                         ) : (
-                          <p className="text-sm leading-relaxed text-foreground/90">
-                            {candidateDetail?.student_answer_raw ?? (loadingCandidate ? "正在加载答案..." : "-")}
-                          </p>
+                          <div className="space-y-4">
+                            {hasAnswerText ? (
+                              candidateDetail?.question_type === "code" ? (
+                                <CodeBlock code={candidateDetail.student_answer_raw} language="python" />
+                              ) : (
+                                <p className="text-sm leading-relaxed text-foreground/90">
+                                  {candidateDetail?.student_answer_raw ?? (loadingCandidate ? "正在加载答案..." : "-")}
+                                </p>
+                              )
+                            ) : null}
+
+                            {hasAnswerAttachment ? (
+                              <div className="space-y-2">
+                                <p className="text-xs text-muted-foreground">附件答案</p>
+                                <div className="space-y-2">
+                                  {candidateDetail?.attachment_refs.map((attachment) => (
+                                    <button
+                                      key={`${attachment.name}-${attachment.url}`}
+                                      type="button"
+                                      onClick={() => setPreviewAttachment(attachment)}
+                                      className="flex w-full items-center gap-3 rounded-lg border border-border/60 bg-background px-3 py-2 text-left transition-colors hover:bg-accent/40"
+                                    >
+                                      {isImageAttachment(attachment) ? (
+                                        <Paperclip className="h-4 w-4 shrink-0 text-primary" />
+                                      ) : (
+                                        <FileText className="h-4 w-4 shrink-0 text-primary" />
+                                      )}
+                                      <div className="min-w-0">
+                                        <p className="truncate text-sm text-foreground">{attachment.name}</p>
+                                        <p className="text-xs text-muted-foreground">
+                                          {isImageAttachment(attachment) ? "图片附件，点击在线查看" : "Word 附件，点击在线查看"}
+                                        </p>
+                                      </div>
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
                         )}
                       </div>
                     </section>
@@ -1104,6 +1246,10 @@ export function GradingCenterPage() {
                       {loadingCandidate ? (
                         <div className="rounded-lg border border-dashed border-border px-4 py-8 text-sm text-muted-foreground">
                           正在分析评分详情...
+                        </div>
+                      ) : !hasAnswerText && !hasAnswerAttachment ? (
+                        <div className="rounded-lg border border-dashed border-border px-4 py-8 text-sm text-muted-foreground">
+                          该考生本题未提交答案，暂无 LLM 评分意见。
                         </div>
                       ) : (
                         candidateDetail?.models.map((model) => {
