@@ -14,6 +14,7 @@ function createForm(overrides: Partial<ExamFormValues> = {}): ExamFormValues {
     status: "draft",
     position_id: null,
     max_switch_count: 3,
+    allow_retake: false,
     show_result: false,
     notes_template: DEFAULT_NOTES,
     question_mode: "manual",

@@ -21,15 +21,28 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    question_import_job_status = sa.Enum(
-        "PENDING",
-        "RUNNING",
-        "COMPLETED",
-        "FAILED",
-        "PARTIAL_FAILED",
-        name="questionimportjobstatus",
-    )
-    question_import_job_status.create(bind, checkfirst=True)
+    if bind.dialect.name == "postgresql":
+        # Create the enum explicitly once, then reuse it in the table definition
+        # without letting create_table emit a second CREATE TYPE.
+        question_import_job_status = postgresql.ENUM(
+            "PENDING",
+            "RUNNING",
+            "COMPLETED",
+            "FAILED",
+            "PARTIAL_FAILED",
+            name="questionimportjobstatus",
+            create_type=False,
+        )
+        question_import_job_status.create(bind, checkfirst=True)
+    else:
+        question_import_job_status = sa.Enum(
+            "PENDING",
+            "RUNNING",
+            "COMPLETED",
+            "FAILED",
+            "PARTIAL_FAILED",
+            name="questionimportjobstatus",
+        )
     if not inspector.has_table("question_import_jobs"):
         op.create_table(
             "question_import_jobs",
@@ -53,4 +66,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("question_import_jobs")
-    sa.Enum(name="questionimportjobstatus").drop(op.get_bind(), checkfirst=True)
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        postgresql.ENUM(name="questionimportjobstatus").drop(bind, checkfirst=True)

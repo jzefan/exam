@@ -7,6 +7,7 @@ from app.auth.models import User
 from app.auth.security import create_access_token
 from app.auth.service import create_user
 from app.common.data_visibility import VisibilityScope
+from app.learning.models import Direction, KnowledgePoint, Major
 from app.questions.models import Question, QuestionBank, QuestionType
 from app.rbac.models import Organization, Role
 
@@ -192,6 +193,74 @@ async def test_teacher_delete_other_teachers_private_bank_is_not_found(
     refreshed_bank = await db_session.scalar(select(QuestionBank).where(QuestionBank.id == private_bank_id))
     assert refreshed_bank is not None
     assert refreshed_bank.deleted_at is None
+
+
+@pytest.mark.asyncio
+async def test_teacher_can_clear_own_question_bank_questions_without_deleting_bank(
+    client: AsyncClient, db_session
+) -> None:
+    org = await _create_org_with_question_roles(db_session)
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-bank-clear-owner",
+        email="teacher-bank-clear-owner@example.com",
+        full_name="Teacher Bank Clear Owner",
+    )
+
+    bank = QuestionBank(
+        name="Clearable Bank",
+        description=None,
+        owner_id=teacher.id,
+        visibility=VisibilityScope.PRIVATE,
+    )
+    db_session.add(bank)
+    await db_session.flush()
+
+    question_a = Question(
+        type=QuestionType.SHORT_ANSWER,
+        title="Bank Question A",
+        content={"text": "Describe caching"},
+        options=None,
+        answer={"points": ["cache"]},
+        analysis=None,
+        difficulty=2,
+        score=5,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+        question_bank_id=bank.id,
+    )
+    question_b = Question(
+        type=QuestionType.SHORT_ANSWER,
+        title="Bank Question B",
+        content={"text": "Describe queues"},
+        options=None,
+        answer={"points": ["fifo"]},
+        analysis=None,
+        difficulty=2,
+        score=5,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+        question_bank_id=bank.id,
+    )
+    db_session.add_all([question_a, question_b])
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    response = await client.post(f"/api/question-banks/{bank.id}/clear")
+
+    assert response.status_code == 200
+    assert response.json() == {"deleted": 2}
+
+    refreshed_bank = await db_session.scalar(select(QuestionBank).where(QuestionBank.id == bank.id))
+    assert refreshed_bank is not None
+    assert refreshed_bank.deleted_at is None
+
+    refreshed_questions = (
+        await db_session.execute(select(Question).where(Question.id.in_([question_a.id, question_b.id])))
+    ).scalars().all()
+    assert len(refreshed_questions) == 2
+    assert all(question.deleted_at is not None for question in refreshed_questions)
 
 
 @pytest.mark.asyncio
@@ -504,6 +573,69 @@ async def test_teacher_bulk_create_allows_owned_bank_and_unbanked_questions(
     ).scalars().all()
     assert {question.owner_id for question in created_questions} == {teacher.id}
     assert {question.question_bank_id for question in created_questions} == {owned_bank_id, None}
+
+
+@pytest.mark.asyncio
+async def test_teacher_import_bulk_create_job_accepts_visible_course(
+    client: AsyncClient, db_session, monkeypatch
+) -> None:
+    org = await _create_org_with_question_roles(db_session)
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-import-job",
+        email="teacher-import-job@example.com",
+        full_name="Teacher Import Job",
+    )
+    major = Major(name="Computer Science", description=None)
+    db_session.add(major)
+    await db_session.flush()
+    direction = Direction(major_id=major.id, name="Application", description=None)
+    db_session.add(direction)
+    await db_session.flush()
+    course = KnowledgePoint(
+        name="Database Systems",
+        direction_id=direction.id,
+        parent_id=None,
+        owner_id=teacher.id,
+        visibility=VisibilityScope.PRIVATE,
+    )
+    db_session.add(course)
+    await db_session.commit()
+
+    async def noop_process_question_import_job(**_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "app.questions.router.process_question_import_job",
+        noop_process_question_import_job,
+    )
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    response = await client.post(
+        "/api/questions/import/bulk-create-job",
+        json={
+            "course_id": str(course.id),
+            "questions": [
+                {
+                    "type": "short_answer",
+                    "title": "Import Job Question",
+                    "content": {"text": "Describe transaction isolation"},
+                    "options": None,
+                    "answer": {"points": ["read committed"]},
+                    "analysis": None,
+                    "difficulty": 2,
+                    "score": 5,
+                    "tag_ids": [],
+                    "knowledge_point_ids": [],
+                    "question_bank_id": None,
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["created"] == 1
 
 
 @pytest.mark.asyncio

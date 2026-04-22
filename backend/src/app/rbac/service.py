@@ -1,6 +1,7 @@
 """Business logic for RBAC operations."""
 
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -92,7 +93,13 @@ async def delete_class(
 # --- Student Management ---
 
 
-async def list_org_students(db: AsyncSession, org_id: uuid.UUID, class_id: uuid.UUID | None = None) -> list[User]:
+async def list_org_students(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    class_id: uuid.UUID | None = None,
+    *,
+    unassigned: bool = False,
+) -> list[User]:
     query = (
         select(User)
         .join(UserOrganization, UserOrganization.user_id == User.id)
@@ -103,7 +110,9 @@ async def list_org_students(db: AsyncSession, org_id: uuid.UUID, class_id: uuid.
             User.deleted_at.is_(None)
         )
     )
-    if class_id:
+    if unassigned:
+        query = query.where(User.class_id.is_(None))
+    elif class_id:
         query = query.where(User.class_id == class_id)
         
     result = await db.execute(query.order_by(User.full_name))
@@ -115,6 +124,8 @@ async def list_teacher_students(
     org_id: uuid.UUID,
     teacher_id: uuid.UUID,
     class_id: uuid.UUID | None = None,
+    *,
+    unassigned: bool = False,
 ) -> list[User]:
     query = (
         select(User)
@@ -128,7 +139,9 @@ async def list_teacher_students(
             User.deleted_at.is_(None),
         )
     )
-    if class_id:
+    if unassigned:
+        query = query.where(User.class_id.is_(None))
+    elif class_id:
         query = query.where(User.class_id == class_id)
 
     result = await db.execute(query.order_by(User.full_name).distinct())
@@ -191,13 +204,42 @@ async def find_existing_student_by_phone(db: AsyncSession, phone: str) -> User |
     return result.scalar_one_or_none()
 
 
+def get_student_account_identifier(data: StudentCreate) -> str:
+    account = (data.phone or data.student_id or "").strip()
+    if not account:
+        raise ValueError("手机号和学号至少需要填写一项")
+    return account
+
+
+async def find_existing_student_by_account(db: AsyncSession, data: StudentCreate) -> User | None:
+    account = get_student_account_identifier(data)
+    conditions = [User.username == account]
+    if data.phone:
+        conditions.append(User.phone == data.phone)
+    if data.student_id:
+        conditions.append(User.student_id == data.student_id)
+
+    result = await db.execute(
+        select(User)
+        .join(UserOrganization, UserOrganization.user_id == User.id)
+        .join(Role, Role.id == UserOrganization.role_id)
+        .where(
+            or_(*conditions),
+            User.deleted_at.is_(None),
+            Role.name == "student",
+        )
+        .distinct()
+    )
+    return result.scalar_one_or_none()
+
+
 async def create_or_link_student(
     db: AsyncSession,
     org_id: uuid.UUID,
     data: StudentCreate,
     teacher_id: uuid.UUID,
 ) -> tuple[User, bool, bool]:
-    existing_student = await find_existing_student_by_phone(db, data.phone)
+    existing_student = await find_existing_student_by_account(db, data)
     if existing_student is None:
         student = await create_student(db, org_id, data, owner_teacher_id=teacher_id)
         return student, True, True
@@ -216,6 +258,66 @@ async def list_student_teacher_ids(db: AsyncSession, student_id: uuid.UUID) -> l
         .order_by(TeacherStudent.created_at)
     )
     return list(result.scalars().all())
+
+
+async def get_active_student_by_id(db: AsyncSession, student_id: uuid.UUID) -> User | None:
+    result = await db.execute(
+        select(User)
+        .join(UserOrganization, UserOrganization.user_id == User.id)
+        .join(Role, Role.id == UserOrganization.role_id)
+        .where(
+            User.id == student_id,
+            User.deleted_at.is_(None),
+            Role.name == "student",
+        )
+        .distinct()
+    )
+    return result.scalar_one_or_none()
+
+
+async def delete_student_for_actor(
+    db: AsyncSession,
+    student_id: uuid.UUID,
+    *,
+    actor_is_admin: bool,
+    teacher_id: uuid.UUID | None = None,
+) -> None:
+    student = await get_active_student_by_id(db, student_id)
+    if student is None:
+        raise LookupError("student not found")
+
+    now = datetime.now(timezone.utc)
+
+    if actor_is_admin:
+        student.deleted_at = now
+        student.owner_teacher_id = None
+        await db.flush()
+        return
+
+    if teacher_id is None:
+        raise PermissionError("teacher context is required")
+
+    link = await db.get(
+        TeacherStudent,
+        {"teacher_id": teacher_id, "student_id": student_id},
+    )
+    is_owner = student.owner_teacher_id == teacher_id
+    if link is None and not is_owner:
+        raise PermissionError("cannot delete a student outside current teacher scope")
+
+    if link is not None:
+        await db.delete(link)
+        await db.flush()
+
+    remaining_teacher_ids = await list_student_teacher_ids(db, student_id)
+    if remaining_teacher_ids:
+        if student.owner_teacher_id not in remaining_teacher_ids:
+            student.owner_teacher_id = remaining_teacher_ids[0]
+    else:
+        student.owner_teacher_id = None
+        student.deleted_at = now
+
+    await db.flush()
 
 
 async def assign_unowned_students_to_single_teacher(db: AsyncSession) -> int:
@@ -297,12 +399,13 @@ async def create_student(
     data: StudentCreate,
     owner_teacher_id: uuid.UUID | None = None,
 ) -> User:
-    # Use phone as username and password
-    password_hash = hash_password(data.phone)
+    # Prefer phone as the login account; school rosters without phones use student_id.
+    account = get_student_account_identifier(data)
+    password_hash = hash_password(account)
     
     user = User(
-        username=data.phone,
-        email=f"{data.phone}@example.com", # Default email
+        username=account,
+        email=f"{account}@example.com", # Default email
         phone=data.phone,
         student_id=data.student_id,
         class_id=data.class_id,

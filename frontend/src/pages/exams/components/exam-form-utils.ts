@@ -15,6 +15,7 @@ export interface ExamFormValues {
   status: "draft" | "upcoming" | "ongoing" | "completed" | "closed";
   position_id: string | null;
   max_switch_count: number;
+  allow_retake: boolean;
   show_result: boolean;
   notes_template: string;
   question_mode: "manual" | "auto" | "ai" | null;

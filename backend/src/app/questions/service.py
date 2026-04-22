@@ -16,6 +16,7 @@ from app.common.data_visibility import VisibilityScope
 from app.common.resource_access import teacher_owned_resource_filter, teacher_visible_resource_filter
 from app.database import async_session
 from app.config import settings
+from app.exams.models import Exam, ExamQuestion, StudentExamAnswer, StudentExamSubmissionAnswer, StudentQuestionProgress
 from app.questions.models import KnowledgePoint, Question, QuestionBank, QuestionImportJob, QuestionImportJobStatus, Tag, question_tags
 from app.questions.schemas import (
     ImportConfidence,
@@ -208,6 +209,20 @@ async def soft_delete_question_bank(db: AsyncSession, bank: QuestionBank) -> Non
     await db.flush()
 
 
+async def clear_question_bank_questions(db: AsyncSession, bank: QuestionBank) -> int:
+    """Soft-delete all active questions in the bank while keeping the bank itself."""
+    now = datetime.now(timezone.utc)
+    from sqlalchemy import update as sql_update
+
+    result = await db.execute(
+        sql_update(Question)
+        .where(Question.question_bank_id == bank.id, Question.deleted_at.is_(None))
+        .values(deleted_at=now)
+    )
+    await db.flush()
+    return result.rowcount or 0
+
+
 # --- Question ---
 
 def _question_scope_query(*, user: User | None, is_platform_admin: bool) -> Select:
@@ -312,6 +327,57 @@ async def update_question(db: AsyncSession, question: Question, data: QuestionUp
 async def soft_delete_question(db: AsyncSession, question: Question) -> None:
     question.deleted_at = datetime.now(timezone.utc)
     await db.flush()
+
+
+async def can_hard_delete_question(db: AsyncSession, question_id: uuid.UUID) -> bool:
+    active_exam_ref = await db.scalar(
+        select(ExamQuestion.question_id)
+        .join(Exam, Exam.id == ExamQuestion.exam_id)
+        .where(
+            ExamQuestion.question_id == question_id,
+            Exam.deleted_at.is_(None),
+        )
+        .limit(1)
+    )
+    if active_exam_ref is not None:
+        return False
+
+    answer_history = await db.scalar(
+        select(StudentExamAnswer.question_id).where(StudentExamAnswer.question_id == question_id).limit(1)
+    )
+    if answer_history is not None:
+        return False
+
+    submission_answer_history = await db.scalar(
+        select(StudentExamSubmissionAnswer.question_id)
+        .where(StudentExamSubmissionAnswer.question_id == question_id)
+        .limit(1)
+    )
+    if submission_answer_history is not None:
+        return False
+
+    progress_history = await db.scalar(
+        select(StudentQuestionProgress.question_id)
+        .where(StudentQuestionProgress.question_id == question_id)
+        .limit(1)
+    )
+    if progress_history is not None:
+        return False
+
+    return True
+
+
+async def cleanup_soft_deleted_question_if_orphaned(db: AsyncSession, question_id: uuid.UUID) -> bool:
+    question = await db.get(Question, question_id)
+    if question is None or question.deleted_at is None:
+        return False
+
+    if not await can_hard_delete_question(db, question_id):
+        return False
+
+    await db.delete(question)
+    await db.flush()
+    return True
 
 
 _http_client: httpx.AsyncClient | None = None

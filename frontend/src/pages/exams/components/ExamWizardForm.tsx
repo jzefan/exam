@@ -4,7 +4,6 @@ import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import {
-  ArrowLeft,
   ArrowRight,
   BookCopy,
   CheckCircle2,
@@ -26,6 +25,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
+import { PageIntroHeader } from "@/components/ui/page-intro-header";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -1752,27 +1752,17 @@ export function ExamWizardForm({
 
   return (
     <form className="space-y-6" onSubmit={handleSubmit}>
-      <div className="flex items-center gap-3">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          aria-label="返回考试列表"
-          onClick={() => navigate("/exams")}
-        >
-          <ArrowLeft size={16} />
-        </Button>
-        <div className="min-w-0">
-          <h1 className="text-base font-bold text-foreground tracking-tight">
-            {mode === "create" ? "创建考试" : "编辑考试"}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {mode === "create"
-              ? "按步骤完成信息填写、组卷、选人和设置，最后一次性创建考试。"
-              : "按步骤修改考试基本信息、题目、考生与设置。"}
-          </p>
-        </div>
-      </div>
+      <PageIntroHeader
+        title={mode === "create" ? "创建考试" : "编辑考试"}
+        description={
+          mode === "create"
+            ? "按步骤完成基本信息、组卷、选人和设置，最后一次性生成考试。"
+            : "按步骤修改考试信息、题目、考生与考试设置。"
+        }
+        onBack={() => navigate("/exams")}
+        backLabel="返回考试列表"
+        fullBleed
+      />
 
       {banner}
 
@@ -2064,35 +2054,55 @@ export function ExamWizardForm({
                     <p className="text-xs text-muted-foreground">先设置考试规则，再继续核对试卷内容与分数。</p>
                   </div>
 
-                  <div className="grid gap-4 md:grid-cols-[minmax(0,220px)_minmax(0,1fr)]">
-                    <div className="space-y-1.5">
-                      <FieldHint label="允许切屏次数" enabled={form.max_switch_count > 0}>
-                        <Input
-                          id="exam-max-switch-count"
-                          type="number"
-                          min={0}
-                          placeholder="允许切屏次数（0 表示不限制）"
-                          aria-label="允许切屏次数"
-                          value={form.max_switch_count}
-                          onChange={(e) =>
-                            updateField("max_switch_count", parseInt(e.target.value, 10) || 0)
-                          }
-                          aria-invalid={Boolean(fieldErrors.max_switch_count)}
-                          aria-describedby="exam-max-switch-count-help"
-                        />
-                      </FieldHint>
-                      <p id="exam-max-switch-count-help" className="text-xs text-muted-foreground">
-                        设为 0 表示不限制切屏次数。
-                      </p>
-                      {fieldErrors.max_switch_count && (
-                        <p className="text-xs text-destructive">{fieldErrors.max_switch_count}</p>
-                      )}
+                  <div className="rounded-xl border border-border/60 bg-background/40 px-4">
+                    <div className="flex flex-col gap-3 py-3 md:flex-row md:items-center md:justify-between">
+                      <div className="min-w-0 space-y-0.5">
+                        <p className="text-sm font-medium text-foreground">允许切屏次数</p>
+                        <p id="exam-max-switch-count-help" className="text-xs text-muted-foreground">
+                          设为 0 表示不限制切屏次数。
+                        </p>
+                        {fieldErrors.max_switch_count && (
+                          <p className="text-xs text-destructive">{fieldErrors.max_switch_count}</p>
+                        )}
+                      </div>
+                      <Input
+                        id="exam-max-switch-count"
+                        type="number"
+                        min={0}
+                        placeholder="0"
+                        aria-label="允许切屏次数"
+                        value={form.max_switch_count}
+                        onChange={(e) =>
+                          updateField("max_switch_count", parseInt(e.target.value, 10) || 0)
+                        }
+                        aria-invalid={Boolean(fieldErrors.max_switch_count)}
+                        aria-describedby="exam-max-switch-count-help"
+                        className="h-8 w-full md:w-28"
+                      />
                     </div>
 
-                    <div className="flex min-h-10 items-center justify-between rounded-lg border px-4 py-2.5">
-                      <div className="min-w-0">
-                        <p className="text-sm text-foreground">允许查看考试结果</p>
-                        <p className="mt-0.5 text-xs text-muted-foreground">
+                    <div className="border-t border-border/40" />
+
+                    <div className="flex flex-col gap-3 py-3 md:flex-row md:items-center md:justify-between">
+                      <div className="min-w-0 space-y-0.5">
+                        <p className="text-sm font-medium text-foreground">允许已提交学生在考试期间重考</p>
+                        <p className="text-xs text-muted-foreground">
+                          开启后，学生提交后只要考试未结束，仍可重新开始一次新的作答。
+                        </p>
+                      </div>
+                      <Switch
+                        id="exam-allow-retake"
+                        checked={form.allow_retake}
+                        onCheckedChange={(checked) => updateField("allow_retake", checked)}
+                      />
+                    </div>
+
+                    <div className="border-t border-border/40" />
+
+                    <div className="flex flex-col gap-3 py-3 md:flex-row md:items-center md:justify-between">
+                      <div className="min-w-0 space-y-0.5">
+                        <p className="text-sm font-medium text-foreground">允许查看考试结果</p>
+                        <p className="text-xs text-muted-foreground">
                           考生提交后是否可以查看批改结果详情。
                         </p>
                       </div>

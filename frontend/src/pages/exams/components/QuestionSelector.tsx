@@ -17,11 +17,13 @@ import { getQuestionContentHtml, getQuestionTitle } from "@/components/questions
 import { LatexText } from "@/components/ui/latex-text";
 import { RichContent } from "@/components/ui/rich-content";
 import { cn } from "@/lib/utils";
-import type { IQuestion, IQuestionBank } from "@/types";
+import type { IQuestion, IQuestionBank, QuestionType } from "@/types";
 import type { SelectedKnowledgePoint } from "@/components/questions/knowledge-point-selector";
 
 const ALL_BANKS = "__all_banks__";
+const ALL_TYPES = "__all_types__";
 const HOVER_PREVIEW_OPEN_DELAY = 1000;
+const HOVER_PREVIEW_CLOSE_DELAY = 120;
 
 const typeLabels: Record<string, { label: string; className: string }> = {
   choice: { label: "选择", className: "border-primary/20 bg-primary/10 text-primary" },
@@ -50,11 +52,13 @@ export function QuestionSelector({
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [bankFilter, setBankFilter] = useState<string | null>(null);
+  const [typeFilter, setTypeFilter] = useState<QuestionType | null>(null);
   const [knowledgePointFilter, setKnowledgePointFilter] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [internalIsFullscreen, setInternalIsFullscreen] = useState(false);
   const [previewTooltip, setPreviewTooltip] = useState<{ questionId: string; x: number; y: number } | null>(null);
   const previewOpenTimerRef = useRef<number | null>(null);
+  const previewCloseTimerRef = useRef<number | null>(null);
   const pendingPreviewRef = useRef<{ questionId: string; x: number; y: number } | null>(null);
   const isFullscreen = controlledIsFullscreen ?? internalIsFullscreen;
   const pageSize = isFullscreen ? 500 : 20;
@@ -90,6 +94,9 @@ export function QuestionSelector({
       if (previewOpenTimerRef.current) {
         window.clearTimeout(previewOpenTimerRef.current);
       }
+      if (previewCloseTimerRef.current) {
+        window.clearTimeout(previewCloseTimerRef.current);
+      }
     },
     [],
   );
@@ -109,6 +116,7 @@ export function QuestionSelector({
     filters: [
       ...(search ? [{ field: "title", operator: "contains" as const, value: search }] : []),
       ...(bankFilter ? [{ field: "question_bank_id", operator: "eq" as const, value: bankFilter }] : []),
+      ...(typeFilter ? [{ field: "type", operator: "eq" as const, value: typeFilter }] : []),
       ...(knowledgePointFilter
         ? [{ field: "knowledge_point_id", operator: "eq" as const, value: knowledgePointFilter }]
         : []),
@@ -141,13 +149,22 @@ export function QuestionSelector({
     }
   };
 
+  const clearPreviewCloseTimer = () => {
+    if (previewCloseTimerRef.current) {
+      window.clearTimeout(previewCloseTimerRef.current);
+      previewCloseTimerRef.current = null;
+    }
+  };
+
   const openPreviewAtPoint = (questionId: string, x: number, y: number) => {
     pendingPreviewRef.current = null;
+    clearPreviewCloseTimer();
     setPreviewTooltip({ questionId, x, y });
   };
 
   const schedulePreviewAtPoint = (questionId: string, x: number, y: number) => {
     clearPreviewOpenTimer();
+    clearPreviewCloseTimer();
     pendingPreviewRef.current = { questionId, x, y };
     setPreviewTooltip(null);
     previewOpenTimerRef.current = window.setTimeout(() => {
@@ -160,6 +177,7 @@ export function QuestionSelector({
   };
 
   const closePreview = (questionId?: string) => {
+    clearPreviewCloseTimer();
     if (!questionId || pendingPreviewRef.current?.questionId === questionId) {
       pendingPreviewRef.current = null;
       clearPreviewOpenTimer();
@@ -170,6 +188,13 @@ export function QuestionSelector({
       }
       return current;
     });
+  };
+
+  const schedulePreviewClose = (questionId?: string) => {
+    clearPreviewCloseTimer();
+    previewCloseTimerRef.current = window.setTimeout(() => {
+      closePreview(questionId);
+    }, HOVER_PREVIEW_CLOSE_DELAY);
   };
 
   const openPreviewAtElement = (questionId: string, element: HTMLElement) => {
@@ -200,7 +225,7 @@ export function QuestionSelector({
           setPage(1);
         }}
       >
-        <SelectTrigger className="h-9 w-full sm:w-[180px]" aria-label="按题库筛选">
+        <SelectTrigger className="h-9 w-full sm:w-[156px]" aria-label="按题库筛选">
           <SelectValue placeholder="全部题库" />
         </SelectTrigger>
         <SelectContent>
@@ -208,6 +233,25 @@ export function QuestionSelector({
           {banks.map((b) => (
             <SelectItem key={b.id} value={b.id}>
               {b.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Select
+        value={typeFilter ?? ALL_TYPES}
+        onValueChange={(value) => {
+          setTypeFilter(value === ALL_TYPES ? null : (value as QuestionType));
+          setPage(1);
+        }}
+      >
+        <SelectTrigger className="h-9 w-full sm:w-[140px]" aria-label="按题型筛选">
+          <SelectValue placeholder="全部题型" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={ALL_TYPES}>全部题型</SelectItem>
+          {Object.entries(typeLabels).map(([type, config]) => (
+            <SelectItem key={type} value={type}>
+              {config.label}
             </SelectItem>
           ))}
         </SelectContent>
@@ -220,7 +264,7 @@ export function QuestionSelector({
             setPage(1);
           }}
         >
-          <SelectTrigger className="h-9 w-full sm:w-[220px]" aria-label="按知识点筛选">
+          <SelectTrigger className="h-9 w-full sm:w-[180px]" aria-label="按知识点筛选">
             <SelectValue placeholder="全部知识点" />
           </SelectTrigger>
           <SelectContent>
@@ -237,7 +281,7 @@ export function QuestionSelector({
   );
 
   const renderQuestionList = () => (
-    <div className="max-h-[400px] divide-y overflow-y-auto rounded-lg border">
+    <div className="max-h-[400px] divide-y divide-border/40 overflow-y-auto rounded-lg">
       {isLoading ? (
         <div className="p-8 text-center text-sm text-muted-foreground">加载中...</div>
       ) : questions.length === 0 ? (
@@ -258,9 +302,9 @@ export function QuestionSelector({
               tabIndex={0}
               aria-pressed={isSelected}
               aria-label={questionText}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors border-l-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+              className={`w-full flex items-center gap-3 px-3 py-3.5 text-left transition-colors border-l-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
                 isSelected
-                  ? "border-l-primary bg-primary text-primary-foreground hover:bg-primary/90"
+                  ? "border-l-primary bg-primary/5 hover:bg-primary/10"
                   : "border-l-transparent hover:bg-muted/50"
               }`}
               onPointerEnter={(event) => schedulePreviewAtPoint(q.id, event.clientX, event.clientY)}
@@ -271,9 +315,9 @@ export function QuestionSelector({
                   pendingPreviewRef.current = { questionId: q.id, x: event.clientX, y: event.clientY };
                 }
               }}
-              onPointerLeave={() => closePreview(q.id)}
+              onPointerLeave={() => schedulePreviewClose(q.id)}
               onFocus={(event) => openPreviewAtElement(q.id, event.currentTarget)}
-              onBlur={() => closePreview(q.id)}
+              onBlur={() => schedulePreviewClose(q.id)}
               onClick={() => toggle(q.id)}
               onKeyDown={(event) => {
                 if (event.key !== "Enter" && event.key !== " ") return;
@@ -284,7 +328,7 @@ export function QuestionSelector({
               <div
                 className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${
                   isSelected
-                    ? "bg-primary-foreground border-primary-foreground text-primary"
+                    ? "bg-primary border-primary text-primary-foreground"
                     : "border-input"
                 }`}
               >
@@ -294,13 +338,13 @@ export function QuestionSelector({
                 variant="outline"
                 className={`text-xs shrink-0 ${
                   isSelected
-                    ? "border-primary-foreground/30 bg-primary-foreground/15 text-primary-foreground"
+                    ? "border-primary/25 bg-primary/10 text-primary"
                     : t.className
                 }`}
               >
                 {t.label}
               </Badge>
-              <div className={`min-w-0 flex-1 text-sm ${isSelected ? "font-medium text-primary-foreground" : "text-foreground"}`}>
+              <div className={`min-w-0 flex-1 text-sm ${isSelected ? "font-medium text-foreground" : "text-foreground"}`}>
                 {questionHtml ? (
                   <RichContent
                     html={questionHtml}
@@ -312,7 +356,7 @@ export function QuestionSelector({
                   </span>
                 )}
               </div>
-              <span className={`text-xs shrink-0 ${isSelected ? "text-primary-foreground/85" : "text-muted-foreground"}`}>
+              <span className={`text-xs shrink-0 ${isSelected ? "text-foreground/75" : "text-muted-foreground"}`}>
                 {q.score}分 · 难度{q.difficulty}
               </span>
             </div>
@@ -442,13 +486,15 @@ export function QuestionSelector({
 
       {previewTooltip && previewQuestion && !isFullscreen && (
         <div
-          className="pointer-events-none fixed z-50 max-h-[70vh] w-[min(44rem,calc(100vw-2rem))] overflow-auto rounded-xl border bg-background p-0 text-foreground shadow-xl opacity-0 translate-y-2 transition-all duration-500 ease-out animate-in fade-in-0 slide-in-from-bottom-2 data-[state=open]:opacity-100"
+          className="fixed z-50 max-h-[70vh] w-[min(44rem,calc(100vw-2rem))] overflow-auto rounded-xl border bg-background p-0 text-foreground shadow-xl opacity-0 translate-y-2 transition-all duration-500 ease-out animate-in fade-in-0 slide-in-from-bottom-2 data-[state=open]:opacity-100"
           style={{
             left: Math.min(previewTooltip.x, window.innerWidth - 720),
             top: Math.min(previewTooltip.y + 10, window.innerHeight - 120),
             opacity: 1,
             transform: "translateY(0)",
           }}
+          onPointerEnter={() => clearPreviewCloseTimer()}
+          onPointerLeave={() => closePreview(previewTooltip.questionId)}
         >
           <QuestionPreviewCard
             question={previewQuestion}

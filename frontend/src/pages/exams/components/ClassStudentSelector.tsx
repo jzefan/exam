@@ -13,6 +13,7 @@ import {
 import { apiRequest } from "@/pages/grading/api";
 import {
   buildStudentBatchImportItems,
+  getStudentImportAccount,
   parseStudentImportFile,
   type StudentImportClassOption,
 } from "@/components/students/student-import-utils";
@@ -255,7 +256,7 @@ export function ClassStudentSelector({
       );
       const existingSelectedIds: string[] = [];
       const rowsToCreate = rows.filter((row) => {
-        const existing = existingStudents.get(normalizeValue(row.phone));
+        const existing = existingStudents.get(normalizeValue(getStudentImportAccount(row)));
         if (!existing) {
           return true;
         }
@@ -288,9 +289,9 @@ export function ClassStudentSelector({
       }
 
       const { studentData } = await loadStudentData();
-      const createdPhones = new Set(rowsToCreate.map((row) => normalizeValue(row.phone)));
+      const createdAccounts = new Set(rowsToCreate.map((row) => normalizeValue(getStudentImportAccount(row))));
       const createdIds = studentData
-        .filter((user) => createdPhones.has(normalizeValue(user.phone ?? user.username)))
+        .filter((user) => createdAccounts.has(normalizeValue(user.phone ?? user.username)))
         .map((user) => user.id);
       const matchedIds = [...existingSelectedIds, ...createdIds];
       const merged = [...new Set([...selectedIds, ...matchedIds])];
@@ -306,7 +307,7 @@ export function ClassStudentSelector({
       setImportError(
         error instanceof Error
           ? error.message
-          : "文件解析失败，请上传包含“姓名”和“手机号”列的 Excel 文件。",
+          : "文件解析失败，请上传包含“姓名”，并提供“手机号”或“学号”的 Excel 文件。",
       );
     }
     if (fileRef.current) fileRef.current.value = "";

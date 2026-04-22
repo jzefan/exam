@@ -3,6 +3,8 @@
 import uuid
 from typing import Annotated
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,7 +20,7 @@ from app.common.pagination import (
     parse_pagination,
 )
 from app.database import get_db
-from app.exams.models import Exam, ExamQuestion, ExamStudent, StudentExamAnswer
+from app.exams.models import Exam, ExamQuestion, ExamStudent, StudentExamAnswer, StudentExamSubmission
 from app.exams.schemas import (
     AnalysisOverall,
     ExamAnalysisResponse,
@@ -34,8 +36,36 @@ from app.exams.schemas import (
     ScoreBucket,
     StudentResultRow,
 )
+from app.questions.service import cleanup_soft_deleted_question_if_orphaned
 
 router = APIRouter()
+
+
+async def _exam_has_student_history(db: AsyncSession, exam_id: uuid.UUID) -> bool:
+    exam_student_history = await db.scalar(
+        select(ExamStudent.exam_id)
+        .where(
+            ExamStudent.exam_id == exam_id,
+            (ExamStudent.started_at.is_not(None) | ExamStudent.submitted_at.is_not(None)),
+        )
+        .limit(1)
+    )
+    if exam_student_history is not None:
+        return True
+
+    answer_history = await db.scalar(
+        select(StudentExamAnswer.exam_id).where(StudentExamAnswer.exam_id == exam_id).limit(1)
+    )
+    if answer_history is not None:
+        return True
+
+    submission_history = await db.scalar(
+        select(StudentExamSubmission.exam_id).where(StudentExamSubmission.exam_id == exam_id).limit(1)
+    )
+    if submission_history is not None:
+        return True
+
+    return False
 
 
 async def _is_exam_admin(db: AsyncSession, user_id: uuid.UUID) -> bool:
@@ -117,6 +147,7 @@ def _build_exam_response(exam: Exam, student_id: uuid.UUID | None = None) -> Exa
         position_id=exam.position_id,
         position_name=exam.position.name if exam.position else None,
         max_switch_count=exam.max_switch_count,
+        allow_retake=exam.allow_retake,
         show_result=exam.show_result,
         notes_template=exam.notes_template,
         question_mode=exam.question_mode,
@@ -277,6 +308,7 @@ async def create_exam(
         status=body.status,
         position_id=body.position_id,
         max_switch_count=body.max_switch_count,
+        allow_retake=body.allow_retake,
         show_result=body.show_result,
         notes_template=body.notes_template,
         question_mode=body.question_mode,
@@ -356,11 +388,17 @@ async def delete_exam(
     db: Annotated[AsyncSession, Depends(get_db)],
     user: CurrentUser,
 ) -> None:
-    from datetime import datetime, timezone
-
     exam = await _get_writable_exam_or_404(db, exam_id, user)
+    question_ids = [item.question_id for item in exam.exam_questions]
 
-    exam.deleted_at = datetime.now(timezone.utc)
+    if await _exam_has_student_history(db, exam.id):
+        exam.deleted_at = datetime.now(timezone.utc)
+    else:
+        await db.delete(exam)
+        await db.flush()
+        for question_id in question_ids:
+            await cleanup_soft_deleted_question_if_orphaned(db, question_id)
+
     await db.commit()
 
 

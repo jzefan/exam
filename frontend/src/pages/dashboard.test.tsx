@@ -68,8 +68,18 @@ describe("Dashboard", () => {
     )
 
     await waitFor(() => {
-      expect(screen.getByText("学生总数")).toBeInTheDocument()
+      expect(screen.getByText("考试/练习数")).toBeInTheDocument()
     })
+
+    expect(screen.queryByText("学生总数")).not.toBeInTheDocument()
+    expect(screen.getByText("考试/练习数")).toBeInTheDocument()
+    expect(screen.getByText("题目数")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText("考试/练习数"))
+    expect(navigateMock).toHaveBeenLastCalledWith("/exams")
+
+    fireEvent.click(screen.getByText("题目数"))
+    expect(navigateMock).toHaveBeenLastCalledWith("/questions")
 
     const actions = [
       ["学生管理", "/students"],

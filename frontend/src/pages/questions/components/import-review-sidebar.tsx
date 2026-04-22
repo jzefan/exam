@@ -219,7 +219,7 @@ export function ImportReviewSidebar({
                   <p
                     className={cn(
                       "whitespace-pre-wrap break-words text-sm font-medium leading-relaxed transition-colors [overflow-wrap:anywhere]",
-                      isSelected ? "text-slate-700" : "text-slate-500 group-hover:text-slate-700",
+                      isSelected ? "text-slate-600" : "text-slate-500 group-hover:text-slate-600",
                     )}
                   >
                     {getDraftPreviewText(draft)}

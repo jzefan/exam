@@ -1,7 +1,8 @@
 import { usePermissions } from "@refinedev/core";
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Plus, Upload, Search, FileSpreadsheet, X, Info, Users, CheckCircle2, AlertCircle } from "lucide-react";
+import { Plus, Upload, Search, FileSpreadsheet, X, Info, Users, CheckCircle2, AlertCircle, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
   Table,
@@ -37,11 +38,12 @@ import {
 } from "@/components/students/student-import-utils";
 
 type ClassItem = StudentImportClassOption;
+type StudentFilterScope = string | "all" | "unassigned";
 
 interface Student {
   id: string;
   full_name: string;
-  phone: string;
+  phone: string | null;
   student_id: string;
   username: string;
   is_active: boolean;
@@ -60,11 +62,14 @@ export default function StudentManagementPage() {
   const { data: role } = usePermissions<string>({});
   const [students, setStudents] = useState<Student[]>([]);
   const [classes, setClasses] = useState<ClassItem[]>([]);
-  const [selectedClassId, setSelectedClassId] = useState<string | "all">("all");
+  const [selectedClassId, setSelectedClassId] = useState<StudentFilterScope>("all");
+  const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const hasLoadedStudentsRef = useRef(false);
   const { toast } = useToast();
 
   const [isAddDialogOpen, setIsAddAddDialogOpen] = useState(false);
@@ -92,11 +97,21 @@ export default function StudentManagementPage() {
   };
 
   const fetchStudents = useCallback(async () => {
-    setLoading(true);
+    if (hasLoadedStudentsRef.current) {
+      setIsRefreshing(true);
+    } else {
+      setLoading(true);
+    }
     try {
-      const url = selectedClassId === "all" ? "/rbac/students" : `/rbac/students?class_id=${selectedClassId}`;
+      const url =
+        selectedClassId === "all"
+          ? "/rbac/students"
+          : selectedClassId === "unassigned"
+            ? "/rbac/students?unassigned=true"
+            : `/rbac/students?class_id=${selectedClassId}`;
       const data = await apiRequest<Student[]>(url);
       setStudents(data);
+      hasLoadedStudentsRef.current = true;
     } catch {
       toast({
         title: "加载失败",
@@ -105,6 +120,7 @@ export default function StudentManagementPage() {
       });
     } finally {
       setLoading(false);
+      setIsRefreshing(false);
     }
   }, [selectedClassId, toast]);
 
@@ -140,11 +156,14 @@ export default function StudentManagementPage() {
       toast({ title: "已删除" });
       if (selectedClassId === id) setSelectedClassId("all");
       fetchClasses();
-      fetchStudents();
+      void fetchStudents();
     } catch {
       // ignore delete failures here; existing UI keeps current state
     }
   };
+
+  const isScopedClassSelected = selectedClassId !== "all" && selectedClassId !== "unassigned";
+  const selectedClassName = isScopedClassSelected ? classes.find((c) => c.id === selectedClassId)?.name : null;
 
   const handleAddStudent = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -159,7 +178,7 @@ export default function StudentManagementPage() {
       });
       setIsAddAddDialogOpen(false);
       setNewStudent({ full_name: "", phone: "", student_id: "", class_id: undefined });
-      fetchStudents();
+      void fetchStudents();
     } catch (error: unknown) {
       toast({
         title: "添加失败",
@@ -176,7 +195,7 @@ export default function StudentManagementPage() {
       const { students: mappedStudents, classes: nextClasses } = await buildStudentBatchImportItems({
         rows,
         classes,
-        fallbackClassId: selectedClassId === "all" ? undefined : selectedClassId,
+        fallbackClassId: isScopedClassSelected ? selectedClassId : undefined,
         createClass: (name) =>
           apiRequest<ClassItem>("/rbac/students/classes", {
             method: "POST",
@@ -193,7 +212,7 @@ export default function StudentManagementPage() {
       setImportResult(response);
       setIsImportDialogOpen(false);
       setIsResultDialogOpen(true);
-      fetchStudents();
+      void fetchStudents();
     } catch (error: unknown) {
       toast({
         title: "导入失败",
@@ -209,10 +228,75 @@ export default function StudentManagementPage() {
   const filteredStudents = students.filter(
     (s) =>
       s.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      s.phone.includes(searchTerm) ||
+      (s.phone && s.phone.includes(searchTerm)) ||
+      s.username.includes(searchTerm) ||
       (s.student_id && s.student_id.includes(searchTerm))
   );
+  const allVisibleSelected =
+    filteredStudents.length > 0 && filteredStudents.every((student) => selectedStudentIds.includes(student.id));
+  const selectedVisibleCount = filteredStudents.filter((student) => selectedStudentIds.includes(student.id)).length;
   const showOwnershipColumn = role === "platform_admin";
+
+  useEffect(() => {
+    setSelectedStudentIds((current) => current.filter((id) => students.some((student) => student.id === id)));
+  }, [students]);
+
+  const toggleStudentSelection = (studentId: string) => {
+    setSelectedStudentIds((current) =>
+      current.includes(studentId) ? current.filter((id) => id !== studentId) : [...current, studentId]
+    );
+  };
+
+  const toggleSelectAllVisible = (checked: boolean | "indeterminate") => {
+    if (checked) {
+      const next = new Set(selectedStudentIds);
+      filteredStudents.forEach((student) => next.add(student.id));
+      setSelectedStudentIds(Array.from(next));
+      return;
+    }
+    setSelectedStudentIds((current) => current.filter((id) => !filteredStudents.some((student) => student.id === id)));
+  };
+
+  const deleteStudents = async (studentIds: string[]) => {
+    if (studentIds.length === 0) {
+      return;
+    }
+    const isBatch = studentIds.length > 1;
+    const confirmed = window.confirm(
+      isBatch ? `确定要批量删除这 ${studentIds.length} 个学生吗？` : "确定要删除这个学生吗？"
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      if (isBatch) {
+        const result = await apiRequest<ImportResult>("/rbac/students/batch-delete", {
+          method: "POST",
+          body: JSON.stringify({ student_ids: studentIds }),
+        });
+        toast({
+          title: result.failed_count === 0 ? "批量删除成功" : "批量删除已完成",
+          description:
+            result.failed_count === 0
+              ? `已处理 ${result.success_count} 个学生。`
+              : `成功 ${result.success_count} 个，失败 ${result.failed_count} 个。`,
+          variant: result.failed_count === 0 ? "default" : "destructive",
+        });
+      } else {
+        await apiRequest(`/rbac/students/${studentIds[0]}`, { method: "DELETE" });
+        toast({ title: "删除成功", description: "学生已移除。" });
+      }
+      setSelectedStudentIds((current) => current.filter((id) => !studentIds.includes(id)));
+      await fetchStudents();
+    } catch (error: unknown) {
+      toast({
+        title: "删除失败",
+        description: error instanceof Error ? error.message : "请稍后重试",
+        variant: "destructive",
+      });
+    }
+  };
 
   return (
     <div className="flex h-full min-h-0 gap-0 overflow-hidden">
@@ -234,6 +318,16 @@ export default function StudentManagementPage() {
           >
             <Users className="h-4 w-4" />
             <span>全部学生</span>
+          </button>
+          <button
+            onClick={() => setSelectedClassId("unassigned")}
+            className={cn(
+              "flex w-full items-center gap-2 px-3 py-2 text-sm rounded-md transition-colors",
+              selectedClassId === "unassigned" ? "bg-primary text-primary-foreground" : "hover:bg-muted"
+            )}
+          >
+            <div className="h-4 w-4 rounded-full border border-current/50" />
+            <span>未分班</span>
           </button>
           {classes.map((c) => (
             <div key={c.id} className="group relative">
@@ -264,9 +358,13 @@ export default function StudentManagementPage() {
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
               <h1 className="text-base font-bold tracking-tight">
-                {selectedClassId === "all" ? "全部学生" : classes.find(c => c.id === selectedClassId)?.name}
+                {selectedClassId === "all"
+                  ? "全部学生"
+                  : selectedClassId === "unassigned"
+                    ? "未分班学生"
+                    : selectedClassName}
               </h1>
-              <p className="text-sm text-muted-foreground">管理学生账号，初始密码默认为手机号。</p>
+              <p className="text-sm text-muted-foreground">管理学生账号，初始密码默认为手机号；无手机号时默认为学号。</p>
             </div>
             <div className="flex items-center gap-2">
               <Button variant="outline" onClick={() => setIsImportDialogOpen(true)}>
@@ -290,28 +388,57 @@ export default function StudentManagementPage() {
             />
           </div>
 
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Checkbox
+                aria-label="全选当前列表学生"
+                checked={allVisibleSelected}
+                onCheckedChange={toggleSelectAllVisible}
+              />
+              <span>{selectedVisibleCount > 0 ? `已选中 ${selectedVisibleCount} 名学生` : "全选当前列表"}</span>
+              {isRefreshing ? <span className="text-xs text-muted-foreground">加载中...</span> : null}
+            </div>
+            {selectedStudentIds.length > 0 ? (
+              <Button variant="destructive" size="sm" onClick={() => void deleteStudents(selectedStudentIds)}>
+                <Trash2 className="mr-2 h-4 w-4" />
+                批量删除
+              </Button>
+            ) : null}
+          </div>
+
           <div className="border rounded-xl bg-card overflow-hidden shadow-sm">
             <Table>
               <TableHeader className="bg-muted/30">
                 <TableRow>
+                  <TableHead className="w-[56px]">
+                    <span className="sr-only">选择</span>
+                  </TableHead>
                   <TableHead>姓名</TableHead>
-                  <TableHead>手机号 (账号)</TableHead>
+                  <TableHead>账号</TableHead>
                   <TableHead>学号</TableHead>
                   <TableHead>班级</TableHead>
                   {showOwnershipColumn && <TableHead>归属</TableHead>}
                   <TableHead className="w-[80px]">状态</TableHead>
+                  <TableHead className="w-[96px] text-right">操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading ? (
-                  <TableRow><TableCell colSpan={showOwnershipColumn ? 6 : 5} className="text-center py-12 text-muted-foreground animate-pulse">正在加载...</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={showOwnershipColumn ? 8 : 7} className="text-center py-12 text-muted-foreground animate-pulse">正在加载...</TableCell></TableRow>
                 ) : filteredStudents.length === 0 ? (
-                  <TableRow><TableCell colSpan={showOwnershipColumn ? 6 : 5} className="text-center py-12 text-muted-foreground">未找到匹配的学生。</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={showOwnershipColumn ? 8 : 7} className="text-center py-12 text-muted-foreground">未找到匹配的学生。</TableCell></TableRow>
                 ) : (
                   filteredStudents.map((student) => (
                     <TableRow key={student.id}>
+                      <TableCell>
+                        <Checkbox
+                          aria-label={`选择 ${student.full_name}`}
+                          checked={selectedStudentIds.includes(student.id)}
+                          onCheckedChange={() => toggleStudentSelection(student.id)}
+                        />
+                      </TableCell>
                       <TableCell className="font-semibold text-foreground/80">{student.full_name}</TableCell>
-                      <TableCell className="text-muted-foreground font-mono text-xs">{student.phone}</TableCell>
+                      <TableCell className="text-muted-foreground font-mono text-xs">{student.phone || student.username}</TableCell>
                       <TableCell className="text-muted-foreground">{student.student_id || "-"}</TableCell>
                       <TableCell>
                         <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-muted text-[10px] font-medium text-muted-foreground">
@@ -334,6 +461,17 @@ export default function StudentManagementPage() {
                       )}
                       <TableCell>
                         <span className={cn("h-2 w-2 rounded-full inline-block", student.is_active ? "bg-emerald-500" : "bg-rose-500")} />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={`删除 ${student.full_name}`}
+                          className="text-destructive hover:text-destructive"
+                          onClick={() => void deleteStudents([student.id])}
+                        >
+                          删除
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))
@@ -392,10 +530,10 @@ export default function StudentManagementPage() {
 
       <Dialog open={isImportDialogOpen} onOpenChange={setIsImportDialogOpen}>
         <DialogContent className="sm:max-w-[500px]">
-          <DialogHeader>
-            <DialogTitle>批量导入学生</DialogTitle>
-            <DialogDescription>
-              {selectedClassId !== "all" ? `正在向 "${classes.find(c => c.id === selectedClassId)?.name}" 导入学生` : "导入学生数据"}
+            <DialogHeader>
+              <DialogTitle>批量导入学生</DialogTitle>
+              <DialogDescription>
+              {isScopedClassSelected ? `正在向 ${selectedClassName} 导入学生` : "导入学生数据"}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
@@ -403,7 +541,10 @@ export default function StudentManagementPage() {
               <Info className="w-5 h-5 text-blue-600 shrink-0" />
               <div className="text-sm">
                 <p className="font-semibold text-blue-900">格式要求：</p>
-                <p className="text-blue-800/80">必须包含"姓名"和"手机号"列。{selectedClassId === "all" ? "将作为未分配班级学生导入。" : "导入的学生将自动加入当前班级。"}</p>
+                <p className="text-blue-800/80">
+                  必须包含"姓名"，并提供"手机号"或"学号"。无手机号时使用学号作为账号和初始密码；识别到班级会自动创建或复用班级。
+                  {isScopedClassSelected ? "如果文件中没有班级，导入的学生将自动加入当前班级。" : ""}
+                </p>
               </div>
             </div>
             <div

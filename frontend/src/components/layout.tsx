@@ -116,7 +116,8 @@ export function Layout() {
   const isQuestionImportPage = location.pathname === "/questions/import";
   const isExamWorkflowPage =
     location.pathname === "/exams/practice/create" ||
-    location.pathname.startsWith("/exams/practice/edit/");
+    location.pathname.startsWith("/exams/practice/edit/") ||
+    /^\/exams\/[^/]+\/view$/.test(location.pathname);
   const isFullScreenPage = isKnowledgePage || isGradingPage || isQuestionImportPage;
   const [examMenuOpen, setExamMenuOpen] = useState(false);
   const [questionMenuOpen, setQuestionMenuOpen] = useState(false);

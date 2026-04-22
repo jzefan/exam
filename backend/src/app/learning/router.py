@@ -14,6 +14,7 @@ from app.learning import service
 from app.learning.schemas import (
     CatalogPhotoRecognizeRequest,
     CatalogPhotoRecognizeResponse,
+    CourseOptionResponse,
     DirectionCreate,
     DirectionResponse,
     FlowData,
@@ -97,6 +98,12 @@ async def delete_major(major_id: uuid.UUID, db: DB, _: WriteUser) -> None:
 async def list_directions(major_id: uuid.UUID, db: DB, user: CurrentUser) -> list[DirectionResponse]:
     directions = await service.list_directions(db, major_id, user=user, is_platform_admin=False)
     return [DirectionResponse.model_validate(direction) for direction in directions]
+
+
+@router.get("/courses", response_model=list[CourseOptionResponse])
+async def list_courses(db: DB, user: CurrentUser) -> list[CourseOptionResponse]:
+    courses = await service.list_course_options(db, user=user, is_platform_admin=False)
+    return [CourseOptionResponse.model_validate(course) for course in courses]
 
 
 @router.get("/directions/{direction_id}", response_model=DirectionResponse)

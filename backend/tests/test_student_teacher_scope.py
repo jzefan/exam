@@ -6,7 +6,7 @@ from app.auth.models import User
 from app.auth.schemas import UserCreate
 from app.auth.security import create_access_token
 from app.auth.service import create_user
-from app.rbac.models import Class, Organization, Role
+from app.rbac.models import Class, Organization, Role, TeacherStudent
 from app.rbac.schemas import StudentCreate
 from app.rbac.service import create_student, assign_unowned_students_to_single_teacher, ensure_teacher_student_link
 
@@ -246,3 +246,126 @@ async def test_teacher_cannot_delete_other_teachers_class(
     response = await client.delete(f"/api/rbac/students/classes/{foreign_class.id}")
 
     assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_teacher_can_filter_unassigned_students(client: AsyncClient, db_session) -> None:
+    org = await _create_org_with_roles(db_session)
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-unassigned-filter",
+        email="teacher-unassigned-filter@example.com",
+        full_name="Teacher Unassigned Filter",
+    )
+    assigned_class = Class(name="有班级", org_id=org.id, created_by=teacher.id)
+    db_session.add(assigned_class)
+    await db_session.flush()
+    await create_student(
+        db_session,
+        org.id,
+        StudentCreate(full_name="Assigned Student", phone="13900000007", student_id="S007", class_id=assigned_class.id),
+        owner_teacher_id=teacher.id,
+    )
+    unassigned_student = await create_student(
+        db_session,
+        org.id,
+        StudentCreate(full_name="Unassigned Student", phone="13900000008", student_id="S008"),
+        owner_teacher_id=teacher.id,
+    )
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    response = await client.get("/api/rbac/students?unassigned=true")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["id"] for item in payload] == [str(unassigned_student.id)]
+    assert payload[0]["class_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_teacher_delete_only_removes_current_teacher_link_for_shared_student(
+    client: AsyncClient, db_session
+) -> None:
+    org = await _create_org_with_roles(db_session)
+    teacher_a = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-delete-shared-a",
+        email="teacher-delete-shared-a@example.com",
+        full_name="Teacher Delete Shared A",
+    )
+    teacher_b = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-delete-shared-b",
+        email="teacher-delete-shared-b@example.com",
+        full_name="Teacher Delete Shared B",
+    )
+    shared_student = await create_student(
+        db_session,
+        org.id,
+        StudentCreate(full_name="Shared Delete Student", phone="13900000010", student_id="S010"),
+        owner_teacher_id=teacher_a.id,
+    )
+    await ensure_teacher_student_link(db_session, teacher_b.id, shared_student.id)
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher_a.id, '')}"})
+    response = await client.delete(f"/api/rbac/students/{shared_student.id}")
+
+    assert response.status_code == 204
+
+    await db_session.refresh(shared_student)
+    remaining_links = (
+        await db_session.execute(
+            select(TeacherStudent.teacher_id).where(TeacherStudent.student_id == shared_student.id)
+        )
+    ).scalars().all()
+    assert remaining_links == [teacher_b.id]
+    assert shared_student.deleted_at is None
+    assert shared_student.owner_teacher_id == teacher_b.id
+
+
+@pytest.mark.asyncio
+async def test_teacher_can_batch_remove_students_from_current_list(client: AsyncClient, db_session) -> None:
+    org = await _create_org_with_roles(db_session)
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-batch-delete",
+        email="teacher-batch-delete@example.com",
+        full_name="Teacher Batch Delete",
+    )
+    student_a = await create_student(
+        db_session,
+        org.id,
+        StudentCreate(full_name="Batch Delete A", phone="13900000011", student_id="S011"),
+        owner_teacher_id=teacher.id,
+    )
+    student_b = await create_student(
+        db_session,
+        org.id,
+        StudentCreate(full_name="Batch Delete B", phone="13900000012", student_id="S012"),
+        owner_teacher_id=teacher.id,
+    )
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    response = await client.post(
+        "/api/rbac/students/batch-delete",
+        json={"student_ids": [str(student_a.id), str(student_b.id)]},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"success_count": 2, "failed_count": 0, "errors": []}
+
+    await db_session.refresh(student_a)
+    await db_session.refresh(student_b)
+    assert student_a.deleted_at is not None
+    assert student_b.deleted_at is not None
+
+    list_response = await client.get("/api/rbac/students")
+    assert list_response.status_code == 200
+    assert list_response.json() == []

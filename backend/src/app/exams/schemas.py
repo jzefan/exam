@@ -81,6 +81,7 @@ class ExamCreate(BaseModel):
     status: ExamStatus = "draft"
     position_id: uuid.UUID | None = None
     max_switch_count: int = Field(default=0, ge=0)
+    allow_retake: bool = False
     show_result: bool = False
     notes_template: str | None = None
     question_mode: ExamQuestionMode | None = None
@@ -100,6 +101,7 @@ class ExamUpdate(BaseModel):
     status: ExamStatus | None = None
     position_id: uuid.UUID | None = None
     max_switch_count: int | None = Field(default=None, ge=0)
+    allow_retake: bool | None = None
     show_result: bool | None = None
     notes_template: str | None = None
     question_mode: ExamQuestionMode | None = None
@@ -123,6 +125,7 @@ class ExamResponse(BaseModel):
     position_id: uuid.UUID | None
     position_name: str | None = None
     max_switch_count: int
+    allow_retake: bool
     show_result: bool
     notes_template: str | None
     question_mode: ExamQuestionMode | None = None

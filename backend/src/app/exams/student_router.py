@@ -1,5 +1,7 @@
+import asyncio
 import re
 import uuid
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
@@ -8,6 +10,9 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser
+from app.code_runner.client import run_code_via_judge_runner
+from app.code_runner.service import run_code
+from app.config import settings
 from app.database import async_session, get_db
 from app.exams.models import (
     AppealStatus,
@@ -17,12 +22,17 @@ from app.exams.models import (
     StudentExamAnswer,
     StudentExamAppeal,
     StudentNotification,
+    StudentExamSubmission,
+    StudentExamSubmissionAnswer,
     StudentQuestionProgress,
 )
 from app.exams.student_schemas import (
     AppealCreateRequest,
     AppealResponse,
     SaveAnswersRequest,
+    StartExamRequest,
+    StudentCodeRunRequest,
+    StudentCodeRunResponse,
     SubmitExamRequest,
     SubmitExamResponse,
     StudentNotificationResponse,
@@ -187,6 +197,61 @@ async def _schedule_subjective_grading_tasks(background_tasks: BackgroundTasks, 
         background_tasks.add_task(_run_subjective_grading_tasks, task_ids)
 
 
+async def _post_submit_housekeeping(
+    *,
+    exam_id: uuid.UUID,
+    student_id: uuid.UUID,
+    wrong_question_ids: list[uuid.UUID],
+    task_ids: list[str],
+    now: datetime,
+) -> None:
+    """Run after submit commit — batches wrong-answer progress upserts, then AI grading.
+
+    Kept off the hot path so 150 concurrent submissions don't each hold a long
+    transaction through N+1 progress SELECTs. Grading tasks are created
+    synchronously in submit (cheap) so tests/clients see them immediately.
+    """
+    if wrong_question_ids:
+        async with async_session() as db:
+            try:
+                # One query instead of N: fetch all existing progress rows at once.
+                existing_result = await db.execute(
+                    select(StudentQuestionProgress).where(
+                        StudentQuestionProgress.student_id == student_id,
+                        StudentQuestionProgress.question_id.in_(wrong_question_ids),
+                    )
+                )
+                existing = {row.question_id: row for row in existing_result.scalars().all()}
+                new_rows: list[StudentQuestionProgress] = []
+                for qid in wrong_question_ids:
+                    progress = existing.get(qid)
+                    if progress is None:
+                        new_rows.append(
+                            StudentQuestionProgress(
+                                student_id=student_id,
+                                question_id=qid,
+                                last_exam_id=exam_id,
+                                wrong_count=1,
+                                mastered=False,
+                                last_wrong_at=now,
+                            )
+                        )
+                    else:
+                        progress.last_exam_id = exam_id
+                        progress.wrong_count += 1
+                        progress.last_wrong_at = now
+                        progress.mastered = False
+                        progress.mastered_at = None
+                if new_rows:
+                    db.add_all(new_rows)
+                await db.commit()
+            except Exception:
+                await db.rollback()
+
+    if task_ids:
+        await _run_subjective_grading_tasks(task_ids)
+
+
 def _build_objective_feedback(
     *,
     correct: bool,
@@ -251,10 +316,12 @@ def _build_code_feedback(
     matched_points: list[str],
     missing_points: list[str],
     language: str | None,
+    question_mode: str | None,
     function_name: str | None,
 ) -> dict[str, Any]:
     syntax_score = round(min(actual_score, max_score * 0.4), 2)
     logic_score = round(max(actual_score - syntax_score, 0), 2)
+    is_function_mode = question_mode == "function"
     return {
         "dimensions": [
             {
@@ -275,12 +342,18 @@ def _build_code_feedback(
             },
         ],
         "strengths": [
-            *( [f"函数命名围绕 {function_name} 展开。"] if function_name else [] ),
+            *( [f"函数命名围绕 {function_name} 展开。"] if is_function_mode and function_name else [] ),
             *[f"已覆盖：{point}" for point in matched_points[:3]],
         ],
         "deductions": [f"仍缺少：{point}" for point in missing_points[:3]],
         "suggestions": (
-            ["继续补全边界处理、返回值和示例测试。"] if missing_points else ["核心逻辑较完整，可继续优化时间复杂度与可读性。"]
+            (
+                ["继续补全边界处理、输入输出和示例测试。"]
+                if missing_points and not is_function_mode
+                else ["继续补全边界处理、返回值和示例测试。"]
+                if missing_points
+                else ["核心逻辑较完整，可继续优化时间复杂度与可读性。"]
+            )
         ),
     }
 
@@ -389,7 +462,10 @@ def _grade_question(question: Question, answer_content: dict[str, Any], score: f
         actual_score = round(score * coverage, 2)
         language = answer_content.get("language")
         function_name = None
+        question_mode = None
         if isinstance(question.content, dict):
+            raw_mode = question.content.get("mode")
+            question_mode = str(raw_mode) if raw_mode else None
             raw_name = question.content.get("function_name")
             function_name = str(raw_name) if raw_name else None
         correct = coverage >= 0.6
@@ -402,6 +478,7 @@ def _grade_question(question: Question, answer_content: dict[str, Any], score: f
                 matched_points=matched_points,
                 missing_points=missing_points,
                 language=str(language) if isinstance(language, str) else None,
+                question_mode=question_mode,
                 function_name=function_name,
             ),
         )
@@ -469,16 +546,71 @@ def _ensure_exam_open(exam: Exam) -> None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exam has ended")
 
 
+def _ensure_exam_attempt_in_progress(exam_student: ExamStudent) -> None:
+    if exam_student.started_at is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exam not started")
+    if exam_student.submitted_at is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exam already submitted")
+
+
+def _can_start_retake(exam: Exam, exam_student: ExamStudent) -> bool:
+    if exam_student.submitted_at is None:
+        return False
+    if not exam.allow_retake:
+        return False
+    now = _utcnow()
+    start_time = _as_utc(exam.start_time)
+    end_time = _as_utc(exam.end_time)
+    if exam.status == "closed":
+        return False
+    if start_time and start_time > now:
+        return False
+    if end_time and end_time < now:
+        return False
+    return True
+
+
+def _reset_exam_student_for_retake(exam_student: ExamStudent) -> None:
+    exam_student.started_at = _utcnow()
+    exam_student.saved_answers = {}
+    exam_student.submitted_at = None
+    exam_student.switch_count = 0
+    exam_student.latest_submission_id = None
+    exam_student.grading_status = GradingStatus.REVIEWED.value
+    exam_student.objective_score = None
+    exam_student.subjective_score = None
+    exam_student.score = None
+    exam_student.ai_scored_at = None
+    exam_student.reviewed_at = None
+    exam_student.graded_at = None
+
+
 @router.post("/exams/{exam_id}/start", response_model=StudentExamStartResponse)
 async def start_exam(
     exam_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
     user: CurrentUser,
+    payload: StartExamRequest | None = None,
 ) -> StudentExamStartResponse:
     exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)
     _ensure_exam_open(exam)
     if exam_student.submitted_at is not None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exam already submitted")
+        wants_retake = bool(payload and payload.retake)
+        if not wants_retake:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exam already submitted")
+        if not _can_start_retake(exam, exam_student):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Retake is not allowed")
+
+        _reset_exam_student_for_retake(exam_student)
+        await db.execute(
+            delete(StudentExamAnswer).where(
+                StudentExamAnswer.exam_id == exam.id,
+                StudentExamAnswer.student_id == user.id,
+            )
+        )
+        await db.commit()
+        await db.refresh(exam)
+        exam_student = next(item for item in exam.exam_students if item.student_id == user.id)
 
     if exam_student.started_at is None:
         exam_student.started_at = _utcnow()
@@ -504,12 +636,54 @@ async def start_exam(
         title=exam.title,
         duration_minutes=exam.duration_minutes,
         max_switch_count=exam.max_switch_count,
+        allow_retake=exam.allow_retake,
         started_at=exam_student.started_at,
         end_time=exam.end_time,
         questions=questions,
         saved_answers={str(key): value for key, value in (exam_student.saved_answers or {}).items()},
         switch_count=exam_student.switch_count,
     )
+
+
+@router.post("/exams/{exam_id}/questions/{question_id}/run", response_model=StudentCodeRunResponse)
+async def run_exam_question_code(
+    exam_id: uuid.UUID,
+    question_id: uuid.UUID,
+    payload: StudentCodeRunRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+) -> StudentCodeRunResponse:
+    exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)
+    _ensure_exam_open(exam)
+    _ensure_exam_attempt_in_progress(exam_student)
+
+    question = (
+        await db.execute(
+            select(Question).where(
+                Question.id == question_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if question is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found")
+
+    if all(exam_question.question_id != question_id for exam_question in exam.exam_questions):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Question does not belong to exam")
+
+    if question.type != QuestionType.CODE:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Question is not a code question")
+
+    sample_tests: list[dict[str, Any]] = []
+    if isinstance(question.content, dict):
+        raw_sample_tests = question.content.get("sample_tests")
+        if isinstance(raw_sample_tests, list):
+            sample_tests = [item for item in raw_sample_tests if isinstance(item, dict)]
+
+    if settings.judge_runner_url:
+        result = await run_code_via_judge_runner(settings.judge_runner_url, payload, sample_tests)
+    else:
+        result = await asyncio.to_thread(run_code, payload, sample_tests=sample_tests)
+    return StudentCodeRunResponse.model_validate(result.model_dump())
 
 
 @router.post("/exams/{exam_id}/answers")
@@ -526,7 +700,7 @@ async def save_answers(
 
     saved_answers = dict(exam_student.saved_answers or {})
     for item in payload.answers:
-        saved_answers[str(item.question_id)] = item.answer_content
+        saved_answers[str(item.question_id)] = deepcopy(item.answer_content)
     exam_student.saved_answers = saved_answers
     await db.commit()
     return {"saved": len(payload.answers)}
@@ -563,8 +737,23 @@ async def submit_exam(
 
     answers_map = dict(exam_student.saved_answers or {})
     for item in payload.answers if payload else []:
-        answers_map[str(item.question_id)] = item.answer_content
+        answers_map[str(item.question_id)] = deepcopy(item.answer_content)
     exam_student.saved_answers = answers_map
+
+    now = _utcnow()
+    next_attempt_no = exam_student.submission_count + 1
+    submission = StudentExamSubmission(
+        exam_id=exam.id,
+        student_id=user.id,
+        attempt_no=next_attempt_no,
+        submitted_at=now,
+        grading_status=GradingStatus.REVIEWED.value,
+        objective_score=0.0,
+        subjective_score=0.0,
+        score=0.0,
+    )
+    db.add(submission)
+    await db.flush()
 
     await db.execute(
         delete(StudentExamAnswer).where(
@@ -573,28 +762,46 @@ async def submit_exam(
         )
     )
 
+    sorted_exam_questions = sorted(exam.exam_questions, key=lambda item: item.order)
+
+    # Pass 1: grade objectives in-memory, collect subjective payloads for deferred creation.
     objective_score = 0.0
-    subjective_score = 0.0
-    now = _utcnow()
-    subjective_task_ids: list[str] = []
+    answer_rows: list[StudentExamAnswer] = []
+    submission_answer_rows: list[StudentExamSubmissionAnswer] = []
+    wrong_question_ids: list[uuid.UUID] = []
+    subjective_payloads: list[dict[str, Any]] = []
+    has_subjective = False
     role_binding_version: int | None = None
-    for exam_question in sorted(exam.exam_questions, key=lambda item: item.order):
+
+    for exam_question in sorted_exam_questions:
         question = exam_question.question
-        answer_content = answers_map.get(str(question.id), {})
+        answer_content = deepcopy(answers_map.get(str(question.id), {}))
         question_score = exam_question.score_override if exam_question.score_override is not None else question.score
         question_type = question.type.value if isinstance(question.type, QuestionType) else str(question.type)
+        is_subjective = _is_subjective_question_type(question_type)
 
-        if _is_subjective_question_type(question_type):
+        if is_subjective:
+            has_subjective = True
             if role_binding_version is None:
                 role_binding_version = await _get_active_role_binding_version(db)
             score_awarded = 0.0
             is_correct = False
-            feedback = {}
+            feedback: dict[str, Any] = {}
+            subjective_payloads.append(
+                _build_grading_task_payload(
+                    exam=exam,
+                    question=question,
+                    question_score=question_score,
+                    answer_content=answer_content,
+                    role_binding_version=role_binding_version,
+                    source_business_id=f"{exam.id}:{question.id}:{user.id}:{submission.id}",
+                )
+            )
         else:
             score_awarded, is_correct, feedback = _grade_question(question, answer_content, question_score)
             objective_score += score_awarded
 
-        db.add(
+        answer_rows.append(
             StudentExamAnswer(
                 exam_id=exam.id,
                 student_id=user.id,
@@ -605,49 +812,38 @@ async def submit_exam(
                 feedback=feedback,
             )
         )
-
-        if _is_subjective_question_type(question_type):
-            task = await create_grading_task(
-                db,
-                _build_grading_task_payload(
-                    exam=exam,
-                    question=question,
-                    question_score=question_score,
-                    answer_content=answer_content,
-                    role_binding_version=role_binding_version or 1,
-                    source_business_id=f"{exam.id}:{question.id}:{user.id}",
-                ),
-            )
-            subjective_task_ids.append(str(task.id))
-
-        progress_result = await db.execute(
-            select(StudentQuestionProgress).where(
-                StudentQuestionProgress.student_id == user.id,
-                StudentQuestionProgress.question_id == question.id,
-            )
-        )
-        progress = progress_result.scalar_one_or_none()
-        if progress is None:
-            progress = StudentQuestionProgress(
+        submission_answer_rows.append(
+            StudentExamSubmissionAnswer(
+                submission_id=submission.id,
+                exam_id=exam.id,
                 student_id=user.id,
                 question_id=question.id,
-                wrong_count=0,
-                mastered=False,
+                answer_content=answer_content,
+                score_awarded=score_awarded,
+                is_correct=is_correct,
+                feedback=feedback,
             )
-            db.add(progress)
+        )
+        if not is_correct and not is_subjective:
+            wrong_question_ids.append(question.id)
 
-        if not is_correct:
-            progress.last_exam_id = exam.id
-            progress.wrong_count += 1
-            progress.last_wrong_at = now
-            progress.mastered = False
-            progress.mastered_at = None
+    # Single batched insert — one round-trip instead of N.
+    db.add_all(answer_rows)
+    db.add_all(submission_answer_rows)
+
+    # Create grading tasks synchronously so clients see them immediately after submit.
+    task_ids: list[str] = []
+    for payload in subjective_payloads:
+        task = await create_grading_task(db, payload)
+        task_ids.append(str(task.id))
 
     exam_student.submitted_at = now
+    exam_student.latest_submission_id = submission.id
+    exam_student.submission_count = next_attempt_no
     exam_student.objective_score = round(objective_score, 2)
-    exam_student.subjective_score = round(subjective_score, 2)
-    exam_student.score = round(objective_score + subjective_score, 2)
-    if subjective_task_ids:
+    exam_student.subjective_score = 0.0
+    exam_student.score = round(objective_score, 2)
+    if has_subjective:
         exam_student.grading_status = GradingStatus.PENDING_AI.value
         exam_student.ai_scored_at = None
         exam_student.reviewed_at = None
@@ -657,8 +853,24 @@ async def submit_exam(
         exam_student.ai_scored_at = now
         exam_student.reviewed_at = now
         exam_student.graded_at = now
+
+    submission.objective_score = exam_student.objective_score
+    submission.subjective_score = exam_student.subjective_score
+    submission.score = exam_student.score
+    submission.grading_status = exam_student.grading_status
+
     await db.commit()
-    await _schedule_subjective_grading_tasks(background_tasks, subjective_task_ids)
+
+    # Defer non-critical work off the submit request path. Student sees "submitted"
+    # immediately; progress tracking + grading-task creation + AI grading happen async.
+    background_tasks.add_task(
+        _post_submit_housekeeping,
+        exam_id=exam.id,
+        student_id=user.id,
+        wrong_question_ids=wrong_question_ids,
+        task_ids=task_ids,
+        now=now,
+    )
 
     return SubmitExamResponse(
         submitted=True,

@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import AsyncGenerator
+from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -13,8 +14,6 @@ from app.main import app
 from app.models import Base
 from app.rbac.models import Organization, Role, UserOrganization
 
-TEST_DATABASE_URL = "sqlite+aiosqlite:///test.db"
-
 
 @pytest.fixture(scope="session")
 def event_loop():
@@ -24,8 +23,9 @@ def event_loop():
 
 
 @pytest.fixture
-async def db_engine():
-    engine = create_async_engine(TEST_DATABASE_URL, echo=False)
+async def db_engine(tmp_path: Path):
+    test_db = tmp_path / "test.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{test_db}", echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield engine

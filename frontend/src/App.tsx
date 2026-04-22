@@ -11,6 +11,7 @@ import { accessControlProvider } from "./providers/access-control";
 import { getUserRole } from "@/types/rbac";
 import { ThemeProvider } from "./components/theme-provider";
 import { ThemeConfigProvider } from "./components/theme-customizer";
+import { BackgroundTaskNoticeHost } from "./components/ui/background-task-notice-host";
 import { Toaster } from "./components/ui/toaster";
 import { Layout } from "./components/layout";
 import { StudentLayout } from "./components/student-layout";
@@ -38,6 +39,7 @@ import { ExamEdit } from "./pages/exams/edit";
 import { PracticeCreate } from "./pages/exams/practice-create";
 import { ExamStudentsPage } from "./pages/exams/students";
 import { ExamAnalysisPage } from "./pages/exams/analysis";
+import { ExamPaperViewPage } from "./pages/exams/view";
 import { ExamTaking } from "./pages/student/exam-taking";
 import { EditorPage } from "./pages/job-models/editor"
 import { JobModelList } from "./pages/job-models/list"
@@ -182,11 +184,12 @@ function App() {
                 <Route path="/exams">
                   <Route index element={<ExamList />} />
                   <Route path="create" element={<ExamCreate />} />
-                  <Route path="practice/create" element={<PracticeCreate />} />
-                  <Route path="practice/edit/:id" element={<PracticeCreate />} />
-                  <Route path=":id/analysis" element={<ExamAnalysisPage />} />
-                  <Route path="edit/:id" element={<ExamEdit />} />
-                  <Route path="students" element={<ExamStudentsPage />} />
+                <Route path="practice/create" element={<PracticeCreate />} />
+                <Route path="practice/edit/:id" element={<PracticeCreate />} />
+                <Route path=":id/view" element={<ExamPaperViewPage />} />
+                <Route path=":id/analysis" element={<ExamAnalysisPage />} />
+                <Route path="edit/:id" element={<ExamEdit />} />
+                <Route path="students" element={<ExamStudentsPage />} />
                 </Route>
                 <Route path="/tags" element={<TagList />} />
                 <Route path="/knowledge" element={<KnowledgeManagementPage />} />
@@ -251,8 +254,9 @@ function App() {
             </Route>
           </Routes>
         </Refine>
+        <BackgroundTaskNoticeHost />
+        <Toaster />
       </BrowserRouter>
-      <Toaster />
       {import.meta.env.DEV && <Agentation />}
       </ThemeConfigProvider>
     </ThemeProvider>

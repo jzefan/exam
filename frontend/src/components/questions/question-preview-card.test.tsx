@@ -94,4 +94,16 @@ describe("QuestionPreviewCard", () => {
 
     expect(screen.getByText("填")).toBeInTheDocument();
   });
+
+  it("renders knowledge recognition status badges when provided", () => {
+    render(
+      <QuestionPreviewCard
+        question={sampleQuestion}
+        mode="compact"
+        knowledgeRecognitionStatus="running"
+      />,
+    );
+
+    expect(screen.getByText("AI 识别中")).toBeInTheDocument();
+  });
 });

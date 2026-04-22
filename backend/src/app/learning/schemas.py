@@ -39,6 +39,15 @@ class DirectionResponse(BaseModel):
     created_at: datetime
 
 
+class CourseOptionResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    direction_id: uuid.UUID
+    direction_name: str
+    major_id: uuid.UUID
+    major_name: str
+
+
 class KnowledgePointCreate(BaseModel):
     direction_id: uuid.UUID
     parent_id: uuid.UUID | None = None

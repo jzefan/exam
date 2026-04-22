@@ -1,7 +1,7 @@
 import { useList } from "@refinedev/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertCircle, ArrowLeft, Download, LoaderCircle, Upload } from "lucide-react";
+import { AlertCircle, ArrowLeft, BookOpen, Download, LoaderCircle, Search, Upload } from "lucide-react";
 
 import {
   AlertDialog,
@@ -16,6 +16,7 @@ import {
 
 import type { IQuestionBank } from "@/types";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -26,11 +27,16 @@ import {
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { useBackgroundTaskNotice } from "@/hooks/use-background-task-notice";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { ImportReviewEditor } from "./components/import-review-editor";
 import { ImportReviewSidebar } from "./components/import-review-sidebar";
 import { ImportSourceEditor } from "./components/import-source-editor";
+import {
+  clearPersistedQuestionImportJobId,
+  persistQuestionImportJobId,
+} from "./question-knowledge-recognition";
 import type {
   ImportFilter,
   QuestionImportBulkCreateJobResponse,
@@ -70,6 +76,13 @@ async function questionApiFetch<T>(url: string, options?: RequestInit): Promise<
   });
 
   if (!response.ok) {
+    let errorText = "";
+    try {
+      const clonedResponse = typeof response.clone === "function" ? response.clone() : response;
+      errorText = await clonedResponse.text();
+    } catch {
+      errorText = "";
+    }
     const error = await response.json().catch(() => ({}));
     const detail = error.detail;
     if (Array.isArray(detail)) {
@@ -79,7 +92,11 @@ async function questionApiFetch<T>(url: string, options?: RequestInit): Promise<
       });
       throw new Error(messages.join("；") || "请求失败");
     }
-    throw new Error(typeof detail === "string" ? detail : "请求失败");
+    throw new Error(
+      typeof detail === "string"
+        ? detail
+        : errorText.trim() || `请求失败（HTTP ${response.status}）`,
+    );
   }
 
   return response.json() as Promise<T>;
@@ -87,13 +104,27 @@ async function questionApiFetch<T>(url: string, options?: RequestInit): Promise<
 
 const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024;
 
+interface CourseOption {
+  id: string;
+  name: string;
+  direction_id: string;
+  direction_name: string;
+  major_id: string;
+  major_name: string;
+}
+
 function isTerminalImportJobStatus(status: QuestionImportJobResponse["status"]) {
   return status === "completed" || status === "failed" || status === "partial_failed";
 }
 
+const KNOWLEDGE_RECOGNITION_NOTICE_ID = "question-knowledge-recognition";
+const KNOWLEDGE_RECOGNITION_NOTICE_PAGE_PATH = "/questions/import";
+const KNOWLEDGE_RECOGNITION_NOTICE_DESCRIPTION = "可离开当前页面继续其它操作，系统会在后台继续识别知识点。";
+
 export function QuestionImportPage() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { showNotice, dismissNotice } = useBackgroundTaskNotice();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [drafts, setDrafts] = useState<QuestionImportDraft[]>([]);
   const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
@@ -125,22 +156,27 @@ export function QuestionImportPage() {
   const [courseDialogOpen, setCourseDialogOpen] = useState(false);
   const [majors, setMajors] = useState<Array<{ id: string; name: string }>>([]);
   const [directions, setDirections] = useState<Array<{ id: string; name: string }>>([]);
-  const [courses, setCourses] = useState<Array<{ id: string; name: string }>>([]);
+  const [courseOptions, setCourseOptions] = useState<CourseOption[]>([]);
+  const [courseQuery, setCourseQuery] = useState("");
   const [selectedMajorId, setSelectedMajorId] = useState<string>("");
   const [selectedDirectionId, setSelectedDirectionId] = useState<string>("");
   const [selectedCourseId, setSelectedCourseId] = useState<string>("");
-  const [importNotice, setImportNotice] = useState<string | null>(null);
   const [activeImportJobId, setActiveImportJobId] = useState<string | null>(null);
-  const [activeImportJob, setActiveImportJob] = useState<QuestionImportJobResponse | null>(null);
 
   useEffect(() => {
-    if (!courseDialogOpen || majors.length > 0) return;
-    questionApiFetch<Array<{ id: string; name: string }>>("/api/knowledge/majors")
-      .then(setMajors)
+    if (!courseDialogOpen || (majors.length > 0 && courseOptions.length > 0)) return;
+    Promise.all([
+      questionApiFetch<Array<{ id: string; name: string }>>("/api/knowledge/majors"),
+      questionApiFetch<CourseOption[]>("/api/knowledge/courses"),
+    ])
+      .then(([nextMajors, nextCourses]) => {
+        setMajors(nextMajors);
+        setCourseOptions(nextCourses);
+      })
       .catch((error: unknown) => {
-        setParseError(error instanceof Error ? error.message : "加载专业列表失败");
+        setParseError(error instanceof Error ? error.message : "加载课程列表失败");
       });
-  }, [courseDialogOpen, majors.length]);
+  }, [courseDialogOpen, courseOptions.length, majors.length]);
 
   useEffect(() => {
     if (!selectedMajorId) {
@@ -159,22 +195,9 @@ export function QuestionImportPage() {
 
   useEffect(() => {
     if (!selectedDirectionId) {
-      setCourses([]);
       setSelectedCourseId("");
       return;
     }
-    questionApiFetch<{ nodes: Array<{ id: string; data: { name: string; parent_id: string | null } }> }>(
-      `/api/knowledge/directions/${selectedDirectionId}/tree`,
-    )
-      .then((data) => {
-        const topLevel = data.nodes
-          .filter((node) => !node.data.parent_id)
-          .map((node) => ({ id: node.id, name: node.data.name }));
-        setCourses(topLevel);
-      })
-      .catch((error: unknown) => {
-        setParseError(error instanceof Error ? error.message : "加载课程列表失败");
-      });
   }, [selectedDirectionId]);
 
   useEffect(() => {
@@ -190,23 +213,28 @@ export function QuestionImportPage() {
         );
         if (cancelled) return;
 
-        setActiveImportJob(job);
         if (isTerminalImportJobStatus(job.status)) {
           setActiveImportJobId(null);
+          clearPersistedQuestionImportJobId();
+          dismissNotice(KNOWLEDGE_RECOGNITION_NOTICE_ID);
           const summary = `知识点识别完成：成功匹配 ${job.matched_count} 道，未匹配 ${job.unmatched_count} 道，失败 ${job.failed_count} 道`;
-          setImportNotice(summary);
           toast({ title: "题目知识点识别完成", description: summary });
           return;
         }
 
-        setImportNotice(
-          `题目已导入，知识点正在后台识别（${job.processed_count}/${job.total_count}）`,
-        );
+        showNotice({
+          id: KNOWLEDGE_RECOGNITION_NOTICE_ID,
+          title: "知识点正在后台识别",
+          progressText: `${job.processed_count}/${job.total_count}`,
+          description: KNOWLEDGE_RECOGNITION_NOTICE_DESCRIPTION,
+          pagePath: KNOWLEDGE_RECOGNITION_NOTICE_PAGE_PATH,
+        });
         timer = window.setTimeout(pollJobStatus, 2000);
       } catch (error) {
         if (cancelled) return;
-        setImportNotice(null);
         setActiveImportJobId(null);
+        clearPersistedQuestionImportJobId();
+        dismissNotice(KNOWLEDGE_RECOGNITION_NOTICE_ID);
         toast({
           title: "知识点识别状态查询失败",
           description: error instanceof Error ? error.message : "请稍后在题目列表中刷新查看结果",
@@ -223,7 +251,7 @@ export function QuestionImportPage() {
         window.clearTimeout(timer);
       }
     };
-  }, [activeImportJobId, toast]);
+  }, [activeImportJobId, dismissNotice, showNotice, toast]);
 
   const selectedDraft = useMemo(
     () => drafts.find((draft) => draft.draft_id === selectedDraftId) ?? null,
@@ -237,6 +265,19 @@ export function QuestionImportPage() {
   const missingAnswerCount = drafts.filter(
     (draft) => !draft.answer_text?.trim() || draft.issues.some(isMissingAnswerIssue),
   ).length;
+  const filteredCourseOptions = useMemo(() => {
+    const normalizedQuery = courseQuery.trim().toLowerCase();
+    return courseOptions.filter((course) => {
+      if (selectedMajorId && course.major_id !== selectedMajorId) return false;
+      if (selectedDirectionId && course.direction_id !== selectedDirectionId) return false;
+      if (!normalizedQuery) return true;
+      return [course.name, course.direction_name, course.major_name]
+        .join(" ")
+        .toLowerCase()
+        .includes(normalizedQuery);
+    });
+  }, [courseOptions, courseQuery, selectedDirectionId, selectedMajorId]);
+  const selectedCourse = courseOptions.find((course) => course.id === selectedCourseId) ?? null;
 
   useEffect(() => {
     if (drafts.length === 0) {
@@ -416,7 +457,6 @@ export function QuestionImportPage() {
       return;
     }
     setParseError(null);
-    setImportNotice(null);
     setCourseDialogOpen(true);
   };
 
@@ -454,7 +494,7 @@ export function QuestionImportPage() {
         },
       );
       setActiveImportJobId(response.job_id);
-      setActiveImportJob(null);
+      persistQuestionImportJobId(response.job_id);
       const successfulIds = new Set(importableDraftIds);
       setDrafts((current) => current.filter((draft) => !successfulIds.has(draft.draft_id)));
       setSourceEdits((current) => {
@@ -471,7 +511,13 @@ export function QuestionImportPage() {
       });
       const importedCount = response.created;
       toast({ title: `已导入 ${importedCount} 道题，知识点正在后台识别` });
-      setImportNotice(`已导入 ${importedCount} 道题，知识点正在后台识别`);
+      showNotice({
+        id: KNOWLEDGE_RECOGNITION_NOTICE_ID,
+        title: "知识点正在后台识别",
+        progressText: `0/${importedCount}`,
+        description: KNOWLEDGE_RECOGNITION_NOTICE_DESCRIPTION,
+        pagePath: KNOWLEDGE_RECOGNITION_NOTICE_PAGE_PATH,
+      });
     } catch (error) {
       setParseError(error instanceof Error ? error.message : "导入失败");
     } finally {
@@ -520,7 +566,11 @@ export function QuestionImportPage() {
             <Button 
               variant="outline" 
               size="sm" 
-              onClick={() => showReviewer ? setDrafts([]) : navigate("/questions")} 
+              onClick={() =>
+                showReviewer
+                  ? setDrafts([])
+                  : navigate(activeImportJobId ? `/questions?import_job_id=${activeImportJobId}` : "/questions")
+              } 
               className="size-8 rounded-lg border-slate-200 p-0 transition-all hover:bg-slate-50"
             >
               <ArrowLeft className="h-4 w-4 text-slate-600" />
@@ -768,63 +818,134 @@ export function QuestionImportPage() {
         )}
       </main>
 
-      {(importNotice || (activeImportJob && !isTerminalImportJobStatus(activeImportJob.status))) && (
-        <div className="pointer-events-none fixed bottom-6 right-6 z-40">
-          <Alert className="pointer-events-auto max-w-sm rounded-2xl border-amber-200 bg-amber-50 text-amber-800 shadow-lg">
-            <AlertCircle size={16} />
-            <AlertDescription className="text-xs">
-              {importNotice ??
-                `题目已导入，知识点正在后台识别（${activeImportJob?.processed_count ?? 0}/${activeImportJob?.total_count ?? 0}）`}
-            </AlertDescription>
-          </Alert>
-        </div>
-      )}
-
       <AlertDialog open={courseDialogOpen} onOpenChange={setCourseDialogOpen}>
-        <AlertDialogContent className="max-w-lg">
+        <AlertDialogContent className="max-w-2xl">
           <AlertDialogHeader>
             <AlertDialogTitle>选择所属课程</AlertDialogTitle>
             <AlertDialogDescription>
-              题目将按照所选课程进行 AI 知识点匹配；未匹配到的题目会在导入后提示。
+              直接搜索课程即可；如果课程较多，也可以先按专业和方向缩小范围。
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <div className="grid gap-3 py-2">
-            <div className="space-y-1">
-              <Label className="text-xs font-bold text-slate-500">专业</Label>
-              <Select value={selectedMajorId} onValueChange={(value) => { setSelectedMajorId(value); setSelectedDirectionId(""); setSelectedCourseId(""); }}>
-                <SelectTrigger><SelectValue placeholder="请选择专业" /></SelectTrigger>
-                <SelectContent>
-                  {majors.map((major) => (
-                    <SelectItem key={major.id} value={major.id}>{major.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+          <div className="grid gap-4 py-2">
+            <div className="space-y-2">
+              <Label className="text-xs font-bold text-slate-500">搜索课程</Label>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
+                <Input
+                  value={courseQuery}
+                  onChange={(event) => setCourseQuery(event.target.value)}
+                  placeholder="输入课程名称，例如 MySQL、数据库、Python..."
+                  className="h-11 rounded-xl border-slate-200 bg-white pl-10 text-sm font-medium"
+                />
+              </div>
             </div>
-            <div className="space-y-1">
-              <Label className="text-xs font-bold text-slate-500">方向</Label>
-              <Select value={selectedDirectionId} disabled={!selectedMajorId} onValueChange={(value) => { setSelectedDirectionId(value); setSelectedCourseId(""); }}>
-                <SelectTrigger><SelectValue placeholder={selectedMajorId ? "请选择方向" : "请先选择专业"} /></SelectTrigger>
-                <SelectContent>
-                  {directions.map((direction) => (
-                    <SelectItem key={direction.id} value={direction.id}>{direction.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-slate-500">专业筛选</Label>
+                <Select
+                  value={selectedMajorId || "__all__"}
+                  onValueChange={(value) => {
+                    const nextMajorId = value === "__all__" ? "" : value;
+                    setSelectedMajorId(nextMajorId);
+                    setSelectedDirectionId("");
+                    setSelectedCourseId("");
+                  }}
+                >
+                  <SelectTrigger className="h-10 rounded-xl">
+                    <SelectValue placeholder="全部专业" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__all__">全部专业</SelectItem>
+                    {majors.map((major) => (
+                      <SelectItem key={major.id} value={major.id}>{major.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-slate-500">方向筛选</Label>
+                <Select
+                  value={selectedDirectionId || "__all__"}
+                  disabled={!selectedMajorId}
+                  onValueChange={(value) => {
+                    setSelectedDirectionId(value === "__all__" ? "" : value);
+                    setSelectedCourseId("");
+                  }}
+                >
+                  <SelectTrigger className="h-10 rounded-xl">
+                    <SelectValue placeholder={selectedMajorId ? "全部方向" : "先选择专业"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__all__">全部方向</SelectItem>
+                    {directions.map((direction) => (
+                      <SelectItem key={direction.id} value={direction.id}>{direction.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
-            <div className="space-y-1">
-              <Label className="text-xs font-bold text-slate-500">课程（主技能）</Label>
-              <Select value={selectedCourseId} disabled={!selectedDirectionId} onValueChange={setSelectedCourseId}>
-                <SelectTrigger><SelectValue placeholder={selectedDirectionId ? "请选择课程" : "请先选择方向"} /></SelectTrigger>
-                <SelectContent>
-                  {courses.map((course) => (
-                    <SelectItem key={course.id} value={course.id}>{course.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+
+            <div className="overflow-hidden rounded-2xl border border-slate-100 bg-slate-50/60">
+              <div className="flex items-center justify-between border-b border-slate-100 bg-white px-3 py-2">
+                <div className="flex items-center gap-2 text-xs font-bold text-slate-500">
+                  <BookOpen size={14} />
+                  可选课程
+                </div>
+                <span className="text-xs font-medium text-slate-400">{filteredCourseOptions.length} 门</span>
+              </div>
+              <div className="max-h-64 overflow-y-auto p-2">
+                {filteredCourseOptions.length === 0 ? (
+                  <div className="flex min-h-28 items-center justify-center rounded-xl bg-white text-sm font-medium text-slate-400">
+                    没有找到匹配课程
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {filteredCourseOptions.map((course) => {
+                      const selected = selectedCourseId === course.id;
+                      return (
+                        <button
+                          key={course.id}
+                          type="button"
+                          className={cn(
+                            "w-full rounded-xl border px-3 py-2.5 text-left transition-all",
+                            selected
+                              ? "border-primary bg-primary/5 shadow-sm"
+                              : "border-transparent bg-white hover:border-primary/20 hover:bg-white",
+                          )}
+                          onClick={() => {
+                            setSelectedCourseId(course.id);
+                            setSelectedMajorId(course.major_id);
+                            setSelectedDirectionId(course.direction_id);
+                          }}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className={cn("truncate text-sm font-medium", selected ? "text-primary" : "text-slate-700")}>
+                                {course.name}
+                              </p>
+                              <p className="mt-0.5 truncate text-xs font-medium text-slate-400">
+                                {course.major_name} / {course.direction_name}
+                              </p>
+                            </div>
+                            {selected && (
+                              <Badge variant="secondary" className="shrink-0 border-none bg-primary/10 text-primary">
+                                已选
+                              </Badge>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
-            {selectedCourseId && (
-              <p className="text-xs text-slate-500">
-                确认用户已选择课程"{courses.find((course) => course.id === selectedCourseId)?.name ?? ""}"
+
+            {selectedCourse && (
+              <p className="rounded-xl border border-primary/10 bg-primary/5 px-3 py-2 text-xs font-medium text-slate-600">
+                已选择：{selectedCourse.name}
+                <span className="text-slate-400">（{selectedCourse.major_name} / {selectedCourse.direction_name}）</span>
               </p>
             )}
           </div>

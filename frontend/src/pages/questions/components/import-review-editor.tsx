@@ -106,7 +106,7 @@ export function ImportReviewEditor({
           <section className="space-y-3">
             <Label className="text-[11px] font-bold uppercase tracking-widest text-slate-400">题目内容</Label>
             <Textarea
-              className="min-h-[220px] w-full rounded-2xl border-slate-200 bg-white p-5 text-sm font-medium leading-relaxed text-slate-700 shadow-sm focus-visible:ring-1 focus-visible:ring-primary/20"
+              className="min-h-[220px] w-full rounded-2xl border-slate-200 bg-white p-5 text-sm font-medium leading-relaxed text-slate-600 shadow-sm focus-visible:ring-1 focus-visible:ring-primary/20"
               value={draft.content_text}
               placeholder="请输入题干内容..."
               onChange={(event) => onChange({ content_text: event.target.value })}
@@ -130,7 +130,7 @@ export function ImportReviewEditor({
                       {key}
                     </div>
                     <Input
-                      className="h-11 rounded-xl border-slate-200 bg-white pl-10 text-sm font-bold shadow-sm focus-visible:ring-1 focus-visible:ring-primary/20"
+                      className="h-11 rounded-xl border-slate-200 bg-white pl-10 text-sm font-medium text-slate-600 shadow-sm focus-visible:ring-1 focus-visible:ring-primary/20"
                       value={draft.options?.[key] ?? ""}
                       placeholder={`选项 ${key} 内容...`}
                       onChange={(event) =>
@@ -154,7 +154,7 @@ export function ImportReviewEditor({
             <div className="space-y-3">
               <Label className="text-[11px] font-bold uppercase tracking-widest text-slate-400">答案</Label>
               <Textarea
-                className="min-h-[120px] rounded-2xl border-slate-200 bg-white p-5 text-sm font-semibold shadow-sm focus-visible:ring-1 focus-visible:ring-primary/20"
+                className="min-h-[120px] rounded-2xl border-slate-200 bg-white p-5 text-sm font-medium text-slate-600 shadow-sm focus-visible:ring-1 focus-visible:ring-primary/20"
                 value={draft.answer_text ?? ""}
                 placeholder="请输入正确答案..."
                 onChange={(event) => onChange({ answer_text: event.target.value })}
@@ -164,7 +164,7 @@ export function ImportReviewEditor({
             <div className="space-y-3">
               <Label className="text-[11px] font-bold uppercase tracking-widest text-slate-400">解析</Label>
               <Textarea
-                className="min-h-[120px] rounded-2xl border-slate-200 bg-white p-5 text-sm font-semibold shadow-sm focus-visible:ring-1 focus-visible:ring-primary/20"
+                className="min-h-[120px] rounded-2xl border-slate-200 bg-white p-5 text-sm font-medium text-slate-600 shadow-sm focus-visible:ring-1 focus-visible:ring-primary/20"
                 value={draft.analysis ?? ""}
                 placeholder="请输入题目解析..."
                 onChange={(event) => onChange({ analysis: event.target.value })}

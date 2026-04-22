@@ -60,6 +60,7 @@ describe("ExamTaking", () => {
         title: "abc",
         duration_minutes: 60,
         max_switch_count: 0,
+        allow_retake: false,
         started_at: "2026-04-09T10:00:00.000Z",
         end_time: "2026-04-09T11:00:00.000Z",
         questions: [
@@ -111,7 +112,9 @@ describe("ExamTaking", () => {
     vi.useRealTimers();
   });
 
-  it("keeps the question navigation open by default", async () => {
+  it("keeps the question navigation closed by default and shows a hint for the answer card", async () => {
+    const user = userEvent.setup();
+
     render(
       <MemoryRouter initialEntries={["/my-exams/exam-1/take"]}>
         <Routes>
@@ -120,9 +123,15 @@ describe("ExamTaking", () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText("答题卡")).toBeInTheDocument();
+    expect(await screen.findByText("右上角的答题卡可以快速跳转到任意题目，适合回看和检查未完成的题。")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "打开答题卡" }).length).toBeGreaterThan(0);
+
+    await user.click(screen.getAllByRole("button", { name: "打开答题卡" })[1]);
+
+    expect(screen.getByText("答题卡")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "1" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "2" })).toBeInTheDocument();
+    expect(screen.queryByText("右上角的答题卡可以快速跳转到任意题目，适合回看和检查未完成的题。")).not.toBeInTheDocument();
   });
 
   it("lets students return to my exams from the exam header", async () => {
@@ -256,6 +265,7 @@ describe("ExamTaking", () => {
         title: "abc",
         duration_minutes: 60,
         max_switch_count: 0,
+        allow_retake: false,
         started_at: "2026-04-09T10:00:00.000Z",
         end_time: "2026-04-09T11:00:00.000Z",
         questions: [
@@ -295,8 +305,150 @@ describe("ExamTaking", () => {
     );
 
     const content = await screen.findByTestId("exam-content-shell");
-    expect(content.className).toContain("max-w-none");
-    expect(content.className).toContain("px-4");
+    expect(content.className).toContain("h-full");
+    expect(content.className).toContain("w-full");
+    expect(content.className).toContain("px-0");
+  });
+
+  it("hides the answer-card hint and top mode row for single code questions", async () => {
+    useExamTakingMock.mockReturnValue({
+      answers: {},
+      currentIndex: 1,
+      setCurrentIndex: vi.fn(),
+      showAll: false,
+      setShowAll: vi.fn(),
+      updateAnswer: vi.fn(),
+      flushAnswers: vi.fn(),
+      flushQuestion: vi.fn().mockResolvedValue(undefined),
+      saveState: "idle",
+      saveMessage: "",
+      submitExam: vi.fn(),
+      reportSwitch: vi.fn(),
+    });
+
+    axiosPostMock.mockResolvedValue({
+      data: {
+        exam_id: "exam-1",
+        title: "abc",
+        duration_minutes: 60,
+        max_switch_count: 0,
+        allow_retake: false,
+        started_at: "2026-04-09T10:00:00.000Z",
+        end_time: "2026-04-09T11:00:00.000Z",
+        questions: [
+          {
+            question_id: "q-1",
+            order: 0,
+            score: 5,
+            type: "essay",
+            title: "题目一",
+            content: { text: "<p>题目一</p>" },
+            options: null,
+          },
+          {
+            question_id: "q-2",
+            order: 1,
+            score: 20,
+            type: "code",
+            title: "代码题",
+            content: {
+              description: "<p>实现一个函数</p>",
+              starter_code: { python: "def solve():\n    pass\n" },
+            },
+            options: null,
+          },
+        ],
+        saved_answers: {},
+        switch_count: 0,
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/my-exams/exam-1/take"]}>
+        <Routes>
+          <Route path="/my-exams/:id/take" element={<ExamTaking />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByTestId("exam-content-shell");
+    expect(screen.queryByText("右上角的答题卡可以快速跳转到任意题目，适合回看和检查未完成的题。")).not.toBeInTheDocument();
+    expect(screen.queryByText("全部显示")).not.toBeInTheDocument();
+    expect(screen.queryByText("编程")).not.toBeInTheDocument();
+  });
+
+  it("shows previous and next navigation in the header for code questions when the exam has multiple questions", async () => {
+    useExamTakingMock.mockReturnValue({
+      answers: {},
+      currentIndex: 1,
+      setCurrentIndex: vi.fn(),
+      showAll: false,
+      setShowAll: vi.fn(),
+      updateAnswer: vi.fn(),
+      flushAnswers: vi.fn(),
+      flushQuestion: vi.fn().mockResolvedValue(undefined),
+      saveState: "idle",
+      saveMessage: "",
+      submitExam: vi.fn(),
+      reportSwitch: vi.fn(),
+    });
+
+    axiosPostMock.mockResolvedValue({
+      data: {
+        exam_id: "exam-1",
+        title: "abc",
+        duration_minutes: 60,
+        max_switch_count: 0,
+        allow_retake: false,
+        started_at: "2026-04-09T10:00:00.000Z",
+        end_time: "2026-04-09T11:00:00.000Z",
+        questions: [
+          {
+            question_id: "q-1",
+            order: 0,
+            score: 5,
+            type: "essay",
+            title: "题目一",
+            content: { text: "<p>题目一</p>" },
+            options: null,
+          },
+          {
+            question_id: "q-2",
+            order: 1,
+            score: 20,
+            type: "code",
+            title: "代码题",
+            content: {
+              description: "<p>实现一个函数</p>",
+              starter_code: { python: "def solve():\n    pass\n" },
+            },
+            options: null,
+          },
+          {
+            question_id: "q-3",
+            order: 2,
+            score: 5,
+            type: "choice",
+            title: "题目三",
+            content: { text: "<p>题目三</p>" },
+            options: { A: "A", B: "B" },
+          },
+        ],
+        saved_answers: {},
+        switch_count: 0,
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/my-exams/exam-1/take"]}>
+        <Routes>
+          <Route path="/my-exams/:id/take" element={<ExamTaking />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("button", { name: /上一题/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /下一题/i })).toBeInTheDocument();
   });
 
   it("counts down and auto-submits before returning to my exams when time is up", async () => {
@@ -326,7 +478,9 @@ describe("ExamTaking", () => {
       </MemoryRouter>,
     );
 
-    await act(async () => {});
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
     fireEvent.click(screen.getByRole("button", { name: "触发时间到" }));
 
     expect(screen.getByText("考试时间到，3 秒后自动提交...")).toBeInTheDocument();

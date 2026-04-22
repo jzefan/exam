@@ -6,9 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import CurrentUser, user_has_role
 from app.database import get_db
 from app.rbac.schemas import StudentCreate, StudentRead, ClassCreate, ClassResponse, BatchImportResponse
+from app.rbac.schemas import StudentBatchDeleteRequest, StudentBatchDeleteResponse
 from app.rbac.service import (
     create_or_link_student,
     create_student, 
+    delete_student_for_actor,
     list_org_students, 
     list_teacher_classes,
     list_teacher_students,
@@ -77,12 +79,14 @@ async def list_students(
     db: Annotated[AsyncSession, Depends(get_db)],
     user: CurrentUser,
     org_id: Annotated[uuid.UUID, Depends(get_teacher_org_id)],
-    class_id: uuid.UUID | None = None
+    class_id: uuid.UUID | None = None,
+    unassigned: bool = False,
 ):
-    if await is_student_admin(db, user):
-        students = await list_org_students(db, org_id, class_id)
+    student_admin = await is_student_admin(db, user)
+    if student_admin:
+        students = await list_org_students(db, org_id, class_id, unassigned=unassigned)
     else:
-        students = await list_teacher_students(db, org_id, user.id, class_id)
+        students = await list_teacher_students(db, org_id, user.id, class_id, unassigned=unassigned)
     result = []
     for s in students:
         item = StudentRead.model_validate(s)
@@ -144,3 +148,58 @@ async def batch_add_students(
         failed_count=failed_count,
         errors=errors
     )
+
+
+@router.post("/batch-delete", response_model=StudentBatchDeleteResponse)
+async def batch_delete_students(
+    body: StudentBatchDeleteRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+    _org_id: Annotated[uuid.UUID, Depends(get_teacher_org_id)],
+):
+    success_count = 0
+    failed_count = 0
+    errors = []
+    student_admin = await is_student_admin(db, user)
+
+    for student_id in body.student_ids:
+        try:
+            await delete_student_for_actor(
+                db,
+                student_id,
+                actor_is_admin=student_admin,
+                teacher_id=None if student_admin else user.id,
+            )
+            success_count += 1
+        except Exception as exc:
+            failed_count += 1
+            errors.append(f"{student_id}: {str(exc)}")
+
+    await db.commit()
+    return StudentBatchDeleteResponse(
+        success_count=success_count,
+        failed_count=failed_count,
+        errors=errors,
+    )
+
+
+@router.delete("/{student_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_student(
+    student_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+    _org_id: Annotated[uuid.UUID, Depends(get_teacher_org_id)],
+):
+    student_admin = await is_student_admin(db, user)
+    try:
+        await delete_student_for_actor(
+            db,
+            student_id,
+            actor_is_admin=student_admin,
+            teacher_id=None if student_admin else user.id,
+        )
+        await db.commit()
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc

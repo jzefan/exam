@@ -34,6 +34,7 @@ function toExamForm(exam: ExamDetail): ExamFormValues {
     status: exam.status,
     position_id: exam.position_id || null,
     max_switch_count: exam.max_switch_count ?? 0,
+    allow_retake: exam.allow_retake ?? false,
     show_result: exam.show_result ?? false,
     notes_template: exam.notes_template || "",
     question_mode: exam.question_mode ?? null,

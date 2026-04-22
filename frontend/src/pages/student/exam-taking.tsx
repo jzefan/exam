@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import axios from "axios";
 import {
   ArrowLeft,
@@ -70,14 +70,17 @@ function isAnswered(ans: Record<string, unknown> | undefined): boolean {
 export function ExamTaking() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const locale = getStudentLocale();
+  const isRetake = searchParams.get("retake") === "1";
 
   /* ---- State ---- */
   const [examData, setExamData] = useState<IExamTaking | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [switchCount, setSwitchCount] = useState(0);
-  const [navOpen, setNavOpen] = useState(true);
+  const [navOpen, setNavOpen] = useState(false);
+  const [showNavHint, setShowNavHint] = useState(true);
   const [showSubmitDialog, setShowSubmitDialog] = useState(false);
   const [switchWarning, setSwitchWarning] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
@@ -86,29 +89,35 @@ export function ExamTaking() {
   const handleSubmitRef = useRef<((reason?: "time-up" | "switch-limit") => Promise<void>) | null>(null);
   const submitInFlightRef = useRef(false);
 
-  /* ---- Load exam data (once) ---- */
+  /* ---- Load exam data (once, with jitter to smooth the enrollment burst) ---- */
   useEffect(() => {
     let cancelled = false;
-    api
-      .post<IExamTaking>(`/api/student/exams/${id}/start`)
-      .then((res) => {
-        if (!cancelled) {
-          setExamData(res.data);
-          setIsLoading(false);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setLoadError(
-            translateStudentError(err?.response?.data?.detail, locale),
-          );
-          setIsLoading(false);
-        }
-      });
+    // Stagger 150 concurrent students across ~3s so the /start endpoint isn't hit in lockstep.
+    const jitterMs = import.meta.env.MODE === "test" ? 0 : Math.random() * 3000;
+    const timer = setTimeout(() => {
+      if (cancelled) return;
+      api
+        .post<IExamTaking>(`/api/student/exams/${id}/start`, isRetake ? { retake: true } : {})
+        .then((res) => {
+          if (!cancelled) {
+            setExamData(res.data);
+            setIsLoading(false);
+          }
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            setLoadError(
+              translateStudentError(err?.response?.data?.detail, locale),
+            );
+            setIsLoading(false);
+          }
+        });
+    }, jitterMs);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
-  }, [id]);
+  }, [id, isRetake]);
 
   /* ---- Exam taking hook ---- */
   const {
@@ -163,6 +172,12 @@ export function ExamTaking() {
   useEffect(() => {
     if (examData) setVisibilityCount(examData.switch_count);
   }, [examData?.switch_count, setVisibilityCount]);
+
+  useEffect(() => {
+    if (navOpen) {
+      setShowNavHint(false);
+    }
+  }, [navOpen]);
 
   /* ---- Submit ---- */
   const handleSubmit = useCallback(async (reason?: "time-up" | "switch-limit") => {
@@ -349,7 +364,7 @@ export function ExamTaking() {
       </div>
 
       {/* ── Top control bar ── */}
-      <header className="z-50 flex h-12 shrink-0 items-center justify-between gap-3 border-b border-border/60 bg-background px-4 sm:px-6">
+      <header className="z-50 grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 border-b border-border/60 bg-background px-4 sm:px-6">
         {/* Left: nav toggle + title */}
         <div className="flex min-w-0 flex-1 items-center gap-2.5">
           <Button
@@ -379,7 +394,43 @@ export function ExamTaking() {
         </div>
 
         {/* Center: question counter (hidden on mobile) */}
-        {!showAll && (
+        {!showAll && isCodeQuestion && questions.length > 1 ? (
+          <div className="flex shrink-0 items-center gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={currentIndex === 0}
+              onClick={() => {
+                void navigateToQuestion(currentIndex - 1);
+              }}
+              className="h-8 rounded-full px-3 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <ChevronLeft data-icon="inline-start" />
+              上一题
+            </Button>
+            <div className="flex items-center gap-1.5 rounded-full border border-border/70 bg-muted/50 px-2.5 py-1 text-xs text-muted-foreground">
+              <span className="font-semibold text-foreground tabular-nums">
+                {currentIndex + 1}
+              </span>
+              <span>/</span>
+              <span className="tabular-nums">{questions.length}</span>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={currentIndex === questions.length - 1}
+              onClick={() => {
+                void navigateToQuestion(currentIndex + 1);
+              }}
+              className="h-8 rounded-full px-3 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              下一题
+              <ChevronRight data-icon="inline-end" />
+            </Button>
+          </div>
+        ) : !showAll && (
           <div className="hidden shrink-0 items-center gap-1.5 rounded-full border border-border/70 bg-muted/50 px-2.5 py-1 text-xs text-muted-foreground md:flex">
             <span className="font-semibold text-foreground tabular-nums">
               {currentIndex + 1}
@@ -390,7 +441,7 @@ export function ExamTaking() {
         )}
 
         {/* Right: controls */}
-        <div className="flex shrink-0 items-center gap-3">
+        <div className="flex shrink-0 items-center justify-end gap-3">
           {saveMessage ? (
             <div
               className={`hidden text-xs sm:block ${
@@ -449,37 +500,56 @@ export function ExamTaking() {
         </div>
 
         {/* Question area */}
-        <main className="flex-1 overflow-y-auto">
+        <main className={isCodeQuestion ? "flex-1 overflow-hidden" : "flex-1 overflow-y-auto"}>
           <div
             data-testid="exam-content-shell"
             className={
               isCodeQuestion
-                ? "mx-auto w-full max-w-none px-4 py-6 sm:px-6 sm:py-8 xl:px-8"
-                : "mx-auto max-w-2xl px-5 py-6 sm:px-8 sm:py-10"
+                ? "h-full w-full px-0 py-0"
+                : "mx-auto max-w-4xl px-5 py-6 sm:px-8 sm:py-10 xl:px-10"
             }
           >
+            {showNavHint && !isCodeQuestion ? (
+              <div className="mb-4 flex items-start justify-between gap-3 rounded-xl border border-border/70 bg-muted/25 px-4 py-3 text-sm text-muted-foreground">
+                <p>
+                  右上角的答题卡可以快速跳转到任意题目，适合回看和检查未完成的题。
+                </p>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 shrink-0 rounded-md px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+                  onClick={() => setNavOpen(true)}
+                >
+                  打开答题卡
+                </Button>
+              </div>
+            ) : null}
+
             {/* View mode toggle */}
-            <div className="flex items-center justify-between mb-6">
-              {!showAll && currentQuestion ? (
-                <div className="flex items-center gap-2.5">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    {TYPE_LABELS[currentQuestion.type] ?? currentQuestion.type}
-                  </span>
-                  <span className="text-[11px] text-muted-foreground/60">
-                    {currentQuestion.score} 分
-                  </span>
-                </div>
-              ) : (
-                <div />
-              )}
-              <button
-                onClick={() => setShowAll(!showAll)}
-                className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-              >
-                {showAll ? <List size={13} /> : <LayoutGrid size={13} />}
-                {showAll ? "单题模式" : "全部显示"}
-              </button>
-            </div>
+            {!isCodeQuestion ? (
+              <div className="mb-6 flex items-center justify-between">
+                {!showAll && currentQuestion ? (
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      {TYPE_LABELS[currentQuestion.type] ?? currentQuestion.type}
+                    </span>
+                    <span className="text-[11px] text-muted-foreground/60">
+                      {currentQuestion.score} 分
+                    </span>
+                  </div>
+                ) : (
+                  <div />
+                )}
+                <button
+                  onClick={() => setShowAll(!showAll)}
+                  className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {showAll ? <List size={13} /> : <LayoutGrid size={13} />}
+                  {showAll ? "单题模式" : "全部显示"}
+                </button>
+              </div>
+            ) : null}
 
             {showAll ? (
               /* ── All questions ── */
@@ -514,7 +584,7 @@ export function ExamTaking() {
               </div>
             ) : currentQuestion ? (
               /* ── Single question ── */
-              <div>
+              <div className={isCodeQuestion ? "h-full min-h-0" : undefined}>
                 <QuestionRenderer
                   question={currentQuestion}
                   answer={answers[currentQuestion.question_id] ?? {}}
@@ -524,17 +594,21 @@ export function ExamTaking() {
                 />
 
                 {/* Prev / Next */}
+                {!isCodeQuestion ? (
                 <div className="flex items-center justify-between mt-10 pt-6 border-t border-border/40">
-                  <button
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
                     disabled={currentIndex === 0}
                     onClick={() => {
                       void navigateToQuestion(currentIndex - 1);
                     }}
-                    className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    className="h-9 rounded-lg px-3 text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
                   >
-                    <ChevronLeft size={16} />
+                    <ChevronLeft data-icon="inline-start" />
                     上一题
-                  </button>
+                  </Button>
 
                   {/* Dot indicators for nearby questions */}
                   <div className="hidden sm:flex items-center gap-1">
@@ -562,27 +636,32 @@ export function ExamTaking() {
                   </div>
 
                   {currentIndex === questions.length - 1 ? (
-                    <button
+                    <Button
                       type="button"
                       onClick={() => setShowSubmitDialog(true)}
-                      className="flex items-center gap-1 text-sm font-medium text-primary hover:text-primary/80 transition-colors"
+                      variant="ghost"
+                      size="sm"
+                      className="h-9 rounded-lg px-3 text-sm font-medium text-primary hover:bg-primary/10 hover:text-primary"
                     >
+                      <Send data-icon="inline-start" />
                       交卷
-                      <Send size={16} />
-                    </button>
+                    </Button>
                   ) : (
-                    <button
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="sm"
                       onClick={() => {
                         void navigateToQuestion(currentIndex + 1);
                       }}
-                      className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+                      className="h-9 rounded-lg px-3 text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
                     >
                       下一题
-                      <ChevronRight size={16} />
-                    </button>
+                      <ChevronRight data-icon="inline-end" />
+                    </Button>
                   )}
                 </div>
+                ) : null}
               </div>
             ) : null}
           </div>

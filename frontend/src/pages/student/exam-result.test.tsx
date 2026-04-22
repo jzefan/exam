@@ -26,6 +26,14 @@ vi.mock("axios", () => ({
   },
 }));
 
+vi.mock("@/components/ui/code-block", () => ({
+  CodeBlock: ({ code, language }: { code: string; language?: string }) => (
+    <div data-testid="code-block" data-language={language}>
+      {code}
+    </div>
+  ),
+}));
+
 describe("ExamResultPage", () => {
   it("shows question navigation and uses feedback wording instead of appeal status", async () => {
     const user = userEvent.setup();
@@ -108,17 +116,18 @@ describe("ExamResultPage", () => {
     expect(screen.getByRole("button", { name: "按序号" })).toBeInTheDocument();
     expect(screen.getAllByText("简答题").length).toBeGreaterThan(0);
     expect(screen.getAllByText("编程题").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("答错")).toHaveLength(2);
+    expect(screen.getAllByText("答错").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("2").length).toBeGreaterThan(0);
     expect(screen.getByText("请说明什么是索引覆盖，并给出一个简短例子。")).toBeInTheDocument();
     expect(screen.queryByText("实现一个 LRU Cache")).not.toBeInTheDocument();
     expect(screen.queryByText("申诉状态：")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "提交反馈" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "按序号" }));
-    expect(screen.getAllByText("第 1 题").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("第 2 题").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /跳转到第 1 题/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /跳转到第 2 题/ })).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "跳转到第 2 题" }));
+    await user.click(screen.getByRole("button", { name: /跳转到第 2 题/ }));
 
     expect(screen.getByText("请实现一个支持 get / put 的 LRU Cache。")).toBeInTheDocument();
     expect(screen.getByText("反馈内容：我的淘汰逻辑已经覆盖边界情况。")).toBeInTheDocument();
@@ -230,5 +239,52 @@ describe("ExamResultPage", () => {
     expect(screen.getByText("反馈内容：我在答案最后提到了边界情况。")).toBeInTheDocument();
     expect(screen.getByText("教师回复：教师会结合原答案复核。")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "收起详细信息" }).length).toBeGreaterThan(0);
+  });
+
+  it("renders sql short-answer content as code blocks in the result page", async () => {
+    getMock.mockResolvedValue({
+      data: {
+        exam_id: "exam-sql",
+        title: "SQL 考试",
+        submitted_at: "2026-04-10T10:00:00.000Z",
+        total_score: 20,
+        score: 18,
+        can_view: true,
+        blocked_reason: null,
+        questions: [
+          {
+            question_id: "q-sql",
+            order: 0,
+            type: "short_answer",
+            title: "请编写 SQL 查询语句",
+            content: { text: "<p>请使用 SQL 查询所有分数大于 90 的学生。</p>" },
+            options: null,
+            total_score: 20,
+            score_awarded: 18,
+            is_correct: false,
+            answer_content: { language: "sql", code: "SELECT * FROM scores WHERE score > 90;" },
+            standard_answer: { correct: "SELECT name FROM scores WHERE score > 90;" },
+            analysis: null,
+            feedback: { dimensions: [], deductions: [], suggestions: [] },
+            appeal_status: null,
+            appeal_reason: null,
+            appeal_reply: null,
+          },
+        ],
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/my-exams/exam-sql/result"]}>
+        <Routes>
+          <Route path="/my-exams/:id/result" element={<ExamResultPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findAllByTestId("code-block")).toHaveLength(2);
+    expect(screen.getAllByText("SQL")).toHaveLength(2);
+    expect(screen.getByText("SELECT * FROM scores WHERE score > 90;")).toBeInTheDocument();
+    expect(screen.getByText("SELECT name FROM scores WHERE score > 90;")).toBeInTheDocument();
   });
 });

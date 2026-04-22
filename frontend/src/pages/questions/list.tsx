@@ -1,7 +1,7 @@
 import { useList, useCreate, useDelete, useGetIdentity, useInvalidate, useNavigation, useUpdate } from "@refinedev/core";
 import type { CrudFilter } from "@refinedev/core";
 import type { IQuestion, IQuestionBank, ITag, QuestionType } from "../../types";
-import { Search, BookOpen, Pencil, Trash2, Plus, ChevronDown, ChevronUp, Library, Check, PackageOpen, GraduationCap, SlidersHorizontal, ChevronsDownUp, ChevronsUpDown, Link2, Save, ChevronRight, Lock, Upload, Sparkles, Loader2 } from "lucide-react";
+import { Search, BookOpen, Pencil, Trash2, Plus, ChevronDown, ChevronUp, Library, Check, PackageOpen, GraduationCap, SlidersHorizontal, ChevronsDownUp, ChevronsUpDown, Link2, Save, ChevronRight, Lock, Upload, Sparkles, Loader2, Eraser } from "lucide-react";
 import { useState, useCallback, useRef, useEffect, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -50,6 +50,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  clearPersistedQuestionImportJobId,
+  getQuestionKnowledgeRecognitionStatus,
+  persistQuestionImportJobId,
+  readPersistedQuestionImportJobId,
+} from "./question-knowledge-recognition";
+import type { QuestionImportJobResponse } from "./import-types";
+import { getQuestionDeleteDescription } from "@/lib/deletion-copy";
 
 const difficultyConfig: Record<
   number,
@@ -192,6 +200,11 @@ export function QuestionList() {
   const { data: identity } = useGetIdentity<{ id?: string; primary_org?: { role_name?: string } | null }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [activeImportJobId, setActiveImportJobId] = useState<string | null>(() => {
+    const importJobIdFromQuery = new URLSearchParams(window.location.search).get("import_job_id");
+    return importJobIdFromQuery ?? readPersistedQuestionImportJobId();
+  });
+  const [activeImportJob, setActiveImportJob] = useState<QuestionImportJobResponse | null>(null);
   const [current, setCurrent] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [filters, setFilters] = useState<CrudFilter[]>([]);
@@ -230,6 +243,8 @@ export function QuestionList() {
 
   // 删除题库确认对话框
   const [deleteBankTarget, setDeleteBankTarget] = useState<IQuestionBank | null>(null);
+  const [clearBankTarget, setClearBankTarget] = useState<IQuestionBank | null>(null);
+  const [clearingBank, setClearingBank] = useState(false);
   const [deleteQuestionTarget, setDeleteQuestionTarget] = useState<IQuestion | null>(null);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
@@ -309,6 +324,67 @@ export function QuestionList() {
     setActiveKnowledgePointId(knowledgePointId);
     rebuildFilters(search, activeQuestionBankId, knowledgePointId, activeTypes, activeDifficulties, activeTagIds, allTagsSelected);
   }, [activeDifficulties, activeQuestionBankId, activeTagIds, activeTypes, allTagsSelected, rebuildFilters, search, searchParams]);
+
+  useEffect(() => {
+    const importJobIdFromQuery = searchParams.get("import_job_id");
+    const nextImportJobId = importJobIdFromQuery ?? readPersistedQuestionImportJobId();
+    setActiveImportJobId(nextImportJobId);
+    if (importJobIdFromQuery) {
+      persistQuestionImportJobId(importJobIdFromQuery);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (!activeImportJobId) {
+      setActiveImportJob(null);
+      return;
+    }
+
+    let cancelled = false;
+    let timer: number | null = null;
+
+    const pollImportJob = async () => {
+      try {
+        const job = await questionApiFetch<QuestionImportJobResponse>(`/api/questions/import/jobs/${activeImportJobId}`);
+        if (cancelled) {
+          return;
+        }
+        setActiveImportJob(job);
+
+        if (job.status === "pending" || job.status === "running") {
+          timer = window.setTimeout(pollImportJob, 2000);
+          return;
+        }
+
+        clearPersistedQuestionImportJobId();
+        setActiveImportJobId(null);
+        setSearchParams((currentParams) => {
+          if (!currentParams.has("import_job_id")) {
+            return currentParams;
+          }
+          const nextParams = new URLSearchParams(currentParams);
+          nextParams.delete("import_job_id");
+          return nextParams;
+        });
+      } catch {
+        if (cancelled) {
+          return;
+        }
+        clearPersistedQuestionImportJobId();
+        setActiveImportJobId(null);
+        setActiveImportJob(null);
+      }
+    };
+
+    void pollImportJob();
+
+    return () => {
+      cancelled = true;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [activeImportJobId, setSearchParams]);
 
   // Disable query when no types or no difficulties selected — result must be empty
   const hasEmptyFilter = activeTypes.size === 0 || activeDifficulties.size === 0;
@@ -517,6 +593,31 @@ export function QuestionList() {
 
   const handleDelete = (question: IQuestion) => {
     setDeleteQuestionTarget(question);
+  };
+
+  const handleClearBankQuestions = async () => {
+    if (!clearBankTarget) {
+      return;
+    }
+
+    setClearingBank(true);
+    try {
+      const result = await questionApiFetch<{ deleted: number }>(`/api/question-banks/${clearBankTarget.id}/clear`, {
+        method: "POST",
+      });
+      toast({ title: `已清空 ${result.deleted} 道题目` });
+      setClearBankTarget(null);
+      refreshQuestions();
+      refreshBanks();
+    } catch (error) {
+      toast({
+        title: "清空题库失败",
+        description: error instanceof Error ? error.message : "请稍后重试",
+        variant: "destructive",
+      });
+    } finally {
+      setClearingBank(false);
+    }
   };
 
   const handleOpenKnowledgeDialog = (question: IQuestion) => {
@@ -856,6 +957,7 @@ export function QuestionList() {
                 bank.visibility === "platform" &&
                 bank.owner_id !== identity?.id &&
                 !canManageSharedResources;
+              const canClearBank = !isReadOnlyShared && bank.question_count > 0;
               return (
                 <div
                   key={bank.id}
@@ -890,19 +992,40 @@ export function QuestionList() {
                       </p>
                     )}
                   </div>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (isReadOnlyShared) return;
-                      setDeleteBankTarget(bank);
-                    }}
-                    disabled={isReadOnlyShared}
-                    className="shrink-0 ml-2 p-0.5 rounded opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive disabled:hover:text-muted-foreground disabled:cursor-not-allowed transition-all"
-                    title={isReadOnlyShared ? "共享题库只读，不能删除" : "删除该题库所有题目"}
-                  >
-                    <Trash2 size={13} />
-                  </button>
+                  <div className="ml-2 flex shrink-0 items-center gap-1 opacity-0 transition-all group-hover:opacity-100">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!canClearBank) return;
+                        setClearBankTarget(bank);
+                      }}
+                      disabled={!canClearBank}
+                      className="rounded p-0.5 text-muted-foreground transition-colors hover:text-amber-600 disabled:cursor-not-allowed disabled:hover:text-muted-foreground"
+                      title={
+                        isReadOnlyShared
+                          ? "共享题库只读，不能清空"
+                          : bank.question_count === 0
+                            ? "题库中暂无题目"
+                            : "清空该题库中的所有题目"
+                      }
+                    >
+                      <Eraser size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (isReadOnlyShared) return;
+                        setDeleteBankTarget(bank);
+                      }}
+                      disabled={isReadOnlyShared}
+                      className="rounded p-0.5 text-muted-foreground transition-colors hover:text-destructive disabled:cursor-not-allowed disabled:hover:text-muted-foreground"
+                      title={isReadOnlyShared ? "共享题库只读，不能删除" : "删除该题库"}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
                 </div>
               );
             })
@@ -1142,9 +1265,9 @@ export function QuestionList() {
       {/* Two-column layout: sidebar left, list right */}
       <div className="flex gap-6">
         {/* Left: sidebar filters (desktop only) */}
-        <aside className="hidden lg:block w-64 shrink-0">
+        <aside className="hidden w-64 shrink-0 self-start lg:sticky lg:top-6 lg:block">
           <Card>
-            <CardContent className="p-4">
+            <CardContent className="max-h-[calc(100vh-8rem)] overflow-y-hidden p-4 hover:overflow-y-auto">
               <TooltipProvider>
                 {filterContent}
               </TooltipProvider>
@@ -1266,6 +1389,7 @@ export function QuestionList() {
                       if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
                       setHoveredCard(null);
                     }}
+                    knowledgeRecognitionStatus={getQuestionKnowledgeRecognitionStatus(question.id, activeImportJob) ?? undefined}
                   />
                 );
               })}
@@ -1595,6 +1719,31 @@ export function QuestionList() {
         </AlertDialogContent>
       </AlertDialog>
 
+      <AlertDialog open={!!clearBankTarget} onOpenChange={(open) => { if (!open && !clearingBank) setClearBankTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>清空题库题目</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定要清空题库「{clearBankTarget?.name}」中的全部 {clearBankTarget?.question_count ?? 0} 道题目吗？题库会保留，但题目将被删除，此操作无法撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={clearingBank}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={clearingBank || !clearBankTarget}
+              onClick={(event) => {
+                event.preventDefault();
+                void handleClearBankQuestions();
+              }}
+            >
+              {clearingBank ? <Loader2 size={14} className="mr-1 animate-spin" /> : null}
+              清空题目
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AlertDialog open={bulkDeleteOpen} onOpenChange={(open) => { if (!open && !bulkDeleting) setBulkDeleteOpen(false); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -1625,7 +1774,7 @@ export function QuestionList() {
           <AlertDialogHeader>
             <AlertDialogTitle>删除题目</AlertDialogTitle>
             <AlertDialogDescription>
-              确定要删除这道题目吗？此操作无法撤销。
+              {getQuestionDeleteDescription()}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

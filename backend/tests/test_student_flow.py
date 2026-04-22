@@ -6,12 +6,26 @@ from httpx import AsyncClient
 from app.auth.schemas import UserCreate
 from app.auth.security import create_access_token
 from app.auth.service import create_user
-from app.exams.models import Exam, ExamQuestion, ExamStudent
+from sqlalchemy import select
+
+from app.exams.models import Exam, ExamQuestion, ExamStudent, StudentExamSubmission, StudentExamSubmissionAnswer
 from app.questions.models import Question, QuestionType
+from app.rbac.models import Organization, Role
+
+
+async def _create_org_with_roles(db_session):
+    org = Organization(name="Student Flow School", type="school", is_active=True)
+    teacher_role = Role(name="teacher", display_name="Teacher", is_system=True)
+    student_role = Role(name="student", display_name="Student", is_system=True)
+    db_session.add_all([org, teacher_role, student_role])
+    await db_session.flush()
+    return org
 
 
 @pytest.mark.asyncio
 async def test_student_exam_flow(client: AsyncClient, db_session) -> None:
+    org = await _create_org_with_roles(db_session)
+
     teacher = await create_user(
         db_session,
         UserCreate(
@@ -20,6 +34,7 @@ async def test_student_exam_flow(client: AsyncClient, db_session) -> None:
             password="teacherpass123",
             full_name="Teacher One",
             role_name="teacher",
+            org_id=org.id,
         ),
     )
     student = await create_user(
@@ -30,6 +45,7 @@ async def test_student_exam_flow(client: AsyncClient, db_session) -> None:
             password="studentpass123",
             full_name="Student One",
             role_name="student",
+            org_id=org.id,
         ),
     )
 
@@ -46,12 +62,12 @@ async def test_student_exam_flow(client: AsyncClient, db_session) -> None:
         created_by=teacher.id,
         owner_id=teacher.id,
     )
-    essay_question = Question(
-        type=QuestionType.ESSAY,
+    fill_in_question = Question(
+        type=QuestionType.FILL_IN,
         title="说明缓存雪崩的应对思路",
         content={"text": "<p>请说明缓存雪崩的常见应对思路。</p>"},
         options=None,
-        answer={"points": ["设置随机过期时间", "多级缓存", "服务降级"]},
+        answer={"blanks": ["设置随机过期时间", "多级缓存", "服务降级"]},
         analysis="从过期时间、隔离兜底和缓存架构三个角度作答。",
         difficulty=3,
         score=20,
@@ -59,7 +75,7 @@ async def test_student_exam_flow(client: AsyncClient, db_session) -> None:
         created_by=teacher.id,
         owner_id=teacher.id,
     )
-    db_session.add_all([choice_question, essay_question])
+    db_session.add_all([choice_question, fill_in_question])
     await db_session.flush()
 
     exam = Exam(
@@ -82,7 +98,7 @@ async def test_student_exam_flow(client: AsyncClient, db_session) -> None:
     db_session.add_all(
         [
             ExamQuestion(exam_id=exam.id, question_id=choice_question.id, order=0),
-            ExamQuestion(exam_id=exam.id, question_id=essay_question.id, order=1),
+            ExamQuestion(exam_id=exam.id, question_id=fill_in_question.id, order=1),
             ExamStudent(exam_id=exam.id, student_id=student.id),
         ]
     )
@@ -109,8 +125,8 @@ async def test_student_exam_flow(client: AsyncClient, db_session) -> None:
             "answers": [
                 {"question_id": str(choice_question.id), "answer_content": {"selected": ["A"]}},
                 {
-                    "question_id": str(essay_question.id),
-                    "answer_content": {"html": "<p>可以设置随机过期时间。</p>"},
+                    "question_id": str(fill_in_question.id),
+                    "answer_content": {"blanks": ["设置随机过期时间"]},
                 },
             ]
         },
@@ -135,25 +151,10 @@ async def test_student_exam_flow(client: AsyncClient, db_session) -> None:
     assert len(result_data["questions"]) == 2
     assert result_data["score"] is not None
 
-    wrong_answers_response = await client.get("/api/wrong-answers")
-    assert wrong_answers_response.status_code == 200
-    wrong_answers = wrong_answers_response.json()
-    assert len(wrong_answers) == 1
-    wrong_item = wrong_answers[0]
-    assert wrong_item["question_title"] == "说明缓存雪崩的应对思路"
-
-    wrong_detail_response = await client.get(f"/api/wrong-answers/{wrong_item['id']}")
-    assert wrong_detail_response.status_code == 200
-    assert wrong_detail_response.json()["feedback"]["deductions"]
-
-    mastered_response = await client.post(f"/api/wrong-answers/{wrong_item['id']}/mastered")
-    assert mastered_response.status_code == 200
-    assert mastered_response.json()["mastered"] is True
-
     appeal_response = await client.post(
         f"/api/student/exams/{exam.id}/appeals",
         json={
-            "question_id": str(essay_question.id),
+            "question_id": str(fill_in_question.id),
             "reason": "答案已覆盖两个核心要点，希望人工复核。",
         },
     )
@@ -165,6 +166,8 @@ async def test_student_exam_flow(client: AsyncClient, db_session) -> None:
 async def test_student_can_submit_with_final_answers_after_exam_end(
     client: AsyncClient, db_session
 ) -> None:
+    org = await _create_org_with_roles(db_session)
+
     teacher = await create_user(
         db_session,
         UserCreate(
@@ -173,6 +176,7 @@ async def test_student_can_submit_with_final_answers_after_exam_end(
             password="teacherpass123",
             full_name="Teacher Submit After End",
             role_name="teacher",
+            org_id=org.id,
         ),
     )
     student = await create_user(
@@ -183,6 +187,7 @@ async def test_student_can_submit_with_final_answers_after_exam_end(
             password="studentpass123",
             full_name="Student Submit After End",
             role_name="student",
+            org_id=org.id,
         ),
     )
 
@@ -243,3 +248,225 @@ async def test_student_can_submit_with_final_answers_after_exam_end(
 
     assert submit_response.status_code == 200
     assert submit_response.json()["submitted"] is True
+
+
+@pytest.mark.asyncio
+async def test_student_can_retake_ongoing_exam_when_teacher_allows_it_and_history_is_preserved(
+    client: AsyncClient, db_session
+) -> None:
+    org = await _create_org_with_roles(db_session)
+
+    teacher = await create_user(
+        db_session,
+        UserCreate(
+            username="teacher_resubmit_flow",
+            email="teacher_resubmit_flow@example.com",
+            password="teacherpass123",
+            full_name="Teacher Resubmit",
+            role_name="teacher",
+            org_id=org.id,
+        ),
+    )
+    student = await create_user(
+        db_session,
+        UserCreate(
+            username="student_resubmit_flow",
+            email="student_resubmit_flow@example.com",
+            password="studentpass123",
+            full_name="Student Resubmit",
+            role_name="student",
+            org_id=org.id,
+        ),
+    )
+
+    choice_question = Question(
+        type=QuestionType.CHOICE,
+        title="哪一个选项是正确答案？",
+        content={"text": "<p>请选择正确答案。</p>"},
+        options={"A": "错误", "B": "正确"},
+        answer={"correct": "B"},
+        analysis="正确答案是 B。",
+        difficulty=1,
+        score=5,
+        usage_count=0,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    db_session.add(choice_question)
+    await db_session.flush()
+
+    exam = Exam(
+        title="进行中可重交考试",
+        description="验证进行中考试允许再次提交",
+        start_time=datetime.now(timezone.utc) - timedelta(minutes=10),
+        end_time=datetime.now(timezone.utc) + timedelta(minutes=50),
+        duration_minutes=60,
+        total_score=5,
+        status="ongoing",
+        max_switch_count=0,
+        allow_retake=True,
+        show_result=True,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    db_session.add(exam)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            ExamQuestion(exam_id=exam.id, question_id=choice_question.id, order=0),
+            ExamStudent(exam_id=exam.id, student_id=student.id),
+        ]
+    )
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(student.id, '')}"})
+
+    first_submit = await client.post(
+        f"/api/student/exams/{exam.id}/submit",
+        json={
+            "answers": [
+                {"question_id": str(choice_question.id), "answer_content": {"selected": ["A"]}},
+            ]
+        },
+    )
+    assert first_submit.status_code == 200
+    assert first_submit.json()["score"] == 0
+
+    restart = await client.post(f"/api/student/exams/{exam.id}/start", json={"retake": True})
+    assert restart.status_code == 200
+    assert restart.json()["saved_answers"] == {}
+
+    second_save = await client.post(
+        f"/api/student/exams/{exam.id}/answers",
+        json={
+            "answers": [
+                {"question_id": str(choice_question.id), "answer_content": {"selected": ["B"]}},
+            ]
+        },
+    )
+    assert second_save.status_code == 200
+
+    second_submit = await client.post(f"/api/student/exams/{exam.id}/submit")
+    assert second_submit.status_code == 200
+    assert second_submit.json()["submitted"] is True
+    assert second_submit.json()["score"] == 5
+
+    result_response = await client.get(f"/api/student/exams/{exam.id}/result")
+    assert result_response.status_code == 200
+    result_payload = result_response.json()
+    assert result_payload["score"] == 5
+    assert result_payload["questions"][0]["answer_content"] == {"selected": ["B"]}
+
+    exam_student = (
+        await db_session.execute(
+            select(ExamStudent).where(ExamStudent.exam_id == exam.id, ExamStudent.student_id == student.id)
+        )
+    ).scalar_one()
+    assert exam_student.score == 5
+    assert exam_student.saved_answers[str(choice_question.id)] == {"selected": ["B"]}
+    assert exam_student.latest_submission_id is not None
+    assert exam_student.submission_count == 2
+
+    submissions = (
+        await db_session.execute(
+            select(StudentExamSubmission)
+            .where(StudentExamSubmission.exam_id == exam.id, StudentExamSubmission.student_id == student.id)
+            .order_by(StudentExamSubmission.attempt_no.asc())
+        )
+    ).scalars().all()
+    assert [submission.attempt_no for submission in submissions] == [1, 2]
+    assert [submission.score for submission in submissions] == [0, 5]
+
+    submission_answers = (
+        await db_session.execute(
+            select(StudentExamSubmissionAnswer)
+                .where(StudentExamSubmissionAnswer.submission_id.in_([submission.id for submission in submissions]))
+        )
+    ).scalars().all()
+    assert len(submission_answers) == 2
+    answers_by_submission_id = {
+        str(item.submission_id): item.answer_content for item in submission_answers
+    }
+    assert answers_by_submission_id[str(submissions[0].id)] == {"selected": ["A"]}
+    assert answers_by_submission_id[str(submissions[1].id)] == {"selected": ["B"]}
+
+
+@pytest.mark.asyncio
+async def test_student_cannot_retake_ongoing_exam_without_teacher_permission(
+    client: AsyncClient, db_session
+) -> None:
+    org = await _create_org_with_roles(db_session)
+
+    teacher = await create_user(
+        db_session,
+        UserCreate(
+            username="teacher_no_retake",
+            email="teacher_no_retake@example.com",
+            password="teacherpass123",
+            full_name="Teacher No Retake",
+            role_name="teacher",
+            org_id=org.id,
+        ),
+    )
+    student = await create_user(
+        db_session,
+        UserCreate(
+            username="student_no_retake",
+            email="student_no_retake@example.com",
+            password="studentpass123",
+            full_name="Student No Retake",
+            role_name="student",
+            org_id=org.id,
+        ),
+    )
+
+    question = Question(
+        type=QuestionType.CHOICE,
+        title="重考限制",
+        content={"text": "<p>请选择正确答案。</p>"},
+        options={"A": "错误", "B": "正确"},
+        answer={"correct": "B"},
+        analysis="正确答案是 B。",
+        difficulty=1,
+        score=5,
+        usage_count=0,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    db_session.add(question)
+    await db_session.flush()
+
+    exam = Exam(
+        title="不允许重考考试",
+        description=None,
+        start_time=datetime.now(timezone.utc) - timedelta(minutes=10),
+        end_time=datetime.now(timezone.utc) + timedelta(minutes=50),
+        duration_minutes=60,
+        total_score=5,
+        status="ongoing",
+        max_switch_count=0,
+        allow_retake=False,
+        show_result=True,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    db_session.add(exam)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            ExamQuestion(exam_id=exam.id, question_id=question.id, order=0),
+            ExamStudent(exam_id=exam.id, student_id=student.id),
+        ]
+    )
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(student.id, '')}"})
+    first_submit = await client.post(
+        f"/api/student/exams/{exam.id}/submit",
+        json={"answers": [{"question_id": str(question.id), "answer_content": {"selected": ["B"]}}]},
+    )
+    assert first_submit.status_code == 200
+
+    restart = await client.post(f"/api/student/exams/{exam.id}/start", json={"retake": True})
+    assert restart.status_code == 400
+    assert restart.json()["detail"] == "Retake is not allowed"

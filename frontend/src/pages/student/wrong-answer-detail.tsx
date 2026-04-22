@@ -2,11 +2,18 @@ import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import axios from "axios";
 import { LatexText, renderLatexInHtml } from "@/components/ui/latex-text";
+import { CodeBlock } from "@/components/ui/code-block";
 import { useOne, useInvalidate } from "@refinedev/core";
 import { ArrowLeft, CheckCircle2, CircleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { IWrongAnswerDetail } from "@/types";
-import { formatStudentDate, renderAnswerSummary, renderStandardAnswer } from "./utils";
+import {
+  formatStudentDate,
+  inferStudentAnswerLanguage,
+  renderAnswerAsCode,
+  renderAnswerSummary,
+  renderStandardAnswer,
+} from "./utils";
 import { getStudentLocale, getStudentQuestionTypeLabel, tStudent } from "./i18n";
 
 const api = axios.create();
@@ -109,6 +116,11 @@ export function WrongAnswerDetailPage() {
                 {item.student_answer.code as string}
               </pre>
             </div>
+          ) : inferStudentAnswerLanguage(item.question_title, item.question_content, item.student_answer) === "sql" ? (
+            <div className="mt-3 overflow-hidden rounded-xl border border-border/70 bg-muted/10 p-3">
+              <div className="mb-2 text-[12px] text-muted-foreground">SQL</div>
+              <CodeBlock code={renderAnswerAsCode(item.student_answer)} language="sql" />
+            </div>
           ) : (
             <p className="mt-3 text-[14px] leading-6 text-muted-foreground">
               <LatexText>{renderAnswerSummary(item.student_answer)}</LatexText>
@@ -118,9 +130,16 @@ export function WrongAnswerDetailPage() {
 
         <section className="rounded-2xl border border-[#ebe3f4] bg-white/90 p-6">
           <h2 className="text-[16px] font-semibold">{tStudent("wrong_detail_standard_answer", undefined, locale)}</h2>
-          <p className="mt-3 text-[14px] leading-6 text-muted-foreground">
-            <LatexText>{renderStandardAnswer(item.standard_answer)}</LatexText>
-          </p>
+          {inferStudentAnswerLanguage(item.question_title, item.question_content, item.student_answer) === "sql" ? (
+            <div className="mt-3 overflow-hidden rounded-xl border border-border/70 bg-muted/10 p-3">
+              <div className="mb-2 text-[12px] text-muted-foreground">SQL</div>
+              <CodeBlock code={renderAnswerAsCode(item.standard_answer)} language="sql" />
+            </div>
+          ) : (
+            <p className="mt-3 text-[14px] leading-6 text-muted-foreground">
+              <LatexText>{renderStandardAnswer(item.standard_answer)}</LatexText>
+            </p>
+          )}
         </section>
       </div>
 

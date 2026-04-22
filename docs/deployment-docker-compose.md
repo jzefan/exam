@@ -7,6 +7,7 @@
 - 容器编排：Docker + docker compose
 - 反向代理：Nginx
 - 数据库：PostgreSQL
+- 代码运行：judge-runner 独立容器
 - 发布方式：本地 `scripts/deploy.sh` 打包 -> `scp` 上传 -> 服务器自动构建并切换
 - 重启方式：蓝绿切换，先启动空闲槽位，再切流，最后关闭旧槽位
 
@@ -21,6 +22,7 @@
 - `/Users/jzefan/work/proj/exam/docker-compose.yml`
   生产编排文件，包含：
   - `db`
+  - `judge_runner`
   - `backend_blue` / `backend_green`
   - `frontend_blue` / `frontend_green`
   - `nginx`
@@ -100,6 +102,36 @@ chmod +x scripts/deploy.sh
 7. 健康检查
 8. Nginx 切流
 9. 下线旧槽位
+
+## 代码运行环境
+
+代码题在线运行不再依赖宿主机是否安装 `go`、`java` 等工具链，而是通过 compose 中的 `judge_runner` 容器统一提供：
+
+- Python
+- JavaScript / Node.js
+- C
+- C++
+- Java
+- Go
+
+backend 容器通过内部地址 `http://judge_runner:8010` 调用该服务。
+
+## 本地开发调试 judge-runner
+
+如果你本地是“前后端分别启动”，但又想让学生端代码运行支持 Java / Go，可以直接使用仓库里的开发编排：
+
+```bash
+docker compose -f docker-compose.dev.yml up -d judge_runner
+```
+
+然后用下面的方式启动后端：
+
+```bash
+cd backend
+EXAM_JUDGE_RUNNER_URL=http://127.0.0.1:8010 uv run uvicorn app.main:app --app-dir src --reload
+```
+
+这样本地开发仍然保留 `uvicorn + pnpm dev` 的节奏，但代码题在线运行会走 Docker 判题环境。
 
 ## 环境变量策略
 

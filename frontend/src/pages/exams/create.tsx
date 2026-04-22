@@ -19,6 +19,7 @@ const initialForm: ExamFormValues = {
   status: "draft",
   position_id: null,
   max_switch_count: 0,
+  allow_retake: false,
   show_result: false,
   notes_template: "",
   question_mode: "manual",

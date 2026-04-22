@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCreate, useList, useOne, useUpdate } from "@refinedev/core";
 import { useNavigate, useParams } from "react-router-dom";
 import {
-  ArrowLeft,
   ArrowRight,
   BookCopy,
   CheckCircle2,
@@ -24,6 +23,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PageIntroHeader } from "@/components/ui/page-intro-header";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
@@ -119,6 +119,38 @@ function getDefaultPracticeTitle(date = new Date()) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}练习`;
 }
 
+function getNextPracticeTitle(existingTitles: string[], date = new Date()) {
+  const baseTitle = getDefaultPracticeTitle(date);
+  let maxSuffix = -1;
+
+  for (const title of existingTitles) {
+    if (title === baseTitle) {
+      maxSuffix = Math.max(maxSuffix, 0);
+      continue;
+    }
+
+    const match = title.match(new RegExp(`^${baseTitle}-(\\d+)$`));
+    if (!match) continue;
+    const suffix = Number.parseInt(match[1], 10);
+    if (Number.isFinite(suffix)) {
+      maxSuffix = Math.max(maxSuffix, suffix);
+    }
+  }
+
+  return maxSuffix < 0 ? baseTitle : `${baseTitle}-${maxSuffix + 1}`;
+}
+
+function getDefaultAITypeAlloc(): Record<QuestionType, number> {
+  return {
+    choice: 0,
+    true_false: 0,
+    fill_in: 0,
+    short_answer: 0,
+    essay: 0,
+    code: 0,
+  };
+}
+
 export function PracticeCreate() {
   const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();
@@ -139,6 +171,7 @@ export function PracticeCreate() {
   const [currentStep, setCurrentStep] = useState(0);
   const [maxVisitedStep, setMaxVisitedStep] = useState(0);
   const [title, setTitle] = useState(() => (isEditMode ? "" : getDefaultPracticeTitle()));
+  const [isTitleManuallyEdited, setIsTitleManuallyEdited] = useState(false);
   const [description, setDescription] = useState("");
   const [selectedKnowledgePoints, setSelectedKnowledgePoints] = useState<SelectedKnowledgePoint[]>([]);
   const [questionMode, setQuestionMode] = useState<QuestionMode>("manual");
@@ -154,14 +187,7 @@ export function PracticeCreate() {
 
   const [aiQuestionCount, setAIQuestionCount] = useState(10);
   const [aiDifficulty, setAIDifficulty] = useState(3);
-  const [aiTypeAlloc, setAITypeAlloc] = useState<Record<QuestionType, number>>({
-    choice: 0,
-    true_false: 0,
-    fill_in: 0,
-    short_answer: 0,
-    essay: 0,
-    code: 0,
-  });
+  const [aiTypeAlloc, setAITypeAlloc] = useState<Record<QuestionType, number>>(getDefaultAITypeAlloc);
   const [aiModel, setAIModel] = useState<AIModelProvider>("qwen");
   const [aiPrompt, setAIPrompt] = useState("");
   const [aiQuestions, setAIQuestions] = useState<GeneratedQuestion[]>([]);
@@ -189,6 +215,20 @@ export function PracticeCreate() {
       ),
     [selectedQuestionQuery.query.data?.data],
   );
+  const todayPracticeTitlePrefix = useMemo(() => getDefaultPracticeTitle(), []);
+  const practiceTitleSuggestionQuery = useList<PracticeDetail>({
+    resource: "exams",
+    pagination: { currentPage: 1, pageSize: 200, mode: "server" },
+    filters: [
+      { field: "category", operator: "eq" as const, value: "practice" },
+      { field: "title", operator: "contains" as const, value: todayPracticeTitlePrefix },
+    ],
+    queryOptions: { enabled: !isEditMode },
+  });
+  const suggestedPracticeTitle = useMemo(() => {
+    const existingTitles = (practiceTitleSuggestionQuery.query.data?.data ?? []).map((item) => item.title);
+    return getNextPracticeTitle(existingTitles);
+  }, [practiceTitleSuggestionQuery.query.data?.data]);
 
   useEffect(() => {
     if (!practice || hydratedExamRef.current) return;
@@ -255,6 +295,42 @@ export function PracticeCreate() {
     () => selectedQuestions.reduce((sum, question) => sum + (Number(question.score) || 0), 0),
     [selectedQuestions],
   );
+
+  useEffect(() => {
+    abortRef.current?.abort();
+    hydratedExamRef.current = false;
+    hydratedQuestionMetaRef.current = false;
+
+    setCurrentStep(0);
+    setMaxVisitedStep(0);
+    setTitle(isEditMode ? "" : getDefaultPracticeTitle());
+    setIsTitleManuallyEdited(false);
+    setDescription("");
+    setSelectedKnowledgePoints([]);
+    setQuestionMode("manual");
+    setQuestionIds([]);
+    setIsManualQuestionFullscreen(false);
+    setStudentIds([]);
+    setDurationMinutes(60);
+    setStartImmediately(true);
+    setScheduledStartTime("");
+    setEndTime("");
+    setShowResult(true);
+    setSubmitError(null);
+    setAIQuestionCount(10);
+    setAIDifficulty(3);
+    setAITypeAlloc(getDefaultAITypeAlloc());
+    setAIModel("qwen");
+    setAIPrompt("");
+    setAIQuestions([]);
+    setAIGenerating(false);
+    setAIApplying(false);
+  }, [id, isEditMode]);
+
+  useEffect(() => {
+    if (isEditMode || isTitleManuallyEdited) return;
+    setTitle(suggestedPracticeTitle);
+  }, [isEditMode, isTitleManuallyEdited, suggestedPracticeTitle]);
 
   const allocationState = validateTypeAllocation(aiQuestionCount, aiTypeAlloc);
   const aiAllocationError =
@@ -602,16 +678,16 @@ export function PracticeCreate() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <Button type="button" variant="ghost" size="sm" aria-label="返回列表" onClick={() => navigate("/exams")}>
-          <ArrowLeft size={16} />
-        </Button>
-        <div className="min-w-0">
-          <h1 className="text-base font-bold text-foreground tracking-tight">
-            {isEditMode ? "编辑练习" : "发布练习"}
-          </h1>
-        </div>
-      </div>
+      <PageIntroHeader
+        title={isEditMode ? "编辑练习" : "发布练习"}
+        description={
+          isEditMode
+            ? "调整知识点、题目、发布对象与时间设置，让练习安排更贴合当前教学。"
+            : "按步骤选择知识点、题目与学生，快速发布一场可追踪的课堂练习。"
+        }
+        onBack={() => navigate("/exams")}
+        backLabel="返回考试与练习"
+      />
 
       {submitError && (
         <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
@@ -707,8 +783,11 @@ export function PracticeCreate() {
                   <Input
                     id="practice-title"
                     value={title}
-                    onChange={(event) => setTitle(event.target.value)}
-                    placeholder={getDefaultPracticeTitle()}
+                    onChange={(event) => {
+                      setIsTitleManuallyEdited(true);
+                      setTitle(event.target.value);
+                    }}
+                    placeholder={suggestedPracticeTitle}
                   />
                 </div>
                 <div className="space-y-1.5">

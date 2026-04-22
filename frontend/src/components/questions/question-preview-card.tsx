@@ -1,7 +1,7 @@
 import type { HTMLAttributes, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
-import { GraduationCap, Tag } from "lucide-react";
+import { Clock3, GraduationCap, Loader2, Tag } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import type { IQuestion } from "@/types";
@@ -20,6 +20,23 @@ import {
   questionTypeChar,
   questionTypeColorClass,
 } from "./question-preview-utils";
+import type { QuestionKnowledgeRecognitionStatus } from "@/pages/questions/question-knowledge-recognition";
+
+const knowledgeRecognitionConfig: Record<
+  QuestionKnowledgeRecognitionStatus,
+  { label: string; className: string; icon: typeof Clock3 }
+> = {
+  waiting: {
+    label: "等待 AI 识别",
+    className: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300",
+    icon: Clock3,
+  },
+  running: {
+    label: "AI 识别中",
+    className: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-300",
+    icon: Loader2,
+  },
+};
 
 function RenderTextWithCode({ text, language }: { text: string; language?: string }) {
   const parts = text.split(/(```[\s\S]*?```)/g);
@@ -95,6 +112,7 @@ export function QuestionPreviewCard({
   hideAnswer = false,
   expandOnHover = false,
   hoverDetailDelay = 180,
+  knowledgeRecognitionStatus,
   ...props
 }: {
   question: IQuestion;
@@ -109,6 +127,7 @@ export function QuestionPreviewCard({
   hideAnswer?: boolean;
   expandOnHover?: boolean;
   hoverDetailDelay?: number;
+  knowledgeRecognitionStatus?: QuestionKnowledgeRecognitionStatus | null;
 } & HTMLAttributes<HTMLDivElement>) {
   const [isHovered, setIsHovered] = useState(false);
   const [isHoverExpanded, setIsHoverExpanded] = useState(false);
@@ -122,6 +141,8 @@ export function QuestionPreviewCard({
   const showDetails = expandOnHover ? isHoverExpanded : mode === "detailed" ? isExpanded : defaultExpanded;
   const html = getQuestionContentHtml(question);
   const normalizedType = normalizeQuestionType(question.type);
+  const recognitionMeta = knowledgeRecognitionStatus ? knowledgeRecognitionConfig[knowledgeRecognitionStatus] : null;
+  const RecognitionIcon = recognitionMeta?.icon;
 
   useEffect(() => {
     if (!expandOnHover) {
@@ -199,6 +220,19 @@ export function QuestionPreviewCard({
           </div>
 
           {renderOptions(question)}
+          {recognitionMeta ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Badge variant="outline" className={cn("gap-1.5 px-2 py-0.5", recognitionMeta.className)}>
+                {RecognitionIcon ? (
+                  <RecognitionIcon
+                    size={12}
+                    className={knowledgeRecognitionStatus === "running" ? "animate-spin" : undefined}
+                  />
+                ) : null}
+                {recognitionMeta.label}
+              </Badge>
+            </div>
+          ) : null}
           {!hideAnswer && answerText !== "" ? (
             <p className="mt-2 text-sm text-muted-foreground">
               {normalizedType === "short_answer" || normalizedType === "essay" ? "答案要点：" : "答案："}

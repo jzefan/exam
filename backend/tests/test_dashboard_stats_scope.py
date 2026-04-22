@@ -4,6 +4,9 @@ from httpx import AsyncClient
 from app.auth.schemas import UserCreate
 from app.auth.security import create_access_token
 from app.auth.service import create_user
+from app.common.data_visibility import VisibilityScope
+from app.exams.models import Exam
+from app.questions.models import Question, QuestionBank, QuestionType
 from app.rbac.models import Organization, Role
 from app.rbac.schemas import StudentCreate
 from app.rbac.service import create_student, ensure_teacher_student_link
@@ -102,3 +105,127 @@ async def test_teacher_dashboard_student_count_includes_associated_students_with
 
     assert response.status_code == 200
     assert response.json()["total_students"] == 1
+
+
+@pytest.mark.asyncio
+async def test_teacher_dashboard_counts_match_visible_exam_and_question_scope(
+    client: AsyncClient, db_session
+) -> None:
+    org = await _create_org_with_roles(db_session)
+    teacher = await create_user(
+        db_session,
+        UserCreate(
+            username="teacher-dashboard-stats",
+            email="teacher-dashboard-stats@example.com",
+            password="teacherpass123",
+            full_name="Teacher Dashboard Stats",
+            role_name="teacher",
+            org_id=org.id,
+        ),
+    )
+    other_teacher = await create_user(
+        db_session,
+        UserCreate(
+            username="teacher-dashboard-stats-other",
+            email="teacher-dashboard-stats-other@example.com",
+            password="teacherpass123",
+            full_name="Teacher Dashboard Stats Other",
+            role_name="teacher",
+            org_id=org.id,
+        ),
+    )
+
+    owned_exam = Exam(
+        title="Teacher Owned Exam",
+        description=None,
+        duration_minutes=60,
+        total_score=100,
+        status="draft",
+        max_switch_count=0,
+        show_result=True,
+        notes_template=None,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    foreign_exam = Exam(
+        title="Foreign Exam",
+        description=None,
+        duration_minutes=60,
+        total_score=100,
+        status="draft",
+        max_switch_count=0,
+        show_result=True,
+        notes_template=None,
+        created_by=other_teacher.id,
+        owner_id=other_teacher.id,
+    )
+    db_session.add_all([owned_exam, foreign_exam])
+    await db_session.flush()
+
+    shared_bank = QuestionBank(
+        name="Dashboard Shared Bank",
+        description=None,
+        owner_id=other_teacher.id,
+        visibility=VisibilityScope.PLATFORM,
+    )
+    hidden_bank = QuestionBank(
+        name="Dashboard Hidden Bank",
+        description=None,
+        owner_id=other_teacher.id,
+        visibility=VisibilityScope.PRIVATE,
+    )
+    db_session.add_all([shared_bank, hidden_bank])
+    await db_session.flush()
+
+    db_session.add_all(
+        [
+            Question(
+                type=QuestionType.SHORT_ANSWER,
+                title="Teacher Owned Question",
+                content={"text": "Owned"},
+                options=None,
+                answer={"points": ["owned"]},
+                analysis=None,
+                difficulty=2,
+                score=5,
+                created_by=teacher.id,
+                owner_id=teacher.id,
+                question_bank_id=None,
+            ),
+            Question(
+                type=QuestionType.SHORT_ANSWER,
+                title="Teacher Visible Shared Question",
+                content={"text": "Shared"},
+                options=None,
+                answer={"points": ["shared"]},
+                analysis=None,
+                difficulty=2,
+                score=5,
+                created_by=other_teacher.id,
+                owner_id=other_teacher.id,
+                question_bank_id=shared_bank.id,
+            ),
+            Question(
+                type=QuestionType.SHORT_ANSWER,
+                title="Teacher Hidden Question",
+                content={"text": "Hidden"},
+                options=None,
+                answer={"points": ["hidden"]},
+                analysis=None,
+                difficulty=2,
+                score=5,
+                created_by=other_teacher.id,
+                owner_id=other_teacher.id,
+                question_bank_id=hidden_bank.id,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    response = await client.get("/api/analytics/dashboard-stats")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_exams"] == 1
+    assert payload["total_questions"] == 2

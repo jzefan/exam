@@ -122,7 +122,9 @@ class QuestionImportJob(Base, TimestampMixin):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     status: Mapped[QuestionImportJobStatus] = mapped_column(
-        Enum(QuestionImportJobStatus), nullable=False, default=QuestionImportJobStatus.PENDING
+        Enum(QuestionImportJobStatus, name="questionimportjobstatus", create_type=False),
+        nullable=False,
+        default=QuestionImportJobStatus.PENDING,
     )
     total_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     processed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

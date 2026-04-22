@@ -90,6 +90,7 @@ export interface IExam {
   position_id: string | null;
   position_name: string | null;
   max_switch_count: number;
+  allow_retake: boolean;
   show_result: boolean;
   notes_template: string | null;
   total_questions: number;
@@ -161,11 +162,21 @@ export interface ICodeSampleTest {
   expected_output: string;
 }
 
+export interface ICodeFunctionParameter {
+  name: string;
+  type: string;
+}
+
 export interface ICodeQuestionContent extends Record<string, unknown> {
+  mode?: "program" | "function";
   description?: string;
   text?: string;
+  input_description?: string;
+  output_description?: string;
   function_name?: string;
   signature?: string;
+  parameters?: ICodeFunctionParameter[];
+  return_type?: string;
   starter_code?: Partial<Record<"python" | "javascript" | "java" | "cpp" | "c" | "go", string>>;
   examples?: ICodeQuestionExample[];
   sample_tests?: ICodeSampleTest[];
@@ -175,9 +186,35 @@ export interface ICodeQuestionContent extends Record<string, unknown> {
 export interface ICodeAnswerContent extends Record<string, unknown> {
   language?: "python" | "javascript" | "java" | "cpp" | "c" | "go";
   code?: string;
+  code_by_language?: Partial<Record<"python" | "javascript" | "java" | "cpp" | "c" | "go", string>>;
   custom_input?: string;
   last_run_input?: string;
   last_run_output?: string;
+}
+
+export interface IStudentCodeRunCaseResult {
+  name: string;
+  input: string;
+  expected_output?: string | null;
+  actual_output: string;
+  status: "passed" | "failed" | "compile_error" | "runtime_error" | "timeout" | "system_error";
+  time_ms: number;
+  memory_kb: number;
+  message: string;
+}
+
+export interface IStudentCodeRunResult {
+  status: "passed" | "failed" | "compile_error" | "runtime_error" | "timeout" | "system_error";
+  mode: "sample" | "custom";
+  language: string;
+  stdout: string;
+  stderr: string;
+  compile_output: string;
+  time_ms: number;
+  memory_kb: number;
+  case_count: number;
+  passed_count: number;
+  cases: IStudentCodeRunCaseResult[];
 }
 
 export interface IExamResultQuestionFeedbackDimension {
@@ -279,6 +316,7 @@ export interface IExamTaking {
   title: string;
   duration_minutes: number;
   max_switch_count: number;
+  allow_retake: boolean;
   started_at: string;
   end_time: string | null;
   questions: IExamQuestionForStudent[];

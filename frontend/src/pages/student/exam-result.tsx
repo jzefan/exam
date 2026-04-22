@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import { LatexText, renderLatexInHtml } from "@/components/ui/latex-text";
+import { CodeBlock } from "@/components/ui/code-block";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Brain, ChevronDown, ChevronRight, CircleAlert, List, PanelLeft, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -18,7 +19,13 @@ import {
 } from "@/components/ui/alert-dialog";
 import type { IAppealResponse, IExamResult } from "@/types";
 import { cn } from "@/lib/utils";
-import { formatStudentDate, renderAnswerSummary, renderStandardAnswer } from "./utils";
+import {
+  formatStudentDate,
+  inferStudentAnswerLanguage,
+  renderAnswerAsCode,
+  renderAnswerSummary,
+  renderStandardAnswer,
+} from "./utils";
 import { getStudentLocale, getStudentQuestionTypeLabel, tStudent } from "./i18n";
 
 const api = axios.create();
@@ -108,6 +115,8 @@ export function ExamResultPage() {
 
   const allQuestionDetailsExpanded =
     viewMode === "all" && questions.length > 0 && questions.every((question) => expandedQuestionDetails[question.question_id]);
+  const correctCount = questions.filter((question) => question.is_correct).length;
+  const incorrectCount = questions.length - correctCount;
 
   const submitAppeal = async () => {
     if (!id || !appealQuestionId || !appealReason.trim()) return;
@@ -236,30 +245,57 @@ export function ExamResultPage() {
 
           {renderQuestionPrompt(question)}
 
-          <div className="grid gap-3 lg:grid-cols-2">
-            <div className="rounded-xl bg-muted/35 p-4">
-              <p className="text-[14px] font-medium text-foreground">{tStudent("result_your_answer", undefined, locale)}</p>
-              {question.type === "code" && typeof question.answer_content.code === "string" && question.answer_content.code.trim() ? (
-                <div className="mt-3 overflow-hidden rounded-xl border border-border bg-slate-950">
-                  <div className="border-b border-white/10 px-3 py-2 text-[12px] text-slate-300">
-                    {(question.answer_content.language as string | undefined) ?? "code"}
+          <div className="flex flex-col gap-3">
+            {(() => {
+              const answerLanguage = inferStudentAnswerLanguage(
+                question.title,
+                question.content,
+                question.answer_content,
+              );
+              const isSqlAnswer = answerLanguage === "sql";
+              const studentCode = renderAnswerAsCode(question.answer_content);
+              const standardCode = renderAnswerAsCode(question.standard_answer);
+
+              return (
+                <>
+                  <div className="rounded-xl bg-muted/35 p-4">
+                    <p className="text-[14px] font-medium text-foreground">{tStudent("result_your_answer", undefined, locale)}</p>
+                    {question.type === "code" && typeof question.answer_content.code === "string" && question.answer_content.code.trim() ? (
+                      <div className="mt-3 overflow-hidden rounded-xl border border-border bg-slate-950">
+                        <div className="border-b border-white/10 px-3 py-2 text-[12px] text-slate-300">
+                          {(question.answer_content.language as string | undefined) ?? "code"}
+                        </div>
+                        <pre className="overflow-x-auto whitespace-pre-wrap px-4 py-4 font-mono text-[13px] leading-6 text-slate-100">
+                          {question.answer_content.code as string}
+                        </pre>
+                      </div>
+                    ) : isSqlAnswer ? (
+                      <div className="mt-3 overflow-hidden rounded-xl border border-border/70 bg-muted/10 p-3">
+                        <div className="mb-2 text-[12px] text-muted-foreground">SQL</div>
+                        <CodeBlock code={studentCode} language="sql" />
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-[14px] leading-6 text-muted-foreground">
+                        <LatexText>{renderAnswerSummary(question.answer_content)}</LatexText>
+                      </p>
+                    )}
                   </div>
-                  <pre className="overflow-x-auto whitespace-pre-wrap px-4 py-4 font-mono text-[13px] leading-6 text-slate-100">
-                    {question.answer_content.code as string}
-                  </pre>
-                </div>
-              ) : (
-                <p className="mt-2 text-[14px] leading-6 text-muted-foreground">
-                  <LatexText>{renderAnswerSummary(question.answer_content)}</LatexText>
-                </p>
-              )}
-            </div>
-            <div className="rounded-xl bg-muted/35 p-4">
-              <p className="text-[14px] font-medium text-foreground">{tStudent("result_standard_answer", undefined, locale)}</p>
-              <p className="mt-2 text-[14px] leading-6 text-muted-foreground">
-                <LatexText>{renderStandardAnswer(question.standard_answer)}</LatexText>
-              </p>
-            </div>
+                  <div className="rounded-xl bg-muted/35 p-4">
+                    <p className="text-[14px] font-medium text-foreground">{tStudent("result_standard_answer", undefined, locale)}</p>
+                    {isSqlAnswer ? (
+                      <div className="mt-3 overflow-hidden rounded-xl border border-border/70 bg-muted/10 p-3">
+                        <div className="mb-2 text-[12px] text-muted-foreground">SQL</div>
+                        <CodeBlock code={standardCode} language="sql" />
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-[14px] leading-6 text-muted-foreground">
+                        <LatexText>{renderStandardAnswer(question.standard_answer)}</LatexText>
+                      </p>
+                    )}
+                  </div>
+                </>
+              );
+            })()}
           </div>
 
           <div className="flex flex-col gap-3">
@@ -349,6 +385,40 @@ export function ExamResultPage() {
     );
   };
 
+  const renderNavQuestionButton = (question: IExamResult["questions"][number], index: number) => {
+    const isActive = index === safeQuestionIndex;
+    const statusLabel = question.is_correct
+      ? tStudent("result_correct", undefined, locale)
+      : tStudent("result_incorrect", undefined, locale);
+
+    return (
+      <button
+        key={question.question_id}
+        type="button"
+        aria-label={`${tStudent("result_jump_to_question", { number: question.order + 1 }, locale)}，${getStudentQuestionTypeLabel(question.type, locale)}，${statusLabel}，${question.score_awarded}/${question.total_score}`}
+        title={`${tStudent("result_question_number", { number: question.order + 1 }, locale)} · ${statusLabel} · ${question.score_awarded}/${question.total_score}`}
+        onClick={() => setActiveQuestionIndex(index)}
+        className={cn(
+          "group flex min-h-14 flex-col items-center justify-center gap-1 rounded-xl border text-center transition-all",
+          isActive
+            ? "border-primary/50 bg-primary/10 text-primary shadow-sm ring-2 ring-primary/15"
+            : "border-border/60 bg-background text-foreground hover:border-primary/25 hover:bg-muted/40",
+        )}
+      >
+        <span className="text-sm font-semibold tabular-nums leading-none">{question.order + 1}</span>
+        <span
+          className={cn(
+            "h-1.5 w-6 rounded-full",
+            question.is_correct ? "bg-emerald-500/75" : "bg-destructive/75",
+          )}
+        />
+        <span className="text-[10px] font-medium tabular-nums text-muted-foreground">
+          {question.score_awarded}/{question.total_score}
+        </span>
+      </button>
+    );
+  };
+
   return (
     <div className="flex flex-col gap-6">
       <div className="grid items-center gap-3 sm:grid-cols-[1fr_auto_1fr]">
@@ -404,11 +474,12 @@ export function ExamResultPage() {
       </div>
 
       {viewMode === "nav" ? (
-        <div className="grid gap-6 lg:grid-cols-[220px_minmax(0,1fr)]">
-          <aside className="self-start rounded-2xl border border-border/70 bg-background p-4">
+        <div className="grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
+          <aside className="self-start rounded-2xl border border-border/70 bg-background p-4 lg:sticky lg:top-4">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <h2 className="text-sm font-semibold text-foreground">{tStudent("result_question_nav", undefined, locale)}</h2>
+                <p className="mt-1 text-xs text-muted-foreground">{tStudent("result_question_count", { count: result.questions.length }, locale)}</p>
               </div>
               <div className="inline-flex shrink-0 rounded-lg bg-muted p-1">
                 <button
@@ -433,8 +504,35 @@ export function ExamResultPage() {
                 </button>
               </div>
             </div>
-            <p className="mt-1 text-xs text-muted-foreground">{tStudent("result_question_count", { count: result.questions.length }, locale)}</p>
-            <div className="exam-result-nav-scroll mt-4 flex max-h-[520px] flex-col gap-4 overflow-y-auto pr-1">
+
+            <div className="mt-4 grid grid-cols-3 gap-2">
+              <div className="rounded-xl bg-muted/40 px-3 py-2">
+                <p className="text-[10px] text-muted-foreground">{locale === "en" ? "Total" : "全部"}</p>
+                <p className="mt-0.5 text-sm font-semibold tabular-nums text-foreground">{questions.length}</p>
+              </div>
+              <div className="rounded-xl bg-muted/40 px-3 py-2">
+                <p className="text-[10px] text-muted-foreground">{tStudent("result_correct", undefined, locale)}</p>
+                <p className="mt-0.5 text-sm font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">{correctCount}</p>
+              </div>
+              <div className="rounded-xl bg-muted/40 px-3 py-2">
+                <p className="text-[10px] text-muted-foreground">{tStudent("result_incorrect", undefined, locale)}</p>
+                <p className="mt-0.5 text-sm font-semibold tabular-nums text-destructive">{incorrectCount}</p>
+              </div>
+            </div>
+
+            <div className="mt-3 flex items-center gap-3 rounded-xl bg-muted/25 px-3 py-2 text-[10px] text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5">
+                <span className="size-2 rounded-full bg-emerald-500/75" />
+                {tStudent("result_correct", undefined, locale)}
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="size-2 rounded-full bg-destructive/75" />
+                {tStudent("result_incorrect", undefined, locale)}
+              </span>
+              <span className="ml-auto">{locale === "en" ? "Click to jump" : "点击跳转"}</span>
+            </div>
+
+            <div className="exam-result-nav-scroll mt-4 flex max-h-[min(560px,calc(100vh-280px))] flex-col gap-4 overflow-y-auto pr-1">
               {navMode === "type"
                 ? groupedQuestions.map(([type, items]) => (
                     <div key={type} className="flex flex-col gap-2">
@@ -446,89 +544,14 @@ export function ExamResultPage() {
                           {tStudent("result_question_count", { count: items.length }, locale)}
                         </span>
                       </div>
-                      <div className="flex flex-col gap-2">
-                        {items.map(({ question, index }) => {
-                          const isActive = index === safeQuestionIndex;
-                          return (
-                            <button
-                              key={question.question_id}
-                              type="button"
-                              aria-label={tStudent("result_jump_to_question", { number: question.order + 1 }, locale)}
-                              onClick={() => setActiveQuestionIndex(index)}
-                              className={cn(
-                                "flex items-center justify-between rounded-xl border px-3 py-2.5 text-left transition-colors",
-                                isActive
-                                  ? "border-primary/30 bg-primary/10"
-                                  : "border-border/60 bg-background hover:border-primary/20 hover:bg-muted/40",
-                              )}
-                            >
-                              <div className="flex min-w-0 flex-col gap-1">
-                                <span className="text-xs font-medium text-muted-foreground">
-                                  {tStudent("result_question_number", { number: question.order + 1 }, locale)}
-                                </span>
-                                <div className="flex items-center gap-2">
-                                  <Badge
-                                    variant={question.is_correct ? "success" : "destructive"}
-                                    className="rounded-md px-1.5 py-0 text-[10px] font-semibold"
-                                  >
-                                    {question.is_correct
-                                      ? tStudent("result_correct", undefined, locale)
-                                      : tStudent("result_incorrect", undefined, locale)}
-                                  </Badge>
-                                  <span className="shrink-0 text-sm font-semibold text-primary">
-                                    {question.score_awarded} / {question.total_score}
-                                  </span>
-                                </div>
-                              </div>
-                            </button>
-                          );
-                        })}
+                      <div className="grid grid-cols-4 gap-2">
+                        {items.map(({ question, index }) => renderNavQuestionButton(question, index))}
                       </div>
                     </div>
                   ))
                 : (
-                    <div className="flex flex-col gap-2">
-                      {questions.map((question, index) => {
-                        const isActive = index === safeQuestionIndex;
-                        return (
-                          <button
-                            key={question.question_id}
-                            type="button"
-                            aria-label={tStudent("result_jump_to_question", { number: question.order + 1 }, locale)}
-                            onClick={() => setActiveQuestionIndex(index)}
-                            className={cn(
-                              "flex items-center justify-between rounded-xl border px-3 py-2.5 text-left transition-colors",
-                              isActive
-                                ? "border-primary/30 bg-primary/10"
-                                : "border-border/60 bg-background hover:border-primary/20 hover:bg-muted/40",
-                            )}
-                          >
-                            <div className="flex min-w-0 flex-col gap-1">
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs font-medium text-muted-foreground">
-                                  {tStudent("result_question_number", { number: question.order + 1 }, locale)}
-                                </span>
-                                <span className="text-[11px] text-muted-foreground">
-                                  {getStudentQuestionTypeLabel(question.type, locale)}
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <Badge
-                                  variant={question.is_correct ? "success" : "destructive"}
-                                  className="rounded-md px-1.5 py-0 text-[10px] font-semibold"
-                                >
-                                  {question.is_correct
-                                    ? tStudent("result_correct", undefined, locale)
-                                    : tStudent("result_incorrect", undefined, locale)}
-                                </Badge>
-                                <span className="shrink-0 text-sm font-semibold text-primary">
-                                  {question.score_awarded} / {question.total_score}
-                                </span>
-                              </div>
-                            </div>
-                          </button>
-                        );
-                      })}
+                    <div className="grid grid-cols-4 gap-2">
+                      {questions.map((question, index) => renderNavQuestionButton(question, index))}
                     </div>
                   )}
             </div>

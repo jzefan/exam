@@ -187,6 +187,13 @@ log "Starting database"
 docker compose up -d db
 wait_for_health db 180
 
+log "Building judge-runner image"
+docker compose build judge_runner
+
+log "Starting judge-runner"
+docker compose up -d judge_runner
+wait_for_health judge_runner 180
+
 log "Building target slot images"
 docker compose build "backend_${TARGET_SLOT}" "frontend_${TARGET_SLOT}"
 

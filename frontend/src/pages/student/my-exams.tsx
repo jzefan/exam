@@ -22,7 +22,7 @@ import {
   AlertDialogDescription,
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
-import { getEffectiveStudentExamStatus } from "./utils";
+import { canStudentRetakeExam, getEffectiveStudentExamStatus } from "./utils";
 import { getStudentDateLocale, getStudentLocale, tStudent } from "./i18n";
 import { StudentPendingExamCard } from "./components/student-pending-exam-card";
 
@@ -44,6 +44,7 @@ interface IMyExam {
   duration_minutes: number;
   total_score: number;
   max_switch_count: number;
+  allow_retake: boolean;
   notes_template: string | null;
   total_questions: number;
   score: number | null;
@@ -128,7 +129,15 @@ function UpcomingExamRow({ exam, onClick }: { exam: IMyExam; onClick: () => void
   );
 }
 
-function CompletedExamRow({ exam, onClick }: { exam: IMyExam; onClick: () => void }) {
+function CompletedExamRow({
+  exam,
+  onClick,
+  onRetake,
+}: {
+  exam: IMyExam;
+  onClick: () => void;
+  onRetake?: () => void;
+}) {
   const locale = getStudentLocale();
   const hasScore = exam.score !== null;
   const passed = (exam.score ?? 0) / exam.total_score >= 0.6;
@@ -142,12 +151,8 @@ function CompletedExamRow({ exam, onClick }: { exam: IMyExam; onClick: () => voi
           ? `${exam.score} / ${exam.total_score}`
           : "已审核确定";
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex w-full items-center justify-between rounded-xl border border-border/40 bg-card/30 px-4 py-3.5 text-left transition-colors hover:bg-muted/30"
-    >
-      <div className="flex min-w-0 items-center gap-4">
+    <div className="flex w-full items-center justify-between rounded-xl border border-border/40 bg-card/30 px-4 py-3.5 text-left transition-colors hover:bg-muted/30">
+      <button type="button" onClick={onClick} className="flex min-w-0 flex-1 items-center gap-4 text-left">
         <div className={cn(
           "flex size-9 shrink-0 items-center justify-center rounded-full",
           passed ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"
@@ -160,9 +165,17 @@ function CompletedExamRow({ exam, onClick }: { exam: IMyExam; onClick: () => voi
             {tStudent("my_exams_completed_at", { time: exam.submitted_at ? formatDateShort(exam.submitted_at) : formatDateShort(exam.end_time) }, locale)}
           </p>
         </div>
-      </div>
+      </button>
       
-        <div className="flex shrink-0 items-center gap-4">
+        <div className="flex shrink-0 items-center gap-3">
+          {onRetake ? (
+            <Button type="button" variant="outline" size="sm" onClick={onRetake}>
+              重考
+            </Button>
+          ) : null}
+          <Button type="button" variant="ghost" size="sm" onClick={onClick}>
+            详情
+          </Button>
           <div className="min-w-[88px] text-right">
           {hasScore && gradingStatus !== "pending_ai" ? (
             <div className={cn(
@@ -177,11 +190,8 @@ function CompletedExamRow({ exam, onClick }: { exam: IMyExam; onClick: () => voi
             <Badge variant="outline" className="border-muted text-[10px] font-medium text-muted-foreground">{statusLabel}</Badge>
           )}
         </div>
-        <span className="inline-flex size-7 items-center justify-center text-muted-foreground transition-colors group-hover:text-primary">
-          <ChevronRight size={18} />
-        </span>
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -207,6 +217,7 @@ export function MyExams() {
   const examsWithDerivedStatus = exams.map((exam) => ({
     ...exam,
     effectiveStatus: getEffectiveStudentExamStatus(exam),
+    canRetake: canStudentRetakeExam(exam),
   }));
 
   const pending = examsWithDerivedStatus
@@ -311,6 +322,7 @@ export function MyExams() {
                   key={e.id}
                   exam={e}
                   onClick={() => navigate(`/my-exams/${e.id}/result`)}
+                  onRetake={e.canRetake ? () => navigate(`/my-exams/${e.id}/take?retake=1`) : undefined}
                 />
               ))}
             </div>

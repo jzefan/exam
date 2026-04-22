@@ -13,7 +13,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { getEffectiveStudentExamStatus } from "./utils";
+import { canStudentRetakeExam, getEffectiveStudentExamStatus } from "./utils";
 import { getStudentDateLocale, getStudentLocale, tStudent } from "./i18n";
 import { StudentPendingExamCard } from "./components/student-pending-exam-card";
 
@@ -30,6 +30,7 @@ interface IMyExam {
   duration_minutes: number;
   total_score: number;
   max_switch_count: number;
+  allow_retake: boolean;
   notes_template: string | null;
   total_questions: number;
   score: number | null;
@@ -99,6 +100,7 @@ export function StudentDashboard() {
   const examsWithDerivedStatus = allExams.map((exam) => ({
     ...exam,
     effectiveStatus: getEffectiveStudentExamStatus(exam),
+    canRetake: canStudentRetakeExam(exam),
   }));
 
   const pending = examsWithDerivedStatus
@@ -298,14 +300,25 @@ export function StudentDashboard() {
                             )}
                           </TableCell>
                           <TableCell className="pr-6 text-right">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="font-bold text-primary"
-                              onClick={() => navigate(`/my-exams/${exam.id}/result`)}
-                            >
-                              {tStudent("dashboard_detail", undefined, locale)}
-                            </Button>
+                            <div className="flex justify-end gap-2">
+                              {exam.canRetake ? (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => navigate(`/my-exams/${exam.id}/take?retake=1`)}
+                                >
+                                  重考
+                                </Button>
+                              ) : null}
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="font-bold text-primary"
+                                onClick={() => navigate(`/my-exams/${exam.id}/result`)}
+                              >
+                                {tStudent("dashboard_detail", undefined, locale)}
+                              </Button>
+                            </div>
                           </TableCell>
                         </TableRow>
                       );

@@ -3,6 +3,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 
 from app.auth.schemas import UserCreate
+from app.auth.security import verify_password
 from app.auth.service import create_user
 from app.rbac.models import Organization, Role, TeacherStudent
 from app.rbac.schemas import StudentCreate
@@ -52,6 +53,34 @@ async def test_create_student_creates_teacher_student_link(db_session) -> None:
     ).scalars().all()
 
     assert len(links) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_student_uses_student_id_as_account_when_phone_is_absent(db_session) -> None:
+    org = await _seed_org_roles(db_session)
+    teacher = await create_user(
+        db_session,
+        UserCreate(
+            username="assoc-roster-teacher",
+            email="assoc-roster-teacher@example.com",
+            password="teacherpass123",
+            full_name="Assoc Roster Teacher",
+            role_name="teacher",
+            org_id=org.id,
+        ),
+    )
+
+    student = await create_student(
+        db_session,
+        org.id,
+        StudentCreate(full_name="Roster Student", student_id="3256260101"),
+        owner_teacher_id=teacher.id,
+    )
+
+    assert student.username == "3256260101"
+    assert student.phone is None
+    assert student.student_id == "3256260101"
+    assert verify_password("3256260101", student.password_hash)
 
 
 @pytest.mark.asyncio

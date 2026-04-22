@@ -40,7 +40,7 @@ describe("QuestionRenderer", () => {
       />,
     );
 
-    expect(screen.getByText("编程题说明")).toBeInTheDocument();
+    expect(screen.getByText("题目说明")).toBeInTheDocument();
     expect(screen.getByText("运行代码")).toBeInTheDocument();
     expect(screen.getByTestId("monaco-editor")).toBeInTheDocument();
   });

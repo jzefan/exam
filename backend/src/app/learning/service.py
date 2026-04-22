@@ -232,6 +232,43 @@ async def list_directions(
     return list(result.scalars().all())
 
 
+async def list_course_options(
+    db: AsyncSession,
+    *,
+    user: User | None = None,
+    is_platform_admin: bool = True,
+) -> list[dict[str, Any]]:
+    """Return visible top-level knowledge points as selectable courses."""
+
+    stmt = (
+        select(KnowledgePoint, Direction, Major)
+        .join(Direction, KnowledgePoint.direction_id == Direction.id)
+        .join(Major, Direction.major_id == Major.id)
+        .where(
+            KnowledgePoint.deleted_at.is_(None),
+            KnowledgePoint.parent_id.is_(None),
+            Direction.deleted_at.is_(None),
+            Major.deleted_at.is_(None),
+        )
+        .order_by(Major.name, Direction.name, KnowledgePoint.name)
+    )
+    if not is_platform_admin and user is not None:
+        stmt = stmt.where(teacher_visible_resource_filter(KnowledgePoint, user.id))
+
+    rows = (await db.execute(stmt)).all()
+    return [
+        {
+            "id": kp.id,
+            "name": kp.name,
+            "direction_id": direction.id,
+            "direction_name": direction.name,
+            "major_id": major.id,
+            "major_name": major.name,
+        }
+        for kp, direction, major in rows
+    ]
+
+
 async def get_direction(
     db: AsyncSession,
     direction_id: uuid.UUID,

@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     openrouter_model_name: str = "anthropic/claude-3.5-sonnet"
     grading_score_diff_threshold: float = 0.15
     grading_dimension_diff_threshold: float = 0.20
+    judge_runner_url: str | None = None
 
 
 settings = Settings()

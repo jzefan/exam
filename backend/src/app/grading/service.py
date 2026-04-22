@@ -15,7 +15,16 @@ from sqlalchemy.orm import selectinload
 
 from app.auth.models import User
 from app.config import settings
-from app.exams.models import Exam, ExamStudent, GradingStatus, StudentExamAnswer, StudentExamAppeal, StudentNotification
+from app.exams.models import (
+    Exam,
+    ExamStudent,
+    GradingStatus,
+    StudentExamAnswer,
+    StudentExamAppeal,
+    StudentExamSubmission,
+    StudentExamSubmissionAnswer,
+    StudentNotification,
+)
 from app.grading.models import GradingAuditEvent, GradingResultSnapshot, GradingTask, ModelConfig, RoleBinding
 from app.questions.models import Question, QuestionType
 from app.grading.providers import (
@@ -108,7 +117,7 @@ def _parse_task_locator(task: GradingTask) -> dict[str, str | None]:
         if task.source_type == "exam_submission" and len(parts) >= 3:
             exam_id = parts[0]
             question_id = parts[1]
-            candidate_code = ":".join(parts[2:])
+            candidate_code = parts[2]
         elif len(parts) >= 2:
             question_id = parts[0]
             candidate_code = ":".join(parts[1:])
@@ -1079,19 +1088,22 @@ async def create_manual_score_override(
     return snapshot
 
 
-def _parse_exam_submission_locator(source_business_id: str | None) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+def _parse_exam_submission_locator(
+    source_business_id: str | None,
+) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID | None]:
     if not source_business_id:
         raise ValueError("missing source business id")
     parts = source_business_id.split(":")
-    if len(parts) != 3:
+    if len(parts) not in {3, 4}:
         raise ValueError("invalid exam submission source business id")
     try:
         exam_id = uuid.UUID(parts[0])
         question_id = uuid.UUID(parts[1])
         student_id = uuid.UUID(parts[2])
+        submission_id = uuid.UUID(parts[3]) if len(parts) == 4 else None
     except ValueError as exc:
         raise ValueError("invalid exam submission source business id") from exc
-    return exam_id, question_id, student_id
+    return exam_id, question_id, student_id, submission_id
 
 
 def _build_exam_submission_feedback(snapshot: GradingResultSnapshot) -> dict[str, Any]:
@@ -1118,7 +1130,13 @@ def _build_exam_submission_feedback(snapshot: GradingResultSnapshot) -> dict[str
 async def _load_exam_submission_context(
     db: AsyncSession,
     task_id: str,
-) -> tuple[GradingTask, ExamStudent, StudentExamAnswer | None]:
+) -> tuple[
+    GradingTask,
+    ExamStudent,
+    StudentExamAnswer | None,
+    StudentExamSubmission | None,
+    StudentExamSubmissionAnswer | None,
+]:
     result = await db.execute(
         select(GradingTask)
         .options(selectinload(GradingTask.latest_final_snapshot))
@@ -1130,7 +1148,7 @@ async def _load_exam_submission_context(
     if task.source_type != "exam_submission":
         raise ValueError("grading task is not linked to an exam submission")
 
-    exam_id, question_id, student_id = _parse_exam_submission_locator(task.source_business_id)
+    exam_id, question_id, student_id, submission_id = _parse_exam_submission_locator(task.source_business_id)
     exam_student = (
         await db.execute(
             select(ExamStudent).where(
@@ -1151,7 +1169,24 @@ async def _load_exam_submission_context(
             )
         )
     ).scalar_one_or_none()
-    return task, exam_student, answer
+
+    submission = None
+    submission_answer = None
+    if submission_id is not None:
+        submission = (
+            await db.execute(
+                select(StudentExamSubmission).where(StudentExamSubmission.id == submission_id)
+            )
+        ).scalar_one_or_none()
+        submission_answer = (
+            await db.execute(
+                select(StudentExamSubmissionAnswer).where(
+                    StudentExamSubmissionAnswer.submission_id == submission_id,
+                    StudentExamSubmissionAnswer.question_id == question_id,
+                )
+            )
+        ).scalar_one_or_none()
+    return task, exam_student, answer, submission, submission_answer
 
 
 async def _recompute_submission_scores(
@@ -1186,11 +1221,40 @@ async def _recompute_submission_scores(
     return round(objective_score, 2), round(subjective_score, 2)
 
 
+async def _recompute_historical_submission_scores(
+    db: AsyncSession,
+    *,
+    submission_id: uuid.UUID,
+) -> tuple[float, float]:
+    rows = (
+        await db.execute(
+            select(StudentExamSubmissionAnswer, Question)
+            .join(Question, Question.id == StudentExamSubmissionAnswer.question_id)
+            .where(StudentExamSubmissionAnswer.submission_id == submission_id)
+        )
+    ).all()
+
+    objective_score = 0.0
+    subjective_score = 0.0
+    for answer, question in rows:
+        question_type = question.type.value if isinstance(question.type, QuestionType) else str(question.type)
+        if question_type in {
+            QuestionType.SHORT_ANSWER.value,
+            QuestionType.ESSAY.value,
+            QuestionType.CODE.value,
+        }:
+            subjective_score += float(answer.score_awarded or 0)
+        else:
+            objective_score += float(answer.score_awarded or 0)
+    return round(objective_score, 2), round(subjective_score, 2)
+
+
 async def _has_pending_exam_submission_tasks(
     db: AsyncSession,
     *,
     exam_id: uuid.UUID,
     student_id: uuid.UUID,
+    submission_id: uuid.UUID | None = None,
 ) -> bool:
     tasks = (
         await db.execute(select(GradingTask).where(GradingTask.source_type == "exam_submission"))
@@ -1199,8 +1263,10 @@ async def _has_pending_exam_submission_tasks(
     student_id_str = str(student_id)
     for task in tasks:
         try:
-            task_exam_id, _question_id, task_student_id = _parse_exam_submission_locator(task.source_business_id)
+            task_exam_id, _question_id, task_student_id, task_submission_id = _parse_exam_submission_locator(task.source_business_id)
         except ValueError:
+            continue
+        if submission_id is not None and task_submission_id != submission_id:
             continue
         if str(task_exam_id) == exam_id_str and str(task_student_id) == student_id_str and task.status != "completed":
             return True
@@ -1208,35 +1274,78 @@ async def _has_pending_exam_submission_tasks(
 
 
 async def apply_grading_task_result_to_exam_submission(db: AsyncSession, task_id: str) -> dict[str, Any]:
-    task, exam_student, answer = await _load_exam_submission_context(db, task_id)
+    task, exam_student, answer, submission, submission_answer = await _load_exam_submission_context(db, task_id)
     if answer is None:
         raise ValueError("student exam answer not found")
     if task.latest_final_snapshot is None:
         raise ValueError("grading task has no final snapshot")
 
     snapshot = task.latest_final_snapshot
-    answer.score_awarded = float(snapshot.score_total)
-    answer.is_correct = float(snapshot.score_total) >= float(task.max_score) * 0.6
-    answer.feedback = _build_exam_submission_feedback(snapshot)
+    latest_score = float(snapshot.score_total)
+    latest_correct = latest_score >= float(task.max_score) * 0.6
+    latest_feedback = _build_exam_submission_feedback(snapshot)
 
-    exam_id, _question_id, student_id = _parse_exam_submission_locator(task.source_business_id)
-    objective_score, subjective_score = await _recompute_submission_scores(db, exam_id=exam_id, student_id=student_id)
-    exam_student.objective_score = objective_score
-    exam_student.subjective_score = subjective_score
-    exam_student.score = round(objective_score + subjective_score, 2)
+    exam_id, _question_id, student_id, submission_id = _parse_exam_submission_locator(task.source_business_id)
 
-    now = _utcnow()
-    if await _has_pending_exam_submission_tasks(db, exam_id=exam_id, student_id=student_id):
-        exam_student.grading_status = GradingStatus.PENDING_AI.value
+    if submission_answer is not None:
+        submission_answer.score_awarded = latest_score
+        submission_answer.is_correct = latest_correct
+        submission_answer.feedback = latest_feedback
+
+    if submission is not None:
+        submission_objective_score, submission_subjective_score = await _recompute_historical_submission_scores(
+            db,
+            submission_id=submission.id,
+        )
+        submission.objective_score = submission_objective_score
+        submission.subjective_score = submission_subjective_score
+        submission.score = round(submission_objective_score + submission_subjective_score, 2)
+
+    if submission_id is None or exam_student.latest_submission_id == submission_id:
+        answer.score_awarded = latest_score
+        answer.is_correct = latest_correct
+        answer.feedback = latest_feedback
+        objective_score, subjective_score = await _recompute_submission_scores(db, exam_id=exam_id, student_id=student_id)
+        exam_student.objective_score = objective_score
+        exam_student.subjective_score = subjective_score
+        exam_student.score = round(objective_score + subjective_score, 2)
+
+        now = _utcnow()
+        if await _has_pending_exam_submission_tasks(
+            db,
+            exam_id=exam_id,
+            student_id=student_id,
+            submission_id=submission_id,
+        ):
+            exam_student.grading_status = GradingStatus.PENDING_AI.value
+        else:
+            exam_student.grading_status = GradingStatus.AI_SCORED.value
+            exam_student.ai_scored_at = now
+        exam_student.graded_at = now
+    elif submission is not None:
+        if await _has_pending_exam_submission_tasks(
+            db,
+            exam_id=exam_id,
+            student_id=student_id,
+            submission_id=submission.id,
+        ):
+            submission.grading_status = GradingStatus.PENDING_AI.value
+        else:
+            submission.grading_status = GradingStatus.AI_SCORED.value
     else:
-        exam_student.grading_status = GradingStatus.AI_SCORED.value
-        exam_student.ai_scored_at = now
-    exam_student.graded_at = now
+        if await _has_pending_exam_submission_tasks(
+            db,
+            exam_id=exam_id,
+            student_id=student_id,
+        ):
+            exam_student.grading_status = GradingStatus.PENDING_AI.value
+        else:
+            exam_student.grading_status = GradingStatus.AI_SCORED.value
     await db.flush()
     return {
         "status": task.status,
-        "grading_status": exam_student.grading_status,
-        "score": exam_student.score,
+        "grading_status": exam_student.grading_status if submission_id is None or exam_student.latest_submission_id == submission_id else submission.grading_status if submission else exam_student.grading_status,
+        "score": exam_student.score if submission_id is None or exam_student.latest_submission_id == submission_id else submission.score if submission else exam_student.score,
     }
 
 
@@ -1273,8 +1382,8 @@ async def confirm_grading_task_for_exam_submission(
         return {"status": task.status, "grading_status": GradingStatus.REVIEWED.value}
 
     try:
-        _exam_id, _question_id, _student_id = _parse_exam_submission_locator(task.source_business_id)
-        task, exam_student, _answer = await _load_exam_submission_context(db, task_id)
+        _exam_id, _question_id, _student_id, _submission_id = _parse_exam_submission_locator(task.source_business_id)
+        task, exam_student, _answer, submission, _submission_answer = await _load_exam_submission_context(db, task_id)
     except ValueError:
         db.add(
             GradingAuditEvent(
@@ -1288,17 +1397,32 @@ async def confirm_grading_task_for_exam_submission(
         await db.flush()
         return {"status": task.status, "grading_status": GradingStatus.REVIEWED.value}
 
-    exam_id, _question_id, student_id = _parse_exam_submission_locator(task.source_business_id)
+    exam_id, _question_id, student_id, submission_id = _parse_exam_submission_locator(task.source_business_id)
     now = _utcnow()
-    if exam_student.grading_status == GradingStatus.REVIEWED.value:
-        return {"status": task.status, "grading_status": exam_student.grading_status}
+    if submission_id is not None and submission is not None:
+        if submission.grading_status != GradingStatus.REVIEWED.value:
+            submission.grading_status = GradingStatus.REVIEWED.value
+        if exam_student.latest_submission_id == submission_id:
+            if exam_student.grading_status != GradingStatus.REVIEWED.value:
+                exam_student.grading_status = GradingStatus.REVIEWED.value
+            exam_student.reviewed_at = now
+            if exam_student.ai_scored_at is None:
+                exam_student.ai_scored_at = now
+            if exam_student.graded_at is None:
+                exam_student.graded_at = now
+        else:
+            await db.flush()
+            return {"status": task.status, "grading_status": submission.grading_status}
+    else:
+        if exam_student.grading_status == GradingStatus.REVIEWED.value:
+            return {"status": task.status, "grading_status": exam_student.grading_status}
 
-    exam_student.grading_status = GradingStatus.REVIEWED.value
-    exam_student.reviewed_at = now
-    if exam_student.ai_scored_at is None:
-        exam_student.ai_scored_at = now
-    if exam_student.graded_at is None:
-        exam_student.graded_at = now
+        exam_student.grading_status = GradingStatus.REVIEWED.value
+        exam_student.reviewed_at = now
+        if exam_student.ai_scored_at is None:
+            exam_student.ai_scored_at = now
+        if exam_student.graded_at is None:
+            exam_student.graded_at = now
 
     existing_notification = (
         await db.execute(

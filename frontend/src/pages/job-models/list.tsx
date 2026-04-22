@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, type KeyboardEvent } from "react"
 import { useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { normalizeJobModelsResponse } from "./list-utils"
@@ -84,22 +84,28 @@ export function JobModelList() {
   const [page, setPage] = useState(1)
   const [deleteTarget, setDeleteTarget] = useState<JobModel | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   const handleDelete = async () => {
     if (!deleteTarget) return
     setIsDeleting(true)
+    setDeleteError(null)
     try {
       const token = localStorage.getItem("access_token")
+      if (!token) {
+        setDeleteError("登录已失效，请重新登录")
+        return
+      }
       const res = await fetch(`/api/job-models/models/${deleteTarget.id}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
       })
-      if (!res.ok) throw new Error(`Delete failed: ${res.status}`)
+      if (!res.ok) throw new Error(`删除失败（${res.status}）`)
       setModels((prev) => prev.filter((m) => m.id !== deleteTarget.id))
       setTotalCount((c) => Math.max(0, c - 1))
       setDeleteTarget(null)
     } catch (err) {
-      console.error("Failed to delete model:", err)
+      setDeleteError(err instanceof Error ? err.message : "删除失败，请稍后重试")
     } finally {
       setIsDeleting(false)
     }
@@ -110,20 +116,30 @@ export function JobModelList() {
   // Facets: cheap aggregate for industry tree + type counts. Fetched once.
   useEffect(() => {
     const token = localStorage.getItem("access_token")
+    if (!token) return
+    const ctrl = new AbortController()
     fetch("/api/job-models/models/facets", {
       headers: { Authorization: `Bearer ${token}` },
+      signal: ctrl.signal,
     })
       .then(async (res) => {
         if (!res.ok) return
         const data = (await res.json()) as Facet[]
         setFacets(Array.isArray(data) ? data : [])
       })
-      .catch((err) => console.error("Failed to load facets:", err))
+      .catch((err) => {
+        if (err?.name !== "AbortError") console.error("Failed to load facets:", err)
+      })
+    return () => ctrl.abort()
   }, [])
 
-  // Paginated list: re-fetch when page or filters change.
+  // Paginated list: re-fetch when page or filters change. Abort stale requests.
   useEffect(() => {
     const token = localStorage.getItem("access_token")
+    if (!token) {
+      setIsLoading(false)
+      return
+    }
     const params = new URLSearchParams({
       _start: String((page - 1) * PAGE_SIZE),
       _end: String(page * PAGE_SIZE),
@@ -132,19 +148,27 @@ export function JobModelList() {
     if (selectedIndustry) params.set("industry_name", selectedIndustry)
     if (selectedDirection) params.set("direction_name", selectedDirection)
 
+    const ctrl = new AbortController()
     setIsLoading(true)
     fetch(`/api/job-models/models?${params}`, {
       headers: { Authorization: `Bearer ${token}` },
+      signal: ctrl.signal,
     })
       .then(async (res) => {
+        if (!res.ok) throw new Error(`Load failed: ${res.status}`)
         const header = res.headers.get("X-Total-Count")
         const data = await res.json()
         const list = normalizeJobModelsResponse<JobModel>(data)
         setModels(list)
         setTotalCount(header ? Number(header) : list.length)
       })
-      .catch((err) => console.error("Failed to load models:", err))
-      .finally(() => setIsLoading(false))
+      .catch((err) => {
+        if (err?.name !== "AbortError") console.error("Failed to load models:", err)
+      })
+      .finally(() => {
+        if (!ctrl.signal.aborted) setIsLoading(false)
+      })
+    return () => ctrl.abort()
   }, [page, typeFilter, selectedIndustry, selectedDirection])
 
   // Build industry tree from facets (one row per industry/direction/type).
@@ -182,8 +206,6 @@ export function JobModelList() {
     return { standard, enterprise, all }
   }, [facets])
 
-  // Server already paginates + filters; frontend just renders.
-  const pagedModels = models
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE))
   const safePage = Math.min(page, totalPages)
 
@@ -200,6 +222,7 @@ export function JobModelList() {
   const selectDirection = (industryName: string, directionName: string) => {
     setSelectedIndustry(industryName)
     setSelectedDirection(directionName)
+    setPage(1)
     if (!expandedIndustries.has(industryName)) {
       setExpandedIndustries(new Set([...expandedIndustries, industryName]))
     }
@@ -211,9 +234,24 @@ export function JobModelList() {
     setPage(1)
   }
 
-  useEffect(() => {
+  const changeTypeFilter = (next: TypeFilter) => {
+    setTypeFilter(next)
     setPage(1)
-  }, [typeFilter, selectedDirection, selectedIndustry])
+  }
+
+  const openModel = (model: JobModel) => {
+    if (!model.current_version_id) return
+    navigate(`/gwmx/job-models/${model.id}/versions/${model.current_version_id}/editor`)
+  }
+
+  const onCardKeyDown = (e: KeyboardEvent<HTMLDivElement>, model: JobModel) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault()
+      openModel(model)
+    }
+  }
+
+  const hasActiveFilter = typeFilter !== "all" || !!selectedIndustry || !!selectedDirection
 
   const handleViewModeChange = (mode: ViewMode) => {
     setViewMode(mode)
@@ -415,7 +453,7 @@ export function JobModelList() {
                   variant={typeFilter === opt.key ? "secondary" : "ghost"}
                   size="sm"
                   className="h-7 px-3 text-xs"
-                  onClick={() => setTypeFilter(opt.key)}
+                  onClick={() => changeTypeFilter(opt.key)}
                 >
                   {opt.label}
                 </Button>
@@ -431,17 +469,22 @@ export function JobModelList() {
             )}
           </div>
 
-          {viewMode === "card" ? (
-            <div className="grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
-              {pagedModels.map((model) => {
+          {!isLoading && models.length === 0 ? (
+            <div className="rounded-[var(--radius)] border border-dashed border-border bg-card p-10 text-center text-sm text-muted-foreground">
+              {hasActiveFilter ? "当前筛选条件下没有匹配的岗位模型" : "暂无岗位模型"}
+            </div>
+          ) : viewMode === "card" ? (
+            <div className={cn("grid gap-3 xl:grid-cols-2 2xl:grid-cols-3 transition-opacity", isLoading && "opacity-60 pointer-events-none")}>
+              {models.map((model) => {
                 return (
                   <div
                     key={model.id}
-                    className="group min-h-[152px] rounded-[var(--radius)] border border-border bg-card p-4 transition-all hover:border-primary/30 hover:bg-primary/[0.02] hover:shadow-md cursor-pointer"
-                    onClick={() => {
-                      if (!model.current_version_id) return
-                      navigate(`/gwmx/job-models/${model.id}/versions/${model.current_version_id}/editor`)
-                    }}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`打开岗位 ${model.job_role}`}
+                    className="group min-h-[152px] rounded-[var(--radius)] border border-border bg-card p-4 transition-all hover:border-primary/30 hover:bg-primary/[0.02] hover:shadow-md cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                    onClick={() => openModel(model)}
+                    onKeyDown={(e) => onCardKeyDown(e, model)}
                   >
                     <div className="flex h-full items-start gap-3">
                       <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary transition-colors group-hover:bg-primary/15">
@@ -458,15 +501,14 @@ export function JobModelList() {
                               {[model.industry_name, model.direction_name].filter(Boolean).join(" / ") || "未分类"}
                             </p>
                           </div>
-                          <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                          <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                             <Button
                               variant="ghost"
                               size="sm"
                               className="h-8 px-2 text-xs"
                               onClick={(e) => {
                                 e.stopPropagation()
-                                if (!model.current_version_id) return
-                                navigate(`/gwmx/job-models/${model.id}/versions/${model.current_version_id}/editor`)
+                                openModel(model)
                               }}
                             >
                               <Edit2 className="mr-1.5 h-3.5 w-3.5" />
@@ -497,10 +539,10 @@ export function JobModelList() {
                               {formatDistanceToNow(new Date(model.updated_at), {
                                 addSuffix: true,
                                 locale: zhCN,
-                            })}
-                          </span>
+                              })}
+                            </span>
+                          </div>
                         </div>
-                      </div>
                       </div>
                     </div>
                   </div>
@@ -508,15 +550,16 @@ export function JobModelList() {
               })}
             </div>
           ) : (
-            <div className="grid gap-3">
-              {pagedModels.map((model) => (
+            <div className={cn("grid gap-3 transition-opacity", isLoading && "opacity-60 pointer-events-none")}>
+              {models.map((model) => (
                 <div
                   key={model.id}
-                  className="group rounded-[var(--radius)] border border-border bg-card p-4 transition-all hover:border-primary/30 hover:bg-primary/[0.02] hover:shadow-md cursor-pointer"
-                  onClick={() => {
-                    if (!model.current_version_id) return
-                    navigate(`/gwmx/job-models/${model.id}/versions/${model.current_version_id}/editor`)
-                  }}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`打开岗位 ${model.job_role}`}
+                  className="group rounded-[var(--radius)] border border-border bg-card p-4 transition-all hover:border-primary/30 hover:bg-primary/[0.02] hover:shadow-md cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                  onClick={() => openModel(model)}
+                  onKeyDown={(e) => onCardKeyDown(e, model)}
                 >
                   <div className="flex items-center gap-4">
                     <div className="h-11 w-11 rounded-[var(--radius)] bg-primary/10 flex items-center justify-center shrink-0 transition-colors group-hover:bg-primary/15">
@@ -545,15 +588,14 @@ export function JobModelList() {
                       </div>
                     </div>
 
-                    <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                    <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                       <Button
                         variant="ghost"
                         size="sm"
                         className="text-xs"
                         onClick={(e) => {
                           e.stopPropagation()
-                          if (!model.current_version_id) return
-                          navigate(`/gwmx/job-models/${model.id}/versions/${model.current_version_id}/editor`)
+                          openModel(model)
                         }}
                       >
                         <Edit2 className="mr-1.5 h-3.5 w-3.5" />
@@ -587,7 +629,7 @@ export function JobModelList() {
                 <Button
                   variant="outline"
                   size="sm"
-                  className="h-7 px-2"
+                  className="h-9 px-3"
                   onClick={() => setPage((p) => Math.max(1, p - 1))}
                   disabled={safePage <= 1}
                 >
@@ -596,7 +638,7 @@ export function JobModelList() {
                 <Button
                   variant="outline"
                   size="sm"
-                  className="h-7 px-2"
+                  className="h-9 px-3"
                   onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                   disabled={safePage >= totalPages}
                 >
@@ -608,7 +650,15 @@ export function JobModelList() {
         </div>
       </div>
 
-      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+      <AlertDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleteTarget(null)
+            setDeleteError(null)
+          }
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>确认删除岗位模型</AlertDialogTitle>
@@ -616,6 +666,14 @@ export function JobModelList() {
               确定要删除岗位"{deleteTarget?.job_role}"及其所有版本吗？此操作不可恢复。
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {deleteError && (
+            <div
+              role="alert"
+              className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+            >
+              {deleteError}
+            </div>
+          )}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={isDeleting}>取消</AlertDialogCancel>
             <AlertDialogAction
@@ -642,7 +700,7 @@ function TypeTag({ modelType }: { modelType?: string }) {
       className={cn(
         "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium",
         isEnterprise
-          ? "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300"
+          ? "border border-primary/40 bg-primary/5 text-primary"
           : "bg-primary/10 text-primary",
       )}
     >

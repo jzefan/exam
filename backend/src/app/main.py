@@ -55,13 +55,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(title="AI Exam Grading System", version="0.1.0", lifespan=lifespan)
 
+from app.database import engine as _engine  # noqa: E402
+from app.observability import install as install_observability  # noqa: E402
+
+install_observability(app, _engine)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Total-Count", "X-No-Bank-Count"],
+    expose_headers=["X-Total-Count", "X-No-Bank-Count", "X-Response-Time-Ms"],
 )
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])

@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
+from app.code_runner.schemas import CodeRunCaseResult, CodeRunMode, CodeRunRequest, CodeRunResult
 
 class StudentAnswerItem(BaseModel):
     question_id: uuid.UUID
@@ -11,6 +12,10 @@ class StudentAnswerItem(BaseModel):
 
 class SaveAnswersRequest(BaseModel):
     answers: list[StudentAnswerItem] = Field(default_factory=list)
+
+
+class StartExamRequest(BaseModel):
+    retake: bool = False
 
 
 class SubmitExamRequest(BaseModel):
@@ -42,6 +47,7 @@ class StudentExamStartResponse(BaseModel):
     title: str
     duration_minutes: int
     max_switch_count: int
+    allow_retake: bool = False
     started_at: datetime
     end_time: datetime | None = None
     questions: list[StudentQuestionPayload] = Field(default_factory=list)
@@ -129,3 +135,15 @@ class StudentNotificationResponse(BaseModel):
     related_exam_id: uuid.UUID | None = None
     read_at: datetime | None = None
     created_at: datetime
+
+
+class StudentCodeRunRequest(CodeRunRequest):
+    pass
+
+
+class StudentCodeRunCaseResponse(CodeRunCaseResult):
+    pass
+
+
+class StudentCodeRunResponse(CodeRunResult):
+    cases: list[StudentCodeRunCaseResponse] = Field(default_factory=list)

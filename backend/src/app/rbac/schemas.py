@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 OrgTypeEnum = Literal["enterprise", "school"]
 PermissionAction = Literal["create", "read", "update", "delete"]
@@ -94,9 +94,23 @@ class UserOrganizationResponse(BaseModel):
 
 class StudentCreate(BaseModel):
     full_name: str
-    phone: str
+    phone: str | None = None
     student_id: str | None = None
     class_id: uuid.UUID | None = None
+
+    @field_validator("full_name", "phone", "student_id", mode="before")
+    @classmethod
+    def strip_text_fields(cls, value):
+        if value is None:
+            return None
+        stripped = str(value).strip()
+        return stripped or None
+
+    @model_validator(mode="after")
+    def require_account_identifier(self):
+        if not self.phone and not self.student_id:
+            raise ValueError("手机号和学号至少需要填写一项")
+        return self
 
 
 class ClassCreate(BaseModel):
@@ -127,6 +141,16 @@ class StudentRead(BaseModel):
 
 
 class BatchImportResponse(BaseModel):
+    success_count: int
+    failed_count: int
+    errors: list[str] = []
+
+
+class StudentBatchDeleteRequest(BaseModel):
+    student_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class StudentBatchDeleteResponse(BaseModel):
     success_count: int
     failed_count: int
     errors: list[str] = []

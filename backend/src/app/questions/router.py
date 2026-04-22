@@ -46,6 +46,7 @@ from app.questions.schemas import (
 from app.questions.service import (
     bulk_create_questions,
     bulk_create_questions_fast,
+    clear_question_bank_questions,
     match_and_create_import_question,
     create_knowledge_point,
     create_question,
@@ -649,6 +650,34 @@ async def create_question_bank_endpoint(
 ) -> QuestionBankResponse:
     bank = await create_question_bank(db, data, user.id)
     return QuestionBankResponse.model_validate(bank)
+
+
+@question_banks_router.post("/{bank_id}/clear", response_model=QuestionBulkDeleteResponse)
+async def clear_question_bank_questions_endpoint(
+    bank_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
+) -> QuestionBulkDeleteResponse:
+    is_admin = await _is_question_admin(db, user)
+    bank = await get_question_bank_by_id(db, bank_id)
+    if bank is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question bank not found")
+    if not can_read_shared_resource(
+        is_platform_admin=is_admin,
+        current_user_id=user.id,
+        owner_id=bank.owner_id,
+        visibility=bank.visibility,
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question bank not found")
+    if not can_write_owned_resource(
+        is_platform_admin=is_admin,
+        current_user_id=user.id,
+        owner_id=bank.owner_id,
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No permission to modify this question bank")
+
+    deleted = await clear_question_bank_questions(db, bank)
+    return QuestionBulkDeleteResponse(deleted=deleted)
 
 
 @question_banks_router.delete("/{bank_id}", status_code=status.HTTP_204_NO_CONTENT)

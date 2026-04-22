@@ -10,6 +10,7 @@ import {
   ClipboardList,
   UserCheck,
   Eye,
+  Pencil,
   Lock,
   Search,
   Filter,
@@ -53,6 +54,7 @@ import { ExamStatusBadge, examStatusOptions } from "./components/ExamStatusBadge
 import { getEffectiveExamStatus } from "./utils";
 import type { ExamStatus, IExam } from "@/types";
 import { getErrorMessage } from "./components/exam-form-utils";
+import { getExamDeleteDescription } from "@/lib/deletion-copy";
 
 type FilterKey = "all" | ExamStatus;
 type CategoryKey = "all" | "exam" | "practice";
@@ -67,12 +69,14 @@ function formatDateTime(iso: string | null) {
 function ExamCard({
   exam,
   onView,
+  onEdit,
   onAnalysis,
   onClose,
   onDelete,
 }: {
   exam: IExam;
   onView: () => void;
+  onEdit: () => void;
   onAnalysis: () => void;
   onClose: () => void;
   onDelete: () => void;
@@ -156,10 +160,15 @@ function ExamCard({
 
         {/* Actions Section */}
         <div className="flex items-center gap-1 self-end md:self-center">
-          {/* 查看 — all statuses */}
           <Button variant="ghost" size="sm" className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold" onClick={onView}>
             <Eye size={14} />
             <span>查看</span>
+          </Button>
+
+          {/* 修改 — all statuses */}
+          <Button variant="ghost" size="sm" className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold" onClick={onEdit}>
+            <Pencil size={14} />
+            <span>修改</span>
           </Button>
 
           {canViewAnalysis && (
@@ -467,7 +476,8 @@ export function ExamList() {
             <ExamCard
               key={exam.id}
               exam={exam}
-              onView={() =>
+              onView={() => navigate(`/exams/${exam.id}/view`)}
+              onEdit={() =>
                 navigate(
                   exam.category === "practice"
                     ? `/exams/practice/edit/${exam.id}`
@@ -563,7 +573,7 @@ export function ExamList() {
           <AlertDialogHeader>
             <AlertDialogTitle>删除{deleteTargetLabel}</AlertDialogTitle>
             <AlertDialogDescription>
-              确定要删除{deleteTargetLabel}「{deleteTarget?.title}」吗？此操作无法撤销。
+              {getExamDeleteDescription(deleteTargetLabel, deleteTarget?.title)}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

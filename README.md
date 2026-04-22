@@ -68,8 +68,17 @@ uv run alembic upgrade head
 EXAM_DATABASE_URL=postgresql+asyncpg://exam:exam@localhost:5432/exam \
 EXAM_SECRET_KEY=dev-secret-key \
 EXAM_DEBUG=true \
+EXAM_JUDGE_RUNNER_URL=http://127.0.0.1:8010 \
 uv run uvicorn app.main:app --app-dir src --reload
 ```
+
+如果你希望本地开发时也支持 Java / Go 等在线运行，先在项目根目录启动 Docker 判题容器：
+
+```bash
+docker compose -f docker-compose.dev.yml up -d judge_runner
+```
+
+然后让后端带上 `EXAM_JUDGE_RUNNER_URL=http://127.0.0.1:8010` 启动。这样本地 `uvicorn` 会把代码运行请求转发到 Docker 里的判题环境，而不是依赖宿主机自己安装 `java`、`go`。
 
 #### 3. 启动前端
 

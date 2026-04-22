@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   buildKnowledgeTreeVisibility,
   buildRecentKeywordState,
@@ -213,7 +213,6 @@ export function KnowledgePointSelector({
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [keyword, setKeyword] = useState("");
   const [knowledgeLoading, setKnowledgeLoading] = useState(false);
-  const [popoverAnchorPosition, setPopoverAnchorPosition] = useState<{ x: number; y: number } | null>(null);
   const [recentKnowledgePoints, setRecentKnowledgePoints] = useState<FrequentKnowledgePointItem[]>([]);
   const [frequentKnowledgePoints, setFrequentKnowledgePoints] = useState<FrequentKnowledgePointItem[]>([]);
   const [recentKeywords, setRecentKeywords] = useState<RecentKeywordState>({});
@@ -318,14 +317,6 @@ export function KnowledgePointSelector({
     [onSelectedKnowledgePointsChange, selectedKnowledgePoints],
   );
 
-  const updateAnchorFromElement = (element: HTMLElement) => {
-    const rect = element.getBoundingClientRect();
-    setPopoverAnchorPosition({
-      x: rect.left + Math.min(rect.width / 2, 32),
-      y: rect.bottom + 6,
-    });
-  };
-
   return (
     <div className={cn("space-y-1.5", className)}>
       <Label>{label}</Label>
@@ -363,33 +354,11 @@ export function KnowledgePointSelector({
           }
         }}
       >
-        {popoverAnchorPosition && (
-          <PopoverAnchor asChild>
-            <span
-              aria-hidden="true"
-              className="pointer-events-none fixed size-px opacity-0"
-              style={{
-                left: popoverAnchorPosition.x,
-                top: popoverAnchorPosition.y,
-              }}
-            />
-          </PopoverAnchor>
-        )}
         <PopoverTrigger asChild>
           <Button
             variant="outline"
             type="button"
             className="w-full justify-between"
-            onPointerDown={(event) => {
-              if (event.pointerType === "mouse" || event.pointerType === "pen") {
-                setPopoverAnchorPosition({ x: event.clientX, y: event.clientY });
-              }
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                updateAnchorFromElement(event.currentTarget);
-              }
-            }}
           >
             <span>
               {selectedKnowledgePoints.length > 0
@@ -400,13 +369,13 @@ export function KnowledgePointSelector({
           </Button>
         </PopoverTrigger>
         <PopoverContent
-          side={popoverAnchorPosition ? "bottom" : popoverSide}
+          side={popoverSide}
           align="start"
-          sideOffset={8}
-          collisionPadding={16}
-          className="h-[560px] w-[560px] max-w-[calc(100vw-2rem)] overflow-hidden p-0"
+          sideOffset={12}
+          collisionPadding={20}
+          className="flex h-[min(640px,calc(100vh-2rem))] w-[min(560px,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-hidden p-0"
         >
-          <div className="border-b p-3">
+          <div className="shrink-0 border-b p-3">
             <div className="flex items-center rounded-lg border bg-background px-3">
               <Search className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
               <Input
@@ -505,7 +474,7 @@ export function KnowledgePointSelector({
             ) : null}
           </div>
 
-          <div className="h-[calc(560px-172px)] overflow-y-auto p-2 text-sm">
+          <div className="min-h-0 flex-1 overflow-y-auto p-2 text-sm">
             {knowledgeLoading ? (
               <div className="flex items-center justify-center gap-2 px-3 py-10 text-sm text-muted-foreground">
                 <Loader2 size={14} className="animate-spin" />

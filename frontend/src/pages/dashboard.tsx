@@ -188,12 +188,20 @@ export function Dashboard() {
               onClick={() => navigate("/grading")}
             />
             <StatCard
-              title="学生总数"
-              value={stats?.total_students ?? 0}
+              title="考试/练习数"
+              value={stats?.total_exams ?? 0}
               loading={loading}
-              icon={<Users size={22} className="text-emerald-600 dark:text-emerald-400" />}
-              color="bg-emerald-50 dark:bg-emerald-950"
-              onClick={() => navigate("/students")}
+              icon={<ClipboardList size={22} className="text-sky-600 dark:text-sky-400" />}
+              color="bg-sky-50 dark:bg-sky-950"
+              onClick={() => navigate("/exams")}
+            />
+            <StatCard
+              title="题目数"
+              value={stats?.total_questions ?? 0}
+              loading={loading}
+              icon={<BookOpen size={22} className="text-indigo-600 dark:text-indigo-400" />}
+              color="bg-indigo-50 dark:bg-indigo-950"
+              onClick={() => navigate("/questions")}
             />
           </>
         )}

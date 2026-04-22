@@ -1,11 +1,13 @@
 import { useList, useCreate, useUpdate, useDelete, useGetIdentity, useInvalidate } from "@refinedev/core";
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Plus, Pencil, Trash2, Tag, TagsIcon, ChevronLeft, ChevronRight, BookOpen } from "lucide-react";
 import type { ITag, IQuestion } from "../../types";
 import { getUserRole } from "@/types/rbac";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { PageIntroHeader } from "@/components/ui/page-intro-header";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -140,10 +142,6 @@ interface EditDialogProps {
 function EditTagDialog({ open, tag, onClose, onSubmit, isLoading }: EditDialogProps) {
   const [name, setName] = useState(tag?.name ?? "");
 
-  useEffect(() => {
-    setName(tag?.name ?? "");
-  }, [tag]);
-
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
@@ -257,9 +255,6 @@ interface TagQuestionsDialogProps {
 function TagQuestionsDialog({ tag, open, onClose }: TagQuestionsDialogProps) {
   const [page, setPage] = useState(1);
   const pageSize = 10;
-
-  // Reset page when tag changes
-  useEffect(() => { setPage(1); }, [tag?.id]);
 
   const { query } = useList<IQuestion>({
     resource: "questions",
@@ -458,6 +453,7 @@ function TagSection({
 }
 
 export function TagList() {
+  const navigate = useNavigate();
   const { data: identity } = useGetIdentity<{ primary_org?: { role_name: string } | null }>();
   const userRole = identity ? getUserRole(identity) : undefined;
   const isAdminOrTeacher = userRole === "platform_admin" || userRole === "enterprise_admin" || userRole === "school_admin" || userRole === "teacher";
@@ -562,13 +558,13 @@ export function TagList() {
 
   return (
     <div className="space-y-6">
-      {/* Page header */}
-      <div>
-        <h1 className="text-base font-bold text-foreground tracking-tight">标签管理</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          管理题目的知识点、学科、用途等分类标签
-        </p>
-      </div>
+      <PageIntroHeader
+        title="标签管理"
+        description="统一维护知识点、学科、用途与自定义标签，方便题目分类与筛选。"
+        onBack={() => navigate("/questions")}
+        backLabel="返回题目列表"
+        fullBleed
+      />
 
       <Card>
         <Tabs defaultValue="standard">
@@ -692,6 +688,7 @@ export function TagList() {
 
       {/* Edit dialog */}
       <EditTagDialog
+        key={editingTag?.id ?? "edit-tag-dialog"}
         open={editDialogOpen}
         tag={editingTag}
         onClose={() => {
@@ -731,6 +728,7 @@ export function TagList() {
 
       {/* Questions detail dialog */}
       <TagQuestionsDialog
+        key={questionsDialogTag?.id ?? "tag-questions-dialog"}
         tag={questionsDialogTag}
         open={!!questionsDialogTag}
         onClose={() => setQuestionsDialogTag(null)}
