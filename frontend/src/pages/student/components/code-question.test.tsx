@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -38,7 +39,7 @@ vi.mock("@/components/ui/select", () => ({
     value?: string;
     onValueChange?: (value: string) => void;
     disabled?: boolean;
-    children: React.ReactNode;
+    children: ReactNode;
   }) => (
     <select
       aria-label="选择语言"
@@ -49,12 +50,18 @@ vi.mock("@/components/ui/select", () => ({
       {children}
     </select>
   ),
-  SelectTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  SelectTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
   SelectValue: () => null,
-  SelectContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  SelectItem: ({ value, children }: { value: string; children: React.ReactNode }) => (
+  SelectContent: ({ children }: { children: ReactNode }) => <>{children}</>,
+  SelectItem: ({ value, children }: { value: string; children: ReactNode }) => (
     <option value={value}>{children}</option>
   ),
+}));
+
+vi.mock("@/components/ui/popover", () => ({
+  Popover: ({ children }: { children: ReactNode }) => <>{children}</>,
+  PopoverTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  PopoverContent: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
 vi.mock("@/components/ui/latex-text", () => ({
@@ -80,12 +87,7 @@ vi.mock("@monaco-editor/react", () => ({
         CompletionItemKind: { Keyword: number; Function: number; Snippet: number; Class: number };
         CompletionItemInsertTextRule: { InsertAsSnippet: number };
       };
-      Range: new (
-        startLineNumber: number,
-        startColumn: number,
-        endLineNumber: number,
-        endColumn: number,
-      ) => unknown;
+      Range: unknown;
     }) => void;
     path?: string;
   }) => {
@@ -102,14 +104,7 @@ vi.mock("@monaco-editor/react", () => ({
           InsertAsSnippet: 4,
         },
       },
-      Range: class MockRange {
-        constructor(
-          public startLineNumber: number,
-          public startColumn: number,
-          public endLineNumber: number,
-          public endColumn: number,
-        ) {}
-      },
+      Range: {},
     });
 
     return (
@@ -280,6 +275,164 @@ describe("CodeQuestion", () => {
     expect(screen.queryByText("函数签名")).not.toBeInTheDocument();
   });
 
+  it("renders markdown-based problem statements in the left prompt pane", () => {
+    const { container } = render(
+      <CodeQuestionHarness
+        content={{
+          mode: "program",
+          description: "# 题目说明\n- 支持 **Markdown**\n- 支持 `代码片段`",
+          starter_code: {
+            python: "print('hello')\n",
+          },
+          sample_tests: [
+            {
+              input: "1 2\n",
+              expected_output: "3\n",
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { level: 1, name: "题目说明" })).toBeInTheDocument();
+    expect(screen.getByText("Markdown")).toBeInTheDocument();
+    expect(container.querySelector("code")?.textContent).toContain("代码片段");
+  });
+
+  it("renders standalone code-signature lines as code blocks in the prompt pane", () => {
+    const { container } = render(
+      <CodeQuestionHarness
+        content={{
+          mode: "program",
+          description: "请实现数组翻转。\nvoid reverse(int arr[], int n);",
+          starter_code: {
+            cpp: "",
+          },
+          sample_tests: [
+            {
+              input: "1 2\n",
+              expected_output: "3\n",
+            },
+          ],
+        }}
+      />,
+    );
+
+    const codeBlocks = container.querySelectorAll("pre code");
+    expect(Array.from(codeBlocks).some((node) => node.textContent?.includes("void reverse(int arr[], int n);"))).toBe(true);
+  });
+
+  it("does not misclassify explanatory Chinese prose as code blocks", () => {
+    const { container } = render(
+      <CodeQuestionHarness
+        content={{
+          mode: "program",
+          description: "编写一个程序，对顺序存储的线性表（使用数组实现，长度为 n，元素类型为 `int`）进行操作。",
+          starter_code: {
+            java: "",
+          },
+          sample_tests: [
+            {
+              input: "1 2\n",
+              expected_output: "3\n",
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/编写一个程序，对顺序存储的线性表/)).toBeInTheDocument();
+    const codeBlocks = Array.from(container.querySelectorAll("pre code"));
+    expect(codeBlocks.some((node) => node.textContent?.includes("编写一个程序"))).toBe(false);
+  });
+
+  it("falls back to helpful default starter code when program-mode starter code is blank", async () => {
+    const user = userEvent.setup();
+    render(
+      <CodeQuestionHarness
+        content={{
+          mode: "program",
+          description: "请编写完整程序。",
+          starter_code: {
+            python: "",
+            javascript: "",
+            java: "",
+            cpp: "",
+            c: "",
+          },
+          sample_tests: [
+            {
+              input: "1 2\n",
+              expected_output: "3\n",
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByLabelText("代码编辑器")).toHaveValue(
+      "# 请从标准输入读取数据，例如使用 input() 或 sys.stdin.read()\n# 在这里开始编写代码\n",
+    );
+
+    await user.selectOptions(screen.getByLabelText("选择语言"), "javascript");
+    expect(screen.getByLabelText("代码编辑器")).toHaveValue(
+      "// 请从标准输入读取数据，例如使用 fs.readFileSync(0, 'utf8')\n// 在这里开始编写代码\n",
+    );
+
+    await user.selectOptions(screen.getByLabelText("选择语言"), "java");
+    expect(screen.getByLabelText("代码编辑器")).toHaveValue(
+      "import java.io.*;\nimport java.util.*;\n\npublic class Solution {\n    public static void main(String[] args) throws Exception {\n        // 请从标准输入读取数据，例如使用 Scanner 或 BufferedReader\n        // 在这里开始编写代码\n    }\n}\n",
+    );
+
+    await user.selectOptions(screen.getByLabelText("选择语言"), "cpp");
+    expect(screen.getByLabelText("代码编辑器")).toHaveValue(
+      "#include <bits/stdc++.h>\nusing namespace std;\n\nint main() {\n    // 请从标准输入读取数据，例如使用 cin\n    // 在这里开始编写代码\n    return 0;\n}\n",
+    );
+
+    await user.selectOptions(screen.getByLabelText("选择语言"), "c");
+    expect(screen.getByLabelText("代码编辑器")).toHaveValue(
+      "#include <stdio.h>\n#include <stdlib.h>\n\nint main(void) {\n    // 请从标准输入读取数据，例如使用 scanf 或 fgets\n    // 在这里开始编写代码\n    return 0;\n}\n",
+    );
+  });
+
+  it("keeps full-program input guidance in starter code comments instead of a separate prompt card", async () => {
+    const user = userEvent.setup();
+    render(
+      <CodeQuestionHarness
+        content={{
+          mode: "program",
+          description: "请编写完整程序。",
+          starter_code: {
+            python: "",
+            javascript: "",
+            java: "",
+          },
+          sample_tests: [
+            {
+              input: "1 2\n",
+              expected_output: "3\n",
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.queryByText("作答提示")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("代码编辑器")).toHaveValue(
+      "# 请从标准输入读取数据，例如使用 input() 或 sys.stdin.read()\n# 在这里开始编写代码\n",
+    );
+
+    await user.selectOptions(screen.getByLabelText("选择语言"), "javascript");
+    expect(screen.getByLabelText("代码编辑器")).toHaveValue(
+      "// 请从标准输入读取数据，例如使用 fs.readFileSync(0, 'utf8')\n// 在这里开始编写代码\n",
+    );
+
+    await user.selectOptions(screen.getByLabelText("选择语言"), "java");
+    expect(screen.getByLabelText("代码编辑器")).toHaveValue(
+      "import java.io.*;\nimport java.util.*;\n\npublic class Solution {\n    public static void main(String[] args) throws Exception {\n        // 请从标准输入读取数据，例如使用 Scanner 或 BufferedReader\n        // 在这里开始编写代码\n    }\n}\n",
+    );
+  });
+
   it("renders function mode metadata for advanced function questions", () => {
     render(
       <CodeQuestionHarness
@@ -304,6 +457,21 @@ describe("CodeQuestion", () => {
     expect(screen.getByText("函数签名")).toBeInTheDocument();
     expect(screen.getByText("twoSum(nums: int[], target: int) -> int[]")).toBeInTheDocument();
     expect(screen.getAllByText("twoSum")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "查看标准输入参考代码" })).not.toBeInTheDocument();
+  });
+
+  it("shows a standard-input reference popover trigger for full-program questions", async () => {
+    const user = userEvent.setup();
+    render(<CodeQuestionHarness />);
+
+    await user.click(screen.getByRole("button", { name: "查看标准输入参考代码" }));
+
+    expect(screen.getByText("标准输入参考")).toBeInTheDocument();
+    expect(screen.getByText(/系统会把测试数据写入标准输入/)).toBeInTheDocument();
+    expect(screen.getByText(/import sys/)).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText("选择语言"), "javascript");
+    expect(screen.getByText(/fs\.readFileSync\(0, 'utf8'\)/)).toBeInTheDocument();
   });
 
   it("disables run controls while a run is in flight", async () => {
@@ -522,6 +690,15 @@ describe("CodeQuestion", () => {
     expect(screen.getByText("编译输出")).toBeInTheDocument();
     expect(screen.getByText("compile output text")).toBeInTheDocument();
     expect(screen.queryByText(/已通过 .* 个示例测试/)).not.toBeInTheDocument();
+  });
+
+  it("uses a concise custom-input placeholder without example suffixes", async () => {
+    const user = userEvent.setup();
+    render(<CodeQuestionHarness />);
+
+    await user.click(screen.getByRole("button", { name: "自定义测试" }));
+
+    expect(screen.getByLabelText("自定义输入")).toHaveAttribute("placeholder", "输入你自己的测试用例");
   });
 
   it("shows custom runs as completed instead of passed when execution succeeds", async () => {

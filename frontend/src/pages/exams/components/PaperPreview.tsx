@@ -1,4 +1,3 @@
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
@@ -13,27 +12,23 @@ export function PaperPreview({
   title,
   categoryLabel,
   items,
-  totalScore,
   scoreMode,
   onScoreModeChange,
   questionTypeSummaries,
   typeScoreDrafts,
   onTypeScoreChange,
   onQuestionScoreChange,
-  isAutoSavingScores,
   className,
 }: {
   title: string;
   categoryLabel: string;
   items: PaperPreviewItem[];
-  totalScore: number;
   scoreMode: ScoreViewMode;
   onScoreModeChange: (mode: ScoreViewMode) => void;
   questionTypeSummaries: QuestionTypeSummary[];
   typeScoreDrafts: Partial<Record<QuestionType, string>>;
   onTypeScoreChange: (summary: QuestionTypeSummary, value: string) => void;
   onQuestionScoreChange: (questionId: string, value: string) => void;
-  isAutoSavingScores: boolean;
   className?: string;
 }) {
   const nextMode = scoreMode === "order" ? "type" : "order";

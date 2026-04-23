@@ -1,3 +1,4 @@
+## syntax=docker/dockerfile:1.7
 ARG PYTHON_BASE_IMAGE=python:3.12-slim
 FROM ${PYTHON_BASE_IMAGE}
 ARG DEBIAN_APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian
@@ -28,8 +29,10 @@ RUN if [ -n "${DEBIAN_APT_MIRROR}" ]; then \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir uv
 
-COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev
+COPY judge-runner-requirements.txt ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv venv .venv \
+    && uv pip install --python .venv/bin/python -r judge-runner-requirements.txt
 
 COPY src ./src
 

@@ -19,7 +19,6 @@ import {
   buildEvenScoreAllocation,
   buildPaperPreviewItems,
   buildQuestionTypeSummaries,
-  questionTypeLabels,
   type QuestionTypeSummary,
 } from "./components/paper-view-utils";
 import { getEffectiveExamStatus } from "./utils";
@@ -350,7 +349,6 @@ export function ExamPaperViewPage() {
           title={exam.title}
           categoryLabel={categoryLabel}
           items={previewItems}
-          totalScore={totalScore}
           scoreMode={scoreMode}
           onScoreModeChange={setScoreMode}
           questionTypeSummaries={questionTypeSummaries}
@@ -369,7 +367,6 @@ export function ExamPaperViewPage() {
             setQuestionItems((prev) => applyTypeScoreAllocationToItems(prev, summary, parsed));
           }}
           onQuestionScoreChange={updateQuestionScore}
-          isAutoSavingScores={savingTarget === "scores" && mutation.isPending}
         />
 
         <PaperSummarySidebar title="考试摘要">

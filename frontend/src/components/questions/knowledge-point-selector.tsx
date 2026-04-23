@@ -371,17 +371,17 @@ export function KnowledgePointSelector({
         <PopoverContent
           side={popoverSide}
           align="start"
-          sideOffset={12}
+          sideOffset={8}
           collisionPadding={20}
-          className="flex h-[min(640px,calc(100vh-2rem))] w-[min(560px,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-hidden p-0"
+          className="flex max-h-[min(480px,calc(100dvh-9rem))] w-[min(560px,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-hidden p-0 sm:max-h-[min(560px,calc(100dvh-9rem))]"
         >
-          <div className="shrink-0 border-b p-3">
-            <div className="flex items-center rounded-lg border bg-background px-3">
-              <Search className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+          <div className="shrink-0 border-b border-border/30 p-3">
+            <div className="flex items-center rounded-lg border border-border/40 bg-background/80 px-3 shadow-sm shadow-black/[0.02]">
+              <Search className="mr-2 h-4 w-4 shrink-0 text-muted-foreground/80" />
               <Input
                 value={keyword}
                 onChange={(e) => setKeyword(e.target.value)}
-                className="border-0 px-0 shadow-none focus-visible:ring-0"
+                className="border-0 px-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
                 placeholder="搜索专业、方向或知识点..."
               />
             </div>
@@ -474,7 +474,7 @@ export function KnowledgePointSelector({
             ) : null}
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto p-2 text-sm">
+          <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-8 pt-2 text-sm">
             {knowledgeLoading ? (
               <div className="flex items-center justify-center gap-2 px-3 py-10 text-sm text-muted-foreground">
                 <Loader2 size={14} className="animate-spin" />

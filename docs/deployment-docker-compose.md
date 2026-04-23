@@ -116,6 +116,21 @@ chmod +x scripts/deploy.sh
 
 backend 容器通过内部地址 `http://judge_runner:8010` 调用该服务。
 
+`judge_runner` 镜像现在使用独立的最小 Python 依赖清单，不再跟随 backend 安装整套文档解析、数据库和 AI SDK 依赖。这样可以显著减少首轮构建时需要下载的 Python 包数量，尤其适合服务器网络较慢的场景。
+
+部署完成后，可以在服务器的项目目录执行下面的验收脚本，快速确认 backend 已经接上 Docker 判题环境：
+
+```bash
+./scripts/check-judge-runner.sh
+```
+
+脚本会检查：
+
+- `db`、`judge_runner`、当前活动 backend 容器是否在运行
+- `judge_runner` 是否为健康状态
+- backend 是否拿到 `EXAM_JUDGE_RUNNER_URL=http://judge_runner:8010`
+- backend 容器内是否能访问 `http://judge_runner:8010/health`
+
 ## 本地开发调试 judge-runner
 
 如果你本地是“前后端分别启动”，但又想让学生端代码运行支持 Java / Go，可以直接使用仓库里的开发编排：
@@ -130,6 +145,32 @@ docker compose -f docker-compose.dev.yml up -d judge_runner
 cd backend
 EXAM_JUDGE_RUNNER_URL=http://127.0.0.1:8010 uv run uvicorn app.main:app --app-dir src --reload
 ```
+
+## 构建缓慢排查
+
+如果部署时长时间停留在 Docker 构建阶段的：
+
+```text
+RUN uv sync --frozen --no-dev
+```
+
+通常不是脚本卡死，而是容器内下载 Python 依赖很慢。当前镜像已经启用了 `uv` 下载缓存；同一台服务器在首次构建完成后，后续重建通常会明显加快。
+
+如果第一次构建就很慢，优先检查 `shared/env/deploy.env` 里的镜像源设置，确认服务器访问下列源是否顺畅：
+
+- `DEBIAN_APT_MIRROR`
+- `PIP_INDEX_URL`
+- `UV_INDEX_URL`
+
+如果当前默认源在你的服务器网络环境下较慢，可以改成更合适的企业内网源或公共镜像，然后重新执行部署。
+
+仓库里也提供了一个快速探测脚本，方便你直接在服务器上挑选更快的 Python 源：
+
+```bash
+./scripts/check-python-mirrors.sh
+```
+
+脚本会测试几组常见 `PIP_INDEX_URL / UV_INDEX_URL`，输出每组的索引访问时间和一个小文件下载时间，并给出推荐配置。
 
 这样本地开发仍然保留 `uvicorn + pnpm dev` 的节奏，但代码题在线运行会走 Docker 判题环境。
 

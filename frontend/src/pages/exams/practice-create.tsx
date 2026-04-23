@@ -76,7 +76,7 @@ const stepItems: Array<{
   {
     id: "knowledge",
     title: "步骤 1：选择知识点",
-    description: "先确定这次练习覆盖的知识范围。",
+    description: "知识点可选，也可以直接进入下一步手动选题。",
   },
   {
     id: "questions",
@@ -341,7 +341,6 @@ export function PracticeCreate() {
   const validateStep = (stepId: PracticeStepId): string | null => {
     if (stepId === "knowledge") {
       if (!title.trim()) return "请填写练习名称。";
-      if (selectedKnowledgePoints.length === 0) return "请至少选择一个知识点。";
     }
 
     if (stepId === "questions") {
@@ -381,7 +380,7 @@ export function PracticeCreate() {
 
   const getStepStatus = (stepId: PracticeStepId) => {
     if (stepId === "knowledge") {
-      if (selectedKnowledgePoints.length === 0) return "待选择";
+      if (selectedKnowledgePoints.length === 0) return "可跳过";
       return `已选 ${selectedKnowledgePoints.length} 个知识点`;
     }
     if (stepId === "questions") return `已选 ${questionIds.length} 题`;
@@ -396,6 +395,22 @@ export function PracticeCreate() {
     }
     return null;
   };
+
+  const submitValidation = useMemo(() => findFirstInvalidStep(), [
+    currentStep,
+    currentStepId,
+    description,
+    durationMinutes,
+    endTime,
+    questionIds,
+    questionMode,
+    scheduledStartTime,
+    selectedKnowledgePoints,
+    showResult,
+    startImmediately,
+    studentIds,
+    title,
+  ]);
 
   const goToStep = (index: number) => {
     if (index > maxVisitedStep) return;
@@ -770,13 +785,19 @@ export function PracticeCreate() {
                 <CardTitle>步骤 1：选择知识点</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Label className="text-sm font-medium text-foreground">知识点</Label>
+                  <span className="inline-flex items-center rounded-full bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-700 dark:text-amber-300">
+                    可跳过，手动选题可不选；AI 出题需先选择知识点
+                  </span>
+                </div>
                 <KnowledgePointSelector
                   fetcher={apiRequest}
                   selectedKnowledgePoints={selectedKnowledgePoints}
                   onSelectedKnowledgePointsChange={setSelectedKnowledgePoints}
                   storageKey="practice-publish-recent-keywords"
                   triggerLabel="选择练习知识点"
-                  popoverSide="right"
+                  popoverSide="bottom"
                 />
                 <div className="space-y-1.5">
                   <Label htmlFor="practice-title">练习名称</Label>
@@ -974,27 +995,6 @@ export function PracticeCreate() {
                 <CardTitle>步骤 4：发布设置</CardTitle>
               </CardHeader>
               <CardContent className="space-y-5">
-                <div className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-background px-4 py-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-foreground">发布后立即开始</p>
-                    <p className="mt-1 text-xs text-muted-foreground">关闭后可设置未来的开始时间。</p>
-                  </div>
-                  <Switch checked={startImmediately} onCheckedChange={setStartImmediately} />
-                </div>
-
-                {!startImmediately && (
-                  <div className="space-y-1.5">
-                    <Label>开始时间</Label>
-                    <DatePicker
-                      value={toPickerDate(scheduledStartTime)}
-                      onChange={(date) => setScheduledStartTime(toLocalDateTimeValue(date))}
-                      includeTime
-                      placeholder="开始时间"
-                      className="h-9 w-full"
-                    />
-                  </div>
-                )}
-
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-1.5">
                     <Label htmlFor="practice-duration">练习时长</Label>
@@ -1026,6 +1026,27 @@ export function PracticeCreate() {
 
                 <div className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-background px-4 py-3">
                   <div className="min-w-0">
+                    <p className="text-sm font-medium text-foreground">发布后立即开始</p>
+                    <p className="mt-1 text-xs text-muted-foreground">关闭后可设置未来的开始时间。</p>
+                  </div>
+                  <Switch checked={startImmediately} onCheckedChange={setStartImmediately} />
+                </div>
+
+                {!startImmediately && (
+                  <div className="space-y-1.5">
+                    <Label>开始时间</Label>
+                    <DatePicker
+                      value={toPickerDate(scheduledStartTime)}
+                      onChange={(date) => setScheduledStartTime(toLocalDateTimeValue(date))}
+                      includeTime
+                      placeholder="开始时间"
+                      className="h-9 w-full"
+                    />
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-background px-4 py-3">
+                  <div className="min-w-0">
                     <p className="text-sm font-medium text-foreground">允许学生查看结果</p>
                     <p className="mt-1 text-xs text-muted-foreground">开启后，学生提交后可以直接看到练习结果。</p>
                   </div>
@@ -1050,7 +1071,7 @@ export function PracticeCreate() {
                   type="button"
                   className="w-full sm:w-auto"
                   onClick={handleSubmit}
-                  disabled={mutation.isPending || updateMutation.isPending}
+                  disabled={Boolean(submitValidation) || mutation.isPending || updateMutation.isPending}
                 >
                   {mutation.isPending || updateMutation.isPending ? (
                     <span className="flex items-center gap-2">

@@ -22,6 +22,7 @@ const examData = {
   title: "考试",
   duration_minutes: 60,
   max_switch_count: 0,
+  allow_retake: false,
   started_at: "2026-04-09T10:00:00.000Z",
   end_time: "2026-04-09T11:00:00.000Z",
   questions: [],

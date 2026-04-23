@@ -5,7 +5,8 @@ import axios from "axios";
 import { useParams } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { renderLatexInHtml } from "@/components/ui/latex-text";
-import { Braces, Play, RotateCcw, TerminalSquare } from "lucide-react";
+import { Braces, CircleHelp, Play, RotateCcw, TerminalSquare } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type {
   ICodeAnswerContent,
   ICodeQuestionContent,
@@ -68,6 +69,17 @@ const LANGUAGE_TAB_SIZE: Record<CodeLanguage, number> = {
 };
 
 type MonacoNamespace = Parameters<NonNullable<ComponentProps<typeof Editor>["beforeMount"]>>[0];
+type MonacoWordAtPosition = {
+  startColumn: number;
+  endColumn: number;
+};
+type MonacoPosition = {
+  lineNumber: number;
+  column: number;
+};
+type MonacoTextModel = {
+  getWordUntilPosition: (position: MonacoPosition) => MonacoWordAtPosition;
+};
 type MonacoCompletionKind = "Keyword" | "Function" | "Snippet" | "Class";
 
 interface CompletionSpec {
@@ -136,12 +148,12 @@ api.interceptors.request.use((config) => {
 });
 
 const DEFAULT_PROGRAM_STARTER_CODE: Record<CodeLanguage, string> = {
-  python: "",
-  javascript: "",
-  java: "public class Solution {\n    public static void main(String[] args) {\n        \n    }\n}\n",
-  cpp: "#include <bits/stdc++.h>\nusing namespace std;\n\nint main() {\n    \n    return 0;\n}\n",
-  c: "#include <stdio.h>\n\nint main(void) {\n    \n    return 0;\n}\n",
-  go: "package main\n\nimport \"fmt\"\n\nfunc main() {\n    _ = fmt.Sprintf\n}\n",
+  python: "# 请从标准输入读取数据，例如使用 input() 或 sys.stdin.read()\n# 在这里开始编写代码\n",
+  javascript: "// 请从标准输入读取数据，例如使用 fs.readFileSync(0, 'utf8')\n// 在这里开始编写代码\n",
+  java: "import java.io.*;\nimport java.util.*;\n\npublic class Solution {\n    public static void main(String[] args) throws Exception {\n        // 请从标准输入读取数据，例如使用 Scanner 或 BufferedReader\n        // 在这里开始编写代码\n    }\n}\n",
+  cpp: "#include <bits/stdc++.h>\nusing namespace std;\n\nint main() {\n    // 请从标准输入读取数据，例如使用 cin\n    // 在这里开始编写代码\n    return 0;\n}\n",
+  c: "#include <stdio.h>\n#include <stdlib.h>\n\nint main(void) {\n    // 请从标准输入读取数据，例如使用 scanf 或 fgets\n    // 在这里开始编写代码\n    return 0;\n}\n",
+  go: "package main\n\nimport \"fmt\"\n\nfunc main() {\n    // 请从标准输入读取数据，例如使用 fmt.Scan 或 bufio.NewReader\n    // 在这里开始编写代码\n    fmt.Print(\"\")\n}\n",
 };
 
 const DEFAULT_FUNCTION_STARTER_CODE: Record<CodeLanguage, string> = {
@@ -151,6 +163,15 @@ const DEFAULT_FUNCTION_STARTER_CODE: Record<CodeLanguage, string> = {
   cpp: "#include <bits/stdc++.h>\nusing namespace std;\n\nclass Solution {\npublic:\n    int solve() {\n        // 请在这里实现你的代码\n        return 0;\n    }\n};\n",
   c: "#include <stdio.h>\n\nint solve() {\n    // 请在这里实现你的代码\n    return 0;\n}\n",
   go: "package main\n\nfunc solve() int {\n\t// 请在这里实现你的代码\n\treturn 0\n}\n",
+};
+
+const STDIN_REFERENCE_SNIPPETS: Record<CodeLanguage, string> = {
+  python: "import sys\n\ndata = sys.stdin.read().strip().split()\n# 或者使用：line = input().strip()",
+  javascript: "const fs = require('fs');\nconst input = fs.readFileSync(0, 'utf8').trim();\nconst lines = input.split(/\\r?\\n/);",
+  java: "BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));\nString line = reader.readLine();\n// 或者使用 Scanner scanner = new Scanner(System.in);",
+  cpp: "int a, b;\ncin >> a >> b;\nstring line;\ngetline(cin, line);",
+  c: "int a, b;\nscanf(\"%d %d\", &a, &b);\n// 或者使用 fgets(buffer, sizeof(buffer), stdin);",
+  go: "var a, b int\nfmt.Scan(&a, &b)\n// 或者使用 reader := bufio.NewReader(os.Stdin)",
 };
 
 const RUN_STATUS_LABELS: Record<IStudentCodeRunResult["status"], string> = {
@@ -295,6 +316,143 @@ function buildCodePayload(
   };
 }
 
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function renderInlineMarkdown(text: string) {
+  const escaped = escapeHtml(text);
+  return escaped
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+    .replace(/(^|[^\*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>")
+    .replace(/(^|[^_])_([^_\n]+)_(?!_)/g, "$1<em>$2</em>")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+}
+
+function isLikelyCodeLine(line: string) {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  if (/^(#{1,6}\s|[-*+]\s)/.test(trimmed)) return false;
+  if (/^`[^`]+`$/.test(trimmed)) return false;
+  if (/[\u3400-\u9fff]/.test(trimmed)) return false;
+  return /^#include\s+[<"][^>"]+[>"]$/.test(trimmed)
+    || /^import\s+.+;$/.test(trimmed)
+    || /^(?:public|private|protected)?\s*(?:static\s+)?(?:void|int|long|float|double|char|bool|string|String|List|Map|vector|func)\b.*[;{]$/.test(trimmed)
+    || /^[A-Za-z_]\w*\s*\([^)]*\)\s*[;{]$/.test(trimmed);
+}
+
+function renderMarkdownToHtml(markdown: string) {
+  const normalized = markdown.replace(/\r\n/g, "\n").trim();
+  if (!normalized) return "";
+
+  const lines = normalized.split("\n");
+  const html: string[] = [];
+  let paragraphLines: string[] = [];
+  let listItems: string[] = [];
+  let inCodeBlock = false;
+  let codeLines: string[] = [];
+
+  const flushParagraph = () => {
+    if (paragraphLines.length === 0) return;
+    html.push(`<p>${renderInlineMarkdown(paragraphLines.join("<br />"))}</p>`);
+    paragraphLines = [];
+  };
+
+  const flushList = () => {
+    if (listItems.length === 0) return;
+    html.push(`<ul>${listItems.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ul>`);
+    listItems = [];
+  };
+
+  const flushCodeBlock = () => {
+    if (!inCodeBlock) return;
+    html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+    inCodeBlock = false;
+    codeLines = [];
+  };
+
+  for (const line of lines) {
+    if (line.trim().startsWith("```")) {
+      flushParagraph();
+      flushList();
+      if (inCodeBlock) {
+        flushCodeBlock();
+      } else {
+        inCodeBlock = true;
+      }
+      continue;
+    }
+
+    if (inCodeBlock) {
+      codeLines.push(line);
+      continue;
+    }
+
+    if (!line.trim()) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const headingMatch = line.match(/^(#{1,6})\s+(.*)$/);
+    if (headingMatch) {
+      flushParagraph();
+      flushList();
+      const level = headingMatch[1].length;
+      html.push(`<h${level}>${renderInlineMarkdown(headingMatch[2])}</h${level}>`);
+      continue;
+    }
+
+    const listMatch = line.match(/^\s*[-*+]\s+(.*)$/);
+    if (listMatch) {
+      flushParagraph();
+      listItems.push(listMatch[1]);
+      continue;
+    }
+
+    if (isLikelyCodeLine(line)) {
+      flushParagraph();
+      flushList();
+      html.push(`<pre><code>${escapeHtml(line.trim())}</code></pre>`);
+      continue;
+    }
+
+    paragraphLines.push(line);
+  }
+
+  flushParagraph();
+  flushList();
+  flushCodeBlock();
+
+  return html.join("");
+}
+
+function renderPromptHtml(value: string) {
+  const raw = value.trim();
+  if (!raw) return "";
+  const html = /<\/?[a-z][\s\S]*>/i.test(raw) ? raw : renderMarkdownToHtml(raw);
+  return renderLatexInHtml(html);
+}
+
+function resolveStarterCode(
+  starterCode: Partial<Record<CodeLanguage, string>>,
+  defaultStarterCode: Record<CodeLanguage, string>,
+  language: CodeLanguage,
+) {
+  const explicitStarter = starterCode[language];
+  if (typeof explicitStarter === "string" && explicitStarter.trim() !== "") {
+    return explicitStarter;
+  }
+  return defaultStarterCode[language];
+}
+
 function resolveLanguageCode(
   normalized: ICodeAnswerContent,
   language: CodeLanguage,
@@ -309,7 +467,7 @@ function resolveLanguageCode(
     return normalized.code;
   }
 
-  return starterCode[language] ?? defaultStarterCode[language];
+  return resolveStarterCode(starterCode, defaultStarterCode, language);
 }
 
 function registerLanguageCompletions(monaco: MonacoNamespace) {
@@ -319,7 +477,7 @@ function registerLanguageCompletions(monaco: MonacoNamespace) {
 
   (Object.keys(LANGUAGE_COMPLETIONS) as CodeLanguage[]).forEach((language) => {
     monaco.languages.registerCompletionItemProvider(MONACO_LANGUAGE_MAP[language], {
-      provideCompletionItems(model, position) {
+      provideCompletionItems(model: MonacoTextModel, position: MonacoPosition) {
         const word = model.getWordUntilPosition(position);
         const range = {
           startLineNumber: position.lineNumber,
@@ -384,8 +542,16 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
   const activeRunIdRef = useRef(0);
 
   const descriptionHtml = useMemo(
-    () => content.description ?? content.text ?? question.title,
+    () => renderPromptHtml(content.description ?? content.text ?? question.title),
     [content.description, content.text, question.title],
+  );
+  const inputDescriptionHtml = useMemo(
+    () => renderPromptHtml(content.input_description ?? ""),
+    [content.input_description],
+  );
+  const outputDescriptionHtml = useMemo(
+    () => renderPromptHtml(content.output_description ?? ""),
+    [content.output_description],
   );
 
   const currentCode = resolveLanguageCode(normalized, language, starterCode, defaultStarterCode);
@@ -441,7 +607,7 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
       return;
     }
 
-    const nextCode = starterCode[language] || defaultStarterCode[language];
+    const nextCode = resolveStarterCode(starterCode, defaultStarterCode, language);
     onChange(buildCodePayload(normalized, language, nextCode));
     setRunFeedback(`已恢复 ${LANGUAGE_LABELS[language]} 模板代码。`);
     setRunResult(null);
@@ -630,21 +796,27 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
           </div>
           <div className="space-y-4 px-6 py-5">
             <div
-              className="prose prose-sm max-w-none leading-7 text-[#40374d]"
-              dangerouslySetInnerHTML={{ __html: renderLatexInHtml(descriptionHtml) }}
+              className="prose prose-sm max-w-none leading-7 text-[#40374d] [&_code]:rounded [&_code]:bg-[#f3f6fb] [&_code]:px-1.5 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-xl [&_pre]:border [&_pre]:border-[#e7ecf4] [&_pre]:bg-[#f8fafc] [&_pre]:px-3 [&_pre]:py-2"
+              dangerouslySetInnerHTML={{ __html: descriptionHtml }}
             />
 
             {questionMode === "program" && content.input_description ? (
               <div className="rounded-2xl border border-[#ebeef5] bg-[#f8fafc] px-4 py-3.5">
                 <p className="text-[12px] text-[#94a3b8]">输入说明</p>
-                <p className="mt-2 text-[13px] leading-6 text-[#2c2438]">{content.input_description}</p>
+                <div
+                  className="prose prose-sm mt-2 max-w-none text-[13px] leading-6 text-[#2c2438] [&_code]:rounded [&_code]:bg-white [&_code]:px-1.5 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-[#e7ecf4] [&_pre]:bg-white [&_pre]:px-3 [&_pre]:py-2"
+                  dangerouslySetInnerHTML={{ __html: inputDescriptionHtml }}
+                />
               </div>
             ) : null}
 
             {questionMode === "program" && content.output_description ? (
               <div className="rounded-2xl border border-[#ebeef5] bg-[#f8fafc] px-4 py-3.5">
                 <p className="text-[12px] text-[#94a3b8]">输出说明</p>
-                <p className="mt-2 text-[13px] leading-6 text-[#2c2438]">{content.output_description}</p>
+                <div
+                  className="prose prose-sm mt-2 max-w-none text-[13px] leading-6 text-[#2c2438] [&_code]:rounded [&_code]:bg-white [&_code]:px-1.5 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-[#e7ecf4] [&_pre]:bg-white [&_pre]:px-3 [&_pre]:py-2"
+                  dangerouslySetInnerHTML={{ __html: outputDescriptionHtml }}
+                />
               </div>
             ) : null}
 
@@ -709,7 +881,10 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
                           {item.explanation ? (
                             <div className="space-y-1">
                               <span className="text-[12px] font-medium text-[#94a3b8]">说明</span>
-                              <p>{item.explanation}</p>
+                              <div
+                                className="prose prose-sm max-w-none text-[13px] leading-6 text-[#334155] [&_code]:rounded [&_code]:bg-[#f3f6fb] [&_code]:px-1.5 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-[#e7ecf4] [&_pre]:bg-[#f8fafc] [&_pre]:px-3 [&_pre]:py-2"
+                                dangerouslySetInnerHTML={{ __html: renderPromptHtml(item.explanation) }}
+                              />
                             </div>
                           ) : null}
                         </div>
@@ -731,7 +906,7 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
                   {content.constraints.map((item) => (
                     <li key={item} className="flex gap-2">
                       <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[#94a3b8]" />
-                      <span>{item}</span>
+                      <span dangerouslySetInnerHTML={{ __html: renderPromptHtml(item) }} />
                     </li>
                   ))}
                 </ul>
@@ -820,7 +995,43 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
                   <span className="h-2.5 w-2.5 rounded-full bg-[#34d399]" />
                 </div>
                 <span>{LANGUAGE_LABELS[language]}</span>
-                {questionMode === "function" && content.function_name ? <span className="truncate text-[#9ca3af]">{content.function_name}</span> : <span className="w-6" />}
+                <div className="flex items-center gap-2">
+                  {questionMode === "function" && content.function_name ? (
+                    <span className="truncate text-[#9ca3af]">{content.function_name}</span>
+                  ) : null}
+                  {questionMode === "program" ? (
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <button
+                          type="button"
+                          aria-label="查看标准输入参考代码"
+                          className="inline-flex h-6 w-6 items-center justify-center rounded-full text-[#94a3b8] transition-colors hover:bg-[#f3f6fb] hover:text-[#4f6fb6]"
+                        >
+                          <CircleHelp size={14} />
+                        </button>
+                      </PopoverTrigger>
+                      <PopoverContent
+                        align="end"
+                        sideOffset={10}
+                        className="w-[22rem] rounded-2xl border border-[#e7ecf4] p-0 shadow-xl"
+                      >
+                        <div className="space-y-3 px-4 py-4">
+                          <div className="space-y-1">
+                            <p className="text-[13px] font-medium text-[#334155]">标准输入参考</p>
+                            <p className="text-[12px] leading-5 text-[#6b7280]">
+                              评测时，系统会把测试数据写入标准输入。下面是 {LANGUAGE_LABELS[language]} 的常见读取方式。
+                            </p>
+                          </div>
+                          <pre className="overflow-x-auto whitespace-pre-wrap rounded-xl border border-[#e7ecf4] bg-[#f8fafc] px-3 py-3 font-mono text-[12px] leading-6 text-[#334155]">
+                            {STDIN_REFERENCE_SNIPPETS[language]}
+                          </pre>
+                        </div>
+                      </PopoverContent>
+                    </Popover>
+                  ) : (
+                    <span className="w-6" />
+                  )}
+                </div>
               </div>
               <div className="min-h-0 flex-1 overflow-hidden bg-[#f7f9fc]">
                 <Editor
@@ -929,7 +1140,7 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
                         disabled={isRunning}
                         spellCheck={false}
                         className="min-h-[120px] w-full rounded-[0.95rem] border border-[#dbe3ef] bg-white px-4 py-3 font-mono text-[13px] leading-6 text-[#1f2937] outline-none placeholder:text-[#94a3b8] focus:border-[#7aa2ff]"
-                        placeholder="输入你自己的测试用例，例如：nums = [2,7,11,15]\ntarget = 9"
+                        placeholder="输入你自己的测试用例"
                       />
                       <p className="text-[12px] leading-5 text-[#94a3b8]">
                         自定义输入会随作答一起保存，并用于本次运行结果展示。
