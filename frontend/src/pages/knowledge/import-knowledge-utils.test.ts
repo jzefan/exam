@@ -4,6 +4,7 @@ import { utils, write } from "xlsx";
 import {
   buildKnowledgeImportPreviewTree,
   extractKnowledgeImportPaths,
+  getFirstKnowledgeImportRootName,
   summarizeKnowledgeImportPaths,
 } from "./import-knowledge-utils";
 
@@ -64,6 +65,17 @@ describe("knowledge import utils", () => {
     });
   });
 
+  it("returns the first top-level knowledge name for post-import focus", () => {
+    expect(
+      getFirstKnowledgeImportRootName([
+        ["数据库基础", "关系模型", "候选键"],
+        ["事务管理"],
+      ]),
+    ).toBe("数据库基础");
+
+    expect(getFirstKnowledgeImportRootName([[], ["", "关系模型"]])).toBeNull();
+  });
+
   it("builds a merged tree for graphical preview", () => {
     expect(
       buildKnowledgeImportPreviewTree([
@@ -75,18 +87,21 @@ describe("knowledge import utils", () => {
     ).toEqual([
       {
         label: "数据库基础",
+        depth: 0,
         pathIndexes: [0, 1, 2],
         children: [
           {
             label: "关系模型",
+            depth: 1,
             pathIndexes: [0, 1],
             children: [
-              { label: "候选键", pathIndexes: [0], children: [] },
-              { label: "外键", pathIndexes: [1], children: [] },
+              { label: "候选键", depth: 2, pathIndexes: [0], children: [] },
+              { label: "外键", depth: 2, pathIndexes: [1], children: [] },
             ],
           },
           {
             label: "SQL",
+            depth: 1,
             pathIndexes: [2],
             children: [],
           },
@@ -94,6 +109,7 @@ describe("knowledge import utils", () => {
       },
       {
         label: "事务管理",
+        depth: 0,
         pathIndexes: [3],
         children: [],
       },

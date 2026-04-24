@@ -11,6 +11,12 @@ const majors: IMajor[] = [
     description: null,
     created_at: "2026-04-18T00:00:00Z",
   },
+  {
+    id: "major-2",
+    name: "人工智能",
+    description: null,
+    created_at: "2026-04-18T00:00:00Z",
+  },
 ];
 
 const directions: IDirection[] = [
@@ -18,6 +24,13 @@ const directions: IDirection[] = [
     id: "direction-1",
     major_id: "major-1",
     name: "软件开发",
+    description: null,
+    created_at: "2026-04-18T00:00:00Z",
+  },
+  {
+    id: "direction-2",
+    major_id: "major-2",
+    name: "机器学习",
     description: null,
     created_at: "2026-04-18T00:00:00Z",
   },
@@ -64,7 +77,7 @@ describe("MajorDirectionSidebar", () => {
     expect(screen.getByRole("button", { name: "添加主知识/技能" })).toBeInTheDocument();
   });
 
-  it("reveals the inline add direction action after expanding a collapsed major", () => {
+  it("expands only the first major by default", () => {
     render(
       <MajorDirectionSidebar
         majors={majors}
@@ -72,7 +85,7 @@ describe("MajorDirectionSidebar", () => {
         selectedRootKnowledgeId={null}
         onSelect={vi.fn()}
         onSelectRootKnowledge={vi.fn()}
-        getDirections={() => directions}
+        getDirections={(majorId) => directions.filter((direction) => direction.major_id === majorId)}
         getRootKnowledgePoints={() => []}
         onCreateMajor={vi.fn()}
         onEditMajor={vi.fn()}
@@ -86,12 +99,35 @@ describe("MajorDirectionSidebar", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "软件工程" }));
+    expect(screen.getByText("软件开发")).toBeInTheDocument();
+    expect(screen.queryByText("机器学习")).not.toBeInTheDocument();
+  });
 
-    expect(screen.queryByRole("button", { name: "添加方向" })).not.toBeInTheDocument();
+  it("keeps only the clicked major expanded", () => {
+    render(
+      <MajorDirectionSidebar
+        majors={majors}
+        selectedDirectionId={null}
+        selectedRootKnowledgeId={null}
+        onSelect={vi.fn()}
+        onSelectRootKnowledge={vi.fn()}
+        getDirections={(majorId) => directions.filter((direction) => direction.major_id === majorId)}
+        getRootKnowledgePoints={() => []}
+        onCreateMajor={vi.fn()}
+        onEditMajor={vi.fn()}
+        onDeleteMajor={vi.fn()}
+        onCreateDirection={vi.fn()}
+        onCreateRootKnowledge={vi.fn()}
+        onEditDirection={vi.fn()}
+        onDeleteDirection={vi.fn()}
+        onEditRootKnowledge={vi.fn()}
+        onDeleteRootKnowledge={vi.fn()}
+      />,
+    );
 
-    fireEvent.click(screen.getByRole("button", { name: "软件工程" }));
+    fireEvent.click(screen.getByRole("button", { name: "人工智能" }));
 
-    expect(screen.getByRole("button", { name: "添加方向" })).toBeInTheDocument();
+    expect(screen.queryByText("软件开发")).not.toBeInTheDocument();
+    expect(screen.getByText("机器学习")).toBeInTheDocument();
   });
 });

@@ -59,6 +59,40 @@ function RenderTextWithCode({ text, language }: { text: string; language?: strin
   );
 }
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function renderHighlightedLatexText(text: string, keyword?: string) {
+  const normalizedKeyword = keyword?.trim();
+  if (!normalizedKeyword) {
+    return <LatexText>{text}</LatexText>;
+  }
+
+  const matcher = new RegExp(`(${escapeRegExp(normalizedKeyword)})`, "gi");
+  const parts = text.split(matcher);
+  return (
+    <>
+      {parts.map((part, index) => {
+        if (!part) {
+          return null;
+        }
+        if (part.toLowerCase() === normalizedKeyword.toLowerCase()) {
+          return (
+            <mark
+              key={`${part}-${index}`}
+              className="rounded-sm bg-amber-200/70 px-0.5 text-inherit dark:bg-amber-500/25"
+            >
+              <LatexText>{part}</LatexText>
+            </mark>
+          );
+        }
+        return <LatexText key={`${part}-${index}`}>{part}</LatexText>;
+      })}
+    </>
+  );
+}
+
 function renderCodeAnswer(question: IQuestion) {
   if (question.type !== "code") {
     return null;
@@ -74,25 +108,92 @@ function renderCodeAnswer(question: IQuestion) {
   );
 }
 
-function renderOptions(question: IQuestion) {
+type ChoiceOptionsLayout = "single-row" | "two-column" | "single-column";
+
+function measureTextWidth(text: string, font: string) {
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return text.length * 14;
+  }
+  context.font = font;
+  return context.measureText(text).width;
+}
+
+function ChoiceOptions({
+  question,
+  highlightKeyword,
+}: {
+  question: IQuestion;
+  highlightKeyword?: string;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [layout, setLayout] = useState<ChoiceOptionsLayout>("single-column");
+
+  useEffect(() => {
+    if (question.type !== "choice" || !question.options || !containerRef.current) {
+      return;
+    }
+
+    const element = containerRef.current;
+    const entries = Object.entries(question.options as Record<string, string>);
+
+    const updateLayout = () => {
+      const width = element.clientWidth;
+      if (!width) {
+        return;
+      }
+
+      const computedStyle = window.getComputedStyle(element);
+      const font = computedStyle.font || `${computedStyle.fontSize} ${computedStyle.fontFamily}`;
+      const gap = 24;
+      const itemPadding = 16;
+      const optionWidths = entries.map(([key, value]) =>
+        measureTextWidth(`${key}. ${value}`, font) + itemPadding,
+      );
+
+      const totalInlineWidth =
+        optionWidths.reduce((sum, current) => sum + current, 0) + gap * Math.max(entries.length - 1, 0);
+      if (totalInlineWidth <= width) {
+        setLayout("single-row");
+        return;
+      }
+
+      const twoColumnWidth = (width - gap) / 2;
+      const canUseTwoColumns = optionWidths.every((optionWidth) => optionWidth <= twoColumnWidth);
+      setLayout(canUseTwoColumns ? "two-column" : "single-column");
+    };
+
+    updateLayout();
+
+    const observer = new ResizeObserver(() => updateLayout());
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [question.options, question.type]);
+
   if (question.type !== "choice" || !question.options) {
     return null;
   }
 
   const entries = Object.entries(question.options as Record<string, string>);
-  const maxLen = Math.max(...entries.map(([, value]) => value.length));
   const layoutClass =
-    maxLen > 30
-      ? "grid grid-cols-1 gap-y-0.5"
-      : maxLen > 10
-        ? "grid grid-cols-2 gap-x-6 gap-y-0.5"
-        : "flex flex-wrap gap-x-8 gap-y-0.5";
+    layout === "single-row"
+      ? "flex flex-nowrap gap-x-6 gap-y-0.5 overflow-hidden"
+      : layout === "two-column"
+        ? "grid grid-cols-2 gap-x-6 gap-y-1.5"
+        : "grid grid-cols-1 gap-y-1.5";
 
   return (
-    <div className={cn("mt-2", layoutClass)}>
+    <div ref={containerRef} className={cn("mt-2", layoutClass)}>
       {entries.map(([key, value]) => (
-        <span key={key} className="text-sm text-muted-foreground">
-          {key}. <LatexText>{value}</LatexText>
+        <span
+          key={key}
+          className={cn(
+            "text-sm text-muted-foreground",
+            layout === "single-row" ? "min-w-0 whitespace-nowrap" : "min-w-0 break-words",
+          )}
+        >
+          {key}. {renderHighlightedLatexText(value, highlightKeyword)}
         </span>
       ))}
     </div>
@@ -110,6 +211,7 @@ export function QuestionPreviewCard({
   defaultExpanded = false,
   hideTypeBadge = false,
   hideAnswer = false,
+  highlightKeyword,
   expandOnHover = false,
   hoverDetailDelay = 180,
   knowledgeRecognitionStatus,
@@ -125,6 +227,7 @@ export function QuestionPreviewCard({
   defaultExpanded?: boolean;
   hideTypeBadge?: boolean;
   hideAnswer?: boolean;
+  highlightKeyword?: string;
   expandOnHover?: boolean;
   hoverDetailDelay?: number;
   knowledgeRecognitionStatus?: QuestionKnowledgeRecognitionStatus | null;
@@ -190,7 +293,9 @@ export function QuestionPreviewCard({
             {html ? (
               <RichContent html={html} className="flex-1 text-sm leading-relaxed text-foreground" />
             ) : (
-              <p className="flex-1 text-sm leading-relaxed text-foreground"><LatexText>{getQuestionTitle(question)}</LatexText></p>
+              <p className="flex-1 text-sm leading-relaxed text-foreground">
+                {renderHighlightedLatexText(getQuestionTitle(question), highlightKeyword)}
+              </p>
             )}
             {(trailing || !hideTypeBadge) && (
               <div className="ml-2 flex flex-shrink-0 items-center gap-2">
@@ -219,7 +324,7 @@ export function QuestionPreviewCard({
             )}
           </div>
 
-          {renderOptions(question)}
+          <ChoiceOptions question={question} highlightKeyword={highlightKeyword} />
           {recognitionMeta ? (
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <Badge variant="outline" className={cn("gap-1.5 px-2 py-0.5", recognitionMeta.className)}>

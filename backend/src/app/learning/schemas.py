@@ -20,6 +20,7 @@ class MajorResponse(BaseModel):
     id: uuid.UUID
     name: str
     description: str | None
+    owner_id: uuid.UUID | None = None
     created_at: datetime
 
 
@@ -36,16 +37,20 @@ class DirectionResponse(BaseModel):
     major_id: uuid.UUID
     name: str
     description: str | None
+    owner_id: uuid.UUID | None = None
     created_at: datetime
 
 
-class CourseOptionResponse(BaseModel):
+class RootKnowledgePointOptionResponse(BaseModel):
     id: uuid.UUID
     name: str
     direction_id: uuid.UUID
     direction_name: str
     major_id: uuid.UUID
     major_name: str
+
+
+CourseOptionResponse = RootKnowledgePointOptionResponse
 
 
 class KnowledgePointCreate(BaseModel):

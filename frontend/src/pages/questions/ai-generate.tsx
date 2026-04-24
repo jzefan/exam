@@ -1,10 +1,14 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Sparkles, Trash2, Loader2, StopCircle, FileQuestion } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
+import {
+  getGeneratedQuestionPersistKey,
+  useUnsavedGeneratedQuestionsGuard,
+} from "@/hooks/use-unsaved-generated-questions-guard";
 import { LatexText } from "@/components/ui/latex-text";
 import type { QuestionType } from "@/types";
 import { AIGenerateLoadingOverlay } from "./components/ai-generate-loading-overlay";
@@ -103,12 +107,25 @@ export function AIGeneratePage() {
   const [questions, setQuestions] = useState<GeneratedQuestion[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [persistedQuestionKeys, setPersistedQuestionKeys] = useState<string[]>([]);
 
   const allocationState = validateTypeAllocation(totalCount, typeAlloc);
   const allocSum = allocationState.allocated;
   const allocMismatch = !allocationState.isValid;
 
   const selectedCount = questions.filter((q) => q.selected).length;
+  const currentPersistKeys = useMemo(
+    () => questions.map((question) => getGeneratedQuestionPersistKey(question)),
+    [questions],
+  );
+  const hasUnsavedGeneratedQuestions =
+    questions.length > 0 &&
+    !isGenerating &&
+    currentPersistKeys.some((key) => !persistedQuestionKeys.includes(key));
+  const { dialog: unsavedGuardDialog, allowNextNavigation } = useUnsavedGeneratedQuestionsGuard({
+    when: hasUnsavedGeneratedQuestions,
+    message: "当前生成的题目尚未保存到题库，确定离开当前页面吗？",
+  });
   /* ---- generation ---- */
 
   const startGeneration = useCallback(async () => {
@@ -123,6 +140,7 @@ export function AIGeneratePage() {
 
     const controller = new AbortController();
     abortRef.current = controller;
+    setPersistedQuestionKeys([]);
     setIsGenerating(true);
     setQuestions([]);
 
@@ -295,6 +313,10 @@ export function AIGeneratePage() {
       });
 
       toast({ title: `已保存 ${selected.length} 道题目到「AI题库」` });
+      setPersistedQuestionKeys((prev) =>
+        Array.from(new Set([...prev, ...selected.map((question) => getGeneratedQuestionPersistKey(question))])),
+      );
+      allowNextNavigation();
       navigate("/questions");
     } catch (err) {
       toast({
@@ -305,7 +327,7 @@ export function AIGeneratePage() {
     } finally {
       setIsSaving(false);
     }
-  }, [questions, toast, navigate]);
+  }, [allowNextNavigation, navigate, questions, toast]);
 
   /* ---------------------------------------------------------------- */
   /*  Render                                                           */
@@ -313,6 +335,7 @@ export function AIGeneratePage() {
 
   return (
     <div className="flex h-full gap-6 p-6">
+      {unsavedGuardDialog}
       {/* ---- Left: Config Panel ---- */}
       <AIQuestionConfigPanel
         title="AI 智能出题"
@@ -381,7 +404,7 @@ export function AIGeneratePage() {
               {questions.map((q) => (
                 <div
                   key={q.index}
-                  className="rounded-lg border bg-card p-4 transition-colors"
+                  className="rounded-lg border border-border/35 bg-card/95 p-4 transition-colors"
                 >
                   {/* Card header */}
                   <div className="mb-2 flex items-center gap-2">
@@ -437,14 +460,14 @@ export function AIGeneratePage() {
                   )}
 
                   {/* Answer */}
-                  <div className="mt-2 rounded bg-muted/50 p-2 text-sm">
+                  <div className="mt-2 rounded bg-muted/28 p-2 text-sm">
                     <span className="font-medium text-primary">答案：</span>
                     <LatexText>{q.answer.correct ?? q.answer.text ?? JSON.stringify(q.answer)}</LatexText>
                   </div>
 
                   {/* Analysis */}
                   {q.analysis && (
-                    <div className="mt-1 rounded bg-muted/30 p-2 text-sm text-muted-foreground">
+                    <div className="mt-1 rounded bg-muted/15 p-2 text-sm text-muted-foreground">
                       <span className="font-medium">解析：</span>
                       <LatexText>{q.analysis}</LatexText>
                     </div>
@@ -455,7 +478,7 @@ export function AIGeneratePage() {
 
             {/* Bottom action bar */}
             {questions.length > 0 && (
-              <div className="sticky bottom-0 flex items-center gap-3 border-t bg-background py-3">
+              <div className="sticky bottom-0 flex items-center gap-3 border-t border-border/35 bg-background py-3">
                 <Button variant="outline" size="sm" onClick={toggleSelectAll}>
                   {questions.every((q) => q.selected) ? "取消全选" : "全选"}
                 </Button>

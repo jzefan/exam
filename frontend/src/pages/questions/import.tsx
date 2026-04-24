@@ -1,7 +1,7 @@
 import { useList } from "@refinedev/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertCircle, ArrowLeft, BookOpen, Download, LoaderCircle, Search, Upload } from "lucide-react";
+import { AlertCircle, ArrowLeft, Download, LoaderCircle, Upload } from "lucide-react";
 
 import {
   AlertDialog,
@@ -16,7 +16,6 @@ import {
 
 import type { IQuestionBank } from "@/types";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -27,6 +26,10 @@ import {
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import {
+  KnowledgePointSelector,
+  type SelectedKnowledgePoint,
+} from "@/components/questions/knowledge-point-selector";
 import { useBackgroundTaskNotice } from "@/hooks/use-background-task-notice";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
@@ -104,15 +107,6 @@ async function questionApiFetch<T>(url: string, options?: RequestInit): Promise<
 
 const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024;
 
-interface CourseOption {
-  id: string;
-  name: string;
-  direction_id: string;
-  direction_name: string;
-  major_id: string;
-  major_name: string;
-}
-
 function isTerminalImportJobStatus(status: QuestionImportJobResponse["status"]) {
   return status === "completed" || status === "failed" || status === "partial_failed";
 }
@@ -125,6 +119,7 @@ export function QuestionImportPage() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { showNotice, dismissNotice } = useBackgroundTaskNotice();
+  const initialQuestionBankId = new URLSearchParams(window.location.search).get("question_bank_id");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [drafts, setDrafts] = useState<QuestionImportDraft[]>([]);
   const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
@@ -134,7 +129,7 @@ export function QuestionImportPage() {
   const [recognizingDraftId, setRecognizingDraftId] = useState<string | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
-  const [questionBankId, setQuestionBankId] = useState<string>("__none__");
+  const [questionBankId, setQuestionBankId] = useState<string>(initialQuestionBankId || "__none__");
   const [isDragActive, setIsDragActive] = useState(false);
   const [filter, setFilter] = useState<ImportFilter>("pending");
   const [duplicatesRemoved, setDuplicatesRemoved] = useState(0);
@@ -153,52 +148,9 @@ export function QuestionImportPage() {
   });
   const banks = banksQuery.data?.data ?? [];
 
-  const [courseDialogOpen, setCourseDialogOpen] = useState(false);
-  const [majors, setMajors] = useState<Array<{ id: string; name: string }>>([]);
-  const [directions, setDirections] = useState<Array<{ id: string; name: string }>>([]);
-  const [courseOptions, setCourseOptions] = useState<CourseOption[]>([]);
-  const [courseQuery, setCourseQuery] = useState("");
-  const [selectedMajorId, setSelectedMajorId] = useState<string>("");
-  const [selectedDirectionId, setSelectedDirectionId] = useState<string>("");
-  const [selectedCourseId, setSelectedCourseId] = useState<string>("");
+  const [rootKnowledgePointDialogOpen, setRootKnowledgePointDialogOpen] = useState(false);
+  const [selectedRootKnowledgePoints, setSelectedRootKnowledgePoints] = useState<SelectedKnowledgePoint[]>([]);
   const [activeImportJobId, setActiveImportJobId] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!courseDialogOpen || (majors.length > 0 && courseOptions.length > 0)) return;
-    Promise.all([
-      questionApiFetch<Array<{ id: string; name: string }>>("/api/knowledge/majors"),
-      questionApiFetch<CourseOption[]>("/api/knowledge/courses"),
-    ])
-      .then(([nextMajors, nextCourses]) => {
-        setMajors(nextMajors);
-        setCourseOptions(nextCourses);
-      })
-      .catch((error: unknown) => {
-        setParseError(error instanceof Error ? error.message : "加载课程列表失败");
-      });
-  }, [courseDialogOpen, courseOptions.length, majors.length]);
-
-  useEffect(() => {
-    if (!selectedMajorId) {
-      setDirections([]);
-      setSelectedDirectionId("");
-      return;
-    }
-    questionApiFetch<Array<{ id: string; name: string }>>(
-      `/api/knowledge/majors/${selectedMajorId}/directions`,
-    )
-      .then(setDirections)
-      .catch((error: unknown) => {
-        setParseError(error instanceof Error ? error.message : "加载方向列表失败");
-      });
-  }, [selectedMajorId]);
-
-  useEffect(() => {
-    if (!selectedDirectionId) {
-      setSelectedCourseId("");
-      return;
-    }
-  }, [selectedDirectionId]);
 
   useEffect(() => {
     if (!activeImportJobId) return;
@@ -257,6 +209,11 @@ export function QuestionImportPage() {
     () => drafts.find((draft) => draft.draft_id === selectedDraftId) ?? null,
     [drafts, selectedDraftId],
   );
+  const selectedDraftNumber = useMemo(() => {
+    if (!selectedDraftId) return null;
+    const index = drafts.findIndex((draft) => draft.draft_id === selectedDraftId);
+    return index >= 0 ? index + 1 : null;
+  }, [drafts, selectedDraftId]);
   const summary = drafts.length > 0 ? buildImportSummary(drafts) : emptyImportSummary;
   const completionPercent = summary.total > 0 ? Math.round((summary.approved / summary.total) * 100) : 0;
   const allowApproveAll = canApproveAllDrafts(drafts);
@@ -265,19 +222,7 @@ export function QuestionImportPage() {
   const missingAnswerCount = drafts.filter(
     (draft) => !draft.answer_text?.trim() || draft.issues.some(isMissingAnswerIssue),
   ).length;
-  const filteredCourseOptions = useMemo(() => {
-    const normalizedQuery = courseQuery.trim().toLowerCase();
-    return courseOptions.filter((course) => {
-      if (selectedMajorId && course.major_id !== selectedMajorId) return false;
-      if (selectedDirectionId && course.direction_id !== selectedDirectionId) return false;
-      if (!normalizedQuery) return true;
-      return [course.name, course.direction_name, course.major_name]
-        .join(" ")
-        .toLowerCase()
-        .includes(normalizedQuery);
-    });
-  }, [courseOptions, courseQuery, selectedDirectionId, selectedMajorId]);
-  const selectedCourse = courseOptions.find((course) => course.id === selectedCourseId) ?? null;
+  const selectedRootKnowledgePointId = selectedRootKnowledgePoints[0]?.id ?? "";
 
   useEffect(() => {
     if (drafts.length === 0) {
@@ -457,10 +402,10 @@ export function QuestionImportPage() {
       return;
     }
     setParseError(null);
-    setCourseDialogOpen(true);
+    setRootKnowledgePointDialogOpen(true);
   };
 
-  const runImportWithCourse = async (courseId: string) => {
+  const runImportWithRootKnowledgePoint = async (rootKnowledgePointId: string | null) => {
     const importDrafts = reviewMode === "fast"
       ? drafts.map((draft) =>
           isEligibleForFastImport(draft)
@@ -486,15 +431,18 @@ export function QuestionImportPage() {
     setImporting(true);
     setParseError(null);
     try {
-      const response = await questionApiFetch<QuestionImportBulkCreateJobResponse>(
-        "/api/questions/import/bulk-create-job",
-        {
-          method: "POST",
-          body: JSON.stringify({ questions, course_id: courseId }),
-        },
-      );
-      setActiveImportJobId(response.job_id);
-      persistQuestionImportJobId(response.job_id);
+      const response = rootKnowledgePointId
+        ? await questionApiFetch<QuestionImportBulkCreateJobResponse>(
+            "/api/questions/import/bulk-create-job",
+            {
+              method: "POST",
+              body: JSON.stringify({ questions, root_knowledge_point_id: rootKnowledgePointId }),
+            },
+          )
+        : await questionApiFetch<{ created: number }>("/api/questions/bulk", {
+            method: "POST",
+            body: JSON.stringify({ questions }),
+          });
       const successfulIds = new Set(importableDraftIds);
       setDrafts((current) => current.filter((draft) => !successfulIds.has(draft.draft_id)));
       setSourceEdits((current) => {
@@ -510,14 +458,24 @@ export function QuestionImportPage() {
         return nextDraft?.draft_id ?? null;
       });
       const importedCount = response.created;
-      toast({ title: `已导入 ${importedCount} 道题，知识点正在后台识别` });
-      showNotice({
-        id: KNOWLEDGE_RECOGNITION_NOTICE_ID,
-        title: "知识点正在后台识别",
-        progressText: `0/${importedCount}`,
-        description: KNOWLEDGE_RECOGNITION_NOTICE_DESCRIPTION,
-        pagePath: KNOWLEDGE_RECOGNITION_NOTICE_PAGE_PATH,
-      });
+      if (rootKnowledgePointId) {
+        const importJobResponse = response as QuestionImportBulkCreateJobResponse;
+        setActiveImportJobId(importJobResponse.job_id);
+        persistQuestionImportJobId(importJobResponse.job_id);
+        toast({ title: `已导入 ${importedCount} 道题，知识点正在后台识别` });
+        showNotice({
+          id: KNOWLEDGE_RECOGNITION_NOTICE_ID,
+          title: "知识点正在后台识别",
+          progressText: `0/${importedCount}`,
+          description: KNOWLEDGE_RECOGNITION_NOTICE_DESCRIPTION,
+          pagePath: KNOWLEDGE_RECOGNITION_NOTICE_PAGE_PATH,
+        });
+      } else {
+        toast({
+          title: `已导入 ${importedCount} 道题`,
+          description: "本次未自动关联知识点，可稍后在题库列表中手动关联。",
+        });
+      }
     } catch (error) {
       setParseError(error instanceof Error ? error.message : "导入失败");
     } finally {
@@ -525,11 +483,16 @@ export function QuestionImportPage() {
     }
   };
 
-  const confirmImportWithCourse = async () => {
-    if (!selectedCourseId) return;
-    const courseId = selectedCourseId;
-    setCourseDialogOpen(false);
-    await runImportWithCourse(courseId);
+  const confirmImportWithRootKnowledgePoint = async () => {
+    if (!selectedRootKnowledgePointId) return;
+    const rootKnowledgePointId = selectedRootKnowledgePointId;
+    setRootKnowledgePointDialogOpen(false);
+    await runImportWithRootKnowledgePoint(rootKnowledgePointId);
+  };
+
+  const skipRootKnowledgePointAndImport = async () => {
+    setRootKnowledgePointDialogOpen(false);
+    await runImportWithRootKnowledgePoint(null);
   };
 
   const showReviewer = drafts.length > 0 && !loading;
@@ -656,9 +619,9 @@ export function QuestionImportPage() {
 
       {parseError && (
         <div className="mx-8 mt-6">
-          <Alert variant="destructive" className="rounded-[16px] border-none bg-red-50 text-red-600 shadow-sm p-4">
-            <AlertCircle size={16} />
-            <AlertDescription className="text-sm leading-snug font-medium ml-2">{parseError}</AlertDescription>
+          <Alert variant="destructive" className="flex items-start gap-3 rounded-[16px] border-none bg-red-50 p-4 text-red-600 shadow-sm [&>svg]:static [&>svg]:translate-y-0">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <AlertDescription className="text-sm font-medium leading-snug">{parseError}</AlertDescription>
           </Alert>
         </div>
       )}
@@ -780,6 +743,7 @@ export function QuestionImportPage() {
                 )}
                 <ImportReviewEditor
                   draft={selectedDraft}
+                  draftNumber={selectedDraftNumber}
                   reviewMode={reviewMode}
                   isRecognizing={recognizingDraftId === selectedDraft?.draft_id}
                   isAnalyzingDocument={isAnalyzingDocument}
@@ -818,147 +782,59 @@ export function QuestionImportPage() {
         )}
       </main>
 
-      <AlertDialog open={courseDialogOpen} onOpenChange={setCourseDialogOpen}>
+      <AlertDialog open={rootKnowledgePointDialogOpen} onOpenChange={setRootKnowledgePointDialogOpen}>
         <AlertDialogContent className="max-w-2xl">
           <AlertDialogHeader>
-            <AlertDialogTitle>选择所属课程</AlertDialogTitle>
+            <AlertDialogTitle>选择主知识点</AlertDialogTitle>
             <AlertDialogDescription>
-              直接搜索课程即可；如果课程较多，也可以先按专业和方向缩小范围。
+              选择后，系统会从这个主知识点下的子知识中为题目自动匹配知识点；也可以暂不关联。
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <div className="grid gap-4 py-2">
-            <div className="space-y-2">
-              <Label className="text-xs font-bold text-slate-500">搜索课程</Label>
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
-                <Input
-                  value={courseQuery}
-                  onChange={(event) => setCourseQuery(event.target.value)}
-                  placeholder="输入课程名称，例如 MySQL、数据库、Python..."
-                  className="h-11 rounded-xl border-slate-200 bg-white pl-10 text-sm font-medium"
-                />
-              </div>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label className="text-xs font-bold text-slate-500">专业筛选</Label>
-                <Select
-                  value={selectedMajorId || "__all__"}
-                  onValueChange={(value) => {
-                    const nextMajorId = value === "__all__" ? "" : value;
-                    setSelectedMajorId(nextMajorId);
-                    setSelectedDirectionId("");
-                    setSelectedCourseId("");
-                  }}
-                >
-                  <SelectTrigger className="h-10 rounded-xl">
-                    <SelectValue placeholder="全部专业" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__all__">全部专业</SelectItem>
-                    {majors.map((major) => (
-                      <SelectItem key={major.id} value={major.id}>{major.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs font-bold text-slate-500">方向筛选</Label>
-                <Select
-                  value={selectedDirectionId || "__all__"}
-                  disabled={!selectedMajorId}
-                  onValueChange={(value) => {
-                    setSelectedDirectionId(value === "__all__" ? "" : value);
-                    setSelectedCourseId("");
-                  }}
-                >
-                  <SelectTrigger className="h-10 rounded-xl">
-                    <SelectValue placeholder={selectedMajorId ? "全部方向" : "先选择专业"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__all__">全部方向</SelectItem>
-                    {directions.map((direction) => (
-                      <SelectItem key={direction.id} value={direction.id}>{direction.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="overflow-hidden rounded-2xl border border-slate-100 bg-slate-50/60">
-              <div className="flex items-center justify-between border-b border-slate-100 bg-white px-3 py-2">
-                <div className="flex items-center gap-2 text-xs font-bold text-slate-500">
-                  <BookOpen size={14} />
-                  可选课程
-                </div>
-                <span className="text-xs font-medium text-slate-400">{filteredCourseOptions.length} 门</span>
-              </div>
-              <div className="max-h-64 overflow-y-auto p-2">
-                {filteredCourseOptions.length === 0 ? (
-                  <div className="flex min-h-28 items-center justify-center rounded-xl bg-white text-sm font-medium text-slate-400">
-                    没有找到匹配课程
-                  </div>
-                ) : (
-                  <div className="space-y-1.5">
-                    {filteredCourseOptions.map((course) => {
-                      const selected = selectedCourseId === course.id;
-                      return (
-                        <button
-                          key={course.id}
-                          type="button"
-                          className={cn(
-                            "w-full rounded-xl border px-3 py-2.5 text-left transition-all",
-                            selected
-                              ? "border-primary bg-primary/5 shadow-sm"
-                              : "border-transparent bg-white hover:border-primary/20 hover:bg-white",
-                          )}
-                          onClick={() => {
-                            setSelectedCourseId(course.id);
-                            setSelectedMajorId(course.major_id);
-                            setSelectedDirectionId(course.direction_id);
-                          }}
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className={cn("truncate text-sm font-medium", selected ? "text-primary" : "text-slate-700")}>
-                                {course.name}
-                              </p>
-                              <p className="mt-0.5 truncate text-xs font-medium text-slate-400">
-                                {course.major_name} / {course.direction_name}
-                              </p>
-                            </div>
-                            {selected && (
-                              <Badge variant="secondary" className="shrink-0 border-none bg-primary/10 text-primary">
-                                已选
-                              </Badge>
-                            )}
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {selectedCourse && (
-              <p className="rounded-xl border border-primary/10 bg-primary/5 px-3 py-2 text-xs font-medium text-slate-600">
-                已选择：{selectedCourse.name}
-                <span className="text-slate-400">（{selectedCourse.major_name} / {selectedCourse.direction_name}）</span>
+          <div className="flex flex-col gap-3 py-2">
+            <KnowledgePointSelector
+              fetcher={(path, options) => questionApiFetch(`/api${path}`, options)}
+              selectedKnowledgePoints={selectedRootKnowledgePoints}
+              onSelectedKnowledgePointsChange={setSelectedRootKnowledgePoints}
+              storageKey="question-import-root-knowledge-recent-keywords"
+              label="主知识点"
+              triggerLabel="搜索或展开知识图谱选择主知识点"
+              popoverSide="bottom"
+              popoverContentStyle={{ maxHeight: "min(340px, calc(100dvh - 360px))" }}
+              selectionTarget="root"
+              selectionMode="single"
+              showUsageShortcuts={false}
+            />
+            {selectedRootKnowledgePoints[0] ? (
+              <p className="rounded-xl border border-primary/10 bg-primary/5 px-3 py-2 text-xs font-medium text-muted-foreground">
+                将从「{selectedRootKnowledgePoints[0].name}」下的子知识点中自动匹配。
+                <span className="ml-1 text-muted-foreground/70">{selectedRootKnowledgePoints[0].path}</span>
               </p>
-            )}
+            ) : null}
+            <Alert className="flex items-start gap-3 border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-300 [&>svg]:static [&>svg]:translate-y-0">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <AlertDescription className="text-xs leading-5">
+                暂不确定时可以先导入，之后在题库列表中使用“关联知识点”补充。
+              </AlertDescription>
+            </Alert>
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={importing}
+              onClick={() => void skipRootKnowledgePointAndImport()}
+            >
+              暂不关联
+            </Button>
             <AlertDialogAction
-              disabled={!selectedCourseId || importing}
+              disabled={!selectedRootKnowledgePointId || importing}
               onClick={(event) => {
                 event.preventDefault();
-                void confirmImportWithCourse();
+                void confirmImportWithRootKnowledgePoint();
               }}
             >
-              确认并导入
+              关联并导入
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

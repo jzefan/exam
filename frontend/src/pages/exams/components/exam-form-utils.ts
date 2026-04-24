@@ -43,6 +43,15 @@ export function getPublishedExamStatus(
   return "upcoming";
 }
 
+export function toSubmitDateTime(value: string): string | null {
+  if (!value) return null;
+  const next = new Date(value);
+  if (Number.isNaN(next.getTime())) {
+    return null;
+  }
+  return next.toISOString();
+}
+
 interface ValidateExamFormOptions {
   allowPastStartTime?: boolean;
   startTimeGraceMinutes?: number;

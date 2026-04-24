@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.common.data_visibility import VisibilityScope
 from app.questions.models import QuestionImportJobStatus, QuestionType, TagType
@@ -265,7 +265,16 @@ class QuestionBulkCreateResponse(BaseModel):
 
 class QuestionImportBulkCreateJobRequest(BaseModel):
     questions: list[QuestionCreate] = Field(min_length=1, max_length=2000)
-    course_id: uuid.UUID
+    root_knowledge_point_id: uuid.UUID | None = None
+    course_id: uuid.UUID | None = Field(default=None, deprecated=True)
+
+    @model_validator(mode="after")
+    def normalize_root_knowledge_point_id(self) -> "QuestionImportBulkCreateJobRequest":
+        if self.root_knowledge_point_id is None:
+            self.root_knowledge_point_id = self.course_id
+        if self.root_knowledge_point_id is None:
+            raise ValueError("root_knowledge_point_id is required")
+        return self
 
 
 class QuestionImportBulkCreateJobResponse(BaseModel):
@@ -300,9 +309,33 @@ class QuestionBulkDeleteResponse(BaseModel):
     deleted: int
 
 
+class QuestionBulkMoveRequest(BaseModel):
+    question_ids: list[uuid.UUID] = Field(min_length=1, max_length=200)
+    question_bank_id: uuid.UUID | None = None
+
+
+class QuestionBulkMoveResponse(BaseModel):
+    moved: int
+
+
+class QuestionBankClearResponse(BaseModel):
+    deleted: int
+    hard_deleted: int
+    soft_deleted: int
+
+
 class QuestionImportMatchCreateRequest(BaseModel):
     question: QuestionCreate
-    course_id: uuid.UUID
+    root_knowledge_point_id: uuid.UUID | None = None
+    course_id: uuid.UUID | None = Field(default=None, deprecated=True)
+
+    @model_validator(mode="after")
+    def normalize_root_knowledge_point_id(self) -> "QuestionImportMatchCreateRequest":
+        if self.root_knowledge_point_id is None:
+            self.root_knowledge_point_id = self.course_id
+        if self.root_knowledge_point_id is None:
+            raise ValueError("root_knowledge_point_id is required")
+        return self
 
 
 class QuestionImportMatchCreateResponse(BaseModel):

@@ -32,6 +32,33 @@ services:
       timeout: 5s
       retries: 12
 
+  lsp_runner:
+    build:
+      context: ./backend
+      dockerfile: lsp-runner.Dockerfile
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12-slim}
+        DEBIAN_APT_MIRROR: ${DEBIAN_APT_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/debian}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+        UV_INDEX_URL: ${UV_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+        GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}
+        GOSUMDB: ${GOSUMDB:-sum.golang.google.cn}
+        INSTALL_JDTLS: ${INSTALL_JDTLS:-0}
+        JDTLS_BASE_URL: ${JDTLS_BASE_URL:-https://download.eclipse.org/jdtls/milestones}
+        JDTLS_CONNECT_TIMEOUT: ${JDTLS_CONNECT_TIMEOUT:-30}
+        JDTLS_MAX_TIME: ${JDTLS_MAX_TIME:-1800}
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8020/health', timeout=5)\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
   backend_blue:
     &backend_app
     build:
@@ -46,10 +73,13 @@ services:
       - ${APP_ROOT}/shared/env/backend.env
     environment:
       EXAM_JUDGE_RUNNER_URL: http://judge_runner:8010
+      EXAM_LSP_RUNNER_URL: http://lsp_runner:8020
     depends_on:
       db:
         condition: service_healthy
       judge_runner:
+        condition: service_healthy
+      lsp_runner:
         condition: service_healthy
     healthcheck:
       test:

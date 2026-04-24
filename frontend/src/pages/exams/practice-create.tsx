@@ -27,6 +27,10 @@ import { PageIntroHeader } from "@/components/ui/page-intro-header";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import {
+  getGeneratedQuestionPersistKey,
+  useUnsavedGeneratedQuestionsGuard,
+} from "@/hooks/use-unsaved-generated-questions-guard";
 import { cn } from "@/lib/utils";
 import { apiRequest } from "@/pages/grading/api";
 import { AIGenerateLoadingOverlay } from "@/pages/questions/components/ai-generate-loading-overlay";
@@ -35,7 +39,7 @@ import type { IExamQuestion, IExamStudent, IQuestion, QuestionType } from "@/typ
 
 import { QuestionSelector } from "./components/QuestionSelector";
 import { ClassStudentSelector } from "./components/ClassStudentSelector";
-import { getErrorMessage, getPublishedExamStatus } from "./components/exam-form-utils";
+import { getErrorMessage, getPublishedExamStatus, toSubmitDateTime } from "./components/exam-form-utils";
 
 type PracticeStepId = "knowledge" | "questions" | "students" | "publish";
 type QuestionMode = "manual" | "ai";
@@ -193,8 +197,22 @@ export function PracticeCreate() {
   const [aiQuestions, setAIQuestions] = useState<GeneratedQuestion[]>([]);
   const [aiGenerating, setAIGenerating] = useState(false);
   const [aiApplying, setAIApplying] = useState(false);
+  const [persistedAIQuestionKeys, setPersistedAIQuestionKeys] = useState<string[]>([]);
 
   const currentStepId = stepItems[currentStep].id;
+  const currentAIPersistKeys = useMemo(
+    () => aiQuestions.map((question) => getGeneratedQuestionPersistKey(question)),
+    [aiQuestions],
+  );
+  const hasUnsavedGeneratedQuestions =
+    questionMode === "ai" &&
+    aiQuestions.length > 0 &&
+    !aiGenerating &&
+    currentAIPersistKeys.some((key) => !persistedAIQuestionKeys.includes(key));
+  const { dialog: unsavedGuardDialog } = useUnsavedGeneratedQuestionsGuard({
+    when: hasUnsavedGeneratedQuestions,
+    message: "当前生成的题目尚未加入练习，确定离开当前页面吗？",
+  });
   const publishStartTime = isEditMode
     ? scheduledStartTime
     : startImmediately
@@ -266,8 +284,7 @@ export function PracticeCreate() {
     setSelectedKnowledgePoints(nextKnowledgePoints);
 
     if ((practice?.question_mode ?? questionMode) === "ai") {
-      setAIQuestions(
-        selectedQuestions.map((question, index) => ({
+      const nextAIQuestions = selectedQuestions.map((question, index) => ({
           index,
           type: question.type,
           title: question.title ?? "",
@@ -286,8 +303,9 @@ export function PracticeCreate() {
           analysis: question.analysis ?? null,
           difficulty: question.difficulty ?? 3,
           selected: true,
-        })),
-      );
+        }));
+      setAIQuestions(nextAIQuestions);
+      setPersistedAIQuestionKeys(nextAIQuestions.map((question) => getGeneratedQuestionPersistKey(question)));
     }
   }, [isEditMode, practice?.question_mode, questionMode, selectedQuestions]);
 
@@ -303,28 +321,34 @@ export function PracticeCreate() {
 
     setCurrentStep(0);
     setMaxVisitedStep(0);
-    setTitle(isEditMode ? "" : getDefaultPracticeTitle());
+    setIsManualQuestionFullscreen(false);
+    setSubmitError(null);
+    setAIQuestions([]);
+    setAIGenerating(false);
+    setAIApplying(false);
+    setPersistedAIQuestionKeys([]);
+
+    if (isEditMode) {
+      return;
+    }
+
+    setTitle(getDefaultPracticeTitle());
     setIsTitleManuallyEdited(false);
     setDescription("");
     setSelectedKnowledgePoints([]);
     setQuestionMode("manual");
     setQuestionIds([]);
-    setIsManualQuestionFullscreen(false);
     setStudentIds([]);
     setDurationMinutes(60);
     setStartImmediately(true);
     setScheduledStartTime("");
     setEndTime("");
     setShowResult(true);
-    setSubmitError(null);
     setAIQuestionCount(10);
     setAIDifficulty(3);
     setAITypeAlloc(getDefaultAITypeAlloc());
     setAIModel("qwen");
     setAIPrompt("");
-    setAIQuestions([]);
-    setAIGenerating(false);
-    setAIApplying(false);
   }, [id, isEditMode]);
 
   useEffect(() => {
@@ -396,21 +420,7 @@ export function PracticeCreate() {
     return null;
   };
 
-  const submitValidation = useMemo(() => findFirstInvalidStep(), [
-    currentStep,
-    currentStepId,
-    description,
-    durationMinutes,
-    endTime,
-    questionIds,
-    questionMode,
-    scheduledStartTime,
-    selectedKnowledgePoints,
-    showResult,
-    startImmediately,
-    studentIds,
-    title,
-  ]);
+  const submitValidation = findFirstInvalidStep();
 
   const goToStep = (index: number) => {
     if (index > maxVisitedStep) return;
@@ -450,6 +460,7 @@ export function PracticeCreate() {
     const controller = new AbortController();
     abortRef.current = controller;
     setAIQuestions([]);
+    setPersistedAIQuestionKeys([]);
     setAIGenerating(true);
     setSubmitError(null);
 
@@ -579,6 +590,9 @@ export function PracticeCreate() {
       );
 
       setQuestionIds(createdQuestions.map((question) => question.id));
+      setPersistedAIQuestionKeys((prev) =>
+        Array.from(new Set([...prev, ...pickedQuestions.map((question) => getGeneratedQuestionPersistKey(question))])),
+      );
       toast({
         title: "AI 题目已加入练习",
         description: `已加入 ${createdQuestions.length} 道题目。`,
@@ -610,8 +624,8 @@ export function PracticeCreate() {
       category: "practice" as const,
       title: title.trim(),
       description: description.trim() || null,
-      start_time: publishStartTime || null,
-      end_time: endTime || null,
+      start_time: toSubmitDateTime(publishStartTime),
+      end_time: toSubmitDateTime(endTime),
       duration_minutes: durationMinutes,
       total_score: totalScore,
       status: getPublishedExamStatus(
@@ -693,6 +707,7 @@ export function PracticeCreate() {
 
   return (
     <div className="space-y-6">
+      {unsavedGuardDialog}
       <PageIntroHeader
         title={isEditMode ? "编辑练习" : "发布练习"}
         description={

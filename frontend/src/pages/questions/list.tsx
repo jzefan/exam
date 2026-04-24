@@ -1,15 +1,17 @@
 import { useList, useCreate, useDelete, useGetIdentity, useInvalidate, useNavigation, useUpdate } from "@refinedev/core";
 import type { CrudFilter } from "@refinedev/core";
 import type { IQuestion, IQuestionBank, ITag, QuestionType } from "../../types";
-import { Search, BookOpen, Pencil, Trash2, Plus, ChevronDown, ChevronUp, Library, Check, PackageOpen, GraduationCap, SlidersHorizontal, ChevronsDownUp, ChevronsUpDown, Link2, Save, ChevronRight, Lock, Upload, Sparkles, Loader2, Eraser } from "lucide-react";
+import { Search, BookOpen, Pencil, Trash2, Plus, ChevronDown, ChevronUp, Library, Check, PackageOpen, GraduationCap, SlidersHorizontal, ChevronsDownUp, ChevronsUpDown, Link2, Save, ChevronRight, Lock, Upload, Sparkles, Loader2, Eraser, AlertTriangle, FolderInput } from "lucide-react";
 import { useState, useCallback, useRef, useEffect, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Dialog,
@@ -72,6 +74,16 @@ const difficultyConfig: Record<
 
 // Sidebar filter type items: split "choice" into single/multi, add others
 type FilterTypeKey = "single_choice" | "multi_choice" | "true_false" | "fill_in" | "short_answer" | "essay" | "code";
+
+type QuestionBankClearResult = {
+  deleted: number;
+  hard_deleted: number;
+  soft_deleted: number;
+};
+
+type QuestionBulkMoveResult = {
+  moved: number;
+};
 
 const FILTER_TYPE_ITEMS: { key: FilterTypeKey; label: string; backendType: QuestionType }[] = [
   { key: "single_choice", label: "单选题", backendType: "choice" },
@@ -196,6 +208,8 @@ async function questionApiFetch<T>(url: string, options?: RequestInit): Promise<
 }
 
 export function QuestionList() {
+  const CARD_EXPAND_DELAY_MS = 720;
+  const CARD_COLLAPSE_DELAY_MS = 320;
   const { toast } = useToast();
   const { data: identity } = useGetIdentity<{ id?: string; primary_org?: { role_name?: string } | null }>();
   const navigate = useNavigate();
@@ -229,7 +243,7 @@ export function QuestionList() {
   const [typesExpanded, setTypesExpanded] = useState(false);
   const [difficultyExpanded, setDifficultyExpanded] = useState(false);
 
-  // 卡片展开/收缩（hover 延时 500ms）
+  // 卡片展开/收缩（hover 延时更长一些，避免内容闪现）
   const [hoveredCard, setHoveredCard] = useState<string | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [allExpanded, setAllExpanded] = useState(false);
@@ -248,6 +262,10 @@ export function QuestionList() {
   const [deleteQuestionTarget, setDeleteQuestionTarget] = useState<IQuestion | null>(null);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [moveQuestionTarget, setMoveQuestionTarget] = useState<IQuestion | null>(null);
+  const [bulkMoveOpen, setBulkMoveOpen] = useState(false);
+  const [moveTargetBankId, setMoveTargetBankId] = useState<string>("__none__");
+  const [movingQuestions, setMovingQuestions] = useState(false);
   const [knowledgeDialogQuestion, setKnowledgeDialogQuestion] = useState<IQuestion | null>(null);
   const [selectedKnowledgePointIds, setSelectedKnowledgePointIds] = useState<Set<string>>(new Set());
   const [knowledgeSearch, setKnowledgeSearch] = useState("");
@@ -280,7 +298,7 @@ export function QuestionList() {
 
       // Search
       if (searchVal) {
-        next.push({ field: "title", operator: "contains", value: searchVal } as CrudFilter);
+        next.push({ field: "search_text", operator: "contains", value: searchVal } as CrudFilter);
       }
 
       // Question bank
@@ -422,6 +440,10 @@ export function QuestionList() {
 
   const refreshBanks = () => invalidate({ resource: "question-banks", invalidates: ["list"] });
   const refreshQuestions = () => invalidate({ resource: "questions", invalidates: ["list"] });
+  const refreshQuestionData = () => {
+    refreshQuestions();
+    refreshBanks();
+  };
   // Client-side filtering for single/multi choice distinction
   // (backend only has "choice" type, can't distinguish single vs multi)
   const rawQuestions = data?.data ?? [];
@@ -443,6 +465,9 @@ export function QuestionList() {
   const banks = banksQuery.data?.data ?? [];
   const roleName = identity?.primary_org?.role_name;
   const canManageSharedResources = roleName === "admin" || roleName === "platform_admin" || roleName === "school_admin";
+  const writableBanks = banks.filter(
+    (bank) => bank.visibility !== "platform" || bank.owner_id === identity?.id || canManageSharedResources,
+  );
   const noBankCount: number = (banksQuery.data as Record<string, unknown>)?.meta
     ? ((banksQuery.data as Record<string, unknown>).meta as Record<string, number>).noBankCount ?? 0
     : 0;
@@ -600,15 +625,20 @@ export function QuestionList() {
       return;
     }
 
+    const clearedBankId = clearBankTarget.id;
     setClearingBank(true);
     try {
-      const result = await questionApiFetch<{ deleted: number }>(`/api/question-banks/${clearBankTarget.id}/clear`, {
+      const result = await questionApiFetch<QuestionBankClearResult>(`/api/question-banks/${clearedBankId}/clear`, {
         method: "POST",
       });
-      toast({ title: `已清空 ${result.deleted} 道题目` });
+      toast({
+        title: `已清空 ${result.deleted} 道题目`,
+        description: `硬删除 ${result.hard_deleted} 道，软删除 ${result.soft_deleted} 道。`,
+      });
+      setActiveQuestionBankId(clearedBankId);
+      rebuildFilters(search, clearedBankId, activeKnowledgePointId, activeTypes, activeDifficulties, activeTagIds, allTagsSelected);
       setClearBankTarget(null);
-      refreshQuestions();
-      refreshBanks();
+      refreshQuestionData();
     } catch (error) {
       toast({
         title: "清空题库失败",
@@ -869,8 +899,7 @@ export function QuestionList() {
       toast({ title: `已删除 ${result.deleted} 道题目` });
       setSelected(new Set());
       setBulkDeleteOpen(false);
-      refreshQuestions();
-      refreshBanks();
+      refreshQuestionData();
     } catch (error) {
       toast({
         title: "批量删除失败",
@@ -879,6 +908,65 @@ export function QuestionList() {
       });
     } finally {
       setBulkDeleting(false);
+    }
+  };
+
+  const openMoveDialog = (question: IQuestion) => {
+    setMoveQuestionTarget(question);
+    setMoveTargetBankId(question.question_bank_id ?? "__none__");
+  };
+
+  const openBulkMoveDialog = () => {
+    if (selectedQuestionIds.length === 0) {
+      return;
+    }
+    setMoveQuestionTarget(null);
+    setMoveTargetBankId(activeQuestionBankId && activeQuestionBankId !== "__none__" ? activeQuestionBankId : "__none__");
+    setBulkMoveOpen(true);
+  };
+
+  const closeMoveDialog = () => {
+    if (movingQuestions) {
+      return;
+    }
+    setMoveQuestionTarget(null);
+    setBulkMoveOpen(false);
+  };
+
+  const handleMoveQuestions = async () => {
+    const questionIds = moveQuestionTarget ? [moveQuestionTarget.id] : selectedQuestionIds;
+    if (questionIds.length === 0) {
+      return;
+    }
+
+    setMovingQuestions(true);
+    try {
+      const result = await questionApiFetch<QuestionBulkMoveResult>("/api/questions/bulk-move", {
+        method: "POST",
+        body: JSON.stringify({
+          question_ids: questionIds,
+          question_bank_id: moveTargetBankId === "__none__" ? null : moveTargetBankId,
+        }),
+      });
+      const targetName =
+        moveTargetBankId === "__none__"
+          ? "未在题库"
+          : writableBanks.find((bank) => bank.id === moveTargetBankId)?.name ?? "目标题库";
+      toast({ title: `已移动 ${result.moved} 道题目`, description: `目标位置：${targetName}` });
+      if (bulkMoveOpen) {
+        setSelected(new Set());
+      }
+      setMoveQuestionTarget(null);
+      setBulkMoveOpen(false);
+      refreshQuestionData();
+    } catch (error) {
+      toast({
+        title: "移动题目失败",
+        description: error instanceof Error ? error.message : "请稍后重试",
+        variant: "destructive",
+      });
+    } finally {
+      setMovingQuestions(false);
     }
   };
 
@@ -993,38 +1081,48 @@ export function QuestionList() {
                     )}
                   </div>
                   <div className="ml-2 flex shrink-0 items-center gap-1 opacity-0 transition-all group-hover:opacity-100">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (!canClearBank) return;
-                        setClearBankTarget(bank);
-                      }}
-                      disabled={!canClearBank}
-                      className="rounded p-0.5 text-muted-foreground transition-colors hover:text-amber-600 disabled:cursor-not-allowed disabled:hover:text-muted-foreground"
-                      title={
-                        isReadOnlyShared
-                          ? "共享题库只读，不能清空"
-                          : bank.question_count === 0
-                            ? "题库中暂无题目"
-                            : "清空该题库中的所有题目"
-                      }
-                    >
-                      <Eraser size={13} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (isReadOnlyShared) return;
-                        setDeleteBankTarget(bank);
-                      }}
-                      disabled={isReadOnlyShared}
-                      className="rounded p-0.5 text-muted-foreground transition-colors hover:text-destructive disabled:cursor-not-allowed disabled:hover:text-muted-foreground"
-                      title={isReadOnlyShared ? "共享题库只读，不能删除" : "删除该题库"}
-                    >
-                      <Trash2 size={13} />
-                    </button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (!canClearBank) return;
+                              setClearBankTarget(bank);
+                            }}
+                            disabled={!canClearBank}
+                            className="rounded p-0.5 text-muted-foreground transition-colors hover:text-amber-600 disabled:cursor-not-allowed disabled:hover:text-muted-foreground"
+                          >
+                            <Eraser size={13} />
+                          </button>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">
+                        <p>清除这个题库的所有题目</p>
+                      </TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (isReadOnlyShared) return;
+                              setDeleteBankTarget(bank);
+                            }}
+                            disabled={isReadOnlyShared}
+                            className="rounded p-0.5 text-muted-foreground transition-colors hover:text-destructive disabled:cursor-not-allowed disabled:hover:text-muted-foreground"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">
+                        <p>只是删除题库，但是题目会移动到未在题库里</p>
+                      </TooltipContent>
+                    </Tooltip>
                   </div>
                 </div>
               );
@@ -1220,7 +1318,7 @@ export function QuestionList() {
             />
             <Input
               className="pl-9 w-full sm:w-60"
-              placeholder="搜索题目标题..."
+              placeholder="搜索题目内容、标题或选项..."
               value={search}
               onChange={(e) => handleSearch(e.target.value)}
             />
@@ -1229,7 +1327,17 @@ export function QuestionList() {
             <Plus size={16} />
             <span className="hidden sm:inline">新建题目</span>
           </Button>
-          <Button variant="outline" className="shrink-0" onClick={() => navigate("/questions/import")}>
+          <Button
+            variant="outline"
+            className="shrink-0"
+            onClick={() => {
+              const query =
+                activeQuestionBankId && activeQuestionBankId !== "__none__"
+                  ? `?question_bank_id=${encodeURIComponent(activeQuestionBankId)}`
+                  : "";
+              navigate(`/questions/import${query}`);
+            }}
+          >
             <Upload size={16} />
             <span className="hidden sm:inline">导入题目</span>
           </Button>
@@ -1291,16 +1399,28 @@ export function QuestionList() {
                   {selectedQuestionCount > 0 ? `已选择 ${selectedQuestionCount} 题` : "全选"}
                 </span>
                 {selectedQuestionCount > 0 ? (
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    size="sm"
-                    className="h-7 px-2 text-xs"
-                    onClick={() => setBulkDeleteOpen(true)}
-                  >
-                    <Trash2 size={13} />
-                    批量删除
-                  </Button>
+                  <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      onClick={openBulkMoveDialog}
+                    >
+                      <FolderInput size={13} />
+                      批量移动
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      onClick={() => setBulkDeleteOpen(true)}
+                    >
+                      <Trash2 size={13} />
+                      批量删除
+                    </Button>
+                  </>
                 ) : null}
               </div>
             ) : (
@@ -1344,6 +1464,7 @@ export function QuestionList() {
                     index={globalIndex}
                     className="transition-all hover:border-primary hover:shadow-md"
                     expanded={isCardExpanded(question.id)}
+                    highlightKeyword={search}
                     trailing={
                       <Checkbox
                         checked={selected.has(question.id)}
@@ -1360,6 +1481,15 @@ export function QuestionList() {
                         >
                           <Link2 size={13} className="sm:mr-1" />
                           <span className="hidden sm:inline">关联知识点</span>
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-1.5 text-xs text-muted-foreground hover:text-blue-600 sm:px-2 dark:hover:text-blue-400"
+                          onClick={() => openMoveDialog(question)}
+                        >
+                          <FolderInput size={13} className="sm:mr-1" />
+                          <span className="hidden sm:inline">移动</span>
                         </Button>
                         <Button
                           variant="ghost"
@@ -1383,11 +1513,14 @@ export function QuestionList() {
                     }
                     onMouseEnter={() => {
                       if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
-                      hoverTimerRef.current = setTimeout(() => setHoveredCard(question.id), 500);
+                      hoverTimerRef.current = setTimeout(() => setHoveredCard(question.id), CARD_EXPAND_DELAY_MS);
                     }}
                     onMouseLeave={() => {
                       if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
-                      setHoveredCard(null);
+                      hoverTimerRef.current = setTimeout(() => {
+                        setHoveredCard(null);
+                        hoverTimerRef.current = null;
+                      }, CARD_COLLAPSE_DELAY_MS);
                     }}
                     knowledgeRecognitionStatus={getQuestionKnowledgeRecognitionStatus(question.id, activeImportJob) ?? undefined}
                   />
@@ -1705,8 +1838,7 @@ export function QuestionList() {
                   {
                     onSuccess: () => {
                       if (activeQuestionBankId === deleteBankTarget.id) handleBankFilter(null);
-                      refreshBanks();
-                      refreshQuestions();
+                      refreshQuestionData();
                       setDeleteBankTarget(null);
                     },
                   },
@@ -1724,9 +1856,15 @@ export function QuestionList() {
           <AlertDialogHeader>
             <AlertDialogTitle>清空题库题目</AlertDialogTitle>
             <AlertDialogDescription>
-              确定要清空题库「{clearBankTarget?.name}」中的全部 {clearBankTarget?.question_count ?? 0} 道题目吗？题库会保留，但题目将被删除，此操作无法撤销。
+              确定要清空题库「{clearBankTarget?.name}」中的全部 {clearBankTarget?.question_count ?? 0} 道题目吗？题库会保留，但其中的题目会被删除。
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <Alert className="flex items-start gap-3 border-destructive/30 bg-destructive/5 text-destructive [&>svg]:static [&>svg]:translate-y-0">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <AlertDescription className="text-sm leading-6">
+              请务必小心：从未被考试或练习使用过的题目会被硬删除，已被使用过的题目会软删除以保留历史记录。此操作不能撤销。
+            </AlertDescription>
+          </Alert>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={clearingBank}>取消</AlertDialogCancel>
             <AlertDialogAction
@@ -1769,6 +1907,58 @@ export function QuestionList() {
         </AlertDialogContent>
       </AlertDialog>
 
+      <Dialog
+        open={!!moveQuestionTarget || bulkMoveOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeMoveDialog();
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{moveQuestionTarget ? "移动题目" : "批量移动题目"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+              {moveQuestionTarget ? (
+                <span className="line-clamp-2">{getQuestionTitle(moveQuestionTarget)}</span>
+              ) : (
+                <span>将已选择的 {selectedQuestionCount} 道题目移动到指定题库。</span>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">目标题库</Label>
+              <Select value={moveTargetBankId} onValueChange={setMoveTargetBankId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="请选择题库" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">未在题库</SelectItem>
+                  {writableBanks.map((bank) => (
+                    <SelectItem key={bank.id} value={bank.id}>
+                      {bank.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {writableBanks.length === 0 ? (
+                <p className="text-xs text-muted-foreground">还没有可移动到的题库，也可以先移动到“未在题库”。</p>
+              ) : null}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" size="sm" disabled={movingQuestions} onClick={closeMoveDialog}>
+              取消
+            </Button>
+            <Button type="button" size="sm" disabled={movingQuestions} onClick={() => void handleMoveQuestions()}>
+              {movingQuestions ? <Loader2 size={14} className="mr-1 animate-spin" /> : <FolderInput size={14} />}
+              确认移动
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <AlertDialog open={!!deleteQuestionTarget} onOpenChange={(open) => { if (!open) setDeleteQuestionTarget(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -1787,7 +1977,17 @@ export function QuestionList() {
                 }
                 deleteQuestion(
                   { resource: "questions", id: deleteQuestionTarget.id },
-                  { onSuccess: () => setDeleteQuestionTarget(null) },
+                  {
+                    onSuccess: () => {
+                      setSelected((prev) => {
+                        const next = new Set(prev);
+                        next.delete(deleteQuestionTarget.id);
+                        return next;
+                      });
+                      setDeleteQuestionTarget(null);
+                      refreshQuestionData();
+                    },
+                  },
                 );
               }}
             >

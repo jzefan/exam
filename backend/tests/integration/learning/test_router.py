@@ -47,6 +47,21 @@ async def test_create_direction_and_get_tree(admin_client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_admin_lists_new_direction_before_knowledge_points_exist(admin_client: AsyncClient):
+    major = (await admin_client.post("/api/knowledge/majors", json={"name": "Physics"})).json()
+
+    response = await admin_client.post(
+        "/api/knowledge/directions",
+        json={"major_id": major["id"], "name": "Mechanics"},
+    )
+    assert response.status_code == 201
+
+    response = await admin_client.get(f"/api/knowledge/majors/{major['id']}/directions")
+    assert response.status_code == 200
+    assert [direction["name"] for direction in response.json()] == ["Mechanics"]
+
+
+@pytest.mark.asyncio
 async def test_prerequisite_cycle_returns_400(admin_client: AsyncClient):
     major = (await admin_client.post("/api/knowledge/majors", json={"name": "CS2"})).json()
     direction = (

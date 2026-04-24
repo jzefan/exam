@@ -1,12 +1,14 @@
 import { useState, useCallback } from "react"
 
 type ToastVariant = "default" | "destructive"
+type ToastPosition = "top" | "bottom"
 
 interface ToastOptions {
   title: string
   description?: string
   variant?: ToastVariant
   duration?: number
+  position?: ToastPosition
 }
 
 interface ToastState extends ToastOptions {

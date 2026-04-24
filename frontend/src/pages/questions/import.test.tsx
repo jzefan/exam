@@ -70,6 +70,7 @@ beforeEach(() => {
   useListMock.mockClear();
   fetchMock.mockReset();
   localStorage.clear();
+  window.history.pushState({}, "", "/questions/import");
   vi.stubGlobal("fetch", fetchMock);
 });
 
@@ -325,6 +326,54 @@ describe("QuestionImportPage", () => {
 
     expect(await screen.findByRole("button", { name: "快速导入（推荐）" })).toHaveAttribute("data-state", "active");
     expect(screen.getByRole("button", { name: "逐题审核" })).toBeInTheDocument();
+    expect(screen.getByText("第 1 题")).toBeInTheDocument();
+  });
+
+  it("uses the selected question bank from the question list as the default import target", async () => {
+    window.history.pushState({}, "", "/questions/import?question_bank_id=bank-from-list");
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJsonResponse({
+          mode: "smart",
+          summary: {
+            total: 1,
+            high_confidence: 0,
+            medium_confidence: 1,
+            low_confidence: 0,
+            issue_count: 0,
+            pending_review: 1,
+            approved: 0,
+            skipped: 0,
+          },
+          drafts: [{ ...baseDraft, review_status: "pending" }],
+        }),
+      )
+      .mockResolvedValueOnce(mockJsonResponse([]))
+      .mockResolvedValueOnce(mockJsonResponse({ created: 1 }));
+
+    render(<QuestionImportPage />);
+
+    const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
+    fireEvent.change(screen.getByTestId("question-import-file-input"), {
+      target: { files: [file] },
+    });
+
+    await screen.findByText("核对导入内容");
+    fireEvent.click(screen.getByRole("button", { name: "导入 1 道题" }));
+    fireEvent.click(await screen.findByRole("button", { name: "暂不关联" }));
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls).toEqual(
+        expect.arrayContaining([
+          [
+            "/api/questions/bulk",
+            expect.objectContaining({
+              body: expect.stringContaining('"question_bank_id":"bank-from-list"'),
+            }),
+          ],
+        ]),
+      );
+    });
   });
 
   it("moves the primary import action out of the header in review mode", async () => {
@@ -457,7 +506,7 @@ describe("QuestionImportPage", () => {
     await screen.findByText("核对导入内容");
     fireEvent.click(screen.getByRole("button", { name: "导入 1 道题" }));
 
-    expect(await screen.findByText("选择所属课程")).toBeInTheDocument();
+    expect(await screen.findByText("选择主知识点")).toBeInTheDocument();
   });
 
   it("shows ai-full loading text while analyzing from the review screen", async () => {

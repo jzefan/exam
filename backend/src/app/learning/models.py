@@ -22,6 +22,7 @@ class Major(BaseModel):
 
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
     directions: Mapped[list["Direction"]] = relationship(
         back_populates="major", cascade="all, delete-orphan"
@@ -34,6 +35,7 @@ class Direction(BaseModel):
     major_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("major.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
     major: Mapped["Major"] = relationship(back_populates="directions")
     knowledge_points: Mapped[list["KnowledgePoint"]] = relationship(back_populates="direction")

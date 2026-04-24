@@ -576,7 +576,7 @@ async def test_teacher_bulk_create_allows_owned_bank_and_unbanked_questions(
 
 
 @pytest.mark.asyncio
-async def test_teacher_import_bulk_create_job_accepts_visible_course(
+async def test_teacher_import_bulk_create_job_accepts_visible_root_knowledge_point(
     client: AsyncClient, db_session, monkeypatch
 ) -> None:
     org = await _create_org_with_question_roles(db_session)
@@ -593,14 +593,14 @@ async def test_teacher_import_bulk_create_job_accepts_visible_course(
     direction = Direction(major_id=major.id, name="Application", description=None)
     db_session.add(direction)
     await db_session.flush()
-    course = KnowledgePoint(
+    root_knowledge_point = KnowledgePoint(
         name="Database Systems",
         direction_id=direction.id,
         parent_id=None,
         owner_id=teacher.id,
         visibility=VisibilityScope.PRIVATE,
     )
-    db_session.add(course)
+    db_session.add(root_knowledge_point)
     await db_session.commit()
 
     async def noop_process_question_import_job(**_kwargs):
@@ -615,7 +615,7 @@ async def test_teacher_import_bulk_create_job_accepts_visible_course(
     response = await client.post(
         "/api/questions/import/bulk-create-job",
         json={
-            "course_id": str(course.id),
+            "root_knowledge_point_id": str(root_knowledge_point.id),
             "questions": [
                 {
                     "type": "short_answer",

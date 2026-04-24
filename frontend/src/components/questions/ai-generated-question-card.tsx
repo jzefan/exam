@@ -61,8 +61,10 @@ export function AIGeneratedQuestionCard({
       defaultExpanded
       index={question.index + 1}
       className={cn(
-        "transition-colors",
-        question.selected ? "border-primary/50 ring-1 ring-primary/15" : "border-border/70",
+        "transition-colors shadow-none",
+        question.selected
+          ? "border-primary/15 bg-primary/[0.012] ring-1 ring-primary/6"
+          : "border-border/35 bg-background/90",
         className,
       )}
       trailing={

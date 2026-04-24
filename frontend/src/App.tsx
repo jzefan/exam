@@ -1,8 +1,6 @@
-import { Agentation } from "agentation";
+import { lazy, Suspense, useEffect, type ComponentType } from "react";
 import { Refine, Authenticated, useGetIdentity } from "@refinedev/core";
-import routerProvider, {
-  CatchAllNavigate,
-} from "@refinedev/react-router";
+import routerProvider, { CatchAllNavigate } from "@refinedev/react-router";
 import { BrowserRouter, Routes, Route, Outlet, Navigate } from "react-router-dom";
 
 import { dataProvider } from "./providers/data-provider";
@@ -15,45 +13,81 @@ import { BackgroundTaskNoticeHost } from "./components/ui/background-task-notice
 import { Toaster } from "./components/ui/toaster";
 import { Layout } from "./components/layout";
 import { StudentLayout } from "./components/student-layout";
-import { LoginPage } from "./pages/auth/login";
-import { RegisterPage } from "./pages/auth/register";
-import { UserList } from "./pages/admin/users/list";
-import { UserCreate } from "./pages/admin/users/create";
-import { UserEdit } from "./pages/admin/users/edit";
-import { QuestionList } from "./pages/questions/list";
-import { QuestionCreate } from "./pages/questions/create";
-import { QuestionEdit } from "./pages/questions/edit";
-import { QuestionImportPage } from "./pages/questions/import";
-import { AIGeneratePage } from "./pages/questions/ai-generate";
-import { Dashboard } from "./pages/dashboard";
-import { KnowledgeManagementPage } from "./pages/knowledge";
-import { MyExams } from "./pages/student/my-exams";
-import { WrongAnswers } from "./pages/student/wrong-answers";
-import { WrongAnswerDetailPage } from "./pages/student/wrong-answer-detail";
-import { StudentDashboard } from "./pages/student/dashboard";
-import { ExamResultPage } from "./pages/student/exam-result";
-import { TagList } from "./pages/tags/list";
-import { ExamList } from "./pages/exams/list";
-import { ExamCreate } from "./pages/exams/create";
-import { ExamEdit } from "./pages/exams/edit";
-import { PracticeCreate } from "./pages/exams/practice-create";
-import { ExamStudentsPage } from "./pages/exams/students";
-import { ExamAnalysisPage } from "./pages/exams/analysis";
-import { ExamPaperViewPage } from "./pages/exams/view";
-import { ExamTaking } from "./pages/student/exam-taking";
-import { EditorPage } from "./pages/job-models/editor"
-import { JobModelList } from "./pages/job-models/list"
-import { JobModelCreate } from "./pages/job-models/create"
-import { JobModelFastCreate } from "./pages/job-models/fast-create";
-import { StandardLibraryPage } from "./pages/job-models/standard-library";
-import { JobModelUploadAI } from "./pages/job-models/upload-ai";
-import { ModelConfigPage } from "./pages/settings/model-config";
-import { GradingCenterPage } from "./pages/grading";
-import { GwmxLanding } from "./pages/gwmx/landing";
-import { GwmxWorkbench } from "./pages/gwmx/workbench";
-import StudentManagementPage from "./pages/students";
+import { useBrand } from "./lib/brand";
 
 import { ENTERPRISE_ROLES, getHomeRoute, TEACHER_ROLES } from "@/utils/role-routing";
+
+function lazyNamed<TModule extends Record<string, unknown>, TExport extends keyof TModule>(
+  loader: () => Promise<TModule>,
+  exportName: TExport,
+) {
+  return lazy(async () => {
+    const module = await loader();
+    return { default: module[exportName] as ComponentType };
+  });
+}
+
+function RouteFallback() {
+  return (
+    <div className="flex min-h-[220px] items-center justify-center text-sm text-muted-foreground">
+      页面加载中...
+    </div>
+  );
+}
+
+function BrowserTitle() {
+  const brand = useBrand();
+
+  useEffect(() => {
+    document.title = brand.browserTitle;
+  }, [brand.browserTitle]);
+
+  return null;
+}
+
+const LoginPage = lazyNamed(() => import("./pages/auth/login"), "LoginPage");
+const RegisterPage = lazyNamed(() => import("./pages/auth/register"), "RegisterPage");
+const UserList = lazyNamed(() => import("./pages/admin/users/list"), "UserList");
+const UserCreate = lazyNamed(() => import("./pages/admin/users/create"), "UserCreate");
+const UserEdit = lazyNamed(() => import("./pages/admin/users/edit"), "UserEdit");
+const QuestionList = lazyNamed(() => import("./pages/questions/list"), "QuestionList");
+const QuestionCreate = lazyNamed(() => import("./pages/questions/create"), "QuestionCreate");
+const QuestionEdit = lazyNamed(() => import("./pages/questions/edit"), "QuestionEdit");
+const QuestionImportPage = lazyNamed(() => import("./pages/questions/import"), "QuestionImportPage");
+const AIGeneratePage = lazyNamed(() => import("./pages/questions/ai-generate"), "AIGeneratePage");
+const Dashboard = lazyNamed(() => import("./pages/dashboard"), "Dashboard");
+const KnowledgeManagementPage = lazyNamed(() => import("./pages/knowledge"), "KnowledgeManagementPage");
+const MyExams = lazyNamed(() => import("./pages/student/my-exams"), "MyExams");
+const WrongAnswers = lazyNamed(() => import("./pages/student/wrong-answers"), "WrongAnswers");
+const WrongAnswerDetailPage = lazyNamed(
+  () => import("./pages/student/wrong-answer-detail"),
+  "WrongAnswerDetailPage",
+);
+const StudentDashboard = lazyNamed(() => import("./pages/student/dashboard"), "StudentDashboard");
+const ExamResultPage = lazyNamed(() => import("./pages/student/exam-result"), "ExamResultPage");
+const TagList = lazyNamed(() => import("./pages/tags/list"), "TagList");
+const ExamList = lazyNamed(() => import("./pages/exams/list"), "ExamList");
+const ExamCreate = lazyNamed(() => import("./pages/exams/create"), "ExamCreate");
+const ExamEdit = lazyNamed(() => import("./pages/exams/edit"), "ExamEdit");
+const PracticeCreate = lazyNamed(() => import("./pages/exams/practice-create"), "PracticeCreate");
+const ExamStudentsPage = lazyNamed(() => import("./pages/exams/students"), "ExamStudentsPage");
+const ExamAnalysisPage = lazyNamed(() => import("./pages/exams/analysis"), "ExamAnalysisPage");
+const ExamPaperViewPage = lazyNamed(() => import("./pages/exams/view"), "ExamPaperViewPage");
+const ExamTaking = lazyNamed(() => import("./pages/student/exam-taking"), "ExamTaking");
+const EditorPage = lazyNamed(() => import("./pages/job-models/editor"), "EditorPage");
+const JobModelList = lazyNamed(() => import("./pages/job-models/list"), "JobModelList");
+const JobModelCreate = lazyNamed(() => import("./pages/job-models/create"), "JobModelCreate");
+const JobModelFastCreate = lazyNamed(() => import("./pages/job-models/fast-create"), "JobModelFastCreate");
+const StandardLibraryPage = lazyNamed(
+  () => import("./pages/job-models/standard-library"),
+  "StandardLibraryPage",
+);
+const JobModelUploadAI = lazyNamed(() => import("./pages/job-models/upload-ai"), "JobModelUploadAI");
+const ModelConfigPage = lazyNamed(() => import("./pages/settings/model-config"), "ModelConfigPage");
+const GradingCenterPage = lazyNamed(() => import("./pages/grading"), "GradingCenterPage");
+const GwmxLanding = lazyNamed(() => import("./pages/gwmx/landing"), "GwmxLanding");
+const GwmxWorkbench = lazyNamed(() => import("./pages/gwmx/workbench"), "GwmxWorkbench");
+const StudentManagementPage = lazy(() => import("./pages/students"));
 
 /** Redirect users to their home route if they don't match the allowed roles */
 function RoleGuard({ allow }: { allow: string[] }) {
@@ -86,178 +120,180 @@ function App() {
   return (
     <ThemeProvider>
       <ThemeConfigProvider>
-      <BrowserRouter>
-        <Refine
-          routerProvider={routerProvider}
-          dataProvider={dataProvider}
-          authProvider={authProvider}
-          accessControlProvider={accessControlProvider}
-          resources={[
-            {
-              name: "users",
-              list: "/users",
-              create: "/users/create",
-              edit: "/users/edit/:id",
-              meta: { label: "Users" },
-            },
-            {
-              name: "questions",
-              list: "/questions",
-              create: "/questions/create",
-              edit: "/questions/edit/:id",
-              meta: { label: "Questions" },
-            },
-            {
-              name: "tags",
-              list: "/tags",
-              meta: { label: "Tags" },
-            },
-            {
-              name: "exams",
-              list: "/exams",
-              create: "/exams/create",
-              edit: "/exams/edit/:id",
-              meta: { label: "考试管理" },
-            },
-            {
-              name: "knowledge",
-              list: "/knowledge",
-              meta: { label: "知识点管理" },
-            },
-            {
-              name: "job-models",
-              list: "/gwmx/job-models",
-              meta: { label: "职位模型管理" },
-            },
-            {
-              name: "grading",
-              list: "/grading",
-              meta: { label: "阅卷中心" },
-            },
-          ]}
-          options={{
-            syncWithLocation: true,
-            warnWhenUnsavedChanges: true,
-          }}
-        >
-          <Routes>
-            {/* Student routes — sidebar layout, students only */}
-            <Route
-              element={
-                <Authenticated key="student-auth" fallback={<CatchAllNavigate to="/login" />}>
-                  <RoleGuard allow={["student"]} />
-                </Authenticated>
-              }
-            >
-              <Route element={<StudentLayout />}>
-                <Route path="/student" element={<StudentDashboard />} />
-                <Route path="/my-exams" element={<MyExams />} />
-                <Route path="/my-exams/:id/result" element={<ExamResultPage />} />
-                <Route path="/wrong-answers" element={<WrongAnswers />} />
-                <Route path="/wrong-answers/:id" element={<WrongAnswerDetailPage />} />
-              </Route>
-            </Route>
-
-            {/* Admin/Teacher routes — top nav layout */}
-            <Route
-              element={
-                <Authenticated key="auth" fallback={<CatchAllNavigate to="/login" />}>
-                  <RoleGuard allow={TEACHER_ROLES} />
-                </Authenticated>
-              }
-            >
-              <Route element={<Layout />}>
-                <Route index element={<HomeRedirect />} />
-                <Route path="/dashboard" element={<Dashboard />} />
-                <Route path="/users">
-                  <Route index element={<UserList />} />
-                  <Route path="create" element={<UserCreate />} />
-                  <Route path="edit/:id" element={<UserEdit />} />
+        <BrowserRouter>
+          <BrowserTitle />
+          <Refine
+            routerProvider={routerProvider}
+            dataProvider={dataProvider}
+            authProvider={authProvider}
+            accessControlProvider={accessControlProvider}
+            resources={[
+              {
+                name: "users",
+                list: "/users",
+                create: "/users/create",
+                edit: "/users/edit/:id",
+                meta: { label: "Users" },
+              },
+              {
+                name: "questions",
+                list: "/questions",
+                create: "/questions/create",
+                edit: "/questions/edit/:id",
+                meta: { label: "Questions" },
+              },
+              {
+                name: "tags",
+                list: "/tags",
+                meta: { label: "Tags" },
+              },
+              {
+                name: "exams",
+                list: "/exams",
+                create: "/exams/create",
+                edit: "/exams/edit/:id",
+                meta: { label: "考试管理" },
+              },
+              {
+                name: "knowledge",
+                list: "/knowledge",
+                meta: { label: "知识点管理" },
+              },
+              {
+                name: "job-models",
+                list: "/gwmx/job-models",
+                meta: { label: "职位模型管理" },
+              },
+              {
+                name: "grading",
+                list: "/grading",
+                meta: { label: "阅卷中心" },
+              },
+            ]}
+            options={{
+              syncWithLocation: true,
+              warnWhenUnsavedChanges: true,
+            }}
+          >
+            <Suspense fallback={<RouteFallback />}>
+              <Routes>
+                {/* Student routes — sidebar layout, students only */}
+                <Route
+                  element={
+                    <Authenticated key="student-auth" fallback={<CatchAllNavigate to="/login" />}>
+                      <RoleGuard allow={["student"]} />
+                    </Authenticated>
+                  }
+                >
+                  <Route element={<StudentLayout />}>
+                    <Route path="/student" element={<StudentDashboard />} />
+                    <Route path="/my-exams" element={<MyExams />} />
+                    <Route path="/my-exams/:id/result" element={<ExamResultPage />} />
+                    <Route path="/wrong-answers" element={<WrongAnswers />} />
+                    <Route path="/wrong-answers/:id" element={<WrongAnswerDetailPage />} />
+                  </Route>
                 </Route>
-                <Route path="/questions">
-                  <Route index element={<QuestionList />} />
-                  <Route path="create" element={<QuestionCreate />} />
-                  <Route path="import" element={<QuestionImportPage />} />
-                  <Route path="ai-generate" element={<AIGeneratePage />} />
-                  <Route path="edit/:id" element={<QuestionEdit />} />
+
+                {/* Admin/Teacher routes — top nav layout */}
+                <Route
+                  element={
+                    <Authenticated key="auth" fallback={<CatchAllNavigate to="/login" />}>
+                      <RoleGuard allow={TEACHER_ROLES} />
+                    </Authenticated>
+                  }
+                >
+                  <Route element={<Layout />}>
+                    <Route index element={<HomeRedirect />} />
+                    <Route path="/dashboard" element={<Dashboard />} />
+                    <Route path="/users">
+                      <Route index element={<UserList />} />
+                      <Route path="create" element={<UserCreate />} />
+                      <Route path="edit/:id" element={<UserEdit />} />
+                    </Route>
+                    <Route path="/questions">
+                      <Route index element={<QuestionList />} />
+                      <Route path="create" element={<QuestionCreate />} />
+                      <Route path="import" element={<QuestionImportPage />} />
+                      <Route path="ai-generate" element={<AIGeneratePage />} />
+                      <Route path="edit/:id" element={<QuestionEdit />} />
+                    </Route>
+                    <Route path="/exams">
+                      <Route index element={<ExamList />} />
+                      <Route path="create" element={<ExamCreate />} />
+                      <Route path="practice/create" element={<PracticeCreate />} />
+                      <Route path="practice/edit/:id" element={<PracticeCreate />} />
+                      <Route path=":id/view" element={<ExamPaperViewPage />} />
+                      <Route path=":id/analysis" element={<ExamAnalysisPage />} />
+                      <Route path="edit/:id" element={<ExamEdit />} />
+                      <Route path="students" element={<ExamStudentsPage />} />
+                    </Route>
+                    <Route path="/tags" element={<TagList />} />
+                    <Route path="/knowledge" element={<KnowledgeManagementPage />} />
+                    <Route path="/grading" element={<GradingCenterPage />} />
+                    <Route path="/students" element={<StudentManagementPage />} />
+                    <Route path="/settings/model" element={<ModelConfigPage />} />
+                  </Route>
                 </Route>
-                <Route path="/exams">
-                  <Route index element={<ExamList />} />
-                  <Route path="create" element={<ExamCreate />} />
-                <Route path="practice/create" element={<PracticeCreate />} />
-                <Route path="practice/edit/:id" element={<PracticeCreate />} />
-                <Route path=":id/view" element={<ExamPaperViewPage />} />
-                <Route path=":id/analysis" element={<ExamAnalysisPage />} />
-                <Route path="edit/:id" element={<ExamEdit />} />
-                <Route path="students" element={<ExamStudentsPage />} />
+
+                {/* GWMX landing page — public */}
+                <Route path="/gwmx" element={<GwmxLanding />} />
+
+                {/* GWMX authenticated routes */}
+                <Route
+                  element={
+                    <Authenticated key="gwmx-auth" fallback={<Navigate to="/login?brand=gwmx" replace />}>
+                      <RoleGuard allow={ENTERPRISE_ROLES} />
+                    </Authenticated>
+                  }
+                >
+                  <Route element={<Layout />}>
+                    <Route path="/gwmx/workbench" element={<GwmxWorkbench />} />
+                    <Route path="/gwmx/job-models" element={<JobModelList />} />
+                    <Route path="/gwmx/job-models/standard-library" element={<StandardLibraryPage />} />
+                    <Route path="/gwmx/job-models/create" element={<JobModelCreate />} />
+                    <Route path="/gwmx/job-models/fast-create" element={<JobModelFastCreate />} />
+                    <Route path="/gwmx/job-models/upload-ai" element={<JobModelUploadAI />} />
+                  </Route>
                 </Route>
-                <Route path="/tags" element={<TagList />} />
-                <Route path="/knowledge" element={<KnowledgeManagementPage />} />
-                <Route path="/grading" element={<GradingCenterPage />} />
-                <Route path="/students" element={<StudentManagementPage />} />
-                <Route path="/settings/model" element={<ModelConfigPage />} />
-              </Route>
-            </Route>
 
-            {/* GWMX landing page — public */}
-            <Route path="/gwmx" element={<GwmxLanding />} />
+                {/* Job model editor — full-screen, no Layout wrapper */}
+                <Route
+                  path="/gwmx/job-models/:jobModelId/versions/:versionId/editor"
+                  element={
+                    <Authenticated key="editor" fallback={<Navigate to="/login?brand=gwmx" replace />}>
+                      <RoleGuard allow={ENTERPRISE_ROLES} />
+                    </Authenticated>
+                  }
+                >
+                  <Route index element={<EditorPage />} />
+                </Route>
 
-            {/* GWMX authenticated routes */}
-            <Route
-              element={
-                <Authenticated key="gwmx-auth" fallback={<Navigate to="/login?brand=gwmx" replace />}>
-                  <RoleGuard allow={ENTERPRISE_ROLES} />
-                </Authenticated>
-              }
-            >
-              <Route element={<Layout />}>
-                <Route path="/gwmx/workbench" element={<GwmxWorkbench />} />
-                <Route path="/gwmx/job-models" element={<JobModelList />} />
-                <Route path="/gwmx/job-models/standard-library" element={<StandardLibraryPage />} />
-                <Route path="/gwmx/job-models/create" element={<JobModelCreate />} />
-                <Route path="/gwmx/job-models/fast-create" element={<JobModelFastCreate />} />
-                <Route path="/gwmx/job-models/upload-ai" element={<JobModelUploadAI />} />
-              </Route>
-            </Route>
+                {/* Exam taking — full-screen, no Layout wrapper */}
+                <Route
+                  path="/my-exams/:id/take"
+                  element={
+                    <Authenticated key="exam-taking" fallback={<CatchAllNavigate to="/login" />}>
+                      <ExamTaking />
+                    </Authenticated>
+                  }
+                />
 
-            {/* Job model editor — full-screen, no Layout wrapper */}
-            <Route
-              path="/gwmx/job-models/:jobModelId/versions/:versionId/editor"
-              element={
-                <Authenticated key="editor" fallback={<Navigate to="/login?brand=gwmx" replace />}>
-                  <RoleGuard allow={ENTERPRISE_ROLES} />
-                </Authenticated>
-              }
-            >
-              <Route index element={<EditorPage />} />
-            </Route>
-
-            {/* Exam taking — full-screen, no Layout wrapper */}
-            <Route
-              path="/my-exams/:id/take"
-              element={
-                <Authenticated key="exam-taking" fallback={<CatchAllNavigate to="/login" />}>
-                  <ExamTaking />
-                </Authenticated>
-              }
-            />
-
-            <Route
-              element={
-                <Authenticated key="auth" fallback={<Outlet />}>
-                  <LoginSuccessRedirect />
-                </Authenticated>
-              }
-            >
-              <Route path="/login" element={<LoginPage />} />
-              <Route path="/register" element={<RegisterPage />} />
-            </Route>
-          </Routes>
-        </Refine>
-        <BackgroundTaskNoticeHost />
-        <Toaster />
-      </BrowserRouter>
-      {import.meta.env.DEV && <Agentation />}
+                <Route
+                  element={
+                    <Authenticated key="auth" fallback={<Outlet />}>
+                      <LoginSuccessRedirect />
+                    </Authenticated>
+                  }
+                >
+                  <Route path="/login" element={<LoginPage />} />
+                  <Route path="/register" element={<RegisterPage />} />
+                </Route>
+              </Routes>
+            </Suspense>
+          </Refine>
+          <BackgroundTaskNoticeHost />
+          <Toaster />
+        </BrowserRouter>
       </ThemeConfigProvider>
     </ThemeProvider>
   );

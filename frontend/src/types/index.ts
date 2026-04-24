@@ -40,6 +40,7 @@ export interface ITokenResponse {
 }
 
 export type QuestionType = "choice" | "true_false" | "fill_in" | "short_answer" | "essay" | "code";
+export type CodeLanguage = "python" | "javascript" | "java" | "cpp" | "c" | "go";
 
 export interface ITag {
   id: string;
@@ -177,16 +178,16 @@ export interface ICodeQuestionContent extends Record<string, unknown> {
   signature?: string;
   parameters?: ICodeFunctionParameter[];
   return_type?: string;
-  starter_code?: Partial<Record<"python" | "javascript" | "java" | "cpp" | "c" | "go", string>>;
+  starter_code?: Partial<Record<CodeLanguage, string>>;
   examples?: ICodeQuestionExample[];
   sample_tests?: ICodeSampleTest[];
   constraints?: string[];
 }
 
 export interface ICodeAnswerContent extends Record<string, unknown> {
-  language?: "python" | "javascript" | "java" | "cpp" | "c" | "go";
+  language?: CodeLanguage;
   code?: string;
-  code_by_language?: Partial<Record<"python" | "javascript" | "java" | "cpp" | "c" | "go", string>>;
+  code_by_language?: Partial<Record<CodeLanguage, string>>;
   custom_input?: string;
   last_run_input?: string;
   last_run_output?: string;

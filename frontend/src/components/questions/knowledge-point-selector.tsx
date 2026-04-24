@@ -124,6 +124,7 @@ function KnowledgeTreeNodeList({
   nodes,
   parentId,
   depth,
+  selectionTarget,
   selectedIds,
   expandedNodes,
   visibleNodeIds,
@@ -133,6 +134,7 @@ function KnowledgeTreeNodeList({
   nodes: KnowledgeTreeNode[];
   parentId: string | null;
   depth: number;
+  selectionTarget: "root" | "child";
   selectedIds: Set<string>;
   expandedNodes: Set<string>;
   visibleNodeIds: Set<string>;
@@ -148,10 +150,11 @@ function KnowledgeTreeNodeList({
       style={{ paddingLeft: `${depth > 0 ? 20 : 10}px` }}
     >
       {children.map((node) => {
-        const hasChildren = nodes.some((item) => item.parent_id === node.id);
+        const shouldRenderChildren = selectionTarget === "child" || depth > 0;
+        const hasChildren = shouldRenderChildren && nodes.some((item) => item.parent_id === node.id);
         const isExpanded = expandedNodes.has(node.id);
         const isSelected = selectedIds.has(node.id);
-        const isSelectable = depth > 0;
+        const isSelectable = selectionTarget === "root" ? depth === 0 : depth > 0;
 
         return (
           <div key={node.id} className="space-y-0.5">
@@ -171,6 +174,7 @@ function KnowledgeTreeNodeList({
                 nodes={nodes}
                 parentId={node.id}
                 depth={depth + 1}
+                selectionTarget={selectionTarget}
                 selectedIds={selectedIds}
                 expandedNodes={expandedNodes}
                 visibleNodeIds={visibleNodeIds}
@@ -194,6 +198,11 @@ export function KnowledgePointSelector({
   triggerLabel = "选择知识点",
   className,
   popoverSide = "right",
+  popoverContentStyle,
+  selectionTarget = "child",
+  selectionMode = "multiple",
+  showUsageShortcuts = true,
+  onOpenChange,
 }: {
   fetcher: KnowledgePointSelectorFetcher;
   selectedKnowledgePoints: SelectedKnowledgePoint[];
@@ -203,6 +212,11 @@ export function KnowledgePointSelector({
   triggerLabel?: string;
   className?: string;
   popoverSide?: "top" | "right" | "bottom" | "left";
+  popoverContentStyle?: React.CSSProperties;
+  selectionTarget?: "root" | "child";
+  selectionMode?: "single" | "multiple";
+  showUsageShortcuts?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const [majors, setMajors] = useState<KnowledgeMajor[]>([]);
   const [directions, setDirections] = useState<Record<string, KnowledgeDirection[]>>({});
@@ -224,12 +238,13 @@ export function KnowledgePointSelector({
   }, [fetcher]);
 
   const loadFrequentKnowledgePoints = useCallback(async () => {
+    if (!showUsageShortcuts) return;
     const data = await fetcher<{ recent: FrequentKnowledgePointItem[]; frequent: FrequentKnowledgePointItem[] }>(
       "/questions/ai-generate/frequent-knowledge-points",
     );
     setRecentKnowledgePoints(data.recent);
     setFrequentKnowledgePoints(data.frequent);
-  }, [fetcher]);
+  }, [fetcher, showUsageShortcuts]);
 
   useEffect(() => {
     void loadFrequentKnowledgePoints().catch(() => {});
@@ -305,16 +320,21 @@ export function KnowledgePointSelector({
 
   const toggleKnowledgePoint = useCallback(
     (node: KnowledgeTreeNode, majorName: string, directionName: string) => {
+      const selected = selectedKnowledgePoints.some((item) => item.id === node.id);
+      const nextItem = { id: node.id, name: node.name, path: `${majorName} > ${directionName} > ${node.name}` };
       onSelectedKnowledgePointsChange(
-        selectedKnowledgePoints.some((item) => item.id === node.id)
+        selected
           ? selectedKnowledgePoints.filter((item) => item.id !== node.id)
-          : [
-              ...selectedKnowledgePoints,
-              { id: node.id, name: node.name, path: `${majorName} > ${directionName} > ${node.name}` },
-            ],
+          : selectionMode === "single"
+            ? [nextItem]
+            : [...selectedKnowledgePoints, nextItem],
       );
+      if (!selected && selectionMode === "single") {
+        setPopoverOpen(false);
+        onOpenChange?.(false);
+      }
     },
-    [onSelectedKnowledgePointsChange, selectedKnowledgePoints],
+    [onOpenChange, onSelectedKnowledgePointsChange, selectedKnowledgePoints, selectionMode],
   );
 
   return (
@@ -346,6 +366,7 @@ export function KnowledgePointSelector({
         open={popoverOpen}
         onOpenChange={(open) => {
           setPopoverOpen(open);
+          onOpenChange?.(open);
           if (open) {
             void ensureKnowledgeTreeReady();
             void loadFrequentKnowledgePoints().catch(() => {});
@@ -362,7 +383,9 @@ export function KnowledgePointSelector({
           >
             <span>
               {selectedKnowledgePoints.length > 0
-                ? `已选 ${selectedKnowledgePoints.length} 个知识点`
+                ? selectionMode === "single"
+                  ? selectedKnowledgePoints[0]?.name
+                  : `已选 ${selectedKnowledgePoints.length} 个知识点`
                 : triggerLabel}
             </span>
             <ChevronDown size={14} className="text-muted-foreground" />
@@ -373,6 +396,7 @@ export function KnowledgePointSelector({
           align="start"
           sideOffset={8}
           collisionPadding={20}
+          style={popoverContentStyle}
           className="flex max-h-[min(480px,calc(100dvh-9rem))] w-[min(560px,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-hidden p-0 sm:max-h-[min(560px,calc(100dvh-9rem))]"
         >
           <div className="shrink-0 border-b border-border/30 p-3">
@@ -402,7 +426,7 @@ export function KnowledgePointSelector({
                 </div>
               </div>
             ) : null}
-            {recentKnowledgePoints.length > 0 ? (
+            {showUsageShortcuts && recentKnowledgePoints.length > 0 ? (
               <div className="mt-3">
                 <p className="mb-2 flex items-center gap-1 text-xs font-semibold text-muted-foreground">
                   <Star size={12} />
@@ -437,7 +461,7 @@ export function KnowledgePointSelector({
                 </div>
               </div>
             ) : null}
-            {frequentKnowledgePoints.length > 0 ? (
+            {showUsageShortcuts && frequentKnowledgePoints.length > 0 ? (
               <div className="mt-3">
                 <p className="mb-2 flex items-center gap-1 text-xs font-semibold text-muted-foreground">
                   <Star size={12} />
@@ -484,19 +508,20 @@ export function KnowledgePointSelector({
               <p className="py-10 text-center text-xs text-muted-foreground">暂无知识图谱数据</p>
             ) : (
               majors.map((major) => {
-                const majorKeywordMatched =
-                  keyword.trim() && major.name.toLowerCase().includes(keyword.trim().toLowerCase());
-                const majorExpanded = keyword.trim() ? true : expandedMajors.has(major.id);
+                const normalizedKeyword = keyword.trim().toLowerCase();
+                const hasKeyword = normalizedKeyword.length > 0;
+                const majorKeywordMatched = hasKeyword && major.name.toLowerCase().includes(normalizedKeyword);
+                const majorExpanded = hasKeyword ? true : expandedMajors.has(major.id);
                 const majorDirections = directions[major.id] ?? [];
-                const visibleDirections = majorDirections.filter((direction) => {
-                  const directionKeywordMatched =
-                    keyword.trim() &&
-                    direction.name.toLowerCase().includes(keyword.trim().toLowerCase());
-                  const nodesForDirection = treeNodes[direction.id] ?? [];
-                  const visibility = buildKnowledgeTreeVisibility(nodesForDirection, keyword);
-                  return majorKeywordMatched || directionKeywordMatched || visibility.visibleNodeIds.size > 0;
-                });
-                if (keyword.trim() && !majorKeywordMatched && visibleDirections.length === 0) {
+                const visibleDirections = hasKeyword
+                  ? majorDirections.filter((direction) => {
+                      const directionKeywordMatched = direction.name.toLowerCase().includes(normalizedKeyword);
+                      const nodesForDirection = treeNodes[direction.id] ?? [];
+                      const visibility = buildKnowledgeTreeVisibility(nodesForDirection, keyword);
+                      return majorKeywordMatched || directionKeywordMatched || visibility.visibleNodeIds.size > 0;
+                    })
+                  : majorDirections;
+                if (hasKeyword && !majorKeywordMatched && visibleDirections.length === 0) {
                   return null;
                 }
 
@@ -531,7 +556,7 @@ export function KnowledgePointSelector({
                     {majorExpanded && visibleDirections.map((direction) => {
                       const nodesForDirection = treeNodes[direction.id] ?? [];
                       const visibility = buildKnowledgeTreeVisibility(nodesForDirection, keyword);
-                      const directionExpanded = keyword.trim() ? true : expandedDirections.has(direction.id);
+                      const directionExpanded = hasKeyword ? true : expandedDirections.has(direction.id);
 
                       return (
                         <div key={direction.id} className="pl-4">
@@ -565,9 +590,10 @@ export function KnowledgePointSelector({
                               nodes={nodesForDirection}
                               parentId={null}
                               depth={0}
+                              selectionTarget={selectionTarget}
                               selectedIds={new Set(selectedKnowledgePoints.map((item) => item.id))}
                               expandedNodes={
-                                keyword.trim()
+                                hasKeyword
                                   ? new Set([...expandedNodes, ...visibility.autoExpandedNodeIds])
                                   : expandedNodes
                               }

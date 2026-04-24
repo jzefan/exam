@@ -26,6 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { createRandomId } from "@/lib/random-id";
 import type { IQuestion } from "@/types";
 import { KnowledgeImportDialog } from "./KnowledgeImportDialog";
 import { KnowledgeCatalogPhotoDialog } from "./KnowledgeCatalogPhotoDialog";
@@ -35,11 +36,10 @@ import { NodeDetailPanel } from "./NodeDetailPanel";
 import { PrerequisiteSelectModal } from "./PrerequisiteSelectModal";
 import { RelatedResourcesDialog, type LearningMaterial } from "./RelatedResourcesDialog";
 import {
-  getReadOnlyDirectionFeedback,
   getReadOnlyKnowledgeFeedback,
-  getReadOnlyMajorFeedback,
 } from "./access-messages";
 import type { KnowledgeImportPath } from "./import-knowledge-utils";
+import { getFirstKnowledgeImportRootName } from "./import-knowledge-utils";
 import type {
   AIRecommendationModel,
   IDirection,
@@ -365,7 +365,15 @@ export function KnowledgeManagementPage() {
         }
       }
 
+      const focusRootName = getFirstKnowledgeImportRootName(paths);
+      const focusRootId = focusRootName ? nodeIdByKey.get(`root::${focusRootName}`) ?? null : null;
+
       await loadTree(selectedDirectionId);
+      if (focusRootId) {
+        setSelectedRootKnowledgeId(focusRootId);
+        setSelectedNodeId(focusRootId);
+        setEditingNodeId(null);
+      }
       toast({
         title: "知识库导入完成",
         description: createdCount > 0 ? `新增 ${createdCount} 个知识点。` : "导入内容已存在，没有重复创建。",
@@ -400,10 +408,6 @@ export function KnowledgeManagementPage() {
 
   const handleEditMajor = useCallback(
     (major: IMajor) => {
-      if (!canManageSharedResources) {
-        notifyReadOnly(getReadOnlyMajorFeedback());
-        return;
-      }
       setFormState({
         open: true,
         kind: "major",
@@ -413,15 +417,11 @@ export function KnowledgeManagementPage() {
         description: major.description ?? "",
       });
     },
-    [canManageSharedResources, notifyReadOnly],
+    [],
   );
 
   const handleDeleteMajor = useCallback(
     (major: IMajor) => {
-      if (!canManageSharedResources) {
-        notifyReadOnly(getReadOnlyMajorFeedback());
-        return;
-      }
       const majorDirections = directions.filter((direction) => direction.major_id === major.id);
       setDeleteState({
         open: true,
@@ -434,7 +434,7 @@ export function KnowledgeManagementPage() {
             : "删除后该专业将不可恢复。",
       });
     },
-    [canManageSharedResources, directions, notifyReadOnly],
+    [directions],
   );
 
   const handleCreateDirection = useCallback(
@@ -453,10 +453,6 @@ export function KnowledgeManagementPage() {
 
   const handleEditDirection = useCallback(
     (direction: IDirection) => {
-      if (!canManageSharedResources) {
-        notifyReadOnly(getReadOnlyDirectionFeedback());
-        return;
-      }
       setFormState({
         open: true,
         kind: "direction",
@@ -467,15 +463,11 @@ export function KnowledgeManagementPage() {
         description: direction.description ?? "",
       });
     },
-    [canManageSharedResources, notifyReadOnly],
+    [],
   );
 
   const handleDeleteDirection = useCallback(
     (direction: IDirection) => {
-      if (!canManageSharedResources) {
-        notifyReadOnly(getReadOnlyDirectionFeedback());
-        return;
-      }
       const isCurrentDirection = selectedDirectionId === direction.id;
       const knowledgeCount = isCurrentDirection ? nodes.length : 0;
       setDeleteState({
@@ -490,7 +482,7 @@ export function KnowledgeManagementPage() {
         isCurrentDirection,
       });
     },
-    [canManageSharedResources, nodes.length, notifyReadOnly, selectedDirectionId],
+    [nodes.length, selectedDirectionId],
   );
 
   const handleAddChild = useCallback(
@@ -715,7 +707,7 @@ export function KnowledgeManagementPage() {
         ...current,
         [resourcesNodeId]: [
           ...(current[resourcesNodeId] ?? []),
-          { ...payload, id: crypto.randomUUID() },
+          { ...payload, id: createRandomId() },
         ],
       }));
     },

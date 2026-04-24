@@ -7,6 +7,7 @@ import { examStatusOptions } from "./components/ExamStatusBadge";
 import type { IExamQuestion, IExamStudent } from "@/types";
 import {
   getErrorMessage,
+  toSubmitDateTime,
   type ExamFormValues,
 } from "./components/exam-form-utils";
 
@@ -68,8 +69,8 @@ function ExamEditForm({ id, exam }: { id: string; exam: ExamDetail }) {
         id,
         values: {
           ...values,
-          start_time: values.start_time || null,
-          end_time: values.end_time || null,
+          start_time: toSubmitDateTime(values.start_time),
+          end_time: toSubmitDateTime(values.end_time),
           notes_template: values.notes_template || null,
           position_id: values.position_id || null,
           category: values.category,

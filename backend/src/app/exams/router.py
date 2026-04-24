@@ -36,6 +36,10 @@ from app.exams.schemas import (
     ScoreBucket,
     StudentResultRow,
 )
+from app.exams.time_utils import (
+    coerce_exam_input_datetime_to_utc,
+    coerce_persisted_exam_datetime_to_utc,
+)
 from app.questions.service import cleanup_soft_deleted_question_if_orphaned
 
 router = APIRouter()
@@ -139,8 +143,8 @@ def _build_exam_response(exam: Exam, student_id: uuid.UUID | None = None) -> Exa
         category=exam.category,
         title=exam.title,
         description=exam.description,
-        start_time=exam.start_time,
-        end_time=exam.end_time,
+        start_time=coerce_persisted_exam_datetime_to_utc(exam.start_time),
+        end_time=coerce_persisted_exam_datetime_to_utc(exam.end_time),
         duration_minutes=exam.duration_minutes,
         total_score=exam.total_score,
         status=exam.status if isinstance(exam.status, str) else exam.status.value,
@@ -301,8 +305,8 @@ async def create_exam(
         category=body.category,
         title=body.title,
         description=body.description,
-        start_time=body.start_time,
-        end_time=body.end_time,
+        start_time=coerce_exam_input_datetime_to_utc(body.start_time),
+        end_time=coerce_exam_input_datetime_to_utc(body.end_time),
         duration_minutes=body.duration_minutes,
         total_score=body.total_score,
         status=body.status,
@@ -358,6 +362,8 @@ async def update_exam(
     student_ids = data.pop("student_ids", None)
 
     for field, value in data.items():
+        if field in {"start_time", "end_time"}:
+            value = coerce_exam_input_datetime_to_utc(value)
         setattr(exam, field, value)
 
     if question_items is not None:

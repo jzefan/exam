@@ -1,3 +1,5 @@
+import { createRandomId } from "@/lib/random-id";
+
 export type CatalogPhotoImage = {
   id: string;
   name: string;
@@ -74,7 +76,7 @@ async function extractImagesFromSingleFile(file: File): Promise<CatalogPhotoImag
     const originalDataUrl = await readFileAsDataUrl(file);
     return [
       {
-        id: crypto.randomUUID(),
+        id: createRandomId(),
         name: file.name,
         src: await compressImageDataUrl(originalDataUrl),
       },
@@ -108,7 +110,7 @@ async function extractImagesFromSingleFile(file: File): Promise<CatalogPhotoImag
     canvas.height = viewport.height;
     await page.render({ canvas, canvasContext: context, viewport }).promise;
     images.push({
-      id: crypto.randomUUID(),
+      id: createRandomId(),
       name: `${file.name} · 第 ${pageNumber} 页`,
       src: canvas.toDataURL("image/jpeg", DEFAULT_CATALOG_IMAGE_QUALITY),
     });

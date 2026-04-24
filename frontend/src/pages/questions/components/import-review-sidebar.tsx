@@ -218,7 +218,7 @@ export function ImportReviewSidebar({
 
                   <p
                     className={cn(
-                      "whitespace-pre-wrap break-words text-sm font-medium leading-relaxed transition-colors [overflow-wrap:anywhere]",
+                      "overflow-hidden break-words text-sm font-medium leading-relaxed transition-colors [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] [overflow-wrap:anywhere]",
                       isSelected ? "text-slate-600" : "text-slate-500 group-hover:text-slate-600",
                     )}
                   >

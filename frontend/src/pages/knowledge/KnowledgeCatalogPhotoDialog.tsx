@@ -130,7 +130,12 @@ export function KnowledgeCatalogPhotoDialog({
   const handleImport = async () => {
     if (effectivePaths.length === 0) return;
     if (!trimmedRootName) {
-      setError("请填写主知识点名称。");
+      toast({
+        title: "请填写主知识点名称",
+        description: "填写后再导入，识别结果会作为这个主知识点的子节点导入。",
+        position: "top",
+        variant: "destructive",
+      });
       return;
     }
     setImporting(true);
@@ -183,7 +188,7 @@ export function KnowledgeCatalogPhotoDialog({
   };
 
   const canImport =
-    !recognizing && !importing && paths.length > 0 && Boolean(trimmedRootName);
+    !recognizing && !importing && paths.length > 0;
 
   return (
     <Dialog onOpenChange={handleOpenChange} open={open}>
@@ -320,6 +325,11 @@ export function KnowledgeCatalogPhotoDialog({
                         images.length === 0
                           ? "左侧上传目录照片后，点击“开始识别”即可在此预览层级。"
                           : "点击“开始识别”，等待后端识别目录层级。"
+                      }
+                      emptyClassName={
+                        images.length > 0
+                          ? "text-emerald-700 dark:text-emerald-400 font-medium"
+                          : undefined
                       }
                       onRemoveNode={removeTreeNode}
                       paths={effectivePaths}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_NOTES, validateExamForm, type ExamFormValues } from "./exam-form-utils";
+import { DEFAULT_NOTES, toSubmitDateTime, validateExamForm, type ExamFormValues } from "./exam-form-utils";
 
 function createForm(overrides: Partial<ExamFormValues> = {}): ExamFormValues {
   return {
@@ -78,5 +78,15 @@ describe("validateExamForm", () => {
 
     expect(errors.start_time).toBeUndefined();
     expect(errors.end_time).toBeUndefined();
+  });
+});
+
+describe("toSubmitDateTime", () => {
+  it("converts a local datetime input into a timezone-aware ISO string", () => {
+    expect(toSubmitDateTime("2026-04-23T19:48")).toMatch(/^2026-04-23T\d{2}:48:00\.000Z$/);
+  });
+
+  it("returns null for an empty datetime input", () => {
+    expect(toSubmitDateTime("")).toBeNull();
   });
 });

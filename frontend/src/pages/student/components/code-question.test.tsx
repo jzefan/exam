@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import userEvent from "@testing-library/user-event";
@@ -7,6 +7,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@/test/test-utils";
 
 import { CodeQuestion } from "./code-question";
+
+vi.mock("@/hooks/use-code-question-lsp", async (importActual) => {
+  const actual = await importActual<typeof import("@/hooks/use-code-question-lsp")>();
+  return {
+    ...actual,
+    useCodeQuestionLsp: vi.fn(),
+  };
+});
 
 const { axiosPostMock, requestUseMock } = vi.hoisted(() => ({
   axiosPostMock: vi.fn(),
@@ -27,7 +35,12 @@ vi.mock("axios", () => ({
   },
 }));
 
-const registerCompletionItemProvider = vi.fn();
+const createDisposable = () => ({ dispose: vi.fn() });
+const registerCompletionItemProvider = vi.fn(() => createDisposable());
+const registerHoverProvider = vi.fn(() => createDisposable());
+const registerSignatureHelpProvider = vi.fn(() => createDisposable());
+const registerDocumentSymbolProvider = vi.fn(() => createDisposable());
+const setModelMarkers = vi.fn();
 
 vi.mock("@/components/ui/select", () => ({
   Select: ({
@@ -75,6 +88,7 @@ vi.mock("@monaco-editor/react", () => ({
     onChange,
     options,
     beforeMount,
+    onMount,
     path,
   }: {
     language?: string;
@@ -84,16 +98,74 @@ vi.mock("@monaco-editor/react", () => ({
     beforeMount?: (monaco: {
       languages: {
         registerCompletionItemProvider: typeof registerCompletionItemProvider;
+        registerHoverProvider: typeof registerHoverProvider;
+        registerSignatureHelpProvider: typeof registerSignatureHelpProvider;
+        registerDocumentSymbolProvider: typeof registerDocumentSymbolProvider;
         CompletionItemKind: { Keyword: number; Function: number; Snippet: number; Class: number };
         CompletionItemInsertTextRule: { InsertAsSnippet: number };
+        SymbolKind: { Class: number; Method: number; Function: number; Object: number };
       };
-      Range: unknown;
+      editor: {
+        setModelMarkers: typeof setModelMarkers;
+        MarkerSeverity: { Error: number; Warning: number; Info: number; Hint: number };
+      };
+      Range: new (
+        startLineNumber: number,
+        startColumn: number,
+        endLineNumber: number,
+        endColumn: number,
+      ) => {
+        startLineNumber: number;
+        startColumn: number;
+        endLineNumber: number;
+        endColumn: number;
+      };
+    }) => void;
+    onMount?: (editor: {
+      getModel: () => {
+        uri: { toString: () => string };
+        getValue: () => string;
+        getVersionId: () => number;
+        getWordUntilPosition: () => { startColumn: number; endColumn: number };
+      };
+      onDidChangeModelContent: (listener: () => void) => { dispose: () => void };
+    }, monaco: {
+      languages: {
+        registerCompletionItemProvider: typeof registerCompletionItemProvider;
+        registerHoverProvider: typeof registerHoverProvider;
+        registerSignatureHelpProvider: typeof registerSignatureHelpProvider;
+        registerDocumentSymbolProvider: typeof registerDocumentSymbolProvider;
+        CompletionItemKind: { Keyword: number; Function: number; Snippet: number; Class: number };
+        CompletionItemInsertTextRule: { InsertAsSnippet: number };
+        SymbolKind: { Class: number; Method: number; Function: number; Object: number };
+      };
+      editor: {
+        setModelMarkers: typeof setModelMarkers;
+        MarkerSeverity: { Error: number; Warning: number; Info: number; Hint: number };
+      };
+      Range: new (
+        startLineNumber: number,
+        startColumn: number,
+        endLineNumber: number,
+        endColumn: number,
+      ) => {
+        startLineNumber: number;
+        startColumn: number;
+        endLineNumber: number;
+        endColumn: number;
+      };
     }) => void;
     path?: string;
   }) => {
-    beforeMount?.({
+    const valueRef = useRef(value ?? "");
+    const versionRef = useRef(1);
+    const listenerRef = useRef<(() => void) | null>(null);
+    const fakeMonacoRef = useRef({
       languages: {
         registerCompletionItemProvider,
+        registerHoverProvider,
+        registerSignatureHelpProvider,
+        registerDocumentSymbolProvider,
         CompletionItemKind: {
           Keyword: 1,
           Function: 2,
@@ -103,9 +175,73 @@ vi.mock("@monaco-editor/react", () => ({
         CompletionItemInsertTextRule: {
           InsertAsSnippet: 4,
         },
+        SymbolKind: {
+          Class: 5,
+          Method: 6,
+          Function: 12,
+          Object: 19,
+        },
       },
-      Range: {},
+      editor: {
+        setModelMarkers,
+        MarkerSeverity: {
+          Error: 8,
+          Warning: 4,
+          Info: 2,
+          Hint: 1,
+        },
+      },
+      Range: class {
+        startLineNumber: number;
+        startColumn: number;
+        endLineNumber: number;
+        endColumn: number;
+
+        constructor(startLineNumber: number, startColumn: number, endLineNumber: number, endColumn: number) {
+          this.startLineNumber = startLineNumber;
+          this.startColumn = startColumn;
+          this.endLineNumber = endLineNumber;
+          this.endColumn = endColumn;
+        }
+      },
     });
+    const fakeEditorRef = useRef({
+      getModel: () => ({
+        uri: {
+          toString: () => path ?? "",
+        },
+        getValue: () => valueRef.current,
+        getVersionId: () => versionRef.current,
+        getWordUntilPosition: () => ({
+          startColumn: 1,
+          endColumn: Math.max(valueRef.current.length, 1),
+        }),
+      }),
+      onDidChangeModelContent: (listener: () => void) => {
+        listenerRef.current = listener;
+        return {
+          dispose: () => {
+            if (listenerRef.current === listener) {
+              listenerRef.current = null;
+            }
+          },
+        };
+      },
+    });
+
+    useEffect(() => {
+      valueRef.current = value ?? "";
+      versionRef.current += 1;
+    }, [value]);
+    const fakeMonaco = fakeMonacoRef.current;
+    const fakeEditor = fakeEditorRef.current;
+
+    useEffect(() => {
+      beforeMount?.({
+        ...fakeMonaco,
+      });
+      onMount?.(fakeEditor, fakeMonaco);
+    }, [beforeMount, fakeEditor, fakeMonaco, onMount]);
 
     return (
       <textarea
@@ -115,7 +251,12 @@ vi.mock("@monaco-editor/react", () => ({
         data-font-size={String(options?.fontSize ?? "")}
         data-tab-size={String(options?.tabSize ?? "")}
         value={value ?? ""}
-        onChange={(event) => onChange?.(event.target.value)}
+        onChange={(event) => {
+          versionRef.current += 1;
+          valueRef.current = event.target.value;
+          onChange?.(event.target.value);
+          listenerRef.current?.();
+        }}
       />
     );
   },
@@ -183,6 +324,12 @@ describe("CodeQuestion", () => {
   beforeEach(() => {
     axiosPostMock.mockReset();
     requestUseMock.mockReset();
+    window.localStorage.removeItem("access_token");
+    registerCompletionItemProvider.mockClear();
+    registerHoverProvider.mockClear();
+    registerSignatureHelpProvider.mockClear();
+    registerDocumentSymbolProvider.mockClear();
+    setModelMarkers.mockClear();
   });
 
   it("keeps separate code content for each language when switching", async () => {
@@ -215,30 +362,6 @@ describe("CodeQuestion", () => {
     expect(screen.getByLabelText("代码编辑器")).toHaveAttribute("data-font-size", "14");
     expect(screen.getByLabelText("代码编辑器")).toHaveAttribute("data-tab-size", "4");
     expect(screen.getByLabelText("代码编辑器")).toHaveAttribute("data-path", "file:///student-exam/code-1/solution.py");
-    expect(registerCompletionItemProvider).toHaveBeenCalledWith(
-      "python",
-      expect.objectContaining({
-        provideCompletionItems: expect.any(Function),
-      }),
-    );
-    expect(registerCompletionItemProvider).toHaveBeenCalledWith(
-      "javascript",
-      expect.objectContaining({
-        provideCompletionItems: expect.any(Function),
-      }),
-    );
-    expect(registerCompletionItemProvider).toHaveBeenCalledWith(
-      "java",
-      expect.objectContaining({
-        provideCompletionItems: expect.any(Function),
-      }),
-    );
-    expect(registerCompletionItemProvider).toHaveBeenCalledWith(
-      "cpp",
-      expect.objectContaining({
-        provideCompletionItems: expect.any(Function),
-      }),
-    );
   });
 
   it("renders program mode guidance without function signature metadata", () => {
@@ -508,6 +631,30 @@ describe("CodeQuestion", () => {
     });
   });
 
+  it("shows a friendly hint instead of calling the API when sample mode has no sample tests", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <CodeQuestionHarness
+        content={{
+          mode: "program",
+          description: "请编写完整程序。",
+          starter_code: {
+            python: "print('hello')\n",
+          },
+          sample_tests: [],
+        }}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "运行代码" }));
+
+    expect(axiosPostMock).not.toHaveBeenCalled();
+    expect(
+      screen.getByText("当前题目尚未配置测试用例，请切换到“自定义测试”并输入测试数据后运行。"),
+    ).toBeInTheDocument();
+  });
+
   it("renders a draggable splitter for the lower test and result workspace", () => {
     render(<CodeQuestionHarness />);
 
@@ -586,9 +733,9 @@ describe("CodeQuestion", () => {
       });
     });
 
-    expect(screen.getByText("示例测试结果：1 个通过，1 个未通过")).toBeInTheDocument();
-    expect(screen.getByText("通过用例")).toBeInTheDocument();
-    expect(screen.getByText("未通过用例")).toBeInTheDocument();
+    expect(screen.getByText("测试用例结果：1 个通过，1 个未通过")).toBeInTheDocument();
+    expect(screen.getByText("通过测试")).toBeInTheDocument();
+    expect(screen.getByText("未通过测试")).toBeInTheDocument();
     expect(screen.getByText("示例 1")).toBeInTheDocument();
     expect(screen.getAllByText("通过").length).toBeGreaterThan(0);
     expect(screen.getAllByText("未通过").length).toBeGreaterThan(0);

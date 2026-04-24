@@ -210,8 +210,11 @@ function ExamCard({
             </TooltipProvider>
           )}
 
-          {/* 删除 — draft, upcoming, completed */}
-          {(effectiveStatus === "draft" || effectiveStatus === "upcoming" || effectiveStatus === "completed") && (
+          {/* 删除 — draft, upcoming, completed, closed */}
+          {(effectiveStatus === "draft" ||
+            effectiveStatus === "upcoming" ||
+            effectiveStatus === "completed" ||
+            effectiveStatus === "closed") && (
             <Button
               variant="ghost"
               size="sm"

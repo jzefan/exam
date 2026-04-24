@@ -7,7 +7,13 @@ import { cn } from "@/lib/utils";
 import { renderLatexInHtml } from "@/components/ui/latex-text";
 import { Braces, CircleHelp, Play, RotateCcw, TerminalSquare } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  useCodeQuestionLsp,
+  type CodeQuestionLspEditor,
+  type CodeQuestionLspMonaco,
+} from "@/hooks/use-code-question-lsp";
 import type {
+  CodeLanguage,
   ICodeAnswerContent,
   ICodeQuestionContent,
   IExamQuestionForStudent,
@@ -36,8 +42,6 @@ const LANGUAGE_LABELS = {
   c: "C",
   go: "Go",
 } as const;
-
-type CodeLanguage = keyof typeof LANGUAGE_LABELS;
 
 const DEFAULT_LANGUAGES: CodeLanguage[] = ["python", "javascript", "java", "cpp", "c", "go"];
 
@@ -218,23 +222,23 @@ function formatRunSummary(result: IStudentCodeRunResult) {
       return result.stderr || result.compile_output || "当前运行环境暂不支持该语言的在线运行。";
     }
     if (result.status === "compile_error") {
-      return "示例测试未运行，代码编译失败。";
+      return "测试用例未运行，代码编译失败。";
     }
     if (result.status === "runtime_error") {
-      return "示例测试运行出错，请检查代码后重试。";
+      return "测试用例运行出错，请检查代码后重试。";
     }
     if (result.status === "timeout") {
-      return "示例测试运行超时，请检查是否存在死循环或复杂度过高。";
+      return "测试用例运行超时，请检查是否存在死循环或复杂度过高。";
     }
     if (result.case_count === 0) {
-      return "当前没有可运行的示例测试。";
+      return "当前没有可运行的测试用例。";
     }
     const failedCount = Math.max(result.case_count - result.passed_count, 0);
     if (result.status === "passed") {
-      return `示例测试全部通过（${result.passed_count} / ${result.case_count}）`;
+      return `测试用例全部通过（${result.passed_count} / ${result.case_count}）`;
     }
 
-    return `示例测试结果：${result.passed_count} 个通过，${failedCount} 个未通过`;
+    return `测试用例结果：${result.passed_count} 个通过，${failedCount} 个未通过`;
   }
 
   if (result.status === "passed") {
@@ -441,6 +445,12 @@ function renderPromptHtml(value: string) {
   return renderLatexInHtml(html);
 }
 
+const PRIMARY_MARKDOWN_PROSE_CLASS = "prose prose-sm max-w-none leading-7 text-[#40374d] [&_code]:rounded [&_code]:bg-[#f3f6fb] [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-semibold [&_code]:text-[#1f2937] [&_pre]:overflow-x-auto [&_pre]:rounded-xl [&_pre]:border [&_pre]:border-[#e7ecf4] [&_pre]:bg-[#f8fafc] [&_pre]:px-3 [&_pre]:py-2 [&_pre]:text-[#1f2937] [&_pre_code]:bg-transparent [&_pre_code]:px-0 [&_pre_code]:py-0 [&_pre_code]:font-medium [&_pre_code]:text-[#1f2937]";
+
+const SECONDARY_MARKDOWN_PROSE_CLASS = "prose prose-sm mt-2 max-w-none text-[13px] leading-6 text-[#2c2438] [&_code]:rounded [&_code]:bg-white [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-semibold [&_code]:text-[#1f2937] [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-[#e7ecf4] [&_pre]:bg-white [&_pre]:px-3 [&_pre]:py-2 [&_pre]:text-[#1f2937] [&_pre_code]:bg-transparent [&_pre_code]:px-0 [&_pre_code]:py-0 [&_pre_code]:font-medium [&_pre_code]:text-[#1f2937]";
+
+const MUTED_MARKDOWN_PROSE_CLASS = "prose prose-sm max-w-none text-[13px] leading-6 text-[#334155] [&_code]:rounded [&_code]:bg-[#f3f6fb] [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-semibold [&_code]:text-[#1f2937] [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-[#e7ecf4] [&_pre]:bg-[#f8fafc] [&_pre]:px-3 [&_pre]:py-2 [&_pre]:text-[#1f2937] [&_pre_code]:bg-transparent [&_pre_code]:px-0 [&_pre_code]:py-0 [&_pre_code]:font-medium [&_pre_code]:text-[#1f2937]";
+
 function resolveStarterCode(
   starterCode: Partial<Record<CodeLanguage, string>>,
   defaultStarterCode: Record<CodeLanguage, string>,
@@ -532,6 +542,8 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
   const [isResizing, setIsResizing] = useState(false);
   const [bottomPaneHeight, setBottomPaneHeight] = useState(36);
   const [isVerticalResizing, setIsVerticalResizing] = useState(false);
+  const [editorInstance, setEditorInstance] = useState<CodeQuestionLspEditor | null>(null);
+  const [monacoInstance, setMonacoInstance] = useState<CodeQuestionLspMonaco | null>(null);
   const layoutRef = useRef<HTMLDivElement | null>(null);
   const rightPaneRef = useRef<HTMLDivElement | null>(null);
   const latestRunContextRef = useRef({
@@ -559,6 +571,17 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
     ? normalized.custom_input ?? ""
     : sampleTests[0]?.input ?? "";
   const customRunInput = normalized.last_run_input ?? normalized.custom_input ?? "";
+
+  useCodeQuestionLsp({
+    examId,
+    questionId: question.question_id,
+    language,
+    code: currentCode,
+    modelUri: getMonacoModelPath(question.question_id, language),
+    editor: editorInstance,
+    monaco: monacoInstance,
+    enabled: Boolean(examId && question.question_id),
+  });
 
   useEffect(() => {
     latestRunContextRef.current = {
@@ -632,7 +655,7 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
 
     if (!currentCode.trim()) {
       setRunResult(null);
-      setRunFeedback("请先输入代码，再执行示例测试。");
+      setRunFeedback("请先输入代码，再执行测试用例。");
       setIsRunResultStale(false);
       return;
     }
@@ -640,6 +663,13 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
     if (!examId) {
       setRunResult(null);
       setRunFeedback("未找到考试上下文，暂时无法运行代码。");
+      setIsRunResultStale(false);
+      return;
+    }
+
+    if (activeTab === "sample" && sampleTests.length === 0) {
+      setRunResult(null);
+      setRunFeedback("当前题目尚未配置测试用例，请切换到“自定义测试”并输入测试数据后运行。");
       setIsRunResultStale(false);
       return;
     }
@@ -796,7 +826,7 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
           </div>
           <div className="space-y-4 px-6 py-5">
             <div
-              className="prose prose-sm max-w-none leading-7 text-[#40374d] [&_code]:rounded [&_code]:bg-[#f3f6fb] [&_code]:px-1.5 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-xl [&_pre]:border [&_pre]:border-[#e7ecf4] [&_pre]:bg-[#f8fafc] [&_pre]:px-3 [&_pre]:py-2"
+              className={PRIMARY_MARKDOWN_PROSE_CLASS}
               dangerouslySetInnerHTML={{ __html: descriptionHtml }}
             />
 
@@ -804,7 +834,7 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
               <div className="rounded-2xl border border-[#ebeef5] bg-[#f8fafc] px-4 py-3.5">
                 <p className="text-[12px] text-[#94a3b8]">输入说明</p>
                 <div
-                  className="prose prose-sm mt-2 max-w-none text-[13px] leading-6 text-[#2c2438] [&_code]:rounded [&_code]:bg-white [&_code]:px-1.5 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-[#e7ecf4] [&_pre]:bg-white [&_pre]:px-3 [&_pre]:py-2"
+                  className={SECONDARY_MARKDOWN_PROSE_CLASS}
                   dangerouslySetInnerHTML={{ __html: inputDescriptionHtml }}
                 />
               </div>
@@ -814,7 +844,7 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
               <div className="rounded-2xl border border-[#ebeef5] bg-[#f8fafc] px-4 py-3.5">
                 <p className="text-[12px] text-[#94a3b8]">输出说明</p>
                 <div
-                  className="prose prose-sm mt-2 max-w-none text-[13px] leading-6 text-[#2c2438] [&_code]:rounded [&_code]:bg-white [&_code]:px-1.5 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-[#e7ecf4] [&_pre]:bg-white [&_pre]:px-3 [&_pre]:py-2"
+                  className={SECONDARY_MARKDOWN_PROSE_CLASS}
                   dangerouslySetInnerHTML={{ __html: outputDescriptionHtml }}
                 />
               </div>
@@ -882,7 +912,7 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
                             <div className="space-y-1">
                               <span className="text-[12px] font-medium text-[#94a3b8]">说明</span>
                               <div
-                                className="prose prose-sm max-w-none text-[13px] leading-6 text-[#334155] [&_code]:rounded [&_code]:bg-[#f3f6fb] [&_code]:px-1.5 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-[#e7ecf4] [&_pre]:bg-[#f8fafc] [&_pre]:px-3 [&_pre]:py-2"
+                                className={MUTED_MARKDOWN_PROSE_CLASS}
                                 dangerouslySetInnerHTML={{ __html: renderPromptHtml(item.explanation) }}
                               />
                             </div>
@@ -928,7 +958,7 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
           <span className="absolute left-1/2 top-1/2 h-10 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#dbe3ef] transition-colors group-hover:bg-[#9fb6ff]" />
         </button>
 
-        <section className="flex min-h-0 flex-col overflow-hidden bg-white">
+        <section className="flex min-h-0 flex-col overflow-visible bg-white">
           <div className="shrink-0 border-b border-[#edf0f6] px-5 py-3.5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="text-[13px] font-medium text-[#6b7280]">代码作答</div>
@@ -987,7 +1017,7 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
               gridTemplateRows: `minmax(0, calc(${100 - bottomPaneHeight}% - 5px)) 10px minmax(0, calc(${bottomPaneHeight}% - 5px))`,
             }}
           >
-            <div className="flex min-h-0 flex-col border-b border-[#edf0f6] bg-[#f7f9fc]">
+            <div className="relative z-10 flex min-h-0 flex-col overflow-visible border-b border-[#edf0f6] bg-[#f7f9fc]">
               <div className="shrink-0 flex items-center justify-between border-b border-[#e7ecf4] bg-white px-5 py-3 text-[12px] text-[#6b7280]">
                 <div className="flex items-center gap-2">
                   <span className="h-2.5 w-2.5 rounded-full bg-[#f87171]" />
@@ -1033,7 +1063,7 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
                   )}
                 </div>
               </div>
-              <div className="min-h-0 flex-1 overflow-hidden bg-[#f7f9fc]">
+              <div className="min-h-0 flex-1 overflow-visible bg-[#f7f9fc]">
                 <Editor
                   height="100%"
                   language={MONACO_LANGUAGE_MAP[language]}
@@ -1041,6 +1071,10 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
                   theme="vs"
                   value={currentCode}
                   beforeMount={registerLanguageCompletions}
+                  onMount={(editor, monaco) => {
+                    setEditorInstance(editor as unknown as CodeQuestionLspEditor);
+                    setMonacoInstance(monaco as unknown as CodeQuestionLspMonaco);
+                  }}
                   onChange={(value) => handleCodeChange(value ?? "")}
                   options={{
                     minimap: { enabled: false },
@@ -1090,7 +1124,7 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
                           : "text-[#6b7280] hover:bg-[#f1f5f9] hover:text-[#334155]"
                       } disabled:cursor-not-allowed disabled:opacity-60`}
                     >
-                      示例测试
+                      测试用例
                     </button>
                     <button
                       type="button"
@@ -1129,7 +1163,7 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
                         </div>
                       ))
                     ) : (
-                      <p className="text-[13px] text-[#94a3b8]">当前题目尚未配置示例测试。</p>
+                      <p className="text-[13px] text-[#94a3b8]">当前题目尚未配置测试用例。</p>
                     )
                   ) : (
                     <div className="space-y-3">
@@ -1174,13 +1208,13 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
                       {runResult?.mode === "sample" && runResult.case_count > 0 ? (
                         <div className="grid gap-3 sm:grid-cols-2">
                           <div className="rounded-lg border border-[#e7ecf4] bg-[#f8fafc] px-3 py-2">
-                            <p className="text-[12px] text-[#94a3b8]">通过用例</p>
+                            <p className="text-[12px] text-[#94a3b8]">通过测试</p>
                             <p className="mt-1 text-[14px] font-medium text-[#1f2937]">
                               {runResult.passed_count} / {runResult.case_count}
                             </p>
                           </div>
                           <div className="rounded-lg border border-[#e7ecf4] bg-[#f8fafc] px-3 py-2">
-                            <p className="text-[12px] text-[#94a3b8]">未通过用例</p>
+                            <p className="text-[12px] text-[#94a3b8]">未通过测试</p>
                             <p className="mt-1 text-[14px] font-medium text-[#1f2937]">
                               {Math.max(runResult.case_count - runResult.passed_count, 0)}
                             </p>

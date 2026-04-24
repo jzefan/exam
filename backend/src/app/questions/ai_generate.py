@@ -21,6 +21,11 @@ from app.database import get_db
 from app.learning.models import KnowledgePoint
 from app.auth.user_settings import get_user_ai_config
 from app.questions.models import UserKnowledgePointUsage
+from app.questions.ai_generate_prompt import (
+    KnowledgePointPromptContext,
+    build_ai_generate_system_prompt as _build_system_prompt,
+    load_knowledge_point_prompt_contexts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +59,6 @@ class FrequentKnowledgePointItem(BaseModel):
 class FrequentKnowledgePointResponse(BaseModel):
     recent: list[FrequentKnowledgePointItem]
     frequent: list[FrequentKnowledgePointItem]
-
-
-DIFFICULTY_LABELS = {1: "容易", 2: "较易", 3: "中等", 4: "较难", 5: "很难"}
 
 
 def _is_missing_usage_table_error(exc: Exception) -> bool:
@@ -190,65 +192,6 @@ async def _get_model_config(
     return model.value, api_key, base_url, model_name
 
 
-def _build_system_prompt(
-    request: AIGenerateRequest,
-    knowledge_point_names: list[str],
-) -> str:
-    difficulty_label = DIFFICULTY_LABELS.get(request.difficulty, "中等")
-
-    type_instruction = ""
-    if request.type_distribution:
-        parts = [f"{qtype} {count}题" for qtype, count in request.type_distribution.items()]
-        type_instruction = f"题型分布要求：{', '.join(parts)}。"
-    else:
-        type_instruction = f"共生成 {request.total_count} 道题目，题型自行合理分配。"
-
-    kp_instruction = ""
-    all_kp = list(knowledge_point_names)
-    if request.knowledge_keywords.strip():
-        all_kp.extend(k.strip() for k in request.knowledge_keywords.split(",") if k.strip())
-    if all_kp:
-        kp_instruction = f"涉及的知识点：{', '.join(all_kp)}。"
-
-    user_extra = ""
-    if request.prompt.strip():
-        user_extra = f"额外要求：{request.prompt.strip()}"
-
-    return f"""你是一位专业的考试命题教师。请根据以下要求生成考试题目。
-
-要求：
-- 难度级别：{difficulty_label}（{request.difficulty}/5）
-- {type_instruction}
-- {kp_instruction}
-- {user_extra}
-
-支持的题型代码：choice（选择题）、true_false（判断题）、fill_in（填空题）、short_answer（简答题）、essay（论述题）、code（编程题）
-
-输出格式要求：
-- 每道题目输出为一个独立的 JSON 对象，题目之间用换行分隔
-- 不要输出 JSON 数组，不要添加 ```json 等标记
-- 支持 LaTeX 公式：行内公式用 $...$，块级公式用 $$...$$
-- 所有内容使用中文
-
-每道题目的 JSON 格式：
-{{
-  "type": "题型代码",
-  "title": "简短题目标题",
-  "content": {{"text": "完整题目内容"}},
-  "options": {{"A": "选项A", "B": "选项B", "C": "选项C", "D": "选项D"}} 或 null,
-  "answer": {{"correct": "A"}} 或 {{"text": "答案文本"}},
-  "analysis": "详细解析",
-  "difficulty": {request.difficulty}
-}}
-
-说明：
-- 选择题(choice)的 answer 使用 {{"correct": "A"}} 格式，options 为选项字典
-- 判断题(true_false)的 answer 使用 {{"correct": "true"}} 或 {{"correct": "false"}}，options 设为 null
-- 其他题型的 answer 使用 {{"text": "答案内容"}} 格式，options 设为 null
-
-请现在开始生成题目。"""
-
-
 async def generate_questions_stream(
     db: AsyncSession,
     request: AIGenerateRequest,
@@ -257,15 +200,9 @@ async def generate_questions_stream(
     """Stream AI-generated questions as parsed JSON events."""
     _validate_generate_request(request)
 
-    # Fetch knowledge point names if provided
-    knowledge_point_names: list[str] = []
+    knowledge_contexts: list[KnowledgePointPromptContext] = []
     if request.knowledge_point_ids:
-        result = await db.execute(
-            select(KnowledgePoint.name).where(
-                KnowledgePoint.id.in_(request.knowledge_point_ids)
-            )
-        )
-        knowledge_point_names = list(result.scalars().all())
+        knowledge_contexts = await load_knowledge_point_prompt_contexts(db, request.knowledge_point_ids)
         try:
             await record_user_knowledge_point_usage(db, user_id, request.knowledge_point_ids)
         except Exception as exc:
@@ -274,7 +211,14 @@ async def generate_questions_stream(
             else:
                 raise
 
-    system_prompt = _build_system_prompt(request, knowledge_point_names)
+    system_prompt = _build_system_prompt(
+        total_count=request.total_count,
+        difficulty=request.difficulty,
+        type_distribution=request.type_distribution,
+        knowledge_keywords=request.knowledge_keywords,
+        user_prompt=request.prompt,
+        knowledge_contexts=knowledge_contexts,
+    )
 
     provider_name, api_key, base_url, model_name = await _get_model_config(db, user_id, request.model)
     if not api_key:

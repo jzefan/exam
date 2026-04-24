@@ -14,6 +14,7 @@ from app.questions.ai_generate import (
     list_user_frequent_knowledge_points,
     record_user_knowledge_point_usage,
 )
+from app.questions.ai_generate_prompt import build_ai_generate_system_prompt
 from app.questions.models import UserKnowledgePointUsage
 
 
@@ -79,7 +80,7 @@ async def test_generate_questions_stream_never_yields_more_than_total_count(
         "data: [DONE]",
     ]
 
-    with patch("app.questions.ai_generate._get_model_config", return_value=("test-key", "https://api.example.com", "test-model")):
+    with patch("app.questions.ai_generate._get_model_config", return_value=("qwen", "test-key", "https://api.example.com", "test-model")):
         with patch("httpx.AsyncClient", side_effect=lambda *args, **kwargs: _FakeAsyncClient(stream_lines, *args, **kwargs)):
             events = [
                 event
@@ -144,7 +145,7 @@ async def test_generate_questions_stream_ignores_missing_usage_table(
     await db_session.commit()
 
     with patch("app.questions.ai_generate.record_user_knowledge_point_usage", side_effect=RuntimeError('relation "user_knowledge_point_usage" does not exist')):
-        with patch("app.questions.ai_generate._get_model_config", return_value=("test-key", "https://api.example.com", "test-model")):
+        with patch("app.questions.ai_generate._get_model_config", return_value=("qwen", "test-key", "https://api.example.com", "test-model")):
             with patch("httpx.AsyncClient", side_effect=lambda *args, **kwargs: _FakeAsyncClient(stream_lines, *args, **kwargs)):
                 events = [
                     event
@@ -174,3 +175,44 @@ async def test_list_user_frequent_knowledge_points_returns_empty_when_usage_tabl
 
     assert result.recent == []
     assert result.frequent == []
+
+
+def test_build_system_prompt_includes_weighted_knowledge_context() -> None:
+    request = AIGenerateRequest(
+        total_count=6,
+        difficulty=3,
+        type_distribution={"choice": 4, "short_answer": 2},
+        knowledge_keywords="事务, 并发控制",
+        prompt="结合教学案例命题",
+        model="qwen",
+    )
+
+    prompt = build_ai_generate_system_prompt(
+        total_count=request.total_count,
+        difficulty=request.difficulty,
+        type_distribution=request.type_distribution,
+        knowledge_keywords=request.knowledge_keywords,
+        user_prompt=request.prompt,
+        knowledge_contexts=[
+            {
+                "selected_name": "事务隔离级别",
+                "selected_path": "数据库技术 > 事务管理 > 事务隔离级别",
+                "major_name": "软件工程",
+                "direction_name": "软件开发",
+                "course_name": "数据库技术",
+                "ancestor_names": ["数据库技术", "事务管理"],
+                "child_names": ["脏读", "不可重复读", "幻读"],
+            }
+        ],
+    )
+
+    assert "专业：软件工程" in prompt
+    assert "方向：软件开发" in prompt
+    assert "主知识点（课程语境）：数据库技术" in prompt
+    assert "当前重点知识点：事务隔离级别" in prompt
+    assert "上层知识链路：数据库技术 > 事务管理 > 事务隔离级别" in prompt
+    assert "可参考的下级知识点：脏读、不可重复读、幻读" in prompt
+    assert "主知识点用于确定课程语境，是命题的核心范围，权重高于子知识点" in prompt
+    assert "若存在同名或近义知识点，优先采用当前专业/方向/主知识点链路下的含义" in prompt
+    assert "补充参考关键词：事务、并发控制。" in prompt
+    assert "额外要求：结合教学案例命题" in prompt

@@ -209,18 +209,30 @@ async def soft_delete_question_bank(db: AsyncSession, bank: QuestionBank) -> Non
     await db.flush()
 
 
-async def clear_question_bank_questions(db: AsyncSession, bank: QuestionBank) -> int:
-    """Soft-delete all active questions in the bank while keeping the bank itself."""
-    now = datetime.now(timezone.utc)
-    from sqlalchemy import update as sql_update
+async def clear_question_bank_questions(db: AsyncSession, bank: QuestionBank) -> dict[str, int]:
+    """Delete all active questions in the bank while keeping the bank itself.
 
+    Questions that have never been used are removed physically. Questions with
+    exam/practice history are soft-deleted so historical records remain valid.
+    """
+    now = datetime.now(timezone.utc)
     result = await db.execute(
-        sql_update(Question)
-        .where(Question.question_bank_id == bank.id, Question.deleted_at.is_(None))
-        .values(deleted_at=now)
+        select(Question).where(Question.question_bank_id == bank.id, Question.deleted_at.is_(None))
     )
+    questions = list(result.scalars().all())
+    hard_deleted = 0
+    soft_deleted = 0
+
+    for question in questions:
+        if await can_hard_delete_question(db, question.id):
+            await db.delete(question)
+            hard_deleted += 1
+        else:
+            question.deleted_at = now
+            soft_deleted += 1
+
     await db.flush()
-    return result.rowcount or 0
+    return {"deleted": hard_deleted + soft_deleted, "hard_deleted": hard_deleted, "soft_deleted": soft_deleted}
 
 
 # --- Question ---
@@ -1405,7 +1417,7 @@ async def process_question_import_job(
     *,
     job_id: uuid.UUID,
     user_id: uuid.UUID,
-    course_id: uuid.UUID,
+    root_knowledge_point_id: uuid.UUID,
     questions: list[dict],
 ) -> None:
     async with async_session() as db:
@@ -1424,7 +1436,7 @@ async def process_question_import_job(
         error_message: str | None = None
 
         try:
-            candidates = await _load_course_descendant_knowledge_points(db, course_id)
+            candidates = await _load_root_descendant_knowledge_points(db, root_knowledge_point_id)
             question_payloads = [QuestionCreate.model_validate(question) for question in questions]
             question_ids = [uuid.UUID(question_id) for question_id in job.created_question_ids]
             questions_by_id = await _load_questions_for_import_job(db, question_ids)
@@ -1494,13 +1506,13 @@ async def process_question_import_job(
                 pass
 
 
-async def _load_course_descendant_knowledge_points(
-    db: AsyncSession, course_id: uuid.UUID
+async def _load_root_descendant_knowledge_points(
+    db: AsyncSession, root_knowledge_point_id: uuid.UUID
 ) -> list[KnowledgePoint]:
-    """Return all descendants of a course-level knowledge point (non-recursive BFS)."""
+    """Return all descendants of a root knowledge point (non-recursive BFS)."""
     result: list[KnowledgePoint] = []
-    frontier: list[uuid.UUID] = [course_id]
-    visited: set[uuid.UUID] = {course_id}
+    frontier: list[uuid.UUID] = [root_knowledge_point_id]
+    visited: set[uuid.UUID] = {root_knowledge_point_id}
     while frontier:
         rows = await db.execute(
             select(KnowledgePoint).where(KnowledgePoint.parent_id.in_(frontier))
@@ -1574,11 +1586,11 @@ async def match_knowledge_points_with_ai(
 async def match_and_create_import_question(
     db: AsyncSession,
     question_data: QuestionCreate,
-    course_id: uuid.UUID,
+    root_knowledge_point_id: uuid.UUID,
     user_id: uuid.UUID,
 ) -> tuple[Question, list[KnowledgePoint]]:
-    """Match knowledge points under the course via AI, then create the question."""
-    candidates = await _load_course_descendant_knowledge_points(db, course_id)
+    """Match knowledge points under the root knowledge point via AI, then create the question."""
+    candidates = await _load_root_descendant_knowledge_points(db, root_knowledge_point_id)
     matched_ids = await match_knowledge_points_with_ai(question_data, candidates)
     question_payload = question_data.model_copy(
         update={"knowledge_point_ids": list({*question_data.knowledge_point_ids, *matched_ids})}

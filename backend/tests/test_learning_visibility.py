@@ -167,16 +167,225 @@ async def test_teacher_only_sees_majors_and_directions_with_visible_knowledge_po
     hidden_tree_response = await client.get(f"/api/knowledge/directions/{hidden_direction.id}/tree")
 
     assert majors_response.status_code == 200
-    assert [item["name"] for item in majors_response.json()] == ["Visible Major"]
+    assert [item["name"] for item in majors_response.json()] == ["Hidden Major", "Visible Major"]
     assert directions_response.status_code == 200
     assert [item["name"] for item in directions_response.json()] == ["Visible Direction"]
     assert hidden_directions_response.status_code == 200
-    assert hidden_directions_response.json() == []
-    assert hidden_tree_response.status_code == 404
+    assert [item["name"] for item in hidden_directions_response.json()] == ["Hidden Direction"]
+    assert hidden_tree_response.status_code == 200
+    assert hidden_tree_response.json() == {"nodes": [], "edges": []}
 
 
 @pytest.mark.asyncio
-async def test_platform_admin_cannot_see_other_users_private_learning_structure(
+async def test_teacher_can_read_new_empty_major_and_direction_before_adding_knowledge_points(
+    client: AsyncClient, db_session
+) -> None:
+    org = await _create_org_with_teacher_role(db_session)
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-empty-structure",
+        email="teacher-empty-structure@example.com",
+        full_name="Teacher Empty Structure",
+    )
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+
+    major_response = await client.post("/api/knowledge/majors", json={"name": "Teacher Draft Major"})
+    assert major_response.status_code == 201
+    major_id = major_response.json()["id"]
+
+    list_majors_response = await client.get("/api/knowledge/majors")
+    assert list_majors_response.status_code == 200
+    assert [item["name"] for item in list_majors_response.json()] == ["Teacher Draft Major"]
+
+    direction_response = await client.post(
+        "/api/knowledge/directions",
+        json={"major_id": major_id, "name": "Teacher Draft Direction"},
+    )
+    assert direction_response.status_code == 201
+    direction_id = direction_response.json()["id"]
+
+    list_directions_response = await client.get(f"/api/knowledge/majors/{major_id}/directions")
+    assert list_directions_response.status_code == 200
+    assert [item["name"] for item in list_directions_response.json()] == ["Teacher Draft Direction"]
+
+    tree_response = await client.get(f"/api/knowledge/directions/{direction_id}/tree")
+    assert tree_response.status_code == 200
+    assert tree_response.json() == {"nodes": [], "edges": []}
+
+    create_kp_response = await client.post(
+        "/api/knowledge/knowledge-points",
+        json={"direction_id": direction_id, "name": "Teacher Visible Knowledge"},
+    )
+    assert create_kp_response.status_code == 201
+
+    tree_after_create_response = await client.get(f"/api/knowledge/directions/{direction_id}/tree")
+    assert tree_after_create_response.status_code == 200
+    assert [node["data"]["name"] for node in tree_after_create_response.json()["nodes"]] == [
+        "Teacher Visible Knowledge"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_teacher_can_delete_empty_structure_they_just_created(
+    client: AsyncClient, db_session
+) -> None:
+    org = await _create_org_with_teacher_role(db_session)
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-delete-own-structure",
+        email="teacher-delete-own-structure@example.com",
+        full_name="Teacher Delete Own Structure",
+    )
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+
+    major_response = await client.post("/api/knowledge/majors", json={"name": "Delete Me Major"})
+    assert major_response.status_code == 201
+    major_id = major_response.json()["id"]
+
+    direction_response = await client.post(
+        "/api/knowledge/directions",
+        json={"major_id": major_id, "name": "Delete Me Direction"},
+    )
+    assert direction_response.status_code == 201
+    direction_id = direction_response.json()["id"]
+
+    delete_direction_response = await client.delete(f"/api/knowledge/directions/{direction_id}")
+    assert delete_direction_response.status_code == 204
+
+    delete_major_response = await client.delete(f"/api/knowledge/majors/{major_id}")
+    assert delete_major_response.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_teacher_cannot_create_duplicate_major_names_but_other_teachers_can(
+    client: AsyncClient, db_session
+) -> None:
+    org = await _create_org_with_teacher_role(db_session)
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-major-dup",
+        email="teacher-major-dup@example.com",
+        full_name="Teacher Major Dup",
+    )
+    other_teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-major-dup-other",
+        email="teacher-major-dup-other@example.com",
+        full_name="Teacher Major Dup Other",
+    )
+    other_teacher_id = other_teacher.id
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    first_response = await client.post("/api/knowledge/majors", json={"name": "重复专业"})
+    duplicate_response = await client.post("/api/knowledge/majors", json={"name": "重复专业"})
+
+    assert first_response.status_code == 201
+    assert duplicate_response.status_code == 409
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(other_teacher_id, '')}"})
+    other_teacher_response = await client.post("/api/knowledge/majors", json={"name": "重复专业"})
+
+    assert other_teacher_response.status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_teacher_cannot_create_duplicate_direction_names_within_same_major(
+    client: AsyncClient, db_session
+) -> None:
+    org = await _create_org_with_teacher_role(db_session)
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-direction-dup",
+        email="teacher-direction-dup@example.com",
+        full_name="Teacher Direction Dup",
+    )
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+
+    first_major_response = await client.post("/api/knowledge/majors", json={"name": "专业一"})
+    second_major_response = await client.post("/api/knowledge/majors", json={"name": "专业二"})
+    assert first_major_response.status_code == 201
+    assert second_major_response.status_code == 201
+
+    first_major_id = first_major_response.json()["id"]
+    second_major_id = second_major_response.json()["id"]
+
+    first_direction_response = await client.post(
+        "/api/knowledge/directions",
+        json={"major_id": first_major_id, "name": "重复方向"},
+    )
+    duplicate_direction_response = await client.post(
+        "/api/knowledge/directions",
+        json={"major_id": first_major_id, "name": "重复方向"},
+    )
+    same_name_other_major_response = await client.post(
+        "/api/knowledge/directions",
+        json={"major_id": second_major_id, "name": "重复方向"},
+    )
+
+    assert first_direction_response.status_code == 201
+    assert duplicate_direction_response.status_code == 409
+    assert same_name_other_major_response.status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_teacher_cannot_delete_shared_structure_with_other_users_knowledge_points(
+    client: AsyncClient, db_session
+) -> None:
+    org = await _create_org_with_teacher_role(db_session)
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-no-delete-shared",
+        email="teacher-no-delete-shared@example.com",
+        full_name="Teacher No Delete Shared",
+    )
+    other_teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-no-delete-shared-other",
+        email="teacher-no-delete-shared-other@example.com",
+        full_name="Teacher No Delete Shared Other",
+    )
+
+    major = Major(name="Shared Delete Protected Major", description=None)
+    direction = Direction(name="Shared Delete Protected Direction", description=None, major=major)
+    db_session.add_all([major, direction])
+    await db_session.flush()
+    major_id = major.id
+    direction_id = direction.id
+    db_session.add(
+        KnowledgePoint(
+            name="Shared Delete Protected KP",
+            direction_id=direction_id,
+            owner_id=other_teacher.id,
+            visibility=VisibilityScope.PLATFORM,
+        )
+    )
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+
+    delete_direction_response = await client.delete(f"/api/knowledge/directions/{direction_id}")
+    delete_major_response = await client.delete(f"/api/knowledge/majors/{major_id}")
+
+    assert delete_direction_response.status_code == 403
+    assert delete_major_response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_platform_admin_can_see_other_users_private_learning_structure(
     client: AsyncClient, db_session
 ) -> None:
     org = await _create_org_with_teacher_role(db_session)
@@ -224,10 +433,11 @@ async def test_platform_admin_cannot_see_other_users_private_learning_structure(
     private_tree_response = await client.get(f"/api/knowledge/directions/{private_direction.id}/tree")
 
     assert majors_response.status_code == 200
-    assert [item["name"] for item in majors_response.json()] == ["Public Major"]
+    assert [item["name"] for item in majors_response.json()] == ["Public Major", "Teacher Private Major"]
     assert private_directions_response.status_code == 200
-    assert private_directions_response.json() == []
-    assert private_tree_response.status_code == 404
+    assert [item["name"] for item in private_directions_response.json()] == ["Teacher Private Direction"]
+    assert private_tree_response.status_code == 200
+    assert [node["data"]["name"] for node in private_tree_response.json()["nodes"]] == ["Teacher Private Root"]
 
 
 @pytest.mark.asyncio

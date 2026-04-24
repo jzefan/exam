@@ -57,6 +57,8 @@
     │   ├── backend.env
     │   └── database.env
     └── nginx/
+        ├── active_backend_slot
+        ├── active_frontend_slot
         ├── active_slot
         └── default.conf
 ```
@@ -91,17 +93,64 @@ chmod +x scripts/deploy.sh
 ./scripts/deploy.sh
 ```
 
+不带参数时等同于：
+
+```bash
+./scripts/deploy.sh --target all
+```
+
+也支持按目标部分部署：
+
+```bash
+./scripts/deploy.sh --target frontend
+./scripts/deploy.sh --target backend
+./scripts/deploy.sh --target app
+./scripts/deploy.sh --target judge-runner
+./scripts/deploy.sh --target lsp-runner
+./scripts/deploy.sh --target runners
+./scripts/deploy.sh --target all
+```
+
+说明：
+
+- `--target frontend`
+  只构建和切换前端槽位，后端、数据库、迁移都不动。
+
+- `--target backend`
+  只构建和切换后端槽位，并执行迁移；前端、`judge_runner`、`lsp_runner` 保持当前在线版本。
+
+- `--target app`
+  同时构建和切换前端、后端，并执行迁移；`judge_runner`、`lsp_runner` 保持当前在线版本。
+
+- `--target judge-runner`
+  只构建并重启 `judge_runner`，不切换前后端流量。
+
+- `--target lsp-runner`
+  只构建并重启 `lsp_runner`，不切换前后端流量。
+
+- `--target runners`
+  同时构建并重启 `judge_runner` 和 `lsp_runner`，不切换前后端流量。
+
+- `--target all`
+  完整部署，包含后端、前端、`judge_runner` 和 `lsp_runner`。
+
+注意：
+
+- 首次部署必须使用 `--target all`
+- 只有在已经存在在线前后端槽位后，才能安全执行前端单独部署或后端单独部署
+- 平时只改业务前后端时，用 `--target app`；只改业务后端时，用 `--target backend`；只有 runner 代码或 runner Dockerfile 改了，才单独执行对应 runner target
+
 脚本自动完成：
 
 1. 打包当前代码
 2. `scp` 上传到服务器
 3. 解压到新 release 目录
-4. 构建空闲蓝绿槽位镜像
-5. 运行数据库迁移
-6. 启动空闲槽位
+4. 按 target 构建对应服务镜像
+5. 如包含后端则运行数据库迁移
+6. 启动对应服务或目标蓝绿槽位
 7. 健康检查
 8. Nginx 切流
-9. 下线旧槽位
+9. 下线本次被替换的旧槽位
 
 ## 代码运行环境
 
@@ -161,8 +210,32 @@ RUN uv sync --frozen --no-dev
 - `DEBIAN_APT_MIRROR`
 - `PIP_INDEX_URL`
 - `UV_INDEX_URL`
+- `NPM_REGISTRY`
+- `GOPROXY`
+- `GOSUMDB`
+- `JDTLS_BASE_URL`
 
 如果当前默认源在你的服务器网络环境下较慢，可以改成更合适的企业内网源或公共镜像，然后重新执行部署。
+
+如果报错出现在 `lsp_runner` 构建阶段，例如：
+
+```text
+go install golang.org/x/tools/gopls@latest ... i/o timeout
+```
+
+通常就是 Go 或 Eclipse 下载源太慢。优先在 `/home/leishuo/exam-app/shared/env/deploy.env` 里补这些配置后重试：
+
+```bash
+NPM_REGISTRY=https://registry.npmmirror.com
+GOPROXY=https://goproxy.cn,direct
+GOSUMDB=sum.golang.google.cn
+INSTALL_JDTLS=0
+JDTLS_BASE_URL=https://download.eclipse.org/jdtls/milestones
+JDTLS_CONNECT_TIMEOUT=30
+JDTLS_MAX_TIME=1800
+```
+
+其中 `INSTALL_JDTLS=0` 表示默认跳过 Java LSP 安装，这样不会因为 `jdtls` 大包下载把整次部署卡死。需要 Java 智能提示时再改成 `1`。`JDTLS_BASE_URL` 默认仍指向官方地址；如果你的服务器访问 Eclipse 官方源很慢，再替换成你能访问的镜像根地址。`JDTLS_MAX_TIME` 是单次大文件下载允许的最长时间，网络特别慢时可以继续调大。
 
 仓库里也提供了一个快速探测脚本，方便你直接在服务器上挑选更快的 Python 源：
 

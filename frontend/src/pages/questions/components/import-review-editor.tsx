@@ -23,6 +23,7 @@ const typeOptions: Array<{ value: QuestionType; label: string }> = [
 
 export function ImportReviewEditor({
   draft,
+  draftNumber,
   reviewMode,
   isRecognizing,
   isAnalyzingDocument,
@@ -41,6 +42,7 @@ export function ImportReviewEditor({
   onEditSource,
 }: {
   draft: QuestionImportDraft | null;
+  draftNumber: number | null;
   reviewMode: "fast" | "review";
   isRecognizing: boolean;
   isAnalyzingDocument: boolean;
@@ -83,6 +85,30 @@ export function ImportReviewEditor({
       <div className="min-w-0 rounded-2xl border border-slate-100 bg-white p-5 shadow-sm lg:p-6">
         <div className="space-y-7">
           <section className="space-y-3">
+            <div className="flex items-center gap-2">
+              {draftNumber ? (
+                <span className="rounded-md bg-primary/10 px-2 py-1 text-xs font-bold text-primary">
+                  第 {draftNumber} 题
+                </span>
+              ) : null}
+              <Label className="text-[11px] font-bold uppercase tracking-widest text-slate-400">题目内容</Label>
+            </div>
+            <Textarea
+              className="min-h-[220px] w-full rounded-2xl border-slate-200 bg-white p-5 text-sm font-medium leading-relaxed text-slate-600 shadow-sm focus-visible:ring-1 focus-visible:ring-primary/20"
+              value={draft.content_text}
+              placeholder="请输入题干内容..."
+              onChange={(event) => onChange({ content_text: event.target.value })}
+            />
+
+            {/<img\s/i.test(draft.content_text) && (
+              <div className="rounded-2xl border border-slate-100 bg-slate-50/60 p-4">
+                <p className="mb-3 text-[11px] font-bold uppercase tracking-widest text-slate-400">图片预览</p>
+                <RichContent html={importTextToHtml(draft.content_text)} />
+              </div>
+            )}
+          </section>
+
+          <section className="space-y-3">
             <Label className="text-[11px] font-bold uppercase tracking-widest text-slate-400">题型</Label>
             <div className="flex flex-wrap gap-2">
               {typeOptions.map((item) => (
@@ -101,23 +127,6 @@ export function ImportReviewEditor({
                 </button>
               ))}
             </div>
-          </section>
-
-          <section className="space-y-3">
-            <Label className="text-[11px] font-bold uppercase tracking-widest text-slate-400">题目内容</Label>
-            <Textarea
-              className="min-h-[220px] w-full rounded-2xl border-slate-200 bg-white p-5 text-sm font-medium leading-relaxed text-slate-600 shadow-sm focus-visible:ring-1 focus-visible:ring-primary/20"
-              value={draft.content_text}
-              placeholder="请输入题干内容..."
-              onChange={(event) => onChange({ content_text: event.target.value })}
-            />
-
-            {/<img\s/i.test(draft.content_text) && (
-              <div className="rounded-2xl border border-slate-100 bg-slate-50/60 p-4">
-                <p className="mb-3 text-[11px] font-bold uppercase tracking-widest text-slate-400">图片预览</p>
-                <RichContent html={importTextToHtml(draft.content_text)} />
-              </div>
-            )}
           </section>
 
           {draft.type === "choice" && (

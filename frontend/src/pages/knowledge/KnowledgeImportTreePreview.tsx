@@ -13,6 +13,7 @@ import {
 type KnowledgeImportTreePreviewProps = {
   paths: KnowledgeImportPath[];
   emptyText: string;
+  emptyClassName?: string;
   onRemoveNode?: (node: KnowledgeImportPreviewNode) => void;
   showTypeBadge?: boolean;
   showCounts?: boolean;
@@ -119,6 +120,7 @@ function TreeLevel({
 export function KnowledgeImportTreePreview({
   paths,
   emptyText,
+  emptyClassName,
   onRemoveNode,
   showTypeBadge = true,
   showCounts = true,
@@ -126,7 +128,7 @@ export function KnowledgeImportTreePreview({
   const tree = buildKnowledgeImportPreviewTree(paths);
 
   if (paths.length === 0) {
-    return <p className="text-sm text-stone-500 dark:text-stone-400">{emptyText}</p>;
+    return <p className={cn("text-sm text-stone-500 dark:text-stone-400", emptyClassName)}>{emptyText}</p>;
   }
 
   return (

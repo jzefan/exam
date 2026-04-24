@@ -5,6 +5,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ExamWizardForm } from "./components/ExamWizardForm";
 import {
   getErrorMessage,
+  toSubmitDateTime,
   type ExamFormValues,
 } from "./components/exam-form-utils";
 
@@ -42,8 +43,8 @@ export function ExamCreate() {
         resource: "exams",
         values: {
           ...values,
-          start_time: values.start_time || null,
-          end_time: values.end_time || null,
+          start_time: toSubmitDateTime(values.start_time),
+          end_time: toSubmitDateTime(values.end_time),
           notes_template: values.notes_template || null,
           position_id: values.position_id || null,
           category: values.category,

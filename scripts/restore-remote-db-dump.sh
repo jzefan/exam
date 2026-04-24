@@ -72,7 +72,9 @@ wait_for_health() {
 
 render_nginx_config() {
   local slot="$1"
-  sed "s/__SLOT__/${slot}/g" \
+  sed \
+    -e "s/__BACKEND_SLOT__/${slot}/g" \
+    -e "s/__FRONTEND_SLOT__/${slot}/g" \
     "${CURRENT_LINK}/deploy/nginx/default.conf.template" \
     > "${NGINX_DIR}/default.conf"
 }
@@ -169,7 +171,10 @@ export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-exam-app}"
 
 cd "${CURRENT_LINK}"
 
-ACTIVE_SLOT="$(cat "${NGINX_DIR}/active_slot" 2>/dev/null || true)"
+ACTIVE_SLOT="$(cat "${NGINX_DIR}/active_backend_slot" 2>/dev/null || true)"
+if [[ -z "${ACTIVE_SLOT}" ]]; then
+  ACTIVE_SLOT="$(cat "${NGINX_DIR}/active_slot" 2>/dev/null || true)"
+fi
 if [[ "${ACTIVE_SLOT}" != "blue" && "${ACTIVE_SLOT}" != "green" ]]; then
   ACTIVE_SLOT="blue"
 fi

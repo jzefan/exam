@@ -154,17 +154,6 @@ async def list_majors(
     is_platform_admin: bool = True,
 ) -> list[Major]:
     stmt = select(Major).where(Major.deleted_at.is_(None))
-    if not is_platform_admin and user is not None:
-        stmt = (
-            stmt
-            .join(Direction, Direction.major_id == Major.id)
-            .join(KnowledgePoint, KnowledgePoint.direction_id == Direction.id)
-            .where(
-                Direction.deleted_at.is_(None),
-                teacher_visible_resource_filter(KnowledgePoint, user.id),
-            )
-            .distinct()
-        )
     result = await db.execute(stmt.order_by(Major.name))
     return list(result.scalars().all())
 
@@ -177,23 +166,30 @@ async def get_major(
     is_platform_admin: bool = True,
 ) -> Major | None:
     stmt = select(Major).where(Major.id == major_id, Major.deleted_at.is_(None))
-    if not is_platform_admin and user is not None:
-        stmt = (
-            stmt
-            .join(Direction, Direction.major_id == Major.id)
-            .join(KnowledgePoint, KnowledgePoint.direction_id == Direction.id)
-            .where(
-                Direction.deleted_at.is_(None),
-                teacher_visible_resource_filter(KnowledgePoint, user.id),
-            )
-            .distinct()
-        )
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
 
-async def create_major(db: AsyncSession, data: MajorCreate) -> Major:
-    major = Major(**data.model_dump())
+async def find_major_by_name_for_owner(
+    db: AsyncSession,
+    *,
+    owner_id: uuid.UUID,
+    name: str,
+    exclude_id: uuid.UUID | None = None,
+) -> Major | None:
+    stmt = select(Major).where(
+        Major.owner_id == owner_id,
+        Major.name == name,
+        Major.deleted_at.is_(None),
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(Major.id != exclude_id)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def create_major(db: AsyncSession, data: MajorCreate, owner_id: uuid.UUID) -> Major:
+    major = Major(**data.model_dump(), owner_id=owner_id)
     db.add(major)
     await db.commit()
     await db.refresh(major)
@@ -213,6 +209,27 @@ async def soft_delete_major(db: AsyncSession, major: Major) -> None:
     await db.commit()
 
 
+async def major_has_foreign_knowledge_points(
+    db: AsyncSession,
+    major_id: uuid.UUID,
+    *,
+    current_user_id: uuid.UUID,
+) -> bool:
+    stmt = (
+        select(KnowledgePoint.id)
+        .join(Direction, KnowledgePoint.direction_id == Direction.id)
+        .where(
+            Direction.major_id == major_id,
+            Direction.deleted_at.is_(None),
+            KnowledgePoint.deleted_at.is_(None),
+            KnowledgePoint.owner_id != current_user_id,
+        )
+        .limit(1)
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none() is not None
+
+
 async def list_directions(
     db: AsyncSession,
     major_id: uuid.UUID,
@@ -221,24 +238,17 @@ async def list_directions(
     is_platform_admin: bool = True,
 ) -> list[Direction]:
     stmt = select(Direction).where(Direction.major_id == major_id, Direction.deleted_at.is_(None))
-    if not is_platform_admin and user is not None:
-        stmt = (
-            stmt
-            .join(KnowledgePoint, KnowledgePoint.direction_id == Direction.id)
-            .where(teacher_visible_resource_filter(KnowledgePoint, user.id))
-            .distinct()
-        )
     result = await db.execute(stmt.order_by(Direction.name))
     return list(result.scalars().all())
 
 
-async def list_course_options(
+async def list_root_knowledge_point_options(
     db: AsyncSession,
     *,
     user: User | None = None,
     is_platform_admin: bool = True,
 ) -> list[dict[str, Any]]:
-    """Return visible top-level knowledge points as selectable courses."""
+    """Return visible top-level knowledge points as selectable roots."""
 
     stmt = (
         select(KnowledgePoint, Direction, Major)
@@ -269,6 +279,40 @@ async def list_course_options(
     ]
 
 
+async def list_course_options(
+    db: AsyncSession,
+    *,
+    user: User | None = None,
+    is_platform_admin: bool = True,
+) -> list[dict[str, Any]]:
+    """Compatibility alias for top-level knowledge point options."""
+    return await list_root_knowledge_point_options(
+        db,
+        user=user,
+        is_platform_admin=is_platform_admin,
+    )
+
+
+async def find_direction_by_name_for_owner(
+    db: AsyncSession,
+    *,
+    owner_id: uuid.UUID,
+    major_id: uuid.UUID,
+    name: str,
+    exclude_id: uuid.UUID | None = None,
+) -> Direction | None:
+    stmt = select(Direction).where(
+        Direction.owner_id == owner_id,
+        Direction.major_id == major_id,
+        Direction.name == name,
+        Direction.deleted_at.is_(None),
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(Direction.id != exclude_id)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
 async def get_direction(
     db: AsyncSession,
     direction_id: uuid.UUID,
@@ -277,19 +321,12 @@ async def get_direction(
     is_platform_admin: bool = True,
 ) -> Direction | None:
     stmt = select(Direction).where(Direction.id == direction_id, Direction.deleted_at.is_(None))
-    if not is_platform_admin and user is not None:
-        stmt = (
-            stmt
-            .join(KnowledgePoint, KnowledgePoint.direction_id == Direction.id)
-            .where(teacher_visible_resource_filter(KnowledgePoint, user.id))
-            .distinct()
-        )
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
 
-async def create_direction(db: AsyncSession, data: DirectionCreate) -> Direction:
-    direction = Direction(**data.model_dump())
+async def create_direction(db: AsyncSession, data: DirectionCreate, owner_id: uuid.UUID) -> Direction:
+    direction = Direction(**data.model_dump(), owner_id=owner_id)
     db.add(direction)
     await db.commit()
     await db.refresh(direction)
@@ -307,6 +344,25 @@ async def update_direction(db: AsyncSession, direction: Direction, data: dict[st
 async def soft_delete_direction(db: AsyncSession, direction: Direction) -> None:
     direction.deleted_at = datetime.now(timezone.utc)
     await db.commit()
+
+
+async def direction_has_foreign_knowledge_points(
+    db: AsyncSession,
+    direction_id: uuid.UUID,
+    *,
+    current_user_id: uuid.UUID,
+) -> bool:
+    stmt = (
+        select(KnowledgePoint.id)
+        .where(
+            KnowledgePoint.direction_id == direction_id,
+            KnowledgePoint.deleted_at.is_(None),
+            KnowledgePoint.owner_id != current_user_id,
+        )
+        .limit(1)
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none() is not None
 
 
 def _visible_knowledge_point_query(*, user: User | None, is_platform_admin: bool):

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -49,20 +49,36 @@ export function MajorDirectionSidebar({
   onEditRootKnowledge,
   onDeleteRootKnowledge,
 }: Props) {
-  const [collapsedMajors, setCollapsedMajors] = useState<Set<string>>(new Set());
+  const [expandedMajorId, setExpandedMajorId] = useState<string | null>(majors[0]?.id ?? null);
   const addActionClassName =
     "flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-stone-500 transition-colors hover:bg-amber-50/80 hover:text-amber-800 dark:text-stone-400 dark:hover:bg-amber-950/30 dark:hover:text-amber-200";
 
-  const toggleMajor = (id: string) =>
-    setCollapsedMajors((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
+  const selectedMajorId = useMemo(() => {
+    if (!selectedDirectionId) {
+      return null;
+    }
+    for (const major of majors) {
+      if (getDirections(major.id).some((direction) => direction.id === selectedDirectionId)) {
+        return major.id;
       }
-      return next;
-    });
+    }
+    return null;
+  }, [getDirections, majors, selectedDirectionId]);
+
+  useEffect(() => {
+    if (selectedMajorId) {
+      setExpandedMajorId(selectedMajorId);
+      return;
+    }
+
+    if (!expandedMajorId || !majors.some((major) => major.id === expandedMajorId)) {
+      setExpandedMajorId(majors[0]?.id ?? null);
+    }
+  }, [expandedMajorId, majors, selectedMajorId]);
+
+  const toggleMajor = (id: string) => {
+    setExpandedMajorId(id);
+  };
 
   return (
     <TooltipProvider delayDuration={120}>
@@ -82,7 +98,7 @@ export function MajorDirectionSidebar({
       </div>
       <div className="space-y-2">
         {majors.map((major) => {
-          const expanded = !collapsedMajors.has(major.id);
+          const expanded = expandedMajorId === major.id;
           const directions = getDirections(major.id);
           return (
             <ContextMenu key={major.id}>

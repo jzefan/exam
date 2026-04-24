@@ -5,7 +5,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser, require_roles, user_has_role
@@ -20,10 +20,13 @@ from app.questions.schemas import (
     KnowledgePointResponse,
     QuestionBankCreate,
     QuestionBankResponse,
+    QuestionBankClearResponse,
     QuestionBulkCreateRequest,
     QuestionBulkCreateResponse,
     QuestionBulkDeleteRequest,
     QuestionBulkDeleteResponse,
+    QuestionBulkMoveRequest,
+    QuestionBulkMoveResponse,
     QuestionImportMatchCreateRequest,
     QuestionImportMatchCreateResponse,
     QuestionImportDocumentRecognizeRequest,
@@ -218,12 +221,22 @@ async def list_questions(
         if knowledge_point_id_raw
         else None
     )
+    search_text = (filters.pop("search_text_like", None) or filters.pop("search_text", None) or "").strip()
 
     if tag_ids:
         base_query = base_query.join(question_tags).where(question_tags.c.tag_id.in_(tag_ids))
     if knowledge_point_id:
         base_query = base_query.join(question_knowledge_points).where(
             question_knowledge_points.c.knowledge_point_id == knowledge_point_id
+        )
+    if search_text:
+        like_pattern = f"%{search_text}%"
+        base_query = base_query.where(
+            or_(
+                Question.title.ilike(like_pattern),
+                cast(Question.content, String).ilike(like_pattern),
+                cast(Question.options, String).ilike(like_pattern),
+            )
         )
 
     filtered_query = apply_filters(base_query, filters, Question)
@@ -245,6 +258,15 @@ async def list_questions(
     if knowledge_point_id:
         full_query = full_query.join(question_knowledge_points).where(
             question_knowledge_points.c.knowledge_point_id == knowledge_point_id
+        )
+    if search_text:
+        like_pattern = f"%{search_text}%"
+        full_query = full_query.where(
+            or_(
+                Question.title.ilike(like_pattern),
+                cast(Question.content, String).ilike(like_pattern),
+                cast(Question.options, String).ilike(like_pattern),
+            )
         )
     full_query = apply_filters(full_query, filters, Question)
     if tag_ids or knowledge_point_id:
@@ -333,6 +355,36 @@ async def bulk_delete_questions_endpoint(
         await soft_delete_question(db, question)
 
     return QuestionBulkDeleteResponse(deleted=len(questions))
+
+
+@questions_router.post("/bulk-move", response_model=QuestionBulkMoveResponse)
+async def bulk_move_questions_endpoint(
+    data: QuestionBulkMoveRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
+) -> QuestionBulkMoveResponse:
+    is_admin = await _is_question_admin(db, user)
+    await _ensure_can_write_question_bank(db, data.question_bank_id, user, is_admin)
+
+    question_ids = list(dict.fromkeys(data.question_ids))
+    questions: list[Question] = []
+    for question_id in question_ids:
+        question = await get_question_by_id(db, question_id, user=user, is_platform_admin=is_admin)
+        if question is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Some questions were not found")
+        if not can_write_owned_resource(
+            is_platform_admin=is_admin,
+            current_user_id=user.id,
+            owner_id=question.owner_id,
+        ):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No permission to modify some questions")
+        questions.append(question)
+
+    for question in questions:
+        question.question_bank_id = data.question_bank_id
+
+    await db.flush()
+    return QuestionBulkMoveResponse(moved=len(questions))
 
 
 @questions_router.delete("/{question_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -437,7 +489,10 @@ async def import_bulk_create_job_endpoint(
     bank_ids = {question.question_bank_id for question in data.questions if question.question_bank_id is not None}
     for bank_id in bank_ids:
         await _ensure_can_write_question_bank(db, bank_id, user, is_admin)
-    knowledge_point_ids = {data.course_id}
+    root_knowledge_point_id = data.root_knowledge_point_id
+    if root_knowledge_point_id is None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="root_knowledge_point_id is required")
+    knowledge_point_ids = {root_knowledge_point_id}
     knowledge_point_ids.update(
         knowledge_point_id
         for question in data.questions
@@ -455,7 +510,7 @@ async def import_bulk_create_job_endpoint(
         process_question_import_job,
         job_id=job.id,
         user_id=user.id,
-        course_id=data.course_id,
+        root_knowledge_point_id=root_knowledge_point_id,
         questions=[question.model_dump() for question in data.questions],
     )
     return QuestionImportBulkCreateJobResponse(job_id=job.id, created=len(created_question_ids), status=job.status)
@@ -485,7 +540,10 @@ async def import_match_create_endpoint(
 ) -> QuestionImportMatchCreateResponse:
     is_admin = await _is_question_admin(db, user)
     await _ensure_can_write_question_bank(db, data.question.question_bank_id, user, is_admin)
-    question, matched = await match_and_create_import_question(db, data.question, data.course_id, user.id)
+    root_knowledge_point_id = data.root_knowledge_point_id
+    if root_knowledge_point_id is None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="root_knowledge_point_id is required")
+    question, matched = await match_and_create_import_question(db, data.question, root_knowledge_point_id, user.id)
     return QuestionImportMatchCreateResponse(
         question_id=question.id,
         matched_knowledge_point_ids=[kp.id for kp in matched],
@@ -652,12 +710,12 @@ async def create_question_bank_endpoint(
     return QuestionBankResponse.model_validate(bank)
 
 
-@question_banks_router.post("/{bank_id}/clear", response_model=QuestionBulkDeleteResponse)
+@question_banks_router.post("/{bank_id}/clear", response_model=QuestionBankClearResponse)
 async def clear_question_bank_questions_endpoint(
     bank_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
-) -> QuestionBulkDeleteResponse:
+) -> QuestionBankClearResponse:
     is_admin = await _is_question_admin(db, user)
     bank = await get_question_bank_by_id(db, bank_id)
     if bank is None:
@@ -676,8 +734,8 @@ async def clear_question_bank_questions_endpoint(
     ):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No permission to modify this question bank")
 
-    deleted = await clear_question_bank_questions(db, bank)
-    return QuestionBulkDeleteResponse(deleted=deleted)
+    result = await clear_question_bank_questions(db, bank)
+    return QuestionBankClearResponse(**result)
 
 
 @question_banks_router.delete("/{bank_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -17,6 +17,8 @@ DEPLOY_HOST="${DEPLOY_HOST:-146.56.224.80}"
 DEPLOY_USER="${DEPLOY_USER:-leishuo}"
 DEPLOY_PORT="${DEPLOY_PORT:-3036}"
 APP_ROOT="${APP_ROOT:-/home/leishuo/exam-app}"
+DEFAULT_DEPLOY_TARGET="all"
+DEPLOY_TARGET="${DEPLOY_TARGET:-${DEFAULT_DEPLOY_TARGET}}"
 
 TIMESTAMP="$(date +"%Y%m%d%H%M%S")"
 ARCHIVE_NAME="exam-release-${TIMESTAMP}.tar.gz"
@@ -26,6 +28,64 @@ REMOTE_ARCHIVE="/tmp/${ARCHIVE_NAME}"
 # Prevent macOS tar from writing Apple-specific metadata into the archive.
 # This avoids noisy GNU tar warnings on the Linux server during extraction.
 export COPYFILE_DISABLE=1
+
+usage() {
+  cat <<EOF
+Usage:
+  ./scripts/deploy.sh [--target all|app|frontend|backend|judge-runner|lsp-runner|runners]
+
+Options:
+  --target, -t   Deploy target. Default: ${DEFAULT_DEPLOY_TARGET}
+                 all          Deploy backend + frontend + runner services
+                 app          Deploy backend + frontend, without runner services
+                 frontend     Deploy only frontend and nginx traffic switch
+                 backend      Deploy backend, migrations, and nginx API switch
+                 judge-runner Deploy only judge-runner
+                 lsp-runner   Deploy only lsp-runner
+                 runners      Deploy judge-runner + lsp-runner
+  -h, --help     Show this help.
+
+Environment variables:
+  DEPLOY_HOST    Remote host. Default: ${DEPLOY_HOST}
+  DEPLOY_USER    Remote SSH user. Default: ${DEPLOY_USER}
+  DEPLOY_PORT    Public app port. Default: ${DEPLOY_PORT}
+  APP_ROOT       Remote app root. Default: ${APP_ROOT}
+  DEPLOY_TARGET  Same as --target. Default all when no argument is provided.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --target|-t)
+      if [[ $# -lt 2 ]]; then
+        echo "Missing value for $1" >&2
+        usage
+        exit 1
+      fi
+      DEPLOY_TARGET="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+case "${DEPLOY_TARGET}" in
+  all|app|frontend|backend|judge-runner|lsp-runner|runners)
+    ;;
+  *)
+    echo "Invalid deploy target: ${DEPLOY_TARGET}" >&2
+    usage
+    exit 1
+    ;;
+esac
 
 log() {
   printf '\n[%s] %s\n' "$(date +"%H:%M:%S")" "$1"
@@ -61,11 +121,12 @@ scp "$ARCHIVE_PATH" "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_ARCHIVE}"
 
 log "Running remote deployment"
 ssh "${DEPLOY_USER}@${DEPLOY_HOST}" \
-  "APP_ROOT='${APP_ROOT}' DEPLOY_PORT='${DEPLOY_PORT}' REMOTE_ARCHIVE='${REMOTE_ARCHIVE}' bash -s" <<'REMOTE'
+  "APP_ROOT='${APP_ROOT}' DEPLOY_PORT='${DEPLOY_PORT}' DEPLOY_TARGET='${DEPLOY_TARGET}' REMOTE_ARCHIVE='${REMOTE_ARCHIVE}' bash -s" <<'REMOTE'
 set -euo pipefail
 
 APP_ROOT="${APP_ROOT:?missing APP_ROOT}"
 DEPLOY_PORT="${DEPLOY_PORT:?missing DEPLOY_PORT}"
+DEPLOY_TARGET="${DEPLOY_TARGET:?missing DEPLOY_TARGET}"
 REMOTE_ARCHIVE="${REMOTE_ARCHIVE:?missing REMOTE_ARCHIVE}"
 
 RELEASES_DIR="${APP_ROOT}/releases"
@@ -89,10 +150,67 @@ require_command() {
 }
 
 render_nginx_config() {
-  local slot="$1"
-  sed "s/__SLOT__/${slot}/g" \
+  local backend_slot="$1"
+  local frontend_slot="$2"
+  sed \
+    -e "s/__BACKEND_SLOT__/${backend_slot}/g" \
+    -e "s/__FRONTEND_SLOT__/${frontend_slot}/g" \
     "${CURRENT_LINK}/deploy/nginx/default.conf.template" \
     > "${NGINX_DIR}/default.conf"
+}
+
+normalize_slot() {
+  local slot="${1:-}"
+  if [[ "${slot}" == "blue" || "${slot}" == "green" ]]; then
+    printf '%s' "${slot}"
+  fi
+}
+
+read_slot_file() {
+  local primary_file="$1"
+  local fallback_file="${2:-}"
+  local slot=""
+
+  if [[ -f "${primary_file}" ]]; then
+    slot="$(tr -d '[:space:]' < "${primary_file}")"
+  fi
+
+  slot="$(normalize_slot "${slot}")"
+  if [[ -n "${slot}" ]]; then
+    printf '%s' "${slot}"
+    return
+  fi
+
+  if [[ -n "${fallback_file}" && -f "${fallback_file}" ]]; then
+    slot="$(tr -d '[:space:]' < "${fallback_file}")"
+    slot="$(normalize_slot "${slot}")"
+    printf '%s' "${slot}"
+  fi
+}
+
+opposite_slot() {
+  local slot="$1"
+  if [[ "${slot}" == "blue" ]]; then
+    printf 'green'
+  else
+    printf 'blue'
+  fi
+}
+
+target_includes_backend() {
+  [[ "${DEPLOY_TARGET}" == "all" || "${DEPLOY_TARGET}" == "app" || "${DEPLOY_TARGET}" == "backend" ]]
+}
+
+target_includes_frontend() {
+  [[ "${DEPLOY_TARGET}" == "all" || "${DEPLOY_TARGET}" == "app" || "${DEPLOY_TARGET}" == "frontend" ]]
+}
+
+target_includes_judge_runner() {
+  [[ "${DEPLOY_TARGET}" == "all" || "${DEPLOY_TARGET}" == "judge-runner" || "${DEPLOY_TARGET}" == "runners" ]]
+}
+
+target_includes_lsp_runner() {
+  [[ "${DEPLOY_TARGET}" == "all" || "${DEPLOY_TARGET}" == "lsp-runner" || "${DEPLOY_TARGET}" == "runners" ]]
 }
 
 wait_for_health() {
@@ -174,31 +292,77 @@ set +a
 cd "${CURRENT_LINK}"
 export APP_ROOT
 
-ACTIVE_SLOT="$(cat "${NGINX_DIR}/active_slot" 2>/dev/null || true)"
-if [[ "${ACTIVE_SLOT}" == "blue" ]]; then
-  TARGET_SLOT="green"
-else
-  TARGET_SLOT="blue"
+ACTIVE_SLOT_FILE="${NGINX_DIR}/active_slot"
+ACTIVE_BACKEND_SLOT_FILE="${NGINX_DIR}/active_backend_slot"
+ACTIVE_FRONTEND_SLOT_FILE="${NGINX_DIR}/active_frontend_slot"
+
+ACTIVE_BACKEND_SLOT="$(read_slot_file "${ACTIVE_BACKEND_SLOT_FILE}" "${ACTIVE_SLOT_FILE}")"
+ACTIVE_FRONTEND_SLOT="$(read_slot_file "${ACTIVE_FRONTEND_SLOT_FILE}" "${ACTIVE_SLOT_FILE}")"
+
+case "${DEPLOY_TARGET}" in
+  all|app)
+    TARGET_SLOT="$(opposite_slot "${ACTIVE_BACKEND_SLOT:-green}")"
+    TARGET_BACKEND_SLOT="${TARGET_SLOT}"
+    TARGET_FRONTEND_SLOT="${TARGET_SLOT}"
+    ;;
+  backend)
+    if [[ -z "${ACTIVE_FRONTEND_SLOT}" ]]; then
+      echo "Cannot do backend-only deploy before a full deploy has established an active frontend slot." >&2
+      exit 1
+    fi
+    TARGET_BACKEND_SLOT="$(opposite_slot "${ACTIVE_BACKEND_SLOT:-green}")"
+    TARGET_FRONTEND_SLOT="${ACTIVE_FRONTEND_SLOT}"
+    ;;
+  frontend)
+    if [[ -z "${ACTIVE_BACKEND_SLOT}" ]]; then
+      echo "Cannot do frontend-only deploy before a full deploy has established an active backend slot." >&2
+      exit 1
+    fi
+    TARGET_BACKEND_SLOT="${ACTIVE_BACKEND_SLOT}"
+    TARGET_FRONTEND_SLOT="$(opposite_slot "${ACTIVE_FRONTEND_SLOT:-green}")"
+    ;;
+  judge-runner|lsp-runner|runners)
+    TARGET_BACKEND_SLOT="${ACTIVE_BACKEND_SLOT:-}"
+    TARGET_FRONTEND_SLOT="${ACTIVE_FRONTEND_SLOT:-}"
+    ;;
+esac
+
+log "Deploy target: ${DEPLOY_TARGET}"
+log "Active slots -> backend: ${ACTIVE_BACKEND_SLOT:-none}, frontend: ${ACTIVE_FRONTEND_SLOT:-none}"
+if target_includes_backend || target_includes_frontend; then
+  log "Target slots -> backend: ${TARGET_BACKEND_SLOT}, frontend: ${TARGET_FRONTEND_SLOT}"
 fi
 
-log "Active slot: ${ACTIVE_SLOT:-none}; target slot: ${TARGET_SLOT}"
+if target_includes_backend || target_includes_judge_runner || target_includes_lsp_runner; then
+  log "Starting database"
+  docker compose up -d db
+  wait_for_health db 180
+fi
 
-log "Starting database"
-docker compose up -d db
-wait_for_health db 180
+if target_includes_judge_runner; then
+  log "Building judge-runner image"
+  docker compose build judge_runner
 
-log "Building judge-runner image"
-docker compose build judge_runner
+  log "Starting judge-runner"
+  docker compose up -d judge_runner
+  wait_for_health judge_runner 180
+fi
 
-log "Starting judge-runner"
-docker compose up -d judge_runner
-wait_for_health judge_runner 180
+if target_includes_lsp_runner; then
+  log "Building lsp-runner image"
+  docker compose build lsp_runner
 
-log "Building target slot images"
-docker compose build "backend_${TARGET_SLOT}" "frontend_${TARGET_SLOT}"
+  log "Starting lsp-runner"
+  docker compose up -d lsp_runner
+  wait_for_health lsp_runner 180
+fi
 
-log "Preparing Alembic version table"
-docker compose exec -T db psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" <<'SQL'
+if target_includes_backend; then
+  log "Building target backend image"
+  docker compose build "backend_${TARGET_BACKEND_SLOT}"
+
+  log "Preparing Alembic version table"
+  docker compose exec -T db psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" <<'SQL'
 CREATE TABLE IF NOT EXISTS alembic_version (
     version_num VARCHAR(128) NOT NULL
 );
@@ -216,39 +380,64 @@ BEGIN
 END $$;
 SQL
 
-log "Running database migrations"
-docker compose run --rm --no-deps -T "backend_${TARGET_SLOT}" python -m alembic upgrade head </dev/null
+  log "Running database migrations"
+  docker compose run --rm --no-deps -T "backend_${TARGET_BACKEND_SLOT}" python -m alembic upgrade head </dev/null
 
-log "Starting target slot containers"
-docker compose up -d "backend_${TARGET_SLOT}" "frontend_${TARGET_SLOT}"
-wait_for_health "backend_${TARGET_SLOT}" 180
-wait_for_health "frontend_${TARGET_SLOT}" 180
-
-log "Switching nginx traffic to ${TARGET_SLOT}"
-render_nginx_config "${TARGET_SLOT}"
-docker compose up -d nginx
-wait_for_health nginx 120
-docker compose exec -T nginx nginx -s reload
-
-log "Smoke testing new live traffic"
-if ! curl --fail --silent "http://127.0.0.1:${DEPLOY_PORT}/healthz" >/dev/null \
-  || ! curl --fail --silent "http://127.0.0.1:${DEPLOY_PORT}/api/health" >/dev/null; then
-  echo "Smoke test failed after switching traffic" >&2
-  if [[ -n "${ACTIVE_SLOT}" ]]; then
-    echo "Rolling back nginx to ${ACTIVE_SLOT}" >&2
-    render_nginx_config "${ACTIVE_SLOT}"
-    docker compose up -d nginx
-    docker compose exec -T nginx nginx -s reload
-  fi
-  exit 1
+  log "Starting target backend slot"
+  docker compose up -d --no-deps "backend_${TARGET_BACKEND_SLOT}"
+  wait_for_health "backend_${TARGET_BACKEND_SLOT}" 180
 fi
 
-echo "${TARGET_SLOT}" > "${NGINX_DIR}/active_slot"
+if target_includes_frontend; then
+  log "Building target frontend image"
+  docker compose build "frontend_${TARGET_FRONTEND_SLOT}"
 
-if [[ -n "${ACTIVE_SLOT}" ]]; then
-  log "Stopping old slot ${ACTIVE_SLOT}"
-  docker compose stop "backend_${ACTIVE_SLOT}" "frontend_${ACTIVE_SLOT}" || true
-  docker compose rm -f "backend_${ACTIVE_SLOT}" "frontend_${ACTIVE_SLOT}" || true
+  log "Starting target frontend slot"
+  docker compose up -d "frontend_${TARGET_FRONTEND_SLOT}"
+  wait_for_health "frontend_${TARGET_FRONTEND_SLOT}" 180
+fi
+
+if target_includes_backend || target_includes_frontend; then
+  log "Switching nginx traffic to backend=${TARGET_BACKEND_SLOT}, frontend=${TARGET_FRONTEND_SLOT}"
+  render_nginx_config "${TARGET_BACKEND_SLOT}" "${TARGET_FRONTEND_SLOT}"
+  docker compose up -d nginx
+  wait_for_health nginx 120
+  docker compose exec -T nginx nginx -s reload
+
+  log "Smoke testing new live traffic"
+  if ! curl --fail --silent "http://127.0.0.1:${DEPLOY_PORT}/healthz" >/dev/null \
+    || ! curl --fail --silent "http://127.0.0.1:${DEPLOY_PORT}/api/health" >/dev/null; then
+    echo "Smoke test failed after switching traffic" >&2
+    if [[ -n "${ACTIVE_BACKEND_SLOT}" && -n "${ACTIVE_FRONTEND_SLOT}" ]]; then
+      echo "Rolling back nginx to backend=${ACTIVE_BACKEND_SLOT}, frontend=${ACTIVE_FRONTEND_SLOT}" >&2
+      render_nginx_config "${ACTIVE_BACKEND_SLOT}" "${ACTIVE_FRONTEND_SLOT}"
+      docker compose up -d nginx
+      docker compose exec -T nginx nginx -s reload
+    fi
+    exit 1
+  fi
+
+  CURRENT_BACKEND_SLOT="${TARGET_BACKEND_SLOT}"
+  CURRENT_FRONTEND_SLOT="${TARGET_FRONTEND_SLOT}"
+  echo "${CURRENT_BACKEND_SLOT}" > "${ACTIVE_BACKEND_SLOT_FILE}"
+  echo "${CURRENT_FRONTEND_SLOT}" > "${ACTIVE_FRONTEND_SLOT_FILE}"
+  echo "${CURRENT_BACKEND_SLOT}" > "${ACTIVE_SLOT_FILE}"
+fi
+
+if target_includes_backend; then
+  if [[ -n "${ACTIVE_BACKEND_SLOT}" && "${ACTIVE_BACKEND_SLOT}" != "${CURRENT_BACKEND_SLOT}" ]]; then
+    log "Stopping old backend slot ${ACTIVE_BACKEND_SLOT}"
+    docker compose stop "backend_${ACTIVE_BACKEND_SLOT}" || true
+    docker compose rm -f "backend_${ACTIVE_BACKEND_SLOT}" || true
+  fi
+fi
+
+if target_includes_frontend; then
+  if [[ -n "${ACTIVE_FRONTEND_SLOT}" && "${ACTIVE_FRONTEND_SLOT}" != "${CURRENT_FRONTEND_SLOT}" ]]; then
+    log "Stopping old frontend slot ${ACTIVE_FRONTEND_SLOT}"
+    docker compose stop "frontend_${ACTIVE_FRONTEND_SLOT}" || true
+    docker compose rm -f "frontend_${ACTIVE_FRONTEND_SLOT}" || true
+  fi
 fi
 
 log "Cleaning up older releases (keeping latest 5)"

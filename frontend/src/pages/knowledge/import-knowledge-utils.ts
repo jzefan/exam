@@ -99,6 +99,16 @@ export function summarizeKnowledgeImportPaths(paths: KnowledgeImportPath[]) {
   };
 }
 
+export function getFirstKnowledgeImportRootName(paths: KnowledgeImportPath[]): string | null {
+  for (const path of paths) {
+    const rootName = path[0]?.trim();
+    if (rootName) {
+      return rootName;
+    }
+  }
+  return null;
+}
+
 export function buildKnowledgeImportPreviewTree(
   paths: KnowledgeImportPath[],
 ): KnowledgeImportPreviewNode[] {

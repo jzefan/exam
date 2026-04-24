@@ -16,7 +16,9 @@ if [[ -z "${APP_ROOT}" ]]; then
 fi
 
 ACTIVE_SLOT_FILE=""
-if [[ -n "${APP_ROOT}" && -f "${APP_ROOT}/shared/nginx/active_slot" ]]; then
+if [[ -n "${APP_ROOT}" && -f "${APP_ROOT}/shared/nginx/active_backend_slot" ]]; then
+  ACTIVE_SLOT_FILE="${APP_ROOT}/shared/nginx/active_backend_slot"
+elif [[ -n "${APP_ROOT}" && -f "${APP_ROOT}/shared/nginx/active_slot" ]]; then
   ACTIVE_SLOT_FILE="${APP_ROOT}/shared/nginx/active_slot"
 fi
 
@@ -157,7 +159,7 @@ main() {
   local backend_service
   if ! backend_service="$(detect_backend_service)"; then
     fail "Could not determine active backend slot"
-    echo "Hint: ensure backend_blue or backend_green is running, or set APP_ROOT so active_slot can be read." >&2
+    echo "Hint: ensure backend_blue or backend_green is running, or set APP_ROOT so active_backend_slot can be read." >&2
     exit 1
   fi
 

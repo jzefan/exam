@@ -510,15 +510,15 @@ export function ExamTaking() {
             }
           >
             {showNavHint && !isCodeQuestion ? (
-              <div className="mb-4 flex items-start justify-between gap-3 rounded-xl border border-border/70 bg-muted/25 px-4 py-3 text-sm text-muted-foreground">
-                <p>
+              <div className="mb-3 flex items-center justify-between gap-3 pt-1 text-xs text-muted-foreground">
+                <p className="min-w-0 truncate">
                   右上角的答题卡可以快速跳转到任意题目，适合回看和检查未完成的题。
                 </p>
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="link"
                   size="sm"
-                  className="h-7 shrink-0 rounded-md px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+                  className="h-auto shrink-0 px-0 py-0 text-xs font-medium text-muted-foreground hover:text-foreground"
                   onClick={() => setNavOpen(true)}
                 >
                   打开答题卡

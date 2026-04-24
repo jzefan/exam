@@ -5,11 +5,13 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, WebSocket, WebSocketException, status
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser
+from app.auth.models import User
+from app.auth.security import decode_access_token
 from app.code_runner.client import run_code_via_judge_runner
 from app.code_runner.service import run_code
 from app.config import settings
@@ -26,6 +28,7 @@ from app.exams.models import (
     StudentExamSubmissionAnswer,
     StudentQuestionProgress,
 )
+from app.exams.time_utils import coerce_persisted_exam_datetime_to_utc
 from app.exams.student_schemas import (
     AppealCreateRequest,
     AppealResponse,
@@ -46,6 +49,8 @@ from app.exams.student_schemas import (
 )
 from app.grading.models import RoleBinding
 from app.grading.service import apply_grading_task_result_to_exam_submission, create_grading_task, run_grading_task_with_role_binding
+from app.lsp_runner.client import proxy_lsp_websocket
+from app.lsp_runner.schemas import LspGatewaySession, LspLanguage, SUPPORTED_LSP_LANGUAGES
 from app.questions.models import Question, QuestionType
 
 router = APIRouter()
@@ -57,11 +62,7 @@ def _utcnow() -> datetime:
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+    return coerce_persisted_exam_datetime_to_utc(value)
 
 
 def _normalize_text(value: str) -> str:
@@ -120,6 +121,46 @@ def _extract_attachment_refs(answer_content: dict[str, Any]) -> list[dict[str, s
         if isinstance(name, str) and name.strip() and isinstance(url, str) and url.strip():
             normalized.append({"name": name.strip(), "url": url.strip()})
     return normalized
+
+
+def _extract_websocket_token(websocket: WebSocket) -> str | None:
+    authorization = websocket.headers.get("authorization")
+    if authorization:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() == "bearer" and token.strip():
+            return token.strip()
+    query_token = websocket.query_params.get("token")
+    return query_token.strip() if query_token and query_token.strip() else None
+
+
+async def _get_current_user_from_websocket(db: AsyncSession, websocket: WebSocket) -> User:
+    token = _extract_websocket_token(websocket)
+    payload = decode_access_token(token) if token else None
+    if payload is None:
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
+
+    try:
+        user_id = uuid.UUID(str(payload["sub"]))
+    except (KeyError, ValueError) as exc:
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token") from exc
+
+    user = (
+        await db.execute(
+            select(User).where(
+                User.id == user_id,
+                User.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if user is None or not user.is_active:
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="User not found or inactive")
+    return user
+
+
+def _parse_lsp_language(raw_language: str) -> LspLanguage:
+    if raw_language not in SUPPORTED_LSP_LANGUAGES:
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Unsupported language")
+    return raw_language
 
 
 def _is_subjective_question_type(question_type: str) -> bool:
@@ -553,6 +594,13 @@ def _ensure_exam_attempt_in_progress(exam_student: ExamStudent) -> None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exam already submitted")
 
 
+def _ensure_exam_attempt_in_progress_for_websocket(exam_student: ExamStudent) -> None:
+    if exam_student.started_at is None:
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Exam not started")
+    if exam_student.submitted_at is not None:
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Exam already submitted")
+
+
 def _can_start_retake(exam: Exam, exam_student: ExamStudent) -> bool:
     if exam_student.submitted_at is None:
         return False
@@ -583,6 +631,30 @@ def _reset_exam_student_for_retake(exam_student: ExamStudent) -> None:
     exam_student.ai_scored_at = None
     exam_student.reviewed_at = None
     exam_student.graded_at = None
+
+
+async def _get_exam_question_for_student(
+    db: AsyncSession,
+    exam: Exam,
+    question_id: uuid.UUID,
+) -> Question:
+    question = (
+        await db.execute(
+            select(Question).where(
+                Question.id == question_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if question is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found")
+
+    if all(exam_question.question_id != question_id for exam_question in exam.exam_questions):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Question does not belong to exam")
+
+    if question.type != QuestionType.CODE:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Question is not a code question")
+
+    return question
 
 
 @router.post("/exams/{exam_id}/start", response_model=StudentExamStartResponse)
@@ -656,22 +728,7 @@ async def run_exam_question_code(
     exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)
     _ensure_exam_open(exam)
     _ensure_exam_attempt_in_progress(exam_student)
-
-    question = (
-        await db.execute(
-            select(Question).where(
-                Question.id == question_id,
-            )
-        )
-    ).scalar_one_or_none()
-    if question is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found")
-
-    if all(exam_question.question_id != question_id for exam_question in exam.exam_questions):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Question does not belong to exam")
-
-    if question.type != QuestionType.CODE:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Question is not a code question")
+    question = await _get_exam_question_for_student(db, exam, question_id)
 
     sample_tests: list[dict[str, Any]] = []
     if isinstance(question.content, dict):
@@ -684,6 +741,41 @@ async def run_exam_question_code(
     else:
         result = await asyncio.to_thread(run_code, payload, sample_tests=sample_tests)
     return StudentCodeRunResponse.model_validate(result.model_dump())
+
+
+@router.websocket("/exams/{exam_id}/questions/{question_id}/lsp")
+async def stream_exam_question_lsp(
+    websocket: WebSocket,
+    exam_id: uuid.UUID,
+    question_id: uuid.UUID,
+    language: str = Query(...),
+) -> None:
+    async with async_session() as db:
+        user = await _get_current_user_from_websocket(db, websocket)
+        try:
+            exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)
+            _ensure_exam_open(exam)
+            _ensure_exam_attempt_in_progress_for_websocket(exam_student)
+            await _get_exam_question_for_student(db, exam, question_id)
+            parsed_language = _parse_lsp_language(language)
+        except HTTPException as exc:
+            raise WebSocketException(
+                code=status.WS_1008_POLICY_VIOLATION,
+                reason=str(exc.detail),
+            ) from exc
+
+    if not settings.lsp_runner_url:
+        await websocket.accept()
+        await websocket.close(code=status.WS_1013_TRY_AGAIN_LATER, reason="Language service unavailable")
+        return
+
+    session = LspGatewaySession(
+        student_id=user.id,
+        exam_id=exam_id,
+        question_id=question_id,
+        language=parsed_language,
+    )
+    await proxy_lsp_websocket(websocket, settings.lsp_runner_url, session)
 
 
 @router.post("/exams/{exam_id}/answers")
