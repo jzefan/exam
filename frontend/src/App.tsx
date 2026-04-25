@@ -15,7 +15,7 @@ import { Layout } from "./components/layout";
 import { StudentLayout } from "./components/student-layout";
 import { useBrand } from "./lib/brand";
 
-import { ENTERPRISE_ROLES, getHomeRoute, TEACHER_ROLES } from "@/utils/role-routing";
+import { ENTERPRISE_ROLES, getHomeRoute, STUDENT_ROLES, TEACHER_ROLES } from "@/utils/role-routing";
 
 function lazyNamed<TModule extends Record<string, unknown>, TExport extends keyof TModule>(
   loader: () => Promise<TModule>,
@@ -87,6 +87,9 @@ const ModelConfigPage = lazyNamed(() => import("./pages/settings/model-config"),
 const GradingCenterPage = lazyNamed(() => import("./pages/grading"), "GradingCenterPage");
 const GwmxLanding = lazyNamed(() => import("./pages/gwmx/landing"), "GwmxLanding");
 const GwmxWorkbench = lazyNamed(() => import("./pages/gwmx/workbench"), "GwmxWorkbench");
+const CandidateLanding = lazyNamed(() => import("./pages/exam-invite/landing"), "CandidateLanding");
+const GuestExamTakePage = lazyNamed(() => import("./pages/exam-invite/take"), "GuestExamTakePage");
+const CandidateDonePage = lazyNamed(() => import("./pages/exam-invite/done"), "CandidateDonePage");
 const StudentManagementPage = lazy(() => import("./pages/students"));
 
 /** Redirect users to their home route if they don't match the allowed roles */
@@ -177,11 +180,16 @@ function App() {
           >
             <Suspense fallback={<RouteFallback />}>
               <Routes>
+                {/* External candidate routes — public, no application shell */}
+                <Route path="/exam-invite" element={<CandidateLanding />} />
+                <Route path="/exam-invite/take/:examId" element={<GuestExamTakePage />} />
+                <Route path="/exam-invite/done" element={<CandidateDonePage />} />
+
                 {/* Student routes — sidebar layout, students only */}
                 <Route
                   element={
                     <Authenticated key="student-auth" fallback={<CatchAllNavigate to="/login" />}>
-                      <RoleGuard allow={["student"]} />
+                      <RoleGuard allow={STUDENT_ROLES} />
                     </Authenticated>
                   }
                 >

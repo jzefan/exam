@@ -22,6 +22,7 @@ import {
   AlertDialogDescription,
 } from "@/components/ui/alert-dialog";
 import type { IExamTaking, ISubmitExamResponse } from "@/types";
+import { apiClient } from "@/lib/api";
 import { CountdownTimer } from "./components/countdown-timer";
 import { SwitchCounter } from "./components/switch-counter";
 import { QuestionNav } from "./components/question-nav";
@@ -33,13 +34,6 @@ import { useVisibilityDetection } from "@/hooks/use-visibility-detection";
 /* ------------------------------------------------------------------ */
 /*  API client                                                         */
 /* ------------------------------------------------------------------ */
-
-const api = axios.create();
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("access_token");
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  return config;
-});
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -67,8 +61,14 @@ function isAnswered(ans: Record<string, unknown> | undefined): boolean {
 /*  Main component                                                     */
 /* ------------------------------------------------------------------ */
 
-export function ExamTaking() {
-  const { id } = useParams<{ id: string }>();
+interface ExamTakingProps {
+  examIdOverride?: string;
+  onSubmitted?: () => void;
+}
+
+export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}) {
+  const { id: routeExamId } = useParams<{ id: string }>();
+  const id = examIdOverride ?? routeExamId;
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const locale = getStudentLocale();
@@ -96,7 +96,7 @@ export function ExamTaking() {
     const jitterMs = import.meta.env.MODE === "test" ? 0 : Math.random() * 3000;
     const timer = setTimeout(() => {
       if (cancelled) return;
-      api
+      apiClient
         .post<IExamTaking>(`/api/student/exams/${id}/start`, isRetake ? { retake: true } : {})
         .then((res) => {
           if (!cancelled) {
@@ -197,6 +197,11 @@ export function ExamTaking() {
       setSubmitted(true);
       setSwitchWarning(null);
       const gradingStatus = submitResult?.grading_status;
+      if (onSubmitted) {
+        setSubmitStatusMessage("考试已提交，正在跳转...");
+        setTimeout(onSubmitted, 1000);
+        return;
+      }
       if (gradingStatus === "pending_ai") {
         setSubmitStatusMessage("主观题已提交，正在等待 AI 评分...");
         setTimeout(() => navigate("/my-exams"), 1500);
@@ -220,7 +225,7 @@ export function ExamTaking() {
             : tStudent("submit_failed", undefined, locale),
       );
     }
-  }, [examData?.exam_id, locale, navigate, submitExam, submitted]);
+  }, [examData?.exam_id, locale, navigate, onSubmitted, submitExam, submitted]);
 
   useEffect(() => {
     handleSubmitRef.current = handleSubmit;

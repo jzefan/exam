@@ -1,6 +1,14 @@
 import type { IUserOrgInfo } from "./rbac";
 
-export type UserRole = "platform_admin" | "enterprise_admin" | "enterprise_user" | "school_admin" | "teacher" | "student";
+export type UserRole =
+  | "platform_admin"
+  | "enterprise_admin"
+  | "enterprise_user"
+  | "school_admin"
+  | "teacher"
+  | "evaluator"
+  | "student"
+  | "assessee";
 
 export interface IUser {
   id: string;

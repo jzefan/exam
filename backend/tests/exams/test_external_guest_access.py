@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.invitation_security import create_exam_take_token
 from app.auth.models import User
-from app.exams.models import Exam, ExamStatus
+from app.exams.models import Exam, ExamStatus, ExamStudent
 from app.rbac.models import Organization
 from app.rbac.seed import seed_roles
 
@@ -81,3 +81,21 @@ async def test_external_guest_cannot_access_other_exam(client, db_session: Async
     )
 
     assert response.status_code in (401, 403)
+
+
+@pytest.mark.asyncio
+async def test_external_guest_can_start_assigned_exam_with_exam_take_token(client, db_session: AsyncSession):
+    guest, exam = await _make_external_guest(db_session)
+    db_session.add(ExamStudent(exam_id=exam.id, student_id=guest.id))
+    await db_session.commit()
+    expires = datetime.now(timezone.utc) + timedelta(hours=1)
+    token = create_exam_take_token(guest.id, exam.id, expires)
+
+    response = await client.post(
+        f"/api/student/exams/{exam.id}/start",
+        headers={"Authorization": f"Bearer {token}"},
+        json={},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["exam_id"] == str(exam.id)

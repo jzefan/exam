@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useGetIdentity } from "@refinedev/core"
-import { Briefcase, Layers, Sparkles, ArrowRight, Clock, GitBranch, Factory } from "lucide-react"
+import { Briefcase, Layers, Sparkles, ArrowRight, Clock, GitBranch, Factory, ClipboardList } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { zhCN } from "date-fns/locale"
 import { Card, CardContent } from "@/components/ui/card"
+import { getCurrentOrgType, getCurrentRoles } from "@/lib/current-user"
 import { normalizeJobModelsResponse } from "@/pages/job-models/list-utils"
 
 interface JobModel {
@@ -38,6 +39,9 @@ export function GwmxWorkbench() {
   const [models, setModels] = useState<JobModel[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
+  const roles = getCurrentRoles()
+  const showRecruitment = getCurrentOrgType() === "enterprise" &&
+    roles.some((role) => ["evaluator", "enterprise_admin", "platform_admin"].includes(role))
 
   useEffect(() => {
     fetch("/api/job-models/models?_start=0&_end=10000", { headers: authHeaders() })
@@ -175,6 +179,14 @@ export function GwmxWorkbench() {
               icon={<Briefcase className="h-4 w-4" />}
               onClick={() => navigate("/gwmx/job-models")}
             />
+            {showRecruitment ? (
+              <QuickAction
+                title="招聘考试"
+                description="发布招聘笔试，邀请外部候选人"
+                icon={<ClipboardList className="h-4 w-4" />}
+                onClick={() => navigate("/exams")}
+              />
+            ) : null}
           </div>
         </section>
       </div>
