@@ -56,7 +56,15 @@ export interface QuestionImportDocumentRecognizeResponse {
 export interface QuestionImportBulkCreateJobResponse {
   job_id: string;
   created: number;
+  existing: number;
+  failed: number;
   status: QuestionImportJobStatus;
+}
+
+export interface QuestionBulkCreateResponse {
+  created: number;
+  existing: number;
+  failed: number;
 }
 
 export interface QuestionImportJobResponse {

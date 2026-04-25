@@ -42,6 +42,7 @@ import {
 } from "./question-knowledge-recognition";
 import type {
   ImportFilter,
+  QuestionBulkCreateResponse,
   QuestionImportBulkCreateJobResponse,
   QuestionImportImageInput,
   QuestionImportDocumentRecognizeResponse,
@@ -439,11 +440,14 @@ export function QuestionImportPage() {
               body: JSON.stringify({ questions, root_knowledge_point_id: rootKnowledgePointId }),
             },
           )
-        : await questionApiFetch<{ created: number }>("/api/questions/bulk", {
+        : await questionApiFetch<QuestionBulkCreateResponse>("/api/questions/bulk", {
             method: "POST",
             body: JSON.stringify({ questions }),
           });
-      const successfulIds = new Set(importableDraftIds);
+      const importedCount = response.created;
+      const existingCount = response.existing ?? 0;
+      const failedCount = response.failed ?? 0;
+      const successfulIds = new Set(importableDraftIds.slice(0, importedCount + existingCount));
       setDrafts((current) => current.filter((draft) => !successfulIds.has(draft.draft_id)));
       setSourceEdits((current) => {
         const rest = { ...current };
@@ -457,23 +461,27 @@ export function QuestionImportPage() {
         const nextDraft = drafts.find((draft) => !successfulIds.has(draft.draft_id));
         return nextDraft?.draft_id ?? null;
       });
-      const importedCount = response.created;
+      const resultDescription = `导入成功 ${importedCount} 道，已存在 ${existingCount} 道，失败 ${failedCount} 道。`;
       if (rootKnowledgePointId) {
         const importJobResponse = response as QuestionImportBulkCreateJobResponse;
-        setActiveImportJobId(importJobResponse.job_id);
-        persistQuestionImportJobId(importJobResponse.job_id);
-        toast({ title: `已导入 ${importedCount} 道题，知识点正在后台识别` });
-        showNotice({
-          id: KNOWLEDGE_RECOGNITION_NOTICE_ID,
-          title: "知识点正在后台识别",
-          progressText: `0/${importedCount}`,
-          description: KNOWLEDGE_RECOGNITION_NOTICE_DESCRIPTION,
-          pagePath: KNOWLEDGE_RECOGNITION_NOTICE_PAGE_PATH,
-        });
+        if (importedCount > 0) {
+          setActiveImportJobId(importJobResponse.job_id);
+          persistQuestionImportJobId(importJobResponse.job_id);
+          toast({ title: "题目导入完成，知识点正在后台识别", description: resultDescription });
+          showNotice({
+            id: KNOWLEDGE_RECOGNITION_NOTICE_ID,
+            title: "知识点正在后台识别",
+            progressText: `0/${importedCount}`,
+            description: KNOWLEDGE_RECOGNITION_NOTICE_DESCRIPTION,
+            pagePath: KNOWLEDGE_RECOGNITION_NOTICE_PAGE_PATH,
+          });
+        } else {
+          toast({ title: "题目导入完成", description: resultDescription });
+        }
       } else {
         toast({
-          title: `已导入 ${importedCount} 道题`,
-          description: "本次未自动关联知识点，可稍后在题库列表中手动关联。",
+          title: "题目导入完成",
+          description: `${resultDescription}本次未自动关联知识点，可稍后在题库列表中手动关联。`,
         });
       }
     } catch (error) {

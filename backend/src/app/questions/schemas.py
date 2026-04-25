@@ -261,6 +261,8 @@ class QuestionBulkCreateRequest(BaseModel):
 
 class QuestionBulkCreateResponse(BaseModel):
     created: int
+    existing: int = 0
+    failed: int = 0
 
 
 class QuestionImportBulkCreateJobRequest(BaseModel):
@@ -280,6 +282,8 @@ class QuestionImportBulkCreateJobRequest(BaseModel):
 class QuestionImportBulkCreateJobResponse(BaseModel):
     job_id: uuid.UUID
     created: int
+    existing: int = 0
+    failed: int = 0
     status: QuestionImportJobStatus
 
 

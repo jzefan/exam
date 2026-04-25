@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
@@ -13,7 +14,7 @@ from app.auth.models import User
 from app.common.pagination import PaginationParams, apply_filters, apply_pagination, get_total_count, parse_filters, parse_pagination
 from app.common.resource_access import can_read_shared_resource, can_write_owned_resource, teacher_visible_resource_filter
 from app.database import get_db
-from app.questions.models import KnowledgePoint, Question
+from app.questions.models import KnowledgePoint, Question, QuestionImportJobStatus
 from app.questions.models import question_knowledge_points, question_tags
 from app.questions.schemas import (
     KnowledgePointCreate,
@@ -470,8 +471,8 @@ async def bulk_create_questions_endpoint(
         for knowledge_point_id in question.knowledge_point_ids
     }
     await _ensure_can_read_knowledge_points(db, list(knowledge_point_ids), user, is_admin)
-    created = await bulk_create_questions(db, data.questions, user.id)
-    return QuestionBulkCreateResponse(created=created)
+    result = await bulk_create_questions(db, data.questions, user.id)
+    return QuestionBulkCreateResponse(created=result.created, existing=result.existing, failed=result.failed)
 
 
 @questions_router.post(
@@ -500,20 +501,31 @@ async def import_bulk_create_job_endpoint(
     )
     await _ensure_can_read_knowledge_points(db, list(knowledge_point_ids), user, is_admin)
 
-    job = await create_question_import_job(db, user_id=user.id, total_count=len(data.questions))
-    created_question_ids = await bulk_create_questions_fast(db, data.questions, user.id)
-    job.created_question_ids = [str(question_id) for question_id in created_question_ids]
+    result = await bulk_create_questions_fast(db, data.questions, user.id)
+    job = await create_question_import_job(db, user_id=user.id, total_count=result.created)
+    job.created_question_ids = [str(question_id) for question_id in result.created_question_ids]
     await db.flush()
     await db.commit()
 
-    background_tasks.add_task(
-        process_question_import_job,
+    if result.created_question_ids:
+        background_tasks.add_task(
+            process_question_import_job,
+            job_id=job.id,
+            user_id=user.id,
+            root_knowledge_point_id=root_knowledge_point_id,
+            questions=[question.model_dump() for question in result.created_questions],
+        )
+    else:
+        job.status = QuestionImportJobStatus.COMPLETED
+        job.completed_at = datetime.now(timezone.utc)
+        await db.commit()
+    return QuestionImportBulkCreateJobResponse(
         job_id=job.id,
-        user_id=user.id,
-        root_knowledge_point_id=root_knowledge_point_id,
-        questions=[question.model_dump() for question in data.questions],
+        created=result.created,
+        existing=result.existing,
+        failed=result.failed,
+        status=job.status,
     )
-    return QuestionImportBulkCreateJobResponse(job_id=job.id, created=len(created_question_ids), status=job.status)
 
 
 @questions_router.get("/import/jobs/{job_id}", response_model=QuestionImportJobResponse)

@@ -40,6 +40,18 @@ from app.questions.schemas import (
 )
 
 
+@dataclass
+class BulkCreateQuestionsResult:
+    created_question_ids: list[uuid.UUID]
+    created_questions: list[QuestionCreate]
+    existing: int = 0
+    failed: int = 0
+
+    @property
+    def created(self) -> int:
+        return len(self.created_question_ids)
+
+
 # --- Tag ---
 
 async def list_tags(db: AsyncSession, question_bank_id: str | None = None) -> list[dict]:
@@ -1258,19 +1270,67 @@ answer_text: 识别到的答案，没有就返回空字符串
     )
 
 
+def _normalize_question_signature_text(value: object) -> str:
+    if value is None:
+        return ""
+    return re.sub(r"\s+", " ", str(value)).strip().lower()
+
+
+def _question_duplicate_signature(data: QuestionCreate | Question) -> str:
+    content = data.content if isinstance(data.content, dict) else {}
+    content_text = content.get("text") or content.get("html") or json.dumps(content, ensure_ascii=False, sort_keys=True)
+    options = data.options or {}
+    normalized_options = json.dumps(options, ensure_ascii=False, sort_keys=True)
+    return "|".join(
+        [
+            data.type.value if hasattr(data.type, "value") else str(data.type),
+            _normalize_question_signature_text(content_text),
+            _normalize_question_signature_text(normalized_options),
+        ]
+    )
+
+
+async def _existing_question_signatures(db: AsyncSession, user_id: uuid.UUID) -> set[str]:
+    rows = await db.execute(
+        select(Question).where(
+            Question.owner_id == user_id,
+            Question.deleted_at.is_(None),
+        )
+    )
+    return {_question_duplicate_signature(question) for question in rows.scalars().all()}
+
+
 async def bulk_create_questions(
     db: AsyncSession, questions: list[QuestionCreate], user_id: uuid.UUID
-) -> int:
-    """Atomically create multiple questions; rolls back all on any failure."""
+) -> BulkCreateQuestionsResult:
+    """Create questions while skipping items already present in the user's database."""
+    existing_signatures = await _existing_question_signatures(db, user_id)
+    created_question_ids: list[uuid.UUID] = []
+    created_questions: list[QuestionCreate] = []
+    existing = 0
+
     for data in questions:
-        await create_question(db, data, user_id)
-    return len(questions)
+        signature = _question_duplicate_signature(data)
+        if signature in existing_signatures:
+            existing += 1
+            continue
+        question = await create_question(db, data, user_id)
+        created_question_ids.append(question.id)
+        created_questions.append(data)
+        existing_signatures.add(signature)
+
+    return BulkCreateQuestionsResult(
+        created_question_ids=created_question_ids,
+        created_questions=created_questions,
+        existing=existing,
+    )
 
 
 async def bulk_create_questions_fast(
     db: AsyncSession, questions: list[QuestionCreate], user_id: uuid.UUID
-) -> list[uuid.UUID]:
+) -> BulkCreateQuestionsResult:
     """Create many questions in one flush while preserving provided relations."""
+    existing_signatures = await _existing_question_signatures(db, user_id)
     tag_ids = {tag_id for data in questions for tag_id in data.tag_ids}
     knowledge_point_ids = {
         knowledge_point_id for data in questions for knowledge_point_id in data.knowledge_point_ids
@@ -1287,7 +1347,13 @@ async def bulk_create_questions_fast(
         knowledge_points_by_id = {kp.id: kp for kp in kp_rows.scalars().all()}
 
     created_questions: list[Question] = []
+    created_question_inputs: list[QuestionCreate] = []
+    existing = 0
     for data in questions:
+        signature = _question_duplicate_signature(data)
+        if signature in existing_signatures:
+            existing += 1
+            continue
         question = Question(
             type=data.type,
             title=data.title,
@@ -1310,10 +1376,16 @@ async def bulk_create_questions_fast(
                 if knowledge_point_id in knowledge_points_by_id
             ]
         created_questions.append(question)
+        created_question_inputs.append(data)
+        existing_signatures.add(signature)
 
     db.add_all(created_questions)
     await db.flush()
-    return [question.id for question in created_questions]
+    return BulkCreateQuestionsResult(
+        created_question_ids=[question.id for question in created_questions],
+        created_questions=created_question_inputs,
+        existing=existing,
+    )
 
 
 async def create_question_import_job(

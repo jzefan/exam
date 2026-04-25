@@ -561,7 +561,7 @@ async def test_teacher_bulk_create_allows_owned_bank_and_unbanked_questions(
     )
 
     assert response.status_code == 201
-    assert response.json() == {"created": 2}
+    assert response.json() == {"created": 2, "existing": 0, "failed": 0}
 
     created_questions = (
         await db_session.execute(
@@ -572,6 +572,74 @@ async def test_teacher_bulk_create_allows_owned_bank_and_unbanked_questions(
     ).scalars().all()
     assert {question.owner_id for question in created_questions} == {teacher.id}
     assert {question.question_bank_id for question in created_questions} == {owned_bank_id, None}
+
+
+@pytest.mark.asyncio
+async def test_teacher_bulk_create_reports_existing_duplicate_questions(
+    client: AsyncClient, db_session
+) -> None:
+    org = await _create_org_with_question_roles(db_session)
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-bulk-duplicate",
+        email="teacher-bulk-duplicate@example.com",
+        full_name="Teacher Bulk Duplicate",
+    )
+    db_session.add(
+        Question(
+            type=QuestionType.SHORT_ANSWER,
+            title="Existing Duplicate Question",
+            content={"text": "Describe quorum"},
+            options=None,
+            answer={"points": ["majority"]},
+            analysis=None,
+            difficulty=2,
+            score=5,
+            created_by=teacher.id,
+            owner_id=teacher.id,
+            question_bank_id=None,
+        )
+    )
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    response = await client.post(
+        "/api/questions/bulk",
+        json={
+            "questions": [
+                {
+                    "type": "short_answer",
+                    "title": "Imported Duplicate Question",
+                    "content": {"text": "Describe quorum"},
+                    "options": None,
+                    "answer": {"points": ["majority"]},
+                    "analysis": None,
+                    "difficulty": 2,
+                    "score": 5,
+                    "tag_ids": [],
+                    "knowledge_point_ids": [],
+                    "question_bank_id": None,
+                },
+                {
+                    "type": "short_answer",
+                    "title": "Imported New Question",
+                    "content": {"text": "Describe consensus"},
+                    "options": None,
+                    "answer": {"points": ["agreement"]},
+                    "analysis": None,
+                    "difficulty": 3,
+                    "score": 8,
+                    "tag_ids": [],
+                    "knowledge_point_ids": [],
+                    "question_bank_id": None,
+                },
+            ]
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json() == {"created": 1, "existing": 1, "failed": 0}
 
 
 @pytest.mark.asyncio
