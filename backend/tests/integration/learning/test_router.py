@@ -196,7 +196,7 @@ async def test_catalog_photo_uses_paddle_ocr_text(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_catalog_photo_returns_friendly_error_when_ocr_engine_missing(monkeypatch):
+async def test_catalog_photo_falls_back_to_qwen_vl_when_ocr_engine_missing(monkeypatch):
     from app.learning.ocr import OCREngineUnavailable
     from app.learning.schemas import CatalogPhotoRecognizeRequest
     from app.learning.service import recognize_catalog_structure_from_images
@@ -204,7 +204,33 @@ async def test_catalog_photo_returns_friendly_error_when_ocr_engine_missing(monk
     async def fake_recognize_image_text(_image: str) -> str:
         raise OCREngineUnavailable("PaddleOCR is not installed")
 
+    async def fake_recognize_catalog_with_qwen_vl(_images: list[str]) -> list[list[str]]:
+        return [["第1章 数据库系统概述", "1.1 数据模型"]]
+
     monkeypatch.setattr("app.learning.service.recognize_image_text", fake_recognize_image_text)
+    monkeypatch.setattr("app.learning.service._recognize_catalog_with_qwen_vl", fake_recognize_catalog_with_qwen_vl)
+
+    response = await recognize_catalog_structure_from_images(
+        CatalogPhotoRecognizeRequest(file_name="catalog.png", images=["data:image/png;base64,ZmFrZQ=="])
+    )
+
+    assert response.paths == [["第1章 数据库系统概述", "1.1 数据模型"]]
+
+
+@pytest.mark.asyncio
+async def test_catalog_photo_returns_friendly_error_when_all_engines_missing(monkeypatch):
+    from app.learning.ocr import OCREngineUnavailable
+    from app.learning.schemas import CatalogPhotoRecognizeRequest
+    from app.learning.service import recognize_catalog_structure_from_images
+
+    async def fake_recognize_image_text(_image: str) -> str:
+        raise OCREngineUnavailable("PaddleOCR is not installed")
+
+    async def fake_recognize_catalog_with_qwen_vl(_images: list[str]) -> list[list[str]]:
+        raise RuntimeError("未配置 Qwen API Key，请联系管理员。")
+
+    monkeypatch.setattr("app.learning.service.recognize_image_text", fake_recognize_image_text)
+    monkeypatch.setattr("app.learning.service._recognize_catalog_with_qwen_vl", fake_recognize_catalog_with_qwen_vl)
 
     with pytest.raises(RuntimeError, match="目录识别服务暂不可用，请联系管理员处理"):
         await recognize_catalog_structure_from_images(
