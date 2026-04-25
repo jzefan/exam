@@ -21,6 +21,10 @@ class User(BaseModel):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     full_name: Mapped[str] = mapped_column(String(100), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    user_type: Mapped[str] = mapped_column(String(20), nullable=False, default="internal")
+    primary_org_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True
+    )
 
     student_class: Mapped["app.rbac.models.Class | None"] = relationship(
         "Class",
@@ -34,4 +38,11 @@ class User(BaseModel):
         Index("ix_users_username_active", "username", unique=True, postgresql_where="deleted_at IS NULL"),
         Index("ix_users_email_active", "email", unique=True, postgresql_where="deleted_at IS NULL"),
         Index("ix_users_phone_active", "phone", unique=True, postgresql_where="deleted_at IS NULL AND phone IS NOT NULL"),
+        Index(
+            "ix_users_phone_org_external",
+            "phone",
+            "primary_org_id",
+            unique=True,
+            postgresql_where="deleted_at IS NULL AND user_type = 'external_guest' AND phone IS NOT NULL",
+        ),
     )
