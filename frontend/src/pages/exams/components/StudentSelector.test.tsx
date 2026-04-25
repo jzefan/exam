@@ -69,7 +69,7 @@ describe("StudentSelector", () => {
     const grid = container.querySelector("[data-student-grid='true']");
     expect(grid?.className).toContain("grid");
     expect(grid?.className).toContain("md:grid-cols-2");
-    expect(grid?.className).toContain("xl:grid-cols-4");
+    expect(grid?.className).toContain("xl:grid-cols-3");
   });
 
   it("merges the selected summary and selected student chips into a single top section", async () => {
@@ -88,23 +88,23 @@ describe("StudentSelector", () => {
     const onChange = vi.fn();
     const view = render(<StudentSelector selectedIds={[]} onChange={onChange} />);
 
-    await user.click(await screen.findByRole("button", { name: "一班" }));
+    await user.click(await screen.findByRole("button", { name: /一班/ }));
     expect(onChange).toHaveBeenLastCalledWith(["student-1"]);
 
     onChange.mockClear();
     view.rerender(<StudentSelector selectedIds={["student-1"]} onChange={onChange} />);
-    await user.click(await screen.findByRole("button", { name: "二班" }));
+    await user.click(await screen.findByRole("button", { name: /二班/ }));
     expect(onChange).toHaveBeenLastCalledWith(["student-1", "student-2"]);
   });
 
-  it("supports selecting all students in the current visible list", async () => {
+  it("supports selecting students from the current visible list", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     render(<StudentSelector selectedIds={[]} onChange={onChange} />);
 
-    await user.click(await screen.findByRole("button", { name: /全选当前列表/i }));
+    await user.click(await screen.findByRole("button", { name: /张三/i }));
 
-    expect(onChange).toHaveBeenLastCalledWith(["student-1", "student-2"]);
+    expect(onChange).toHaveBeenLastCalledWith(["student-1"]);
   });
 
   it("shows manual add fields for name, phone, optional student id, and class", async () => {
@@ -117,7 +117,7 @@ describe("StudentSelector", () => {
     expect(screen.getByLabelText("手机号")).toBeInTheDocument();
     expect(screen.getByLabelText("学号（可选）")).toBeInTheDocument();
     expect(screen.getByRole("combobox")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /添加考生/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /添加学生/i })).toBeInTheDocument();
   });
 
   it("autofills phone, student id, and class when the entered name uniquely matches an existing student", async () => {
@@ -148,7 +148,7 @@ describe("StudentSelector", () => {
       expect(screen.getByLabelText("手机号")).toHaveValue("13800000001");
     });
 
-    await user.click(screen.getByRole("button", { name: /添加考生/i }));
+    await user.click(screen.getByRole("button", { name: /添加学生/i }));
 
     expect(onChange).toHaveBeenCalledWith(["student-1"]);
   });

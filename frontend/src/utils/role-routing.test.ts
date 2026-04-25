@@ -14,16 +14,16 @@ describe("getHomeRoute", () => {
     expect(getHomeRoute("student")).toBe("/student")
   })
 
-  it("routes enterprise_admin to /job-models", () => {
-    expect(getHomeRoute("enterprise_admin")).toBe("/gwmx/job-models")
+  it("routes enterprise_admin to workbench", () => {
+    expect(getHomeRoute("enterprise_admin")).toBe("/gwmx/workbench")
   })
 
-  it("routes enterprise_user to /job-models", () => {
-    expect(getHomeRoute("enterprise_user")).toBe("/gwmx/job-models")
+  it("routes enterprise_user to workbench", () => {
+    expect(getHomeRoute("enterprise_user")).toBe("/gwmx/workbench")
   })
 
-  it("routes school_admin to /job-models", () => {
-    expect(getHomeRoute("school_admin")).toBe("/gwmx/job-models")
+  it("routes school_admin to workbench", () => {
+    expect(getHomeRoute("school_admin")).toBe("/gwmx/workbench")
   })
 
   it("routes teacher to /dashboard", () => {
@@ -41,8 +41,9 @@ describe("getHomeRoute", () => {
 })
 
 describe("role access lists", () => {
-  it("only student can access student routes", () => {
+  it("student aliases can access student routes", () => {
     expect(STUDENT_ROLES).toContain("student")
+    expect(STUDENT_ROLES).toContain("assessee")
     expect(STUDENT_ROLES).not.toContain("enterprise_admin")
     expect(STUDENT_ROLES).not.toContain("teacher")
     expect(STUDENT_ROLES).not.toContain("platform_admin")
@@ -50,9 +51,10 @@ describe("role access lists", () => {
 
   it("teacher and admin can access teaching features", () => {
     expect(TEACHER_ROLES).toContain("teacher")
+    expect(TEACHER_ROLES).toContain("evaluator")
+    expect(TEACHER_ROLES).toContain("enterprise_admin")
     expect(TEACHER_ROLES).toContain("platform_admin")
     expect(TEACHER_ROLES).not.toContain("student")
-    expect(TEACHER_ROLES).not.toContain("enterprise_admin")
   })
 
   it("enterprise roles and admin can access job models", () => {

@@ -30,11 +30,11 @@ from app.learning.schemas import (
 
 router = APIRouter()
 DB = Annotated[AsyncSession, Depends(get_db)]
-WriteUser = Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")]
+WriteUser = Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")]
 
 
 async def _is_knowledge_admin(db: AsyncSession, user: User) -> bool:
-    return await user_has_role(db, user.id, "platform_admin", "school_admin", "admin")
+    return await user_has_role(db, user.id, "platform_admin", "school_admin", "admin", "enterprise_admin")
 
 
 def _ensure_can_write_kp(kp, user: User, is_admin: bool) -> None:

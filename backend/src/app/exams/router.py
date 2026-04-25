@@ -73,11 +73,18 @@ async def _exam_has_student_history(db: AsyncSession, exam_id: uuid.UUID) -> boo
 
 
 async def _is_exam_admin(db: AsyncSession, user_id: uuid.UUID) -> bool:
-    return await user_has_role(db, user_id, "platform_admin", "school_admin", "admin")
+    return await user_has_role(
+        db,
+        user_id,
+        "platform_admin",
+        "school_admin",
+        "admin",
+        "enterprise_admin",
+    )
 
 
 async def _is_student_user(db: AsyncSession, user_id: uuid.UUID) -> bool:
-    return await user_has_role(db, user_id, "student")
+    return await user_has_role(db, user_id, "student", "assessee")
 
 
 async def _exam_query_for_user(db: AsyncSession, user: CurrentUser):

@@ -137,10 +137,15 @@ async def admin_token(router_db_session: AsyncSession) -> str:
     await router_db_session.flush()
 
     user_org = UserOrganization(
-        user_id=admin.id, org_id=org.id, role_id=admin_role.id, is_primary=True
+        user_id=admin.id,
+        org_id=org.id,
+        role_id=admin_role.id,
+        is_primary=True,
+        is_primary_role=True,
     )
     router_db_session.add(user_org)
     await router_db_session.commit()
+    router_db_session.info["current_org_id"] = org.id
     return create_access_token(admin.id, "")
 
 

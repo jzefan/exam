@@ -1,13 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import axios from "axios";
 import type { IExamTaking, ISubmitExamResponse } from "@/types";
-
-const api = axios.create();
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("access_token");
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  return config;
-});
+import { apiClient } from "@/lib/api";
 
 interface UseExamTakingOptions {
   examData: IExamTaking | null;
@@ -79,7 +72,7 @@ export function useExamTaking({ examData }: UseExamTakingOptions) {
       setSaveState("saving");
       setSaveMessage("正在保存...");
       try {
-        await api.post(`/api/student/exams/${examData.exam_id}/answers`, {
+        await apiClient.post(`/api/student/exams/${examData.exam_id}/answers`, {
           answers: batch,
         });
         setSaveState("saved");
@@ -132,7 +125,7 @@ export function useExamTaking({ examData }: UseExamTakingOptions) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-    const response = await api.post<ISubmitExamResponse>(`/api/student/exams/${examData.exam_id}/submit`, {
+    const response = await apiClient.post<ISubmitExamResponse>(`/api/student/exams/${examData.exam_id}/submit`, {
       answers: finalAnswers,
     });
     return response.data;
@@ -141,7 +134,7 @@ export function useExamTaking({ examData }: UseExamTakingOptions) {
   const reportSwitch = useCallback(
     (count: number) => {
       if (!examData) return;
-      api.post(`/api/student/exams/${examData.exam_id}/switch`, {
+      apiClient.post(`/api/student/exams/${examData.exam_id}/switch`, {
         switch_count: count,
       });
     },

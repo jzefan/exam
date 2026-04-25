@@ -1,15 +1,15 @@
 /** Map user role to their default home route */
 export function getHomeRoute(role: string): string {
-  if (role === "student") return "/student"
+  if (role === "student" || role === "assessee") return "/student"
   if (["enterprise_user", "enterprise_admin", "school_admin"].includes(role)) return "/gwmx/workbench"
   return "/dashboard"
 }
 
 /** Roles allowed to access student layout routes */
-export const STUDENT_ROLES = ["student"]
+export const STUDENT_ROLES = ["student", "assessee"]
 
 /** Roles allowed to see teacher/admin features */
-export const TEACHER_ROLES = ["teacher", "platform_admin"]
+export const TEACHER_ROLES = ["teacher", "evaluator", "enterprise_admin", "school_admin", "platform_admin"]
 
 /** Roles allowed to see enterprise/job-model features */
 export const ENTERPRISE_ROLES = ["enterprise_user", "enterprise_admin", "school_admin", "platform_admin"]

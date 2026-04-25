@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useList, useOne, useUpdate } from "@refinedev/core";
+import { useGetIdentity, useList, useOne, useUpdate } from "@refinedev/core";
 import { useNavigate, useParams } from "react-router-dom";
 import { FilePenLine, List, Loader2 } from "lucide-react";
 
@@ -15,6 +15,7 @@ import { ExamSettingsPanel, type ViewSettingsValues } from "./components/ExamSet
 import { PaperPreview } from "./components/PaperPreview";
 import type { ScoreViewMode } from "./components/PaperScorePanel";
 import { PaperSummarySidebar } from "./components/PaperSummarySidebar";
+import { InvitationManagement } from "./components/InvitationManagement";
 import {
   buildEvenScoreAllocation,
   buildPaperPreviewItems,
@@ -72,6 +73,7 @@ export function ExamPaperViewPage() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { mutate: update, mutation } = useUpdate();
+  const { data: identity } = useGetIdentity<{ primary_org?: { org_type?: string } | null }>();
 
   const { result: exam, query } = useOne<ExamViewDetail>({
     resource: "exams",
@@ -149,6 +151,7 @@ export function ExamPaperViewPage() {
 
   const effectiveStatus = exam ? getEffectiveExamStatus(exam) : "draft";
   const categoryLabel = exam?.category === "practice" ? "练习" : "考试";
+  const showInvitations = identity?.primary_org?.org_type === "enterprise" && exam?.category === "exam";
   const selectedKnowledgePoints = useMemo(
     () =>
       Array.from(
@@ -432,6 +435,8 @@ export function ExamPaperViewPage() {
               saving={savingTarget === "settings" && mutation.isPending}
             />
           ) : null}
+
+          {showInvitations ? <InvitationManagement examId={exam.id} /> : null}
         </PaperSummarySidebar>
         </div>
       </div>

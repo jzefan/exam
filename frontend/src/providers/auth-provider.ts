@@ -49,6 +49,7 @@ export const authProvider: AuthProvider = {
       id: user.id,
       name: user.full_name,
       primary_org: user.primary_org,
+      organizations: user.organizations,
       avatar: undefined,
     };
   },

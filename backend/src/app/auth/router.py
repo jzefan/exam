@@ -33,6 +33,11 @@ async def login(data: LoginRequest, db: Annotated[AsyncSession, Depends(get_db)]
     user = await authenticate_user(db, data.username, data.password)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    if user.user_type == "external_guest":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="External guests must use invitation links to access exams",
+        )
     token = create_access_token(user.id, "")
     user_response = await build_user_response(db, user)
     return TokenResponse(access_token=token, user=user_response)

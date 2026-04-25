@@ -250,7 +250,7 @@ async def test_teacher_can_clear_own_question_bank_questions_without_deleting_ba
     response = await client.post(f"/api/question-banks/{bank.id}/clear")
 
     assert response.status_code == 200
-    assert response.json() == {"deleted": 2}
+    assert response.json() == {"deleted": 2, "hard_deleted": 2, "soft_deleted": 0}
 
     refreshed_bank = await db_session.scalar(select(QuestionBank).where(QuestionBank.id == bank.id))
     assert refreshed_bank is not None
@@ -259,8 +259,7 @@ async def test_teacher_can_clear_own_question_bank_questions_without_deleting_ba
     refreshed_questions = (
         await db_session.execute(select(Question).where(Question.id.in_([question_a.id, question_b.id])))
     ).scalars().all()
-    assert len(refreshed_questions) == 2
-    assert all(question.deleted_at is not None for question in refreshed_questions)
+    assert len(refreshed_questions) == 0
 
 
 @pytest.mark.asyncio

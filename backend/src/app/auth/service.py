@@ -56,6 +56,7 @@ async def create_user(db: AsyncSession, data: UserCreate) -> User:
                     org_id=org_id,
                     role_id=role.id,
                     is_primary=(i == 0),
+                    is_primary_role=(i == 0),
                 ))
         await db.flush()
 
@@ -72,7 +73,11 @@ async def authenticate_user(db: AsyncSession, username: str, password: str) -> U
         )
     )
     user = result.scalar_one_or_none()
-    if user is None or not verify_password(password, user.password_hash):
+    if user is None:
+        return None
+    if user.user_type == "external_guest":
+        return user
+    if not verify_password(password, user.password_hash):
         return None
     return user
 

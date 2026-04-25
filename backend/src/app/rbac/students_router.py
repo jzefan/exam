@@ -30,7 +30,7 @@ async def get_teacher_org_id(user: CurrentUser, db: Annotated[AsyncSession, Depe
 
 
 async def is_student_admin(db: AsyncSession, user: CurrentUser) -> bool:
-    return await user_has_role(db, user.id, "platform_admin", "school_admin", "admin")
+    return await user_has_role(db, user.id, "platform_admin", "school_admin", "admin", "enterprise_admin")
 
 # --- Class Routes ---
 

@@ -10,6 +10,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser
+from app.auth.external_guest_dependencies import get_actor_for_exam
 from app.auth.models import User
 from app.auth.security import decode_access_token
 from app.code_runner.client import run_code_via_judge_runner
@@ -55,6 +56,7 @@ from app.questions.models import Question, QuestionType
 
 router = APIRouter()
 wrong_answers_router = APIRouter()
+ExamActor = Annotated[User, Depends(get_actor_for_exam)]
 
 
 def _utcnow() -> datetime:
@@ -661,7 +663,7 @@ async def _get_exam_question_for_student(
 async def start_exam(
     exam_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: CurrentUser,
+    user: ExamActor,
     payload: StartExamRequest | None = None,
 ) -> StudentExamStartResponse:
     exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)
@@ -723,7 +725,7 @@ async def run_exam_question_code(
     question_id: uuid.UUID,
     payload: StudentCodeRunRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: CurrentUser,
+    user: ExamActor,
 ) -> StudentCodeRunResponse:
     exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)
     _ensure_exam_open(exam)
@@ -783,7 +785,7 @@ async def save_answers(
     exam_id: uuid.UUID,
     payload: SaveAnswersRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: CurrentUser,
+    user: ExamActor,
 ) -> dict[str, Any]:
     exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)
     _ensure_exam_open(exam)
@@ -803,7 +805,7 @@ async def report_switch(
     exam_id: uuid.UUID,
     payload: SwitchReportRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: CurrentUser,
+    user: ExamActor,
 ) -> dict[str, Any]:
     exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)
     exam_student.switch_count = payload.switch_count
@@ -820,7 +822,7 @@ async def submit_exam(
     exam_id: uuid.UUID,
     background_tasks: BackgroundTasks,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: CurrentUser,
+    user: ExamActor,
     payload: SubmitExamRequest | None = None,
 ) -> SubmitExamResponse:
     exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)

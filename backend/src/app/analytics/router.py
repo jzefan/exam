@@ -47,7 +47,7 @@ async def get_dashboard_stats(
             print(f"ERROR in admin dashboard stats: {str(e)}")
         return stats
 
-    is_teacher = await user_has_role(db, user.id, "teacher")
+    is_teacher = await user_has_role(db, user.id, "teacher", "evaluator")
     if is_teacher:
         try:
             stats.total_exams = (

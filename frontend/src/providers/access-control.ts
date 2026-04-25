@@ -17,7 +17,7 @@ export const accessControlProvider: AccessControlProvider = {
     }
 
     // Teacher permissions
-    if (role === "teacher") {
+    if (role === "teacher" || role === "evaluator") {
       const teacherResources = ["questions", "exams", "grading", "knowledge"];
       if (teacherResources.includes(resource ?? "")) {
         return { can: true };
@@ -29,7 +29,7 @@ export const accessControlProvider: AccessControlProvider = {
     }
 
     // Student / enterprise_user permissions
-    if (role === "student" || role === "enterprise_user") {
+    if (role === "student" || role === "assessee" || role === "enterprise_user") {
       if (resource === "job-models" && canAccessJobModels(role)) {
         return { can: true };
       }

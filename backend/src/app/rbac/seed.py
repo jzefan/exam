@@ -60,12 +60,15 @@ SYSTEM_ROLES: list[tuple[str, str, str, list[tuple[str, str]]]] = [
     (
         "enterprise_admin",
         "Enterprise Admin",
-        "Manage organization job models and members",
+        "Manage organization job models, members, and recruitment exams",
         [
             ("job_model", "create"), ("job_model", "read"), ("job_model", "update"), ("job_model", "delete"),
             ("user", "read"), ("user", "create"), ("user", "update"),
             ("export", "create"),
             ("gap_analysis", "read"),
+            ("exam", "create"), ("exam", "read"), ("exam", "update"), ("exam", "delete"),
+            ("question", "create"), ("question", "read"), ("question", "update"), ("question", "delete"),
+            ("knowledge", "read"),
         ],
     ),
     (
@@ -107,9 +110,33 @@ SYSTEM_ROLES: list[tuple[str, str, str, list[tuple[str, str]]]] = [
         ],
     ),
     (
+        "evaluator",
+        "Evaluator",
+        "Generic role for exam authors (alias of teacher across orgs)",
+        [
+            ("course", "read"), ("course", "update"),
+            ("job_model", "read"),
+            ("gap_analysis", "read"),
+            ("exam", "create"), ("exam", "read"), ("exam", "update"),
+            ("question", "create"), ("question", "read"), ("question", "update"),
+            ("knowledge", "read"),
+            ("export", "create"),
+        ],
+    ),
+    (
         "student",
         "Student",
         "Take exams, view learning paths",
+        [
+            ("exam", "read"),
+            ("course", "read"),
+            ("knowledge", "read"),
+        ],
+    ),
+    (
+        "assessee",
+        "Assessee",
+        "Generic role for exam takers (alias of student across orgs)",
         [
             ("exam", "read"),
             ("course", "read"),
@@ -160,16 +187,30 @@ async def seed_roles(db: AsyncSession) -> list[Role]:
             )
             db.add(role)
             await db.flush()
+        else:
+            role.display_name = display_name
+            role.description = description
+            role.is_system = True
 
-            if not role_perms:
-                target_ids = all_perm_ids
-            else:
-                target_ids = [perm_map[key].id for key in role_perms if key in perm_map]
+        if not role_perms:
+            target_ids = all_perm_ids
+        else:
+            target_ids = [perm_map[key].id for key in role_perms if key in perm_map]
 
-            for pid in target_ids:
+        existing_permission_ids = {
+            row[0]
+            for row in (
+                await db.execute(
+                    select(RolePermission.permission_id).where(RolePermission.role_id == role.id)
+                )
+            ).all()
+        }
+        for pid in target_ids:
+            if pid not in existing_permission_ids:
                 db.add(RolePermission(role_id=role.id, permission_id=pid))
-            await db.flush()
-            await db.refresh(role)
+
+        await db.flush()
+        await db.refresh(role)
 
         roles.append(role)
 

@@ -103,6 +103,8 @@ vi.mock("@refinedev/core", () => ({
 }));
 
 vi.mock("react-router-dom", () => ({
+  useBeforeUnload: vi.fn(),
+  useLocation: () => ({ pathname: "/exams/create", search: "", hash: "", state: null, key: "test" }),
   useNavigate: () => navigateMock,
 }));
 

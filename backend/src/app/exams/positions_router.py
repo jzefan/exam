@@ -47,7 +47,7 @@ async def create_position(
     db: Annotated[AsyncSession, Depends(get_db)],
     user: CurrentUser,
 ) -> PositionResponse:
-    is_admin = await user_has_role(db, user.id, "platform_admin", "school_admin")
+    is_admin = await user_has_role(db, user.id, "platform_admin", "school_admin", "enterprise_admin")
     position = Position(name=body.name, created_by=user.id, is_system=is_admin)
     db.add(position)
     await db.commit()
@@ -77,7 +77,7 @@ async def delete_position(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Position not found")
 
     # Only allow deleting own non-system positions (admins can delete system ones)
-    is_admin = await user_has_role(db, user.id, "platform_admin", "school_admin")
+    is_admin = await user_has_role(db, user.id, "platform_admin", "school_admin", "enterprise_admin")
     if position.is_system and not is_admin:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot delete system position")
     if not position.is_system and position.created_by != user.id:

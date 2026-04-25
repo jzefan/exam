@@ -18,6 +18,7 @@ from app.common.data_visibility import VisibilityScope
 from app.common.resource_access import teacher_visible_resource_filter
 from app.config import settings
 from app.learning.models import Direction, KnowledgePoint, KnowledgePointPrerequisite, Major
+from app.learning.ocr import OCREngineUnavailable, recognize_image_text
 from app.learning.schemas import (
     CatalogPhotoRecognizeRequest,
     DirectionCreate,
@@ -764,6 +765,11 @@ async def recognize_catalog_structure_from_images(
     request: CatalogPhotoRecognizeRequest,
 ) -> CatalogPhotoRecognizeResponse:
     try:
+        text_chunks = [await recognize_image_text(image) for image in request.images]
+        paths = _parse_catalog_paths_from_text("\n".join(text_chunks))
+        if paths:
+            return CatalogPhotoRecognizeResponse(paths=paths)
+
         paths = await asyncio.wait_for(
             _recognize_catalog_with_qwen_vl(request.images),
             timeout=120.0,
@@ -773,6 +779,8 @@ async def recognize_catalog_structure_from_images(
         raise RuntimeError("目录识别超时，请减少图片数量或稍后重试。") from exc
     except httpx.HTTPError as exc:
         raise RuntimeError(f"目录识别网络错误：{exc}") from exc
+    except OCREngineUnavailable as exc:
+        raise RuntimeError("目录识别服务暂不可用，请联系管理员处理。") from exc
 
 
 async def _search_bilibili_videos(query: str) -> list[RecommendationItem]:

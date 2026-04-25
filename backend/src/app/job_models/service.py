@@ -644,6 +644,50 @@ async def _rank_standard_with_llm(
     return chosen_id, rationale, confidence, keywords
 
 
+def _candidate_keyword_tokens(model: JobModel) -> set[str]:
+    text = " ".join(
+        part
+        for part in [
+            model.job_role,
+            model.industry_name or "",
+            model.direction_name or "",
+            model.job_family or "",
+        ]
+        if part
+    ).lower()
+    tokens = {match.group(0) for match in re.finditer(r"[a-z0-9+#.]+", text)}
+
+    for chunk in re.findall(r"[\u4e00-\u9fff]{2,}", text):
+        tokens.add(chunk)
+        for size in (2, 3, 4):
+            if len(chunk) >= size:
+                tokens.update(chunk[i : i + size] for i in range(len(chunk) - size + 1))
+
+    return {token for token in tokens if len(token.strip()) >= 2}
+
+
+def _rank_standard_with_keywords(
+    job_text: str,
+    candidates: list[JobModel],
+) -> tuple[JobModel, float, list[str]] | None:
+    haystack = job_text.lower()
+    scored: list[tuple[int, JobModel, list[str]]] = []
+    for model in candidates:
+        matched = sorted(token for token in _candidate_keyword_tokens(model) if token in haystack)
+        if not matched:
+            continue
+        score = sum(3 if re.search(r"[a-z0-9]", token) else len(token) for token in matched)
+        scored.append((score, model, matched))
+
+    if not scored:
+        return None
+
+    scored.sort(key=lambda item: (item[0], item[1].updated_at), reverse=True)
+    score, model, matched = scored[0]
+    confidence = min(0.85, 0.25 + score / 20)
+    return model, confidence, matched[:8]
+
+
 async def recommend_standard_model(
     db: AsyncSession,
     job_text: str,
@@ -667,9 +711,17 @@ async def recommend_standard_model(
 
     if chosen_id is None:
         if not rationale:
-            # LLM 未可用或打分过低：退化为最近更新的一个 + 低置信度
+            keyword_match = _rank_standard_with_keywords(job_text, candidates)
+            if keyword_match is not None:
+                fallback, fallback_confidence, fallback_keywords = keyword_match
+                return (
+                    fallback,
+                    f"根据岗位描述中的关键词匹配到标准岗位「{fallback.job_role}」。",
+                    fallback_confidence,
+                    fallback_keywords,
+                )
             fallback = candidates[0]
-            return fallback, "未开启 AI 推荐或输入信息不足，默认返回最近更新的标准岗位，请自行核对。", 0.0, []
+            return fallback, "未开启 AI 推荐且未识别到明显关键词，默认返回最近更新的标准岗位，请自行核对。", 0.0, []
         return None
 
     chosen = next((model for model in candidates if model.id == chosen_id), None)

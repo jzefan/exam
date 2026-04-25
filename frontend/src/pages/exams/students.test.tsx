@@ -6,9 +6,11 @@ import { render, screen, waitFor } from "@/test/test-utils";
 import { ExamStudentsPage } from "./students";
 
 const useListMock = vi.fn();
+const useGetIdentityMock = vi.fn();
 const apiRequestMock = vi.fn();
 
 vi.mock("@refinedev/core", () => ({
+  useGetIdentity: (...args: unknown[]) => useGetIdentityMock(...args),
   useList: (...args: unknown[]) => useListMock(...args),
 }));
 
@@ -18,6 +20,7 @@ vi.mock("@/pages/grading/api", () => ({
 
 describe("ExamStudentsPage", () => {
   it("sorts exams from near to far and loads student list for the latest exam first", async () => {
+    useGetIdentityMock.mockReturnValue({ data: { primary_org: null } });
     useListMock.mockReturnValue({
       query: {
         data: {

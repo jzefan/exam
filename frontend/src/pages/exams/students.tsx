@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { useList } from "@refinedev/core";
+import { useGetIdentity, useList } from "@refinedev/core";
 import { CalendarClock, CheckCircle2, Clock3, Loader2, Search, UserCheck, Users } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { apiRequest } from "@/pages/grading/api";
 import { cn } from "@/lib/utils";
 import type { IExam, IExamStudent } from "@/types";
+import { ExternalCandidateImport } from "./components/ExternalCandidateImport";
 
 function formatDateTime(iso: string | null) {
   if (!iso) return "—";
@@ -24,6 +26,8 @@ export function ExamStudentsPage() {
   const [students, setStudents] = useState<IExamStudent[]>([]);
   const [studentsLoading, setStudentsLoading] = useState(false);
   const [searchText, setSearchText] = useState("");
+  const [refreshSeed, setRefreshSeed] = useState(0);
+  const { data: identity } = useGetIdentity<{ primary_org?: { org_type?: string } | null }>();
 
   const { query } = useList<IExam>({
     resource: "exams",
@@ -77,7 +81,7 @@ export function ExamStudentsPage() {
     return () => {
       alive = false;
     };
-  }, [selectedExam]);
+  }, [selectedExam, refreshSeed]);
 
   const filteredStudents = useMemo(() => {
     const keyword = searchText.trim().toLowerCase();
@@ -86,6 +90,8 @@ export function ExamStudentsPage() {
       [student.full_name ?? "", student.username ?? ""].join(" ").toLowerCase().includes(keyword),
     );
   }, [searchText, students]);
+
+  const isEnterprise = identity?.primary_org?.org_type === "enterprise";
 
   return (
     <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
@@ -159,72 +165,90 @@ export function ExamStudentsPage() {
           </div>
         </CardHeader>
         <CardContent>
-          {!selectedExam ? (
-            <div className="rounded-2xl border border-dashed border-border/50 bg-muted/10 px-4 py-10 text-center text-sm text-muted-foreground">
-              暂无可查看的考试
-            </div>
-          ) : studentsLoading ? (
-            <div className="flex items-center gap-2 rounded-xl border border-border/50 bg-muted/20 px-4 py-8 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              正在加载考生列表...
-            </div>
-          ) : filteredStudents.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-border/50 bg-muted/10 px-4 py-10 text-center text-sm text-muted-foreground">
-              当前考试下暂无匹配的考生
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {filteredStudents.map((student) => {
-                const submitted = Boolean(student.submitted_at);
-                return (
-                  <div
-                    key={student.student_id}
-                    className="grid gap-4 rounded-2xl border border-border/50 bg-background px-4 py-4 md:grid-cols-[minmax(0,1fr)_180px_180px]"
-                  >
-                    <div className="min-w-0 space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate text-sm font-semibold text-foreground">
-                          {student.full_name || "未命名考生"}
-                        </span>
-                        <span
-                          className={cn(
-                            "rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                            submitted
-                              ? "bg-emerald-50 text-emerald-700"
-                              : "bg-amber-50 text-amber-700",
-                          )}
-                        >
-                          {submitted ? "已提交" : "未提交"}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                        <Users className="h-3.5 w-3.5" />
-                        <span>{student.username || "无学号"}</span>
-                      </div>
-                    </div>
+          <Tabs defaultValue="internal" className="space-y-4">
+            <TabsList>
+              <TabsTrigger value="internal">系统考生</TabsTrigger>
+              {isEnterprise ? <TabsTrigger value="external">外部候选人</TabsTrigger> : null}
+            </TabsList>
+            <TabsContent value="internal">
+              {!selectedExam ? (
+                <div className="rounded-2xl border border-dashed border-border/50 bg-muted/10 px-4 py-10 text-center text-sm text-muted-foreground">
+                  暂无可查看的考试
+                </div>
+              ) : studentsLoading ? (
+                <div className="flex items-center gap-2 rounded-xl border border-border/50 bg-muted/20 px-4 py-8 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  正在加载考生列表...
+                </div>
+              ) : filteredStudents.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-border/50 bg-muted/10 px-4 py-10 text-center text-sm text-muted-foreground">
+                  当前考试下暂无匹配的考生
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {filteredStudents.map((student) => {
+                    const submitted = Boolean(student.submitted_at);
+                    return (
+                      <div
+                        key={student.student_id}
+                        className="grid gap-4 rounded-2xl border border-border/50 bg-background px-4 py-4 md:grid-cols-[minmax(0,1fr)_180px_180px]"
+                      >
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate text-sm font-semibold text-foreground">
+                              {student.full_name || "未命名考生"}
+                            </span>
+                            <span
+                              className={cn(
+                                "rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                                submitted ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700",
+                              )}
+                            >
+                              {submitted ? "已提交" : "未提交"}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <Users className="h-3.5 w-3.5" />
+                            <span>{student.username || "无学号"}</span>
+                          </div>
+                        </div>
 
-                    <div className="space-y-1 text-xs text-muted-foreground">
-                      <div className="flex items-center gap-1.5">
-                        <Clock3 className="h-3.5 w-3.5" />
-                        <span>开始时间</span>
-                      </div>
-                      <div className="font-medium text-foreground">{formatDateTime(student.started_at)}</div>
-                    </div>
+                        <div className="space-y-1 text-xs text-muted-foreground">
+                          <div className="flex items-center gap-1.5">
+                            <Clock3 className="h-3.5 w-3.5" />
+                            <span>开始时间</span>
+                          </div>
+                          <div className="font-medium text-foreground">{formatDateTime(student.started_at)}</div>
+                        </div>
 
-                    <div className="space-y-1 text-xs text-muted-foreground">
-                      <div className="flex items-center gap-1.5">
-                        {submitted ? <CheckCircle2 className="h-3.5 w-3.5" /> : <UserCheck className="h-3.5 w-3.5" />}
-                        <span>{submitted ? "提交时间" : "最近状态"}</span>
+                        <div className="space-y-1 text-xs text-muted-foreground">
+                          <div className="flex items-center gap-1.5">
+                            {submitted ? (
+                              <CheckCircle2 className="h-3.5 w-3.5" />
+                            ) : (
+                              <UserCheck className="h-3.5 w-3.5" />
+                            )}
+                            <span>{submitted ? "提交时间" : "最近状态"}</span>
+                          </div>
+                          <div className="font-medium text-foreground">
+                            {submitted ? formatDateTime(student.submitted_at) : "尚未提交"}
+                          </div>
+                        </div>
                       </div>
-                      <div className="font-medium text-foreground">
-                        {submitted ? formatDateTime(student.submitted_at) : "尚未提交"}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+                    );
+                  })}
+                </div>
+              )}
+            </TabsContent>
+            {isEnterprise && selectedExam ? (
+              <TabsContent value="external">
+                <ExternalCandidateImport
+                  examId={selectedExam.id}
+                  onImported={() => setRefreshSeed((value) => value + 1)}
+                />
+              </TabsContent>
+            ) : null}
+          </Tabs>
         </CardContent>
       </Card>
     </div>
