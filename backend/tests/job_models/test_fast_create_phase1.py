@@ -84,6 +84,11 @@ async def _create_standard_model(
 
 
 async def _get_router_org(db_session: AsyncSession) -> Organization:
+    current_org_id = db_session.info.get("current_org_id")
+    if current_org_id is not None:
+        org = await db_session.get(Organization, current_org_id)
+        if org is not None:
+            return org
     result = await db_session.execute(
         select(Organization).order_by(Organization.created_at.desc()).limit(1)
     )

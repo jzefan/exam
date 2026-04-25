@@ -19,7 +19,15 @@ async def test_list_all_models_passes_model_type_filter(monkeypatch) -> None:
 
     captured: dict[str, object] = {}
 
-    async def fake_list_all_job_models(db, org_id, skip, limit, model_type=None):
+    async def fake_list_all_job_models(
+        db,
+        org_id,
+        skip,
+        limit,
+        model_type=None,
+        industry_name=None,
+        direction_name=None,
+    ):
         captured["model_type"] = model_type
         now = datetime.now(timezone.utc)
         model = SimpleNamespace(

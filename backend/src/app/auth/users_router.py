@@ -166,6 +166,7 @@ async def update_user_endpoint(
                         org_id=org.id,
                         role_id=role.id,
                         is_primary=(i == 0),
+                        is_primary_role=(i == 0),
                     ))
 
     effective_role_names = data.role_names if data.role_names is not None else [

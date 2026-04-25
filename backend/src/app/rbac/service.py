@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import User
@@ -550,11 +550,91 @@ async def assign_user_to_org(
         org_id=org_id,
         role_id=role_id,
         is_primary=is_primary,
+        is_primary_role=True,
     )
     db.add(user_org)
     await db.flush()
     await db.refresh(user_org)
     return user_org
+
+
+async def add_role_to_user(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    org_id: uuid.UUID,
+    role_id: uuid.UUID,
+    *,
+    is_primary: bool = False,
+) -> UserOrganization:
+    existing = (
+        await db.execute(
+            select(UserOrganization).where(
+                UserOrganization.user_id == user_id,
+                UserOrganization.org_id == org_id,
+                UserOrganization.role_id == role_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+    if is_primary:
+        await db.execute(
+            update(UserOrganization)
+            .where(
+                UserOrganization.user_id == user_id,
+                UserOrganization.org_id == org_id,
+            )
+            .values(is_primary_role=False)
+        )
+
+    if existing is None:
+        link = UserOrganization(
+            user_id=user_id,
+            org_id=org_id,
+            role_id=role_id,
+            is_primary=False,
+            is_primary_role=is_primary,
+        )
+        db.add(link)
+        await db.flush()
+        return link
+
+    if is_primary:
+        existing.is_primary_role = True
+        await db.flush()
+    return existing
+
+
+async def remove_role_from_user(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    org_id: uuid.UUID,
+    role_id: uuid.UUID,
+) -> None:
+    await db.execute(
+        delete(UserOrganization).where(
+            UserOrganization.user_id == user_id,
+            UserOrganization.org_id == org_id,
+            UserOrganization.role_id == role_id,
+        )
+    )
+
+
+async def list_user_roles(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> list[Role]:
+    rows = (
+        await db.execute(
+            select(Role)
+            .join(UserOrganization, UserOrganization.role_id == Role.id)
+            .where(
+                UserOrganization.user_id == user_id,
+                UserOrganization.org_id == org_id,
+            )
+        )
+    ).scalars().all()
+    return list(rows)
 
 
 async def get_user_organizations(

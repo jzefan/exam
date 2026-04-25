@@ -102,9 +102,10 @@ class UserOrganization(Base, TimestampMixin):
         Uuid, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
     )
     role_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("roles.id", ondelete="RESTRICT"), nullable=False
+        Uuid, ForeignKey("roles.id", ondelete="RESTRICT"), primary_key=True
     )
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_primary_role: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     organization: Mapped[Organization] = relationship("Organization", lazy="joined")
     role: Mapped[Role] = relationship("Role", lazy="joined")

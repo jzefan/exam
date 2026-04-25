@@ -153,13 +153,6 @@ async def list_question_banks(
     )
     if not is_platform_admin:
         stmt = stmt.where(teacher_visible_resource_filter(QuestionBank, user.id))
-    else:
-        stmt = stmt.where(
-            or_(
-                QuestionBank.visibility == VisibilityScope.PLATFORM,
-                QuestionBank.owner_id == user.id,
-            )
-        )
     stmt = stmt.order_by(QuestionBank.name)
     result = await db.execute(stmt)
     rows = result.all()
@@ -239,7 +232,7 @@ async def clear_question_bank_questions(db: AsyncSession, bank: QuestionBank) ->
 
 def _question_scope_query(*, user: User | None, is_platform_admin: bool) -> Select:
     query = select(Question).where(Question.deleted_at.is_(None))
-    if user is not None:
+    if user is not None and not is_platform_admin:
         query = query.outerjoin(QuestionBank, Question.question_bank_id == QuestionBank.id).where(
             or_(
                 teacher_owned_resource_filter(Question, user.id),
