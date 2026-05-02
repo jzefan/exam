@@ -1,7 +1,7 @@
 """add student exam submission history
 
-Revision ID: 20260421_add_student_exam_submission_history
-Revises: 20260420_fix_question_import_job_completed_at
+Revision ID: 20260421_submission_history
+Revises: 20260420_q_import_completed
 Create Date: 2026-04-21 21:10:00.000000
 """
 
@@ -12,8 +12,8 @@ from alembic import op
 
 
 # revision identifiers, used by Alembic.
-revision: str = "20260421_add_student_exam_submission_history"
-down_revision: str | Sequence[str] | None = "20260420_fix_question_import_job_completed_at"
+revision: str = "20260421_submission_history"
+down_revision: str | Sequence[str] | None = "20260420_q_import_completed"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -2,6 +2,7 @@ import { memo } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { BookOpenText, GitBranchPlus, Pencil, PlusCircle, Trash2 } from "lucide-react";
 
+import { NodeCollapseToggle } from "@/components/graph/node-collapse-toggle";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -20,6 +21,9 @@ type KnowledgeNodeData = IKnowledgePointDetail & {
   onDelete: (id: string, name: string) => void;
   hasIncomingEdge?: boolean;
   hasOutgoingEdge?: boolean;
+  hasChildren?: boolean;
+  childCount?: number;
+  collapsed?: boolean;
   isSelected?: boolean;
   isEditing?: boolean;
   renameDraft?: string;
@@ -37,12 +41,16 @@ export const KnowledgeNode = memo(({ data }: NodeProps) => {
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
-          className={`min-w-[116px] max-w-[144px] rounded-lg border px-2 py-1.5 pb-1 shadow-[0_4px_12px_rgba(120,113,108,0.1)] transition-colors duration-150 hover:bg-stone-100 focus-visible:bg-stone-100 dark:hover:bg-stone-800 dark:focus-visible:bg-stone-800 ${
+          className={`relative min-w-[116px] max-w-[256px] rounded-lg border px-2 py-1.5 pb-1 shadow-[0_4px_12px_rgba(120,113,108,0.1)] transition-colors duration-150 hover:bg-stone-100 focus-visible:bg-stone-100 dark:hover:bg-stone-800 dark:focus-visible:bg-stone-800 ${
             kp.isSelected
               ? "border-primary bg-primary/10 ring-1 ring-primary/20"
               : "border-stone-300/80 bg-stone-50 dark:border-stone-700 dark:bg-stone-900"
           }`}
         >
+          {kp.hasChildren ? (
+            <NodeCollapseToggle collapsed={Boolean(kp.collapsed)} count={kp.childCount} />
+          ) : null}
+
           <Handle
             type="target"
             position={Position.Left}
@@ -72,7 +80,13 @@ export const KnowledgeNode = memo(({ data }: NodeProps) => {
               value={kp.renameDraft ?? ""}
             />
           ) : (
-            <p className="truncate text-[12px] font-semibold leading-tight text-stone-900 dark:text-stone-100">{kp.name}</p>
+            <p
+              className="truncate text-[12px] font-semibold leading-tight text-stone-900 dark:text-stone-100"
+              style={{ maxWidth: "20em" }}
+              title={kp.name}
+            >
+              {kp.name}
+            </p>
           )}
 
           {kp.description && !isRootKnowledge && (

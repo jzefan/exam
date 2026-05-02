@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useCreate } from "@refinedev/core";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
+import { apiClient } from "@/lib/api";
 import { ExamWizardForm } from "./components/ExamWizardForm";
 import {
   getErrorMessage,
@@ -27,7 +28,12 @@ const initialForm: ExamFormValues = {
   question_ids: [],
   question_items: [],
   student_ids: [],
+  public_link_enabled: false,
 };
+
+interface PublicLinkResponse {
+  public_url: string;
+}
 
 export function ExamCreate() {
   const navigate = useNavigate();
@@ -38,22 +44,39 @@ export function ExamCreate() {
   const handleSubmit = (values: ExamFormValues) => {
     setSubmitError(null);
     const isDraft = values.status === "draft";
+    const { public_link_enabled: publicLinkEnabled, ...submitValues } = values;
     create(
       {
         resource: "exams",
         values: {
-          ...values,
-          start_time: toSubmitDateTime(values.start_time),
-          end_time: toSubmitDateTime(values.end_time),
-          notes_template: values.notes_template || null,
-          position_id: values.position_id || null,
-          category: values.category,
-          question_mode: values.question_mode,
-          question_items: values.question_items,
+          ...submitValues,
+          start_time: toSubmitDateTime(submitValues.start_time),
+          end_time: toSubmitDateTime(submitValues.end_time),
+          notes_template: submitValues.notes_template || null,
+          position_id: submitValues.position_id || null,
+          category: submitValues.category,
+          question_mode: submitValues.question_mode,
+          question_items: submitValues.question_items,
         },
       },
       {
-        onSuccess: () => {
+        onSuccess: async (response) => {
+          if (!isDraft && publicLinkEnabled && response.data?.id) {
+            try {
+              const link = await apiClient.post<PublicLinkResponse>(`/api/exams/${response.data.id}/public-link`);
+              await navigator.clipboard?.writeText(link.data.public_url).catch(() => undefined);
+              toast({
+                title: "公开链接已生成",
+                description: "公开链接已复制，外部考生填写姓名和手机号后即可进入。",
+              });
+            } catch (error) {
+              toast({
+                title: "公开链接生成失败",
+                description: getErrorMessage(error, "考试已创建，但公开链接生成失败。"),
+                variant: "destructive",
+              });
+            }
+          }
           toast({
             title: isDraft ? "草稿已保存" : "创建成功",
             description: isDraft ? "考试已保存到草稿。" : "考试已创建并发布，正在返回考试列表。",

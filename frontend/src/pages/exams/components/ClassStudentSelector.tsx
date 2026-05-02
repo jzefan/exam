@@ -3,6 +3,7 @@ import { Search, Check, Upload, Plus, Users } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,
   SelectContent,
@@ -383,60 +384,78 @@ export function ClassStudentSelector({
     }
   };
 
+  const currentVisibleIds = visibleUsers.map((user) => user.id);
+  const visibleAllSelected =
+    currentVisibleIds.length > 0 && currentVisibleIds.every((id) => selectedSet.has(id));
+
+  const toggleVisibleUsers = () => {
+    if (currentVisibleIds.length === 0) return;
+    if (visibleAllSelected) {
+      onChange(selectedIds.filter((id) => !currentVisibleIds.includes(id)));
+      return;
+    }
+    onChange([...new Set([...selectedIds, ...currentVisibleIds])]);
+  };
+
   const supplementModes: { key: SupplementMode; label: string; icon: ReactNode }[] = [
-    { key: "import", label: "Excel导入", icon: <Upload size={14} /> },
-    { key: "manual", label: "手动添加", icon: <Plus size={14} /> },
+    { key: "import", label: "Excel 导入", icon: <Upload data-icon="inline-start" /> },
+    { key: "manual", label: "手动添加", icon: <Plus data-icon="inline-start" /> },
   ];
 
   return (
-    <div className="space-y-5">
-      <div className="space-y-2 rounded-lg border border-border bg-muted/30 px-3 py-3">
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-sm text-muted-foreground">
-            已选 <span className="font-semibold text-foreground">{selectedIds.length}</span> {summaryLabel}
-          </p>
-          {selectedIds.length > 0 ? (
-            <Button type="button" variant="ghost" size="sm" onClick={() => onChange([])}>
-              清空选择
-            </Button>
-          ) : null}
+    <div className="flex flex-col gap-5">
+      {selectedIds.length > 0 ? (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <Check className="size-4 shrink-0 text-primary" />
+            <span className="shrink-0 text-sm font-semibold text-primary">
+              已选 {selectedIds.length} {summaryLabel}
+            </span>
+            <span className="text-xs text-muted-foreground">·</span>
+            <span className="truncate text-xs text-muted-foreground" title={selectedStudentSummary}>
+              {selectedStudentSummary}
+            </span>
+          </div>
+          <Button type="button" variant="ghost" size="sm" className="shrink-0" onClick={() => onChange([])}>
+            清空选择
+          </Button>
         </div>
+      ) : (
+        <div className="rounded-xl bg-muted/30 px-4 py-3 text-xs text-muted-foreground">
+          {emptySummaryText}
+        </div>
+      )}
 
-        {selectedIds.length > 0 ? (
-          <p className="truncate text-xs text-muted-foreground" title={selectedStudentSummary}>
-            {selectedStudentSummary}
-          </p>
-        ) : (
-          <p className="text-xs text-muted-foreground">{emptySummaryText}</p>
-        )}
-      </div>
-
-      <div className="space-y-3">
-        <div className="space-y-1">
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-1">
           <p className="text-sm font-semibold text-foreground">按班级选择</p>
           <p className="text-xs text-muted-foreground">优先从班级中批量选择学生，其它方式作为补充。</p>
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
-          <div className="rounded-lg border border-border/80 bg-muted/15 p-2">
-            <div className="mb-2 px-2 py-1">
-              <p className="text-xs font-medium text-muted-foreground">班级</p>
-            </div>
-            <div className="space-y-1">
+        <div className="flex min-h-[260px] overflow-hidden rounded-xl border border-border bg-background">
+          <div className="w-40 shrink-0 overflow-y-auto border-r border-border bg-muted/25 py-2">
+            <div className="flex flex-col gap-1">
               {classGroups.map((group) => (
                 <button
                   key={group.id}
                   type="button"
                   onClick={() => handleClassFilterSelect(group.id)}
                   className={cn(
-                    "flex w-full items-center justify-between rounded-md px-3 py-2 text-left transition-colors",
+                    "flex w-full items-center justify-between border-l-2 px-3 py-2.5 text-left transition-colors",
                     selectedClassFilter === group.id
-                      ? "bg-background text-foreground shadow-sm ring-1 ring-primary/15"
-                      : "text-muted-foreground hover:bg-background/70 hover:text-foreground",
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-transparent text-muted-foreground hover:bg-background/70 hover:text-foreground",
                   )}
                 >
                   <span className="min-w-0 truncate text-sm font-medium">{group.label}</span>
-                  <span className="ml-3 inline-flex min-w-8 items-center justify-center rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                  <span
+                    className={cn(
+                      "ml-3 inline-flex min-w-7 items-center justify-center rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                      selectedClassFilter === group.id
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-background text-muted-foreground",
+                    )}
+                  >
                     {group.count}
                   </span>
                 </button>
@@ -444,24 +463,43 @@ export function ClassStudentSelector({
             </div>
           </div>
 
-          <div className="space-y-3">
-            <div className="relative">
-              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                aria-label="搜索学生"
-                placeholder="搜索学生..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="h-9 pl-8 text-sm"
-              />
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+              <div className="relative min-w-0 flex-1">
+                <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  aria-label="搜索学生"
+                  placeholder="搜索学生..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="h-8 border-border/70 bg-muted/40 pl-8 text-xs shadow-none"
+                />
+              </div>
+              <button
+                type="button"
+                className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                onClick={toggleVisibleUsers}
+              >
+                <span
+                  className={cn(
+                    "flex size-4 items-center justify-center rounded border",
+                    visibleAllSelected
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border bg-background",
+                  )}
+                >
+                  {visibleAllSelected && <Check className="size-3" />}
+                </span>
+                全选
+              </button>
             </div>
 
-            <div className="max-h-[360px] overflow-y-auto rounded-lg border p-2">
+            <div className="min-h-0 flex-1 overflow-y-auto p-2">
               {isLoading ? (
                 <div className="p-8 text-center text-sm text-muted-foreground">加载中...</div>
               ) : visibleUsers.length === 0 ? (
                 <div className="p-8 text-center text-sm text-muted-foreground">
-                  <Users size={24} className="mx-auto mb-2 opacity-25" />
+                  <Users className="mx-auto mb-2 size-6 opacity-25" />
                   {normalizedSearch ? "没有匹配的学生" : "暂无学生"}
                 </div>
               ) : (
@@ -474,23 +512,24 @@ export function ClassStudentSelector({
                         type="button"
                         aria-pressed={isSelected}
                         aria-label={u.full_name || u.username}
-                        className={`flex min-w-0 items-center gap-3 rounded-md border px-3 py-2 text-left transition-colors ${
-                          isSelected ? "border-primary/50" : "border-border"
-                        } hover:bg-muted/50`}
+                        className={cn(
+                          "flex min-w-0 items-center gap-2 rounded-lg border bg-background px-3 py-2 text-left transition-colors hover:bg-muted/50",
+                          isSelected ? "border-primary" : "border-border",
+                        )}
                         onClick={() => toggle(u.id)}
                       >
                         <div
-                          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors ${
+                          className={`flex size-4 shrink-0 items-center justify-center rounded border transition-colors ${
                             isSelected
                               ? "bg-primary border-primary text-primary-foreground"
                               : "border-input"
                           }`}
                         >
-                          {isSelected && <Check size={12} />}
+                          {isSelected && <Check className="size-3" />}
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium">{u.full_name}</p>
-                          <p className="truncate text-xs text-muted-foreground">{u.username}</p>
+                          <p className={cn("truncate text-sm font-medium", isSelected && "text-primary")}>{u.full_name}</p>
+                          <p className="truncate text-xs text-muted-foreground">{u.phone || u.username}</p>
                         </div>
                       </button>
                     );
@@ -502,49 +541,36 @@ export function ClassStudentSelector({
         </div>
       </div>
 
-      <div className="space-y-3 rounded-lg border border-border/70 bg-background p-4">
-        <div className="space-y-1">
+      <div className="overflow-hidden rounded-xl border border-border bg-background">
+        <div className="flex flex-col gap-1 px-4 py-3">
           <p className="text-sm font-semibold text-foreground">补充方式</p>
           <p className="text-xs text-muted-foreground">如果列表里没有，也可以导入或手动新增后直接选中。</p>
         </div>
 
-        <div
-          className="flex flex-wrap gap-1 rounded-lg bg-muted p-0.5"
-          role="tablist"
-          aria-label="补充选择方式"
+        <Tabs
+          value={supplementMode}
+          onValueChange={(value) => setSupplementMode(value as SupplementMode)}
+          className="border-t border-border"
         >
-          {supplementModes.map((m) => (
-            <button
-              key={m.key}
-              id={`${modeId}-${m.key}-tab`}
-              type="button"
-              role="tab"
-              aria-selected={supplementMode === m.key}
-              aria-controls={`${modeId}-${m.key}-panel`}
-              className={cn(
-                "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors",
-                supplementMode === m.key
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-              onClick={() => setSupplementMode(m.key)}
-            >
-              {m.icon}
-              {m.label}
-            </button>
-          ))}
-        </div>
+          <TabsList className="h-10 rounded-none bg-muted/30 p-0">
+            {supplementModes.map((m) => (
+              <TabsTrigger
+                key={m.key}
+                value={m.key}
+                className="h-10 rounded-none border-b-2 border-transparent px-5 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-primary data-[state=active]:shadow-none"
+              >
+                {m.icon}
+                {m.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
 
-        {supplementMode === "import" && (
-          <div
-            id={`${modeId}-import-panel`}
-            role="tabpanel"
-            aria-labelledby={`${modeId}-import-tab`}
-            className="space-y-3"
-          >
-            <div className="rounded-lg border-2 border-dashed border-border p-6 text-center">
-              <Upload size={24} className="mx-auto mb-2 text-muted-foreground" />
-              <p className="mb-3 text-sm text-muted-foreground">
+          <TabsContent value="import" className="m-0 flex flex-col gap-3 p-5">
+            <div className="flex flex-col items-center gap-3 rounded-lg py-4 text-center">
+              <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                <Upload className="size-5" />
+              </div>
+              <p className="text-sm text-muted-foreground">
                 上传 Excel 文件，至少包含“姓名”和“手机号”列，可选“学号”和“班级”
               </p>
               <input
@@ -560,7 +586,7 @@ export function ClassStudentSelector({
                 size="sm"
                 onClick={() => fileRef.current?.click()}
               >
-                <Upload size={14} className="mr-1" />
+                <Upload data-icon="inline-start" />
                 选择文件
               </Button>
             </div>
@@ -587,18 +613,11 @@ export function ClassStudentSelector({
                 </ul>
               </div>
             )}
-          </div>
-        )}
+          </TabsContent>
 
-        {supplementMode === "manual" && (
-          <div
-            id={`${modeId}-manual-panel`}
-            role="tabpanel"
-            aria-labelledby={`${modeId}-manual-tab`}
-            className="space-y-3"
-          >
+          <TabsContent value="manual" className="m-0 flex flex-col gap-3 p-5">
             <div className="grid gap-3 md:grid-cols-2">
-              <div className="space-y-1">
+              <div className="flex flex-col gap-1">
                 <Label className="text-xs" htmlFor={`${modeId}-manual-name`}>
                   姓名
                 </Label>
@@ -610,7 +629,7 @@ export function ClassStudentSelector({
                   className="h-9 text-sm"
                 />
               </div>
-              <div className="space-y-1">
+              <div className="flex flex-col gap-1">
                 <Label className="text-xs" htmlFor={`${modeId}-manual-phone`}>
                   手机号
                 </Label>
@@ -625,7 +644,7 @@ export function ClassStudentSelector({
                   className="h-9 text-sm"
                 />
               </div>
-              <div className="space-y-1">
+              <div className="flex flex-col gap-1">
                 <Label className="text-xs" htmlFor={`${modeId}-manual-student-id`}>
                   学号（可选）
                 </Label>
@@ -637,7 +656,7 @@ export function ClassStudentSelector({
                   className="h-9 text-sm"
                 />
               </div>
-              <div className="space-y-1">
+              <div className="flex flex-col gap-1">
                 <Label className="text-xs">班级</Label>
                 <Select
                   value={manualClassSelectValue}
@@ -692,7 +711,7 @@ export function ClassStudentSelector({
                 }
                 onClick={() => void handleManualAdd()}
               >
-                <Plus size={14} className="mr-1" />
+                <Plus data-icon="inline-start" />
                 {isManualSubmitting ? "添加中..." : "添加学生"}
               </Button>
             </div>
@@ -714,8 +733,8 @@ export function ClassStudentSelector({
                 {manualFeedback}
               </div>
             )}
-          </div>
-        )}
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   );

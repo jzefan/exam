@@ -1,6 +1,6 @@
 """add learning structure ownership
 
-Revision ID: 20260423_add_learning_structure_ownership
+Revision ID: 20260423_learning_owner
 Revises: 20260421_add_exam_allow_retake
 Create Date: 2026-04-23
 
@@ -11,7 +11,7 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "20260423_add_learning_structure_ownership"
+revision: str = "20260423_learning_owner"
 down_revision: Union[str, None] = "20260421_add_exam_allow_retake"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

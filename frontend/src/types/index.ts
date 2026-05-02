@@ -16,6 +16,7 @@ export interface IUser {
   email: string;
   full_name: string;
   is_active: boolean;
+  persona: "teacher" | "assessor";
   primary_org: IUserOrgInfo | null;
   organizations: IUserOrgInfo[];
   system_domain: "platform" | "exam" | "job_model";
@@ -38,6 +39,7 @@ export interface IRegisterRequest {
   email: string;
   password: string;
   full_name: string;
+  persona?: "teacher" | "assessor";
   role?: UserRole;
 }
 
@@ -136,6 +138,8 @@ export interface IExamStudent {
   student_id: string;
   full_name: string | null;
   username: string | null;
+  phone?: string | null;
+  user_type?: string | null;
   started_at: string | null;
   submitted_at: string | null;
 }

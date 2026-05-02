@@ -93,9 +93,22 @@ export function StudentDashboard() {
     pagination: { currentPage: 1, pageSize: 100 },
     sorters: [{ field: "start_time", order: "desc" }],
   });
+  const { query: wrongAnswersQuery } = useList({
+    resource: "wrong-answers",
+    pagination: { currentPage: 1, pageSize: 1 },
+    filters: [
+      {
+        field: "mastered",
+        operator: "eq",
+        value: false,
+      },
+    ],
+  });
 
   const allExams = query.data?.data ?? [];
   const isLoading = query.isLoading;
+  const wrongAnswersCount = wrongAnswersQuery.data?.total ?? wrongAnswersQuery.data?.data?.length ?? 0;
+  const hasWrongAnswers = wrongAnswersCount > 0;
 
   const examsWithDerivedStatus = allExams.map((exam) => ({
     ...exam,
@@ -345,7 +358,14 @@ export function StudentDashboard() {
                     : "考试前花几分钟回顾近期练习和错题记录，通常能更快进入答题状态，也更容易避免重复失误。"}
                 </p>
               </div>
-              <Button className="h-10 w-full rounded-xl font-semibold shadow-sm" onClick={() => navigate("/wrong-answers")}>
+              <Button
+                className="h-10 w-full rounded-xl font-semibold shadow-sm"
+                disabled={!hasWrongAnswers}
+                onClick={() => {
+                  if (!hasWrongAnswers) return;
+                  navigate("/wrong-answers");
+                }}
+              >
                 {locale === "en" ? "Review wrong answers" : "立即复习错题"}
               </Button>
             </div>

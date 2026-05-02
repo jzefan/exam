@@ -185,7 +185,7 @@ async def _hydrate_task_locators(
             user = users_by_id.get(str(user_uuid)) if user_uuid is not None else None
             if user is not None:
                 locator["candidate_name"] = user.full_name
-                locator["candidate_code"] = user.student_id or None
+                locator["candidate_code"] = user.student_id or user.phone or None
 
         hydrated[task.id] = locator
 

@@ -1,4 +1,4 @@
-import { usePermissions } from "@refinedev/core";
+import { useGetIdentity, usePermissions } from "@refinedev/core";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Plus, Upload, Search, FileSpreadsheet, X, Info, Users, CheckCircle2, AlertCircle, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { apiRequest } from "@/pages/grading/api";
 import { useToast } from "@/hooks/use-toast";
+import { getPersonaCopy } from "@/lib/persona-copy";
 import { cn } from "@/lib/utils";
 import {
   buildStudentBatchImportItems,
@@ -60,6 +61,8 @@ interface ImportResult {
 
 export default function StudentManagementPage() {
   const { data: role } = usePermissions<string>({});
+  const { data: identity } = useGetIdentity<{ persona?: string | null }>();
+  const copy = getPersonaCopy(identity?.persona);
   const [students, setStudents] = useState<Student[]>([]);
   const [classes, setClasses] = useState<ClassItem[]>([]);
   const [selectedClassId, setSelectedClassId] = useState<StudentFilterScope>("all");
@@ -115,14 +118,14 @@ export default function StudentManagementPage() {
     } catch {
       toast({
         title: "加载失败",
-        description: "无法获取学生列表",
+        description: `无法获取${copy.person}列表`,
         variant: "destructive",
       });
     } finally {
       setLoading(false);
       setIsRefreshing(false);
     }
-  }, [selectedClassId, toast]);
+  }, [selectedClassId, toast, copy.person]);
 
   useEffect(() => {
     fetchClasses();
@@ -140,7 +143,7 @@ export default function StudentManagementPage() {
         method: "POST",
         body: JSON.stringify({ name: newClassName }),
       });
-      toast({ title: "创建成功", description: `班级 ${newClassName} 已创建。` });
+      toast({ title: "创建成功", description: `${copy.group} ${newClassName} 已创建。` });
       setNewClassName("");
       setIsAddClassDialogOpen(false);
       fetchClasses();
@@ -150,7 +153,7 @@ export default function StudentManagementPage() {
   };
 
   const handleDeleteClass = async (id: string, name: string) => {
-    if (!confirm(`确定要删除班级 "${name}" 吗？学生将变为未分配班级状态。`)) return;
+    if (!confirm(`确定要删除${copy.group} "${name}" 吗？${copy.personPlural}将变为未分配${copy.group}状态。`)) return;
     try {
       await apiRequest(`/rbac/students/classes/${id}`, { method: "DELETE" });
       toast({ title: "已删除" });
@@ -174,7 +177,7 @@ export default function StudentManagementPage() {
       });
       toast({
         title: "添加成功",
-        description: `学生 ${newStudent.full_name} 已添加。`,
+        description: `${copy.person} ${newStudent.full_name} 已添加。`,
       });
       setIsAddAddDialogOpen(false);
       setNewStudent({ full_name: "", phone: "", student_id: "", class_id: undefined });
@@ -263,7 +266,7 @@ export default function StudentManagementPage() {
     }
     const isBatch = studentIds.length > 1;
     const confirmed = window.confirm(
-      isBatch ? `确定要批量删除这 ${studentIds.length} 个学生吗？` : "确定要删除这个学生吗？"
+      isBatch ? `确定要批量删除这 ${studentIds.length} 个${copy.person}吗？` : `确定要删除这个${copy.person}吗？`
     );
     if (!confirmed) {
       return;
@@ -279,13 +282,13 @@ export default function StudentManagementPage() {
           title: result.failed_count === 0 ? "批量删除成功" : "批量删除已完成",
           description:
             result.failed_count === 0
-              ? `已处理 ${result.success_count} 个学生。`
+              ? `已处理 ${result.success_count} 个${copy.person}。`
               : `成功 ${result.success_count} 个，失败 ${result.failed_count} 个。`,
           variant: result.failed_count === 0 ? "default" : "destructive",
         });
       } else {
         await apiRequest(`/rbac/students/${studentIds[0]}`, { method: "DELETE" });
-        toast({ title: "删除成功", description: "学生已移除。" });
+        toast({ title: "删除成功", description: `${copy.person}已移除。` });
       }
       setSelectedStudentIds((current) => current.filter((id) => !studentIds.includes(id)));
       await fetchStudents();
@@ -303,7 +306,7 @@ export default function StudentManagementPage() {
       {/* Left Sidebar: Classes */}
       <aside className="w-64 border-r border-border/60 bg-muted/10 flex flex-col">
         <div className="p-4 border-b border-border/60 flex items-center justify-between">
-          <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground/70">班级列表</h2>
+          <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground/70">{copy.group}列表</h2>
           <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setIsAddClassDialogOpen(true)}>
             <Plus className="h-4 w-4" />
           </Button>
@@ -317,7 +320,7 @@ export default function StudentManagementPage() {
             )}
           >
             <Users className="h-4 w-4" />
-            <span>全部学生</span>
+            <span>{copy.allPeople}</span>
           </button>
           <button
             onClick={() => setSelectedClassId("unassigned")}
@@ -327,7 +330,7 @@ export default function StudentManagementPage() {
             )}
           >
             <div className="h-4 w-4 rounded-full border border-current/50" />
-            <span>未分班</span>
+            <span>{copy.unassignedGroup}</span>
           </button>
           {classes.map((c) => (
             <div key={c.id} className="group relative">
@@ -359,12 +362,14 @@ export default function StudentManagementPage() {
             <div>
               <h1 className="text-base font-bold tracking-tight">
                 {selectedClassId === "all"
-                  ? "全部学生"
+                  ? copy.allPeople
                   : selectedClassId === "unassigned"
-                    ? "未分班学生"
+                    ? copy.unassignedPeople
                     : selectedClassName}
               </h1>
-              <p className="text-sm text-muted-foreground">管理学生账号，初始密码默认为手机号；无手机号时默认为学号。</p>
+              <p className="text-sm text-muted-foreground">
+                管理{copy.person}账号，初始密码默认为手机号；无手机号时默认为{copy.persona === "teacher" ? "学号" : "编号"}。
+              </p>
             </div>
             <div className="flex items-center gap-2">
               <Button variant="outline" onClick={() => setIsImportDialogOpen(true)}>
@@ -373,7 +378,7 @@ export default function StudentManagementPage() {
               </Button>
               <Button onClick={() => setIsAddAddDialogOpen(true)}>
                 <Plus className="w-4 h-4 mr-2" />
-                添加学生
+                添加{copy.person}
               </Button>
             </div>
           </div>
@@ -382,7 +387,7 @@ export default function StudentManagementPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
               className="pl-10"
-              placeholder="搜索姓名、手机号或学号..."
+              placeholder={`搜索姓名、手机号或${copy.persona === "teacher" ? "学号" : "编号"}...`}
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
@@ -391,11 +396,11 @@ export default function StudentManagementPage() {
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Checkbox
-                aria-label="全选当前列表学生"
+                aria-label={`全选当前列表${copy.person}`}
                 checked={allVisibleSelected}
                 onCheckedChange={toggleSelectAllVisible}
               />
-              <span>{selectedVisibleCount > 0 ? `已选中 ${selectedVisibleCount} 名学生` : "全选当前列表"}</span>
+              <span>{selectedVisibleCount > 0 ? `已选中 ${selectedVisibleCount} 名${copy.person}` : "全选当前列表"}</span>
               {isRefreshing ? <span className="text-xs text-muted-foreground">加载中...</span> : null}
             </div>
             {selectedStudentIds.length > 0 ? (
@@ -415,8 +420,8 @@ export default function StudentManagementPage() {
                   </TableHead>
                   <TableHead>姓名</TableHead>
                   <TableHead>账号</TableHead>
-                  <TableHead>学号</TableHead>
-                  <TableHead>班级</TableHead>
+                  <TableHead>{copy.persona === "teacher" ? "学号" : "编号"}</TableHead>
+                  <TableHead>{copy.group}</TableHead>
                   {showOwnershipColumn && <TableHead>归属</TableHead>}
                   <TableHead className="w-[80px]">状态</TableHead>
                   <TableHead className="w-[96px] text-right">操作</TableHead>
@@ -426,7 +431,7 @@ export default function StudentManagementPage() {
                 {loading ? (
                   <TableRow><TableCell colSpan={showOwnershipColumn ? 8 : 7} className="text-center py-12 text-muted-foreground animate-pulse">正在加载...</TableCell></TableRow>
                 ) : filteredStudents.length === 0 ? (
-                  <TableRow><TableCell colSpan={showOwnershipColumn ? 8 : 7} className="text-center py-12 text-muted-foreground">未找到匹配的学生。</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={showOwnershipColumn ? 8 : 7} className="text-center py-12 text-muted-foreground">未找到匹配的{copy.person}。</TableCell></TableRow>
                 ) : (
                   filteredStudents.map((student) => (
                     <TableRow key={student.id}>
@@ -455,7 +460,7 @@ export default function StudentManagementPage() {
                                 : "bg-emerald-50 text-emerald-700"
                             )}
                           >
-                            {student.owner_teacher_id === null ? "未分配" : "我的学生"}
+                            {student.owner_teacher_id === null ? "未分配" : `我的${copy.person}`}
                           </span>
                         </TableCell>
                       )}
@@ -486,10 +491,17 @@ export default function StudentManagementPage() {
       <Dialog open={isAddClassDialogOpen} onOpenChange={setIsAddClassDialogOpen}>
         <DialogContent className="sm:max-w-[400px]">
           <form onSubmit={handleAddClass}>
-            <DialogHeader><DialogTitle>新建班级</DialogTitle></DialogHeader>
+            <DialogHeader><DialogTitle>新建{copy.group}</DialogTitle></DialogHeader>
             <div className="py-4">
-              <Label htmlFor="className">班级名称</Label>
-              <Input id="className" value={newClassName} onChange={(e) => setNewClassName(e.target.value)} placeholder="例如：2024级计算机1班" className="mt-2" required />
+              <Label htmlFor="className">{copy.group}名称</Label>
+              <Input
+                id="className"
+                value={newClassName}
+                onChange={(e) => setNewClassName(e.target.value)}
+                placeholder={copy.persona === "teacher" ? "例如：2024级计算机1班" : "例如：技术一部"}
+                className="mt-2"
+                required
+              />
             </div>
             <DialogFooter><Button type="submit">确认创建</Button></DialogFooter>
           </form>
@@ -499,7 +511,7 @@ export default function StudentManagementPage() {
       <Dialog open={isAddDialogOpen} onOpenChange={setIsAddAddDialogOpen}>
         <DialogContent className="sm:max-w-[425px]">
           <form onSubmit={handleAddStudent}>
-            <DialogHeader><DialogTitle>添加新学生</DialogTitle></DialogHeader>
+            <DialogHeader><DialogTitle>添加新{copy.person}</DialogTitle></DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
                 <Label htmlFor="name">姓名</Label>
@@ -510,13 +522,13 @@ export default function StudentManagementPage() {
                 <Input id="phone" required value={newStudent.phone} onChange={(e) => setNewStudent({ ...newStudent, phone: e.target.value })} />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="sid">学号 (可选)</Label>
+                <Label htmlFor="sid">{copy.persona === "teacher" ? "学号" : "编号"} (可选)</Label>
                 <Input id="sid" value={newStudent.student_id} onChange={(e) => setNewStudent({ ...newStudent, student_id: e.target.value })} />
               </div>
               <div className="grid gap-2">
-                <Label>所属班级</Label>
+                <Label>所属{copy.group}</Label>
                 <Select value={newStudent.class_id} onValueChange={(val) => setNewStudent({ ...newStudent, class_id: val })}>
-                  <SelectTrigger><SelectValue placeholder="选择班级 (可选)" /></SelectTrigger>
+                  <SelectTrigger><SelectValue placeholder={`选择${copy.group} (可选)`} /></SelectTrigger>
                   <SelectContent>
                     {classes.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
                   </SelectContent>
@@ -531,9 +543,9 @@ export default function StudentManagementPage() {
       <Dialog open={isImportDialogOpen} onOpenChange={setIsImportDialogOpen}>
         <DialogContent className="sm:max-w-[500px]">
             <DialogHeader>
-              <DialogTitle>批量导入学生</DialogTitle>
+              <DialogTitle>批量导入{copy.person}</DialogTitle>
               <DialogDescription>
-              {isScopedClassSelected ? `正在向 ${selectedClassName} 导入学生` : "导入学生数据"}
+              {isScopedClassSelected ? `正在向 ${selectedClassName} 导入${copy.person}` : `导入${copy.person}数据`}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
@@ -542,8 +554,8 @@ export default function StudentManagementPage() {
               <div className="text-sm">
                 <p className="font-semibold text-blue-900">格式要求：</p>
                 <p className="text-blue-800/80">
-                  必须包含"姓名"，并提供"手机号"或"学号"。无手机号时使用学号作为账号和初始密码；识别到班级会自动创建或复用班级。
-                  {isScopedClassSelected ? "如果文件中没有班级，导入的学生将自动加入当前班级。" : ""}
+                  必须包含"姓名"，并提供"手机号"或"{copy.persona === "teacher" ? "学号" : "编号"}"。无手机号时使用{copy.persona === "teacher" ? "学号" : "编号"}作为账号和初始密码；识别到{copy.group}会自动创建或复用{copy.group}。
+                  {isScopedClassSelected ? `如果文件中没有${copy.group}，导入的${copy.person}将自动加入当前${copy.group}。` : ""}
                 </p>
               </div>
             </div>

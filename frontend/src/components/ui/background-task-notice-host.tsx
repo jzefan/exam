@@ -4,7 +4,37 @@ import { LoaderCircle } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
-import { useBackgroundTaskNoticeState } from "@/hooks/use-background-task-notice";
+import {
+  dismissBackgroundTaskNotice,
+  upsertBackgroundTaskNotice,
+  useBackgroundTaskNoticeState,
+} from "@/hooks/use-background-task-notice";
+import type { QuestionImportJobResponse } from "@/pages/questions/import-types";
+import {
+  clearPersistedQuestionImportJobId,
+  isTerminalQuestionImportJobStatus,
+  QUESTION_KNOWLEDGE_RECOGNITION_NOTICE_DESCRIPTION,
+  QUESTION_KNOWLEDGE_RECOGNITION_NOTICE_ID,
+  QUESTION_KNOWLEDGE_RECOGNITION_NOTICE_PAGE_PATH,
+  readPersistedQuestionImportJobId,
+} from "@/pages/questions/question-knowledge-recognition";
+
+const QUESTION_IMPORT_JOB_POLL_INTERVAL_MS = 2000;
+
+async function fetchQuestionImportJob(jobId: string): Promise<QuestionImportJobResponse> {
+  const token = localStorage.getItem("access_token");
+  const response = await fetch(`/api/questions/import/jobs/${jobId}`, {
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Question import job polling failed: ${response.status}`);
+  }
+
+  return response.json() as Promise<QuestionImportJobResponse>;
+}
 
 export function BackgroundTaskNoticeHost() {
   const location = useLocation();
@@ -13,6 +43,51 @@ export function BackgroundTaskNoticeHost() {
   useEffect(() => {
     return subscribe();
   }, [subscribe]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | null = null;
+
+    const pollQuestionImportJob = async () => {
+      const jobId = readPersistedQuestionImportJobId();
+      if (!jobId) {
+        timer = window.setTimeout(pollQuestionImportJob, QUESTION_IMPORT_JOB_POLL_INTERVAL_MS);
+        return;
+      }
+
+      try {
+        const job = await fetchQuestionImportJob(jobId);
+        if (cancelled) return;
+
+        if (isTerminalQuestionImportJobStatus(job.status)) {
+          clearPersistedQuestionImportJobId();
+          dismissBackgroundTaskNotice(QUESTION_KNOWLEDGE_RECOGNITION_NOTICE_ID);
+          return;
+        }
+
+        upsertBackgroundTaskNotice({
+          id: QUESTION_KNOWLEDGE_RECOGNITION_NOTICE_ID,
+          title: "知识点正在后台识别",
+          progressText: `${job.processed_count}/${job.total_count}`,
+          description: QUESTION_KNOWLEDGE_RECOGNITION_NOTICE_DESCRIPTION,
+          pagePath: QUESTION_KNOWLEDGE_RECOGNITION_NOTICE_PAGE_PATH,
+        });
+      } catch {
+        if (cancelled) return;
+      }
+
+      timer = window.setTimeout(pollQuestionImportJob, QUESTION_IMPORT_JOB_POLL_INTERVAL_MS);
+    };
+
+    void pollQuestionImportJob();
+
+    return () => {
+      cancelled = true;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, []);
 
   return (
     <>

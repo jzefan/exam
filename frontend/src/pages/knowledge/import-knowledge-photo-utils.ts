@@ -6,8 +6,8 @@ export type CatalogPhotoImage = {
   src: string;
 };
 
-export const DEFAULT_CATALOG_IMAGE_MAX_EDGE = 1280;
-const DEFAULT_CATALOG_IMAGE_QUALITY = 0.8;
+export const DEFAULT_CATALOG_IMAGE_MAX_EDGE = 2048;
+const DEFAULT_CATALOG_IMAGE_QUALITY = 0.92;
 
 export function scaleDimensionsToMaxEdge(width: number, height: number, maxEdge = DEFAULT_CATALOG_IMAGE_MAX_EDGE) {
   const longestEdge = Math.max(width, height);

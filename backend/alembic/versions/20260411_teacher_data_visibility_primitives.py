@@ -1,6 +1,6 @@
 """Add teacher data visibility primitives.
 
-Revision ID: 20260411_teacher_data_visibility_primitives
+Revision ID: 20260411_teacher_visibility
 Revises: ext_grading_task_src_id
 Create Date: 2026-04-11 00:00:00.000000
 """
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "20260411_teacher_data_visibility_primitives"
+revision: str = "20260411_teacher_visibility"
 down_revision: Union[str, None] = "ext_grading_task_src_id"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

@@ -2,8 +2,10 @@
 
 import asyncio
 import json
+import logging
 import re
 import uuid
+from collections.abc import Awaitable, Callable
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from typing import Any, cast
@@ -18,7 +20,6 @@ from app.common.data_visibility import VisibilityScope
 from app.common.resource_access import teacher_visible_resource_filter
 from app.config import settings
 from app.learning.models import Direction, KnowledgePoint, KnowledgePointPrerequisite, Major
-from app.learning.ocr import OCREngineUnavailable, recognize_image_text
 from app.learning.schemas import (
     CatalogPhotoRecognizeRequest,
     DirectionCreate,
@@ -33,7 +34,7 @@ from app.questions.models import question_knowledge_points
 
 HORIZONTAL_SPACING = 280
 VERTICAL_SPACING = 40
-MAX_NODES_PER_DIRECTION = 300
+logger = logging.getLogger(__name__)
 
 MODEL_CONFIGS = {
     "deepseek": {
@@ -396,9 +397,6 @@ async def get_direction_tree(
         stmt = stmt.where(teacher_visible_resource_filter(KnowledgePoint, user.id))
     rows = (await db.execute(stmt)).all()
 
-    if len(rows) > MAX_NODES_PER_DIRECTION:
-        raise ValueError(f"节点数超过上限（{MAX_NODES_PER_DIRECTION}），请拆分方向后再操作")
-
     flat_nodes = [
         {
             "id": str(kp.id),
@@ -607,12 +605,18 @@ def _normalize_catalog_paths(payload: object) -> list[list[str]]:
 
 _CATALOG_LINE_PREFIX = re.compile(
     r"^(?P<prefix>"
-    r"第[一二三四五六七八九十百千万\d]+[章节篇编]"
+    r"第[一二三四五六七八九十百千万两\d]+(?:部分|单元|章节|章|节|篇|编|卷)"
+    r"|(?:Chapter|Unit|Part|Module|Section)\s+(?:[IVXLCDM]+|\d+(?:\.\d+)*)\.?"
     r"|[一二三四五六七八九十]+[、.]"
     r"|[（(][一二三四五六七八九十\d]+[）)]"
     r"|\d+(?:\.\d+)*[、.]?"
-    r")\s*(?P<title>.+)$"
+    r")\s*(?P<title>.+)$",
+    re.IGNORECASE,
 )
+
+_CATALOG_TOP_LEVEL_CN_SUFFIXES = ("部分", "单元", "章", "篇", "编", "卷")
+_CATALOG_EN_TOP_LEVEL_PREFIXES = {"chapter", "unit", "part", "module"}
+_CATALOG_EN_SECOND_LEVEL_PREFIXES = {"section"}
 
 
 def _clean_catalog_line(line: str) -> str:
@@ -634,10 +638,15 @@ def _catalog_line_level(line: str) -> tuple[int, str] | None:
     if not title:
         return None
     text = f"{prefix} {title}".strip()
+    prefix_lower = prefix.lower()
 
-    if prefix.startswith("第") and prefix[-1] in {"章", "篇", "编"}:
+    if prefix.startswith("第") and prefix.endswith(_CATALOG_TOP_LEVEL_CN_SUFFIXES):
         return 1, text
     if prefix.startswith("第") and prefix[-1] == "节":
+        return 2, text
+    if any(prefix_lower.startswith(f"{keyword} ") for keyword in _CATALOG_EN_TOP_LEVEL_PREFIXES):
+        return 1, text
+    if any(prefix_lower.startswith(f"{keyword} ") for keyword in _CATALOG_EN_SECOND_LEVEL_PREFIXES):
         return 2, text
     if re.match(r"^\d+(?:\.\d+)+$", prefix):
         return prefix.count(".") + 1, text
@@ -692,7 +701,10 @@ _CATALOG_VL_PROMPT = """你是图书目录结构化助手。请仔细阅读用�
 3. 每个 path 是一条从最顶层到某个叶子节点的完整层级数组。
 4. 去除页码、前后空白；保留书名号、顿号等正文符号。
 5. 同一目录条目跨页出现时仅输出一次，不要重复。
-6. 不要编造目录中不存在的内容。"""
+6. 不要编造目录中不存在的内容。
+7. 必须尽量完整提取当前图片中所有可见目录行，不要只输出每章前几个条目，也不要只输出示例或摘要。"""
+_CATALOG_SINGLE_IMAGE_TIMEOUT_SECONDS = 30.0
+_CATALOG_VISION_MAX_CONCURRENCY = 4
 
 
 async def _recognize_catalog_with_qwen_vl(images: list[str]) -> list[list[str]]:
@@ -718,6 +730,7 @@ async def _recognize_catalog_with_qwen_vl(images: list[str]) -> list[list[str]]:
                     {"role": "user", "content": content},
                 ],
                 "temperature": 0.1,
+                "max_tokens": 8192,
             },
         )
 
@@ -761,38 +774,511 @@ async def _recognize_catalog_with_qwen_vl(images: list[str]) -> list[list[str]]:
     return cleaned
 
 
+async def _recognize_catalog_with_deepseek_vl(images: list[str]) -> list[list[str]]:
+    api_key = settings.deepseek_api_key
+    if not api_key:
+        raise RuntimeError("未配置 DeepSeek API Key，请联系管理员。")
+
+    base_url = settings.deepseek_base_url.rstrip("/")
+    model_name = settings.deepseek_model_name
+
+    content: list[dict[str, Any]] = [{"type": "text", "text": _CATALOG_VL_PROMPT}]
+    for image in images:
+        content.append({"type": "image_url", "image_url": {"url": _ensure_data_url(image)}})
+
+    async with httpx.AsyncClient(timeout=90.0) as client:
+        response = await client.post(
+            f"{base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": "你只输出合法 JSON。"},
+                    {"role": "user", "content": content},
+                ],
+                "temperature": 0.1,
+                "max_tokens": 8192,
+            },
+        )
+
+    if response.status_code >= 400:
+        detail = response.text.strip() or "AI 服务请求失败"
+        raise RuntimeError(f"目录识别失败：{detail[:200]}")
+
+    raw = (
+        response.json()
+        .get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+    )
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("未识别到目录内容，请换一张更清晰的照片。")
+
+    text = raw.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
+        text = re.sub(r"\s*```\s*$", "", text)
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError("目录识别结果格式异常，请重试。") from exc
+
+    raw_paths = payload.get("paths") if isinstance(payload, dict) else None
+    if not isinstance(raw_paths, list):
+        raise ValueError("未识别到目录层级，请换一张更清晰的照片。")
+
+    cleaned: list[list[str]] = []
+    for item in raw_paths:
+        if not isinstance(item, list):
+            continue
+        segs = [str(seg).strip() for seg in item if str(seg).strip()]
+        if segs:
+            cleaned.append(segs)
+
+    if not cleaned:
+        raise ValueError("未识别到目录层级，请换一张更清晰的照片。")
+    return cleaned
+
+
+def _is_provider_unavailable_error(exc: Exception) -> bool:
+    message = str(exc)
+    return "API Key" in message or "暂不可用" in message
+
+
+def _is_catalog_excluded_segment(segment: str) -> bool:
+    cleaned = _clean_catalog_line(segment)
+    if not cleaned:
+        return False
+    cleaned_lower = cleaned.lower()
+    excluded_keywords = (
+        "附录",
+        "习题",
+        "练习题",
+        "本章小结",
+        "本章重要概念",
+        "本章的重要概念",
+        "复习题",
+        "思考题",
+        "思考与练习",
+        "appendix",
+        "exercises",
+        "review questions",
+    )
+    return any(keyword in cleaned_lower or keyword in cleaned for keyword in excluded_keywords)
+
+
+_CHINESE_DIGITS = {
+    "零": 0,
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+}
+_CHINESE_UNITS = {
+    "十": 10,
+    "百": 100,
+    "千": 1000,
+    "万": 10000,
+}
+_ROMAN_NUMERAL_MAP = {
+    "I": 1,
+    "V": 5,
+    "X": 10,
+    "L": 50,
+    "C": 100,
+    "D": 500,
+    "M": 1000,
+}
+
+
+def _parse_chinese_number_token(token: str) -> int | None:
+    if not token:
+        return None
+    if token.isdigit():
+        return int(token)
+
+    total = 0
+    current = 0
+    for char in token:
+        if char in _CHINESE_DIGITS:
+            current = _CHINESE_DIGITS[char]
+            continue
+        if char in _CHINESE_UNITS:
+            unit = _CHINESE_UNITS[char]
+            if current == 0:
+                current = 1
+            total += current * unit
+            current = 0
+            continue
+        return None
+    return total + current
+
+
+def _parse_roman_number_token(token: str) -> int | None:
+    if not token:
+        return None
+    token = token.upper()
+    total = 0
+    previous = 0
+    for char in reversed(token):
+        value = _ROMAN_NUMERAL_MAP.get(char)
+        if value is None:
+            return None
+        if value < previous:
+            total -= value
+        else:
+            total += value
+            previous = value
+    return total
+
+
+def _catalog_explicit_anchor_key(segment: str) -> str | None:
+    cleaned = _clean_catalog_line(segment)
+
+    cn_match = re.match(r"^第([一二三四五六七八九十百千万两\d]+)(部分|单元|章|篇|编|卷)\b", cleaned)
+    if cn_match:
+        value = _parse_chinese_number_token(cn_match.group(1))
+        return str(value) if value is not None else None
+
+    en_match = re.match(
+        r"^(Chapter|Unit|Part|Module)\s+([IVXLCDM]+|\d+(?:\.\d+)*)\b",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if en_match:
+        number_token = en_match.group(2)
+        if re.fullmatch(r"\d+(?:\.\d+)*", number_token):
+            return number_token.split(".", 1)[0]
+        value = _parse_roman_number_token(number_token)
+        return str(value) if value is not None else None
+    return None
+
+
+def _catalog_chapter_key_for_segment(segment: str) -> str | None:
+    explicit_key = _catalog_explicit_anchor_key(segment)
+    if explicit_key is not None:
+        return explicit_key
+
+    cleaned = _clean_catalog_line(segment)
+    section_match = re.match(r"^(\d+)(?:\.\d+)*\b", cleaned)
+    if section_match:
+        return section_match.group(1)
+    return None
+
+
+def _catalog_decimal_prefix(segment: str) -> str | None:
+    cleaned = _clean_catalog_line(segment)
+    match = re.match(r"^(\d+(?:\.\d+)+)\b", cleaned)
+    return match.group(1) if match else None
+
+
+def _catalog_prefix_candidate_rank(path: list[str], prefix: str) -> tuple[int, int]:
+    chapter_key = prefix.split(".", 1)[0]
+    explicit_anchor_key = None
+    for segment in path:
+        explicit_anchor_key = _catalog_explicit_anchor_key(segment)
+        if explicit_anchor_key is not None:
+            break
+    if explicit_anchor_key == chapter_key:
+        anchor_score = 2
+    elif explicit_anchor_key is None:
+        anchor_score = 1
+    else:
+        anchor_score = 0
+    return (anchor_score, -len(path))
+
+
+def _restore_missing_catalog_decimal_parents(
+    path: list[str],
+    prefix_paths: dict[str, list[str]],
+) -> list[str]:
+    for index, segment in enumerate(path):
+        prefix = _catalog_decimal_prefix(segment)
+        if not prefix or "." not in prefix:
+            continue
+
+        parent_prefix = prefix.rsplit(".", 1)[0]
+        while "." in parent_prefix or parent_prefix:
+            parent_path = prefix_paths.get(parent_prefix)
+            if parent_path and parent_path[-1] not in path[:index]:
+                return [*parent_path, *path[index:]]
+            if "." not in parent_prefix:
+                break
+            parent_prefix = parent_prefix.rsplit(".", 1)[0]
+    return path
+
+
+def _remember_catalog_decimal_prefixes(path: list[str], prefix_paths: dict[str, list[str]]) -> None:
+    for index, segment in enumerate(path):
+        prefix = _catalog_decimal_prefix(segment)
+        if prefix:
+            candidate = path[: index + 1]
+            existing = prefix_paths.get(prefix)
+            if existing is None or _catalog_prefix_candidate_rank(candidate, prefix) > _catalog_prefix_candidate_rank(existing, prefix):
+                prefix_paths[prefix] = candidate
+
+
+def _page_chapter_anchors(paths: list[list[str]]) -> dict[str, str]:
+    anchors: dict[str, str] = {}
+    for path in paths:
+        for segment in path:
+            parsed = _catalog_line_level(segment)
+            if not parsed:
+                continue
+            level, title = parsed
+            if level != 1:
+                continue
+            chapter_key = _catalog_explicit_anchor_key(title)
+            if chapter_key:
+                anchors[chapter_key] = title
+    return anchors
+
+
+def _stitch_catalog_paths_across_pages(image_paths: list[list[list[str]]]) -> list[list[str]]:
+    stitched: list[list[str]] = []
+    last_stack: list[str] = []
+    prefix_paths: dict[str, list[str]] = {}
+
+    for paths in image_paths:
+        page_chapter_anchors = _page_chapter_anchors(paths)
+        for path in paths:
+            resolved: list[str] = []
+            for index, segment in enumerate(path):
+                parsed = _catalog_line_level(segment)
+                if parsed:
+                    level, title = parsed
+                    base_stack = last_stack if index == 0 else resolved
+                    if index == 0 and level >= 2:
+                        chapter_key = _catalog_chapter_key_for_segment(title)
+                        chapter_anchor = page_chapter_anchors.get(chapter_key or "")
+                        if chapter_anchor:
+                            base_stack = [chapter_anchor]
+                    resolved = base_stack[: max(level - 1, 0)] + [title]
+                    continue
+
+                title = _clean_catalog_line(segment)
+                if not title:
+                    continue
+                if index == 0:
+                    resolved = [title]
+                else:
+                    resolved.append(title)
+
+            if resolved:
+                resolved = _restore_missing_catalog_decimal_parents(resolved, prefix_paths)
+                if any(_is_catalog_excluded_segment(segment) for segment in resolved):
+                    continue
+                stitched.append(resolved)
+                _remember_catalog_decimal_prefixes(resolved, prefix_paths)
+                last_stack = resolved.copy()
+
+    return stitched
+
+
+def _merge_catalog_paths(image_paths: list[list[list[str]]]) -> list[list[str]]:
+    merged: list[list[str]] = []
+    seen: set[tuple[str, ...]] = set()
+    reattached_paths = _reattach_paths_to_global_anchors(_stitch_catalog_paths_across_pages(image_paths))
+    normalized_paths = _restore_catalog_decimal_parents_from_all_paths(reattached_paths)
+    for path in normalized_paths:
+        key = tuple(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(path)
+    return _order_catalog_paths(merged)
+
+
+def _restore_catalog_decimal_parents_from_all_paths(paths: list[list[str]]) -> list[list[str]]:
+    prefix_paths: dict[str, list[str]] = {}
+    for path in paths:
+        _remember_catalog_decimal_prefixes(path, prefix_paths)
+    return [_restore_missing_catalog_decimal_parents(path, prefix_paths) for path in paths]
+
+
+def _reattach_paths_to_global_anchors(paths: list[list[str]]) -> list[list[str]]:
+    explicit_anchor_by_key: dict[str, str] = {}
+    for path in paths:
+        if not path:
+            continue
+        anchor_key = _catalog_explicit_anchor_key(path[0])
+        if anchor_key and anchor_key not in explicit_anchor_by_key:
+            explicit_anchor_by_key[anchor_key] = path[0]
+
+    corrected: list[list[str]] = []
+    for path in paths:
+        if not path:
+            continue
+
+        first_anchor_key = _catalog_explicit_anchor_key(path[0])
+        if first_anchor_key is None:
+            leading_key = _catalog_chapter_key_for_segment(path[0])
+            replacement_anchor = explicit_anchor_by_key.get(leading_key or "")
+            if replacement_anchor:
+                corrected.append([replacement_anchor, *path])
+                continue
+            corrected.append(path)
+            continue
+
+        replacement_path: list[str] | None = None
+        for index in range(1, len(path)):
+            segment_key = _catalog_chapter_key_for_segment(path[index])
+            replacement_anchor = explicit_anchor_by_key.get(segment_key or "")
+            if segment_key and replacement_anchor and segment_key != first_anchor_key:
+                replacement_path = [replacement_anchor, *path[index:]]
+                break
+
+        if replacement_path is not None:
+            corrected.append(replacement_path)
+            continue
+
+        corrected.append(path)
+
+    return corrected
+
+
+def _order_catalog_paths(paths: list[list[str]]) -> list[list[str]]:
+    class _TreeNode:
+        __slots__ = ("label", "children", "child_order", "is_terminal")
+
+        def __init__(self, label: str):
+            self.label = label
+            self.children: dict[str, "_TreeNode"] = {}
+            self.child_order: list[str] = []
+            self.is_terminal = False
+
+    roots: dict[str, _TreeNode] = {}
+    root_order: list[str] = []
+
+    for path in paths:
+        siblings = roots
+        sibling_order = root_order
+        for label in path:
+            if label not in siblings:
+                siblings[label] = _TreeNode(label)
+                sibling_order.append(label)
+            node = siblings[label]
+            siblings = node.children
+            sibling_order = node.child_order
+        node.is_terminal = True
+
+    ordered: list[list[str]] = []
+
+    def walk(labels: list[str], siblings: dict[str, _TreeNode], sibling_order: list[str]) -> None:
+        for label in sibling_order:
+            node = siblings[label]
+            next_labels = [*labels, label]
+            if node.is_terminal:
+                ordered.append(next_labels)
+            walk(next_labels, node.children, node.child_order)
+
+    walk([], roots, root_order)
+    return ordered
+
+
+async def _recognize_catalog_single_image(
+    recognizer: Callable[[list[str]], Awaitable[list[list[str]]]],
+    image: str,
+    *,
+    image_index: int,
+    semaphore: asyncio.Semaphore,
+) -> list[list[str]]:
+    image_label = f"第 {image_index + 1} 张图片"
+    async with semaphore:
+        try:
+            return await asyncio.wait_for(
+                recognizer([image]),
+                timeout=_CATALOG_SINGLE_IMAGE_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError as exc:
+            raise RuntimeError(
+                f"{image_label}识别超时，请减少单次上传数量，或更换更清晰的图片后重试。"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"{image_label}网络请求失败，请稍后重试。") from exc
+        except (RuntimeError, ValueError) as exc:
+            if _is_provider_unavailable_error(exc):
+                raise
+            raise RuntimeError(f"{image_label}识别失败：{exc}") from exc
+
+
+async def _recognize_catalog_images_with_engine(
+    recognizer: Callable[[list[str]], Awaitable[list[list[str]]]],
+    images: list[str],
+) -> list[list[str]]:
+    semaphore = asyncio.Semaphore(min(_CATALOG_VISION_MAX_CONCURRENCY, len(images)))
+    results = await asyncio.gather(
+        *[
+            _recognize_catalog_single_image(
+                recognizer,
+                image,
+                image_index=index,
+                semaphore=semaphore,
+            )
+            for index, image in enumerate(images)
+        ],
+        return_exceptions=True,
+    )
+
+    unavailable_errors = [
+        result
+        for result in results
+        if isinstance(result, Exception) and _is_provider_unavailable_error(result)
+    ]
+    if unavailable_errors and len(unavailable_errors) == len(results):
+        raise unavailable_errors[0]
+
+    for result in results:
+        if isinstance(result, Exception):
+            raise result
+
+    raw_image_paths = cast(list[list[list[str]]], results)
+    merged_paths = _merge_catalog_paths(raw_image_paths)
+    logger.info(
+        "Catalog photo recognition path counts: per_image=%s merged=%s",
+        [len(paths) for paths in raw_image_paths],
+        len(merged_paths),
+    )
+    logger.debug(
+        "Catalog photo recognition raw_paths=%s merged_paths=%s",
+        raw_image_paths,
+        merged_paths,
+    )
+    return merged_paths
+
+
 async def recognize_catalog_structure_from_images(
     request: CatalogPhotoRecognizeRequest,
 ) -> CatalogPhotoRecognizeResponse:
-    async def recognize_with_qwen_vl() -> CatalogPhotoRecognizeResponse:
-        try:
-            paths = await asyncio.wait_for(
-                _recognize_catalog_with_qwen_vl(request.images),
-                timeout=120.0,
-            )
-        except RuntimeError as exc:
-            if "Qwen API Key" in str(exc):
-                raise RuntimeError("目录识别服务暂不可用，请联系管理员处理。") from exc
-            raise
-        return CatalogPhotoRecognizeResponse(paths=paths)
+    recognizers = (
+        _recognize_catalog_with_deepseek_vl,
+        _recognize_catalog_with_qwen_vl,
+    )
+    last_error: Exception | None = None
+    unavailable_errors: list[Exception] = []
 
-    try:
+    for recognizer in recognizers:
         try:
-            text_chunks = [await recognize_image_text(image) for image in request.images]
-        except OCREngineUnavailable:
-            return await recognize_with_qwen_vl()
-
-        paths = _parse_catalog_paths_from_text("\n".join(text_chunks))
-        if paths:
+            paths = await _recognize_catalog_images_with_engine(recognizer, request.images)
             return CatalogPhotoRecognizeResponse(paths=paths)
+        except (RuntimeError, ValueError) as exc:
+            last_error = exc
+            if _is_provider_unavailable_error(exc):
+                unavailable_errors.append(exc)
+                continue
 
-        return await recognize_with_qwen_vl()
-    except asyncio.TimeoutError as exc:
-        raise RuntimeError("目录识别超时，请减少图片数量或稍后重试。") from exc
-    except httpx.HTTPError as exc:
-        raise RuntimeError(f"目录识别网络错误：{exc}") from exc
-    except OCREngineUnavailable as exc:
-        raise RuntimeError("目录识别服务暂不可用，请联系管理员处理。") from exc
+    if unavailable_errors and len(unavailable_errors) == len(recognizers):
+        raise RuntimeError("目录识别服务暂不可用，请联系管理员处理。") from unavailable_errors[-1]
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("目录识别服务暂不可用，请联系管理员处理。")
 
 
 async def _search_bilibili_videos(query: str) -> list[RecommendationItem]:

@@ -10,18 +10,22 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { getPersonaCopy } from "@/lib/persona-copy";
 import { canManageStudents, canManageUsers } from "@/utils/role-routing";
 
 export function UserDropdown({
   name,
   role,
+  persona,
   onLogout,
 }: {
   name: string;
   role?: string;
+  persona?: string | null;
   onLogout: () => void;
 }) {
   const navigate = useNavigate();
+  const copy = getPersonaCopy(persona);
   const initials = name
     .split(" ")
     .map((n) => n[0])
@@ -49,7 +53,7 @@ export function UserDropdown({
         {canManageStudents(role ?? "") && (
           <DropdownMenuItem onClick={() => navigate("/students")}>
             <Users size={14} className="mr-2" />
-            学生管理
+            {copy.management}
           </DropdownMenuItem>
         )}
         {canManageStudents(role ?? "") && <DropdownMenuSeparator />}

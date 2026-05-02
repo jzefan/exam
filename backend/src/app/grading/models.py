@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlalchemy import Boolean, Float, ForeignKey, ForeignKeyConstraint, Integer, JSON, String, Text, UniqueConstraint, Uuid, event, select
+from sqlalchemy import Boolean, Float, ForeignKey, ForeignKeyConstraint, Index, Integer, JSON, String, Text, UniqueConstraint, Uuid, event, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship, validates
 
@@ -63,6 +63,8 @@ class RoleBinding(BaseModel):
 class GradingTask(BaseModel):
     __tablename__ = "grading_tasks"
     __table_args__ = (
+        Index("ix_grading_tasks_source_business_id", "source_business_id"),
+        Index("ix_grading_tasks_source_business_id_status", "source_business_id", "status"),
         ForeignKeyConstraint(
             ["id", "latest_primary_snapshot_id"],
             ["grading_result_snapshots.task_id", "grading_result_snapshots.id"],

@@ -2,6 +2,7 @@ import { useNavigate } from "react-router-dom"
 import { useGetIdentity } from "@refinedev/core"
 import { getUserRole } from "@/types/rbac"
 import { getHomeRoute } from "@/utils/role-routing"
+import { BrandLogoMark } from "@/components/brand-logo"
 import { Button } from "@/components/ui/button"
 import {
   ArrowRight,
@@ -87,9 +88,7 @@ export function GwmxLanding() {
       <header className="sticky top-0 z-50 border-b border-border bg-background/95">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <GitCompareArrows className="h-4 w-4" aria-hidden="true" />
-            </div>
+            <BrandLogoMark className="h-9 w-9 rounded-lg" />
             <div className="leading-tight">
               <div className="text-base font-bold tracking-tight text-foreground">工教桥</div>
               <div className="text-[10px] tracking-wider text-muted-foreground">
@@ -290,7 +289,7 @@ export function GwmxLanding() {
       {/* Footer */}
       <footer className="py-10">
         <div className="mx-auto flex max-w-6xl flex-col items-center gap-2 px-6 text-xs text-muted-foreground">
-          <span>工教桥 · 智评云旗下产教融合产品</span>
+          <span>工教桥 · 智评线旗下产教融合产品</span>
           <span>&copy; {new Date().getFullYear()} 工教桥 · 岗位能力建模与专业对标平台</span>
         </div>
       </footer>

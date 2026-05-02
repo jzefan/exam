@@ -45,7 +45,7 @@ class AIGenerateRequest(BaseModel):
     knowledge_point_ids: list[uuid.UUID] = Field(default_factory=list)
     knowledge_keywords: str = Field(default="", max_length=500)
     prompt: str = Field(default="", max_length=2000)
-    model: AIModelProvider = AIModelProvider.QWEN
+    model: AIModelProvider = AIModelProvider.DEEPSEEK
 
 
 class FrequentKnowledgePointItem(BaseModel):

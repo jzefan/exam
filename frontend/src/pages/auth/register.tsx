@@ -1,25 +1,55 @@
 import { useRegister } from "@refinedev/core";
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { GraduationCap, Eye, EyeOff } from "lucide-react";
+import { Check, Eye, EyeOff, Monitor, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useBrand } from "@/lib/brand";
+import { cn } from "@/lib/utils";
+import { AuthHeader, AuthShell } from "./auth-shell";
+
+type PasswordStrength = 0 | 1 | 2 | 3;
 
 export function RegisterPage() {
   const { mutate: register, isPending } = useRegister();
-  const brand = useBrand();
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [form, setForm] = useState({
+    persona: "teacher",
     username: "",
     email: "",
     password: "",
     confirmPassword: "",
-    full_name: "",
   });
   const [error, setError] = useState("");
   const [passwordError, setPasswordError] = useState("");
+  const [confirmPasswordError, setConfirmPasswordError] = useState("");
+
+  const getPasswordStrength = (value: string): PasswordStrength => {
+    if (!value) return 0;
+    let score = 0;
+    if (value.length >= 6) score += 1;
+    if (/[A-Z]/.test(value) || /[^a-zA-Z0-9]/.test(value)) score += 1;
+    if (value.length >= 10 && /\d/.test(value)) score += 1;
+    return Math.min(score, 3) as PasswordStrength;
+  };
+
+  const passwordStrength = getPasswordStrength(form.password);
+  const strengthLabel = ["", "弱", "中", "强"][passwordStrength];
+  const personaOptions = [
+    {
+      value: "teacher",
+      title: "教学考试",
+      desc: "管理学生、班级、考试与阅卷",
+      icon: Users,
+    },
+    {
+      value: "assessor",
+      title: "通用测评",
+      desc: "管理考生、部门、测评与阅卷",
+      icon: Monitor,
+    },
+  ];
 
   const validatePassword = (value: string) => {
     if (!value) {
@@ -31,144 +61,218 @@ export function RegisterPage() {
     return "";
   };
 
+  const validateConfirmPassword = (value: string, password = form.password) => {
+    if (!value) {
+      return "";
+    }
+    if (password !== value) {
+      return "两次输入的密码不一致";
+    }
+    return "";
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     const nextPasswordError = validatePassword(form.password);
+    const nextConfirmPasswordError = validateConfirmPassword(form.confirmPassword);
     setPasswordError(nextPasswordError);
-    if (form.password !== form.confirmPassword) {
-      setError("两次输入的密码不一致");
+    setConfirmPasswordError(nextConfirmPasswordError);
+    if (nextConfirmPasswordError) {
       return;
     }
     if (nextPasswordError) {
       return;
     }
     register({
-      username: form.username,
+      username: form.username.trim(),
       email: form.email.trim(),
       password: form.password,
-      full_name: form.full_name,
-      role_name: "teacher",
+      full_name: form.username.trim(),
+      role_name: "evaluator",
+      persona: form.persona,
     });
   };
 
   const updateField = (field: string, value: string) => {
-    setForm((prev) => ({ ...prev, [field]: value }));
+    setForm((prev) => {
+      const next = { ...prev, [field]: value };
+      if (field === "password" && confirmPasswordError) {
+        setConfirmPasswordError(validateConfirmPassword(next.confirmPassword, value));
+      }
+      if (field === "confirmPassword" && confirmPasswordError) {
+        setConfirmPasswordError(validateConfirmPassword(value, next.password));
+      }
+      return next;
+    });
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
-      <div className="w-full max-w-sm p-6">
-        <div className="flex items-center justify-center gap-2.5 mb-8">
-          <div className="h-9 w-9 rounded-lg bg-primary flex items-center justify-center">
-            <GraduationCap size={18} className="text-white" />
+    <AuthShell cardClassName="auth-card-register">
+      <AuthHeader
+        title="创建账号"
+        subtitle="适用于高校师生、企业培训与职业认证"
+      />
+
+      {error && (
+        <div className="auth-error-box">
+          {error}
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="auth-fields auth-register-form">
+        <div className="auth-field auth-field-span-2">
+          <Label>账号用途</Label>
+          <div className="auth-persona-grid">
+            {personaOptions.map((option) => {
+              const Icon = option.icon;
+              return (
+                <label
+                  key={option.value}
+                  className={cn(
+                    "auth-persona-card",
+                    form.persona === option.value && "auth-persona-card-active",
+                  )}
+                >
+                  <input
+                    type="radio"
+                    name="persona"
+                    value={option.value}
+                    checked={form.persona === option.value}
+                    onChange={(event) => updateField("persona", event.target.value)}
+                  />
+                  <span className="auth-persona-icon" aria-hidden="true">
+                    <Icon />
+                  </span>
+                  <span className="auth-persona-body">
+                    <span className="auth-persona-title">{option.title}</span>
+                    <span className="auth-persona-desc">{option.desc}</span>
+                  </span>
+                  <span className="auth-persona-check" aria-hidden="true">
+                    <Check />
+                  </span>
+                </label>
+              );
+            })}
           </div>
-          <span className="text-lg font-bold text-foreground">{brand.name}</span>
         </div>
 
-        <div className="mb-6 text-center">
-          <h1 className="text-base font-bold text-foreground tracking-tight">创建账号</h1>
-          <p className="mt-1.5 text-sm text-muted-foreground">注册教师账号开始使用</p>
+        <div className="auth-field auth-field-span-2">
+          <Label htmlFor="register-username">用户名</Label>
+          <Input
+            id="register-username"
+            type="text"
+            placeholder="请设置登录用户名"
+            autoComplete="username"
+            value={form.username}
+            onChange={(e) => updateField("username", e.target.value)}
+            required
+            autoFocus
+          />
         </div>
 
-        {error && (
-          <div className="mb-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            {error}
-          </div>
-        )}
+        <div className="auth-field auth-field-span-2">
+          <Label htmlFor="register-email">邮箱</Label>
+          <Input
+            id="register-email"
+            type="email"
+            placeholder="请输入邮箱，用于后续找回密码"
+            autoComplete="email"
+            value={form.email}
+            onChange={(e) => updateField("email", e.target.value)}
+          />
+        </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-1.5">
-            <Label>姓名</Label>
+        <div className="auth-field">
+          <Label htmlFor="register-password">密码</Label>
+          <div className="auth-input-wrap">
             <Input
-              type="text"
-              placeholder="请输入姓名"
-              value={form.full_name}
-              onChange={(e) => updateField("full_name", e.target.value)}
+              id="register-password"
+              type={showPassword ? "text" : "password"}
+              className="auth-input-with-suffix"
+              placeholder="请输入密码（至少6位）"
+              autoComplete="new-password"
+              value={form.password}
+              onBlur={(e) => setPasswordError(validatePassword(e.target.value))}
+              onChange={(e) => {
+                updateField("password", e.target.value);
+                if (passwordError) {
+                  setPasswordError(validatePassword(e.target.value));
+                }
+              }}
               required
-              autoFocus
             />
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              className="auth-input-suffix"
+              aria-label={showPassword ? "隐藏密码" : "显示密码"}
+            >
+              {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+            </button>
           </div>
-
-          <div className="space-y-1.5">
-            <Label>用户名</Label>
-            <Input
-              type="text"
-              placeholder="请输入用户名"
-              value={form.username}
-              onChange={(e) => updateField("username", e.target.value)}
-              required
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>邮箱</Label>
-            <Input
-              type="email"
-              placeholder="请输入邮箱（选填）"
-              value={form.email}
-              onChange={(e) => updateField("email", e.target.value)}
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>密码</Label>
-            <div className="relative">
-              <Input
-                type={showPassword ? "text" : "password"}
-                className="pr-10"
-                placeholder="请输入密码（至少6位）"
-                value={form.password}
-                onBlur={(e) => setPasswordError(validatePassword(e.target.value))}
-                onChange={(e) => {
-                  updateField("password", e.target.value);
-                  if (passwordError) {
-                    setPasswordError(validatePassword(e.target.value));
-                  }
-                }}
-                required
+          <div className="auth-strength" aria-hidden={!form.password}>
+            {[1, 2, 3].map((level) => (
+              <span
+                key={level}
+                className={cn(
+                  passwordStrength >= level && passwordStrength === 1 && "auth-strength-weak",
+                  passwordStrength >= level && passwordStrength === 2 && "auth-strength-medium",
+                  passwordStrength >= level && passwordStrength === 3 && "auth-strength-strong",
+                )}
               />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              >
-                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
-            </div>
-            {passwordError && <p className="text-sm text-destructive">{passwordError}</p>}
+            ))}
           </div>
+          {form.password && (
+            <p className="auth-strength-hint">强度：{strengthLabel}</p>
+          )}
+          {passwordError && <p className="auth-error-text">{passwordError}</p>}
+        </div>
 
-          <div className="space-y-1.5">
-            <Label>确认密码</Label>
+        <div className="auth-field">
+          <Label htmlFor="register-confirm-password">确认密码</Label>
+          <div className="auth-input-wrap">
             <Input
-              type="password"
+              id="register-confirm-password"
+              type={showConfirmPassword ? "text" : "password"}
+              className="auth-input-with-suffix"
               placeholder="再次输入密码"
+              autoComplete="new-password"
               value={form.confirmPassword}
               onChange={(e) => updateField("confirmPassword", e.target.value)}
+              onBlur={(e) => setConfirmPasswordError(validateConfirmPassword(e.target.value))}
               required
             />
+            <button
+              type="button"
+              onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+              className="auth-input-suffix"
+              aria-label={showConfirmPassword ? "隐藏确认密码" : "显示确认密码"}
+            >
+              {showConfirmPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+            </button>
           </div>
+          {confirmPasswordError && <p className="auth-error-text">{confirmPasswordError}</p>}
+        </div>
 
-          <Button type="submit" className="w-full mt-2" disabled={isPending}>
-            {isPending ? (
-              <span className="flex items-center gap-2">
-                <span className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                注册中...
-              </span>
-            ) : (
-              "注册"
-            )}
-          </Button>
-        </form>
+        <Button type="submit" className="auth-submit auth-register-submit auth-field-span-2" disabled={isPending}>
+          {isPending ? (
+            <span className="flex items-center gap-2">
+              <span className="auth-submit-spinner" />
+              注册中...
+            </span>
+          ) : (
+            "注册"
+          )}
+        </Button>
+      </form>
 
-        <p className="mt-5 text-center text-sm text-muted-foreground">
-          已有账号？{" "}
-          <Link to="/login" className="font-medium text-primary hover:underline">
-            去登录
-          </Link>
-        </p>
-      </div>
-    </div>
+      <p className="auth-switch">
+        已有账号？{" "}
+        <Link to="/login">
+          去登录
+        </Link>
+      </p>
+    </AuthShell>
   );
 }

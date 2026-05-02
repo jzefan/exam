@@ -396,8 +396,11 @@ export function KnowledgePointSelector({
           align="start"
           sideOffset={8}
           collisionPadding={20}
-          style={popoverContentStyle}
-          className="flex max-h-[min(480px,calc(100dvh-9rem))] w-[min(560px,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-hidden p-0 sm:max-h-[min(560px,calc(100dvh-9rem))]"
+          style={{
+            maxHeight: "min(560px, var(--radix-popover-content-available-height))",
+            ...popoverContentStyle,
+          }}
+          className="flex w-[min(560px,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-hidden p-0"
         >
           <div className="shrink-0 border-b border-border/30 p-3">
             <div className="flex items-center rounded-lg border border-border/40 bg-background/80 px-3 shadow-sm shadow-black/[0.02]">
@@ -498,7 +501,7 @@ export function KnowledgePointSelector({
             ) : null}
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-8 pt-2 text-sm">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-12 pt-2 text-sm">
             {knowledgeLoading ? (
               <div className="flex items-center justify-center gap-2 px-3 py-10 text-sm text-muted-foreground">
                 <Loader2 size={14} className="animate-spin" />

@@ -27,6 +27,7 @@ import { PageIntroHeader } from "@/components/ui/page-intro-header";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { apiClient } from "@/lib/api";
 import {
   getGeneratedQuestionPersistKey,
   useUnsavedGeneratedQuestionsGuard,
@@ -54,6 +55,7 @@ type GeneratedQuestion = {
   analysis: string | null;
   difficulty: number;
   selected: boolean;
+  persistedQuestionId?: string;
 };
 
 type PracticeDetail = {
@@ -71,6 +73,10 @@ type PracticeDetail = {
   questions: IExamQuestion[];
   students: IExamStudent[];
 };
+
+interface PublicLinkResponse {
+  public_url: string;
+}
 
 const stepItems: Array<{
   id: PracticeStepId;
@@ -182,6 +188,7 @@ export function PracticeCreate() {
   const [questionIds, setQuestionIds] = useState<string[]>([]);
   const [isManualQuestionFullscreen, setIsManualQuestionFullscreen] = useState(false);
   const [studentIds, setStudentIds] = useState<string[]>([]);
+  const [publicLinkEnabled, setPublicLinkEnabled] = useState(false);
   const [durationMinutes, setDurationMinutes] = useState(60);
   const [startImmediately, setStartImmediately] = useState(true);
   const [scheduledStartTime, setScheduledStartTime] = useState("");
@@ -192,7 +199,7 @@ export function PracticeCreate() {
   const [aiQuestionCount, setAIQuestionCount] = useState(10);
   const [aiDifficulty, setAIDifficulty] = useState(3);
   const [aiTypeAlloc, setAITypeAlloc] = useState<Record<QuestionType, number>>(getDefaultAITypeAlloc);
-  const [aiModel, setAIModel] = useState<AIModelProvider>("qwen");
+  const [aiModel, setAIModel] = useState<AIModelProvider>("deepseek");
   const [aiPrompt, setAIPrompt] = useState("");
   const [aiQuestions, setAIQuestions] = useState<GeneratedQuestion[]>([]);
   const [aiGenerating, setAIGenerating] = useState(false);
@@ -257,6 +264,7 @@ export function PracticeCreate() {
     setQuestionMode(practice.question_mode === "ai" ? "ai" : "manual");
     setQuestionIds(practice.questions.map((question) => question.question_id));
     setStudentIds(practice.students.map((student) => student.student_id));
+    setPublicLinkEnabled(false);
     setDurationMinutes(practice.duration_minutes ?? 60);
     setScheduledStartTime(practice.start_time ? toLocalDateTimeValue(new Date(practice.start_time)) : "");
     setEndTime(practice.end_time ? toLocalDateTimeValue(new Date(practice.end_time)) : "");
@@ -303,6 +311,7 @@ export function PracticeCreate() {
           analysis: question.analysis ?? null,
           difficulty: question.difficulty ?? 3,
           selected: true,
+          persistedQuestionId: question.id,
         }));
       setAIQuestions(nextAIQuestions);
       setPersistedAIQuestionKeys(nextAIQuestions.map((question) => getGeneratedQuestionPersistKey(question)));
@@ -339,6 +348,7 @@ export function PracticeCreate() {
     setQuestionMode("manual");
     setQuestionIds([]);
     setStudentIds([]);
+    setPublicLinkEnabled(false);
     setDurationMinutes(60);
     setStartImmediately(true);
     setScheduledStartTime("");
@@ -347,7 +357,7 @@ export function PracticeCreate() {
     setAIQuestionCount(10);
     setAIDifficulty(3);
     setAITypeAlloc(getDefaultAITypeAlloc());
-    setAIModel("qwen");
+    setAIModel("deepseek");
     setAIPrompt("");
   }, [id, isEditMode]);
 
@@ -369,12 +379,12 @@ export function PracticeCreate() {
 
     if (stepId === "questions") {
       if (questionIds.length === 0) {
-        return questionMode === "manual" ? "请先选择题目。" : "请先生成并加入练习题目。";
+        return questionMode === "manual" ? "请先选择题目。" : "请先生成练习题目。";
       }
     }
 
     if (stepId === "students") {
-      if (studentIds.length === 0) return "请至少选择一个班级或学生。";
+      if (studentIds.length === 0 && !publicLinkEnabled) return "请选择班级/学生，或开启公开链接。";
     }
 
     if (stepId === "publish") {
@@ -408,7 +418,10 @@ export function PracticeCreate() {
       return `已选 ${selectedKnowledgePoints.length} 个知识点`;
     }
     if (stepId === "questions") return `已选 ${questionIds.length} 题`;
-    if (stepId === "students") return `已选 ${studentIds.length} 人`;
+    if (stepId === "students") {
+      if (studentIds.length === 0 && publicLinkEnabled) return "公开链接";
+      return `已选 ${studentIds.length} 人`;
+    }
     return startImmediately ? "发布后立即开始" : "定时开始";
   };
 
@@ -445,6 +458,83 @@ export function PracticeCreate() {
     setSubmitError(null);
     setCurrentStep((prev) => Math.max(prev - 1, 0));
   };
+
+  const persistAIQuestions = useCallback(async (
+    questions: GeneratedQuestion[],
+    options: { append?: boolean; showToast?: boolean } = {},
+  ): Promise<number> => {
+    if (questions.length === 0) {
+      setSubmitError("请至少生成一道 AI 题目。");
+      return 0;
+    }
+
+    setAIApplying(true);
+    setSubmitError(null);
+    try {
+      const banks = await apiRequest<Array<{ id: string; name: string }>>("/question-banks");
+      let bankId = banks.find((bank) => bank.name === "AI题库")?.id;
+      if (!bankId) {
+        const createdBank = await apiRequest<{ id: string }>("/question-banks", {
+          method: "POST",
+          body: JSON.stringify({ name: "AI题库", description: "AI 自动生成的练习题目" }),
+        });
+        bankId = createdBank.id;
+      }
+
+      const createdQuestions = await Promise.all(
+        questions.map((question) =>
+          apiRequest<IQuestion>("/questions", {
+            method: "POST",
+            body: JSON.stringify({
+              type: question.type,
+              title: question.title || question.content.text.slice(0, 120),
+              content: question.content,
+              options: question.options,
+              answer: question.answer,
+              analysis: question.analysis,
+              difficulty: question.difficulty,
+              score: 10,
+              tag_ids: [],
+              knowledge_point_ids: selectedKnowledgePoints.map((item) => item.id),
+              question_bank_id: bankId,
+            }),
+          }),
+        ),
+      );
+
+      const nextQuestionIds = createdQuestions.map((question) => question.id);
+      setQuestionIds((prev) =>
+        options.append ? Array.from(new Set([...prev, ...nextQuestionIds])) : nextQuestionIds,
+      );
+      setAIQuestions((prev) =>
+        prev.map((question) => {
+          const createdQuestion = createdQuestions[questions.findIndex((item) => item.index === question.index)];
+          return createdQuestion ? { ...question, persistedQuestionId: createdQuestion.id, selected: true } : question;
+        }),
+      );
+      setPersistedAIQuestionKeys((prev) =>
+        Array.from(new Set([...prev, ...questions.map((question) => getGeneratedQuestionPersistKey(question))])),
+      );
+      if (options.showToast !== false) {
+        toast({
+          title: "AI 题目已加入练习",
+          description: `已加入 ${createdQuestions.length} 道题目。`,
+        });
+      }
+      return createdQuestions.length;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "加入练习失败";
+      setSubmitError(message);
+      toast({
+        title: "加入练习失败",
+        description: message,
+        variant: "destructive",
+      });
+      return 0;
+    } finally {
+      setAIApplying(false);
+    }
+  }, [selectedKnowledgePoints, toast]);
 
   const handleAIGenerate = useCallback(async () => {
     if (aiAllocationError) {
@@ -496,6 +586,7 @@ export function PracticeCreate() {
       let buffer = "";
       let questionIndex = 0;
       let nextQuestions: GeneratedQuestion[] = [];
+      const persistPromises: Array<Promise<number>> = [];
 
       while (true) {
         const { done, value } = await reader.read();
@@ -523,10 +614,19 @@ export function PracticeCreate() {
             };
             nextQuestions = [...nextQuestions, nextQuestion];
             setAIQuestions(nextQuestions);
+            persistPromises.push(persistAIQuestions([nextQuestion], { append: true, showToast: false }));
           } else if (event.type === "error") {
             throw new Error(event.message ?? "AI 出题失败");
           }
         }
+      }
+
+      const persistedCount = (await Promise.all(persistPromises)).reduce((sum, count) => sum + count, 0);
+      if (persistedCount > 0) {
+        toast({
+          title: "AI 题目已加入练习",
+          description: `已自动加入 ${persistedCount} 道题目。`,
+        });
       }
     } catch (error) {
       if ((error as Error).name !== "AbortError") {
@@ -542,73 +642,19 @@ export function PracticeCreate() {
       setAIGenerating(false);
       abortRef.current = null;
     }
-  }, [aiAllocationError, aiDifficulty, aiModel, aiPrompt, aiQuestionCount, aiTypeAlloc, selectedKnowledgePoints, toast]);
+  }, [aiAllocationError, aiDifficulty, aiModel, aiPrompt, aiQuestionCount, aiTypeAlloc, persistAIQuestions, selectedKnowledgePoints, toast]);
 
   const stopAIGeneration = () => {
     abortRef.current?.abort();
   };
 
-  const handleApplyAIQuestions = useCallback(async () => {
-    const pickedQuestions = aiQuestions.filter((question) => question.selected);
-    if (pickedQuestions.length === 0) {
-      setSubmitError("请至少选择一道 AI 题目。");
-      return;
+  const removeAIQuestion = (index: number) => {
+    const target = aiQuestions.find((question) => question.index === index);
+    setAIQuestions((prev) => prev.filter((question) => question.index !== index));
+    if (target?.persistedQuestionId) {
+      setQuestionIds((prev) => prev.filter((questionId) => questionId !== target.persistedQuestionId));
     }
-
-    setAIApplying(true);
-    setSubmitError(null);
-    try {
-      const banks = await apiRequest<Array<{ id: string; name: string }>>("/question-banks");
-      let bankId = banks.find((bank) => bank.name === "AI题库")?.id;
-      if (!bankId) {
-        const createdBank = await apiRequest<{ id: string }>("/question-banks", {
-          method: "POST",
-          body: JSON.stringify({ name: "AI题库", description: "AI 自动生成的练习题目" }),
-        });
-        bankId = createdBank.id;
-      }
-
-      const createdQuestions = await Promise.all(
-        pickedQuestions.map((question) =>
-          apiRequest<IQuestion>("/questions", {
-            method: "POST",
-            body: JSON.stringify({
-              type: question.type,
-              title: question.title || question.content.text.slice(0, 120),
-              content: question.content,
-              options: question.options,
-              answer: question.answer,
-              analysis: question.analysis,
-              difficulty: question.difficulty,
-              score: 10,
-              tag_ids: [],
-              knowledge_point_ids: selectedKnowledgePoints.map((item) => item.id),
-              question_bank_id: bankId,
-            }),
-          }),
-        ),
-      );
-
-      setQuestionIds(createdQuestions.map((question) => question.id));
-      setPersistedAIQuestionKeys((prev) =>
-        Array.from(new Set([...prev, ...pickedQuestions.map((question) => getGeneratedQuestionPersistKey(question))])),
-      );
-      toast({
-        title: "AI 题目已加入练习",
-        description: `已加入 ${createdQuestions.length} 道题目。`,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "加入练习失败";
-      setSubmitError(message);
-      toast({
-        title: "加入练习失败",
-        description: message,
-        variant: "destructive",
-      });
-    } finally {
-      setAIApplying(false);
-    }
-  }, [aiQuestions, selectedKnowledgePoints, toast]);
+  };
 
   const handleSubmit = () => {
     const invalidStep = findFirstInvalidStep();
@@ -659,6 +705,24 @@ export function PracticeCreate() {
       });
     };
 
+    const createPublicLink = async (examId: string, fallbackMessage: string) => {
+      if (!publicLinkEnabled) return;
+      try {
+        const link = await apiClient.post<PublicLinkResponse>(`/api/exams/${examId}/public-link`);
+        await navigator.clipboard?.writeText(link.data.public_url).catch(() => undefined);
+        toast({
+          title: "公开链接已生成",
+          description: "公开链接已复制，外部考生填写姓名和手机号后即可进入。",
+        });
+      } catch (error) {
+        toast({
+          title: "公开链接生成失败",
+          description: getErrorMessage(error, fallbackMessage),
+          variant: "destructive",
+        });
+      }
+    };
+
     if (isEditMode && id) {
       update(
         {
@@ -667,7 +731,8 @@ export function PracticeCreate() {
           values,
         },
         {
-          onSuccess: () => {
+          onSuccess: async () => {
+            await createPublicLink(id, "练习已保存，但公开链接生成失败。");
             toast({
               title: "保存成功",
               description: "练习修改已保存。",
@@ -685,7 +750,11 @@ export function PracticeCreate() {
         values,
       },
       {
-        onSuccess: () => {
+        onSuccess: async (response) => {
+          const createdId = response.data?.id ? String(response.data.id) : "";
+          if (createdId) {
+            await createPublicLink(createdId, "练习已发布，但公开链接生成失败。");
+          }
           toast({
             title: "发布成功",
             description: "练习已发布，正在返回列表。",
@@ -950,31 +1019,22 @@ export function PracticeCreate() {
                             <p className="text-sm font-semibold text-foreground">
                               生成结果
                               <span className="ml-2 text-xs font-normal text-muted-foreground">
-                                已选 {aiQuestions.filter((question) => question.selected).length}/{aiQuestions.length} 道
+                                已自动加入 {aiQuestions.filter((question) => question.persistedQuestionId).length} 道
                               </span>
                             </p>
-                            <Button
-                              type="button"
-                              size="sm"
-                              onClick={() => void handleApplyAIQuestions()}
-                              disabled={aiApplying || aiGenerating || aiQuestions.every((question) => !question.selected)}
-                            >
-                              {aiApplying && <Loader2 size={14} className="mr-1 animate-spin" />}
-                              加入练习
-                            </Button>
+                            {aiApplying ? (
+                              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                <Loader2 className="size-3.5 animate-spin" />
+                                正在自动加入...
+                              </div>
+                            ) : null}
                           </div>
                           <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
                             {aiQuestions.map((question) => (
                               <AIGeneratedQuestionCard
                                 key={question.index}
                                 question={question}
-                                onToggleSelected={() =>
-                                  setAIQuestions((prev) =>
-                                    prev.map((item) =>
-                                      item.index === question.index ? { ...item, selected: !item.selected } : item,
-                                    ),
-                                  )
-                                }
+                                onRemove={() => removeAIQuestion(question.index)}
                               />
                             ))}
                           </div>
@@ -1000,6 +1060,19 @@ export function PracticeCreate() {
                   summaryLabel="人"
                   emptySummaryText="还没有选择发布对象，可以优先按班级选择，导入和手动添加作为补充方式。"
                 />
+                <div className="mt-4 flex flex-col gap-3 rounded-2xl bg-primary/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="space-y-1">
+                    <p className="text-sm font-semibold text-foreground">公开链接</p>
+                    <p className="text-xs text-muted-foreground">
+                      开启后，发布成功会生成一个公开链接。外部考生填写姓名和手机号后进入。
+                    </p>
+                  </div>
+                  <Switch
+                    checked={publicLinkEnabled}
+                    onCheckedChange={setPublicLinkEnabled}
+                    aria-label="开启公开链接"
+                  />
+                </div>
               </CardContent>
             </Card>
           )}

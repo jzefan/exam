@@ -42,6 +42,8 @@ type StudentRow = {
   student_id: string;
   full_name: string | null;
   username: string | null;
+  phone?: string | null;
+  user_type?: string | null;
   submitted_at: string | null;
   grading_status: string | null;
   objective_score: number | null;
@@ -279,7 +281,7 @@ export function ExamAnalysisPage() {
                   <TableRow key={s.student_id}>
                     <TableCell>
                       <div className="font-medium">{s.full_name ?? "—"}</div>
-                      <div className="text-xs text-muted-foreground">{s.username ?? ""}</div>
+                      <div className="text-xs text-muted-foreground">{s.username ?? s.phone ?? ""}</div>
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
                       {formatDateTime(s.submitted_at)}

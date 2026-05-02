@@ -47,6 +47,7 @@ function BrowserTitle() {
 
 const LoginPage = lazyNamed(() => import("./pages/auth/login"), "LoginPage");
 const RegisterPage = lazyNamed(() => import("./pages/auth/register"), "RegisterPage");
+const ResetPasswordPage = lazyNamed(() => import("./pages/auth/reset-password"), "ResetPasswordPage");
 const UserList = lazyNamed(() => import("./pages/admin/users/list"), "UserList");
 const UserCreate = lazyNamed(() => import("./pages/admin/users/create"), "UserCreate");
 const UserEdit = lazyNamed(() => import("./pages/admin/users/edit"), "UserEdit");
@@ -88,6 +89,7 @@ const GradingCenterPage = lazyNamed(() => import("./pages/grading"), "GradingCen
 const GwmxLanding = lazyNamed(() => import("./pages/gwmx/landing"), "GwmxLanding");
 const GwmxWorkbench = lazyNamed(() => import("./pages/gwmx/workbench"), "GwmxWorkbench");
 const CandidateLanding = lazyNamed(() => import("./pages/exam-invite/landing"), "CandidateLanding");
+const CandidatePublicLanding = lazyNamed(() => import("./pages/exam-invite/public-landing"), "CandidatePublicLanding");
 const GuestExamTakePage = lazyNamed(() => import("./pages/exam-invite/take"), "GuestExamTakePage");
 const CandidateDonePage = lazyNamed(() => import("./pages/exam-invite/done"), "CandidateDonePage");
 const StudentManagementPage = lazy(() => import("./pages/students"));
@@ -182,8 +184,10 @@ function App() {
               <Routes>
                 {/* External candidate routes — public, no application shell */}
                 <Route path="/exam-invite" element={<CandidateLanding />} />
+                <Route path="/exam-public" element={<CandidatePublicLanding />} />
                 <Route path="/exam-invite/take/:examId" element={<GuestExamTakePage />} />
                 <Route path="/exam-invite/done" element={<CandidateDonePage />} />
+                <Route path="/reset-password" element={<ResetPasswordPage />} />
 
                 {/* Student routes — sidebar layout, students only */}
                 <Route

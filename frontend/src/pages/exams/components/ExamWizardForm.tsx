@@ -13,6 +13,8 @@ import {
   CheckCircle2,
   CircleAlert,
   FileText,
+  Globe2,
+  Link2,
   ListChecks,
   Loader2,
   Maximize2,
@@ -110,6 +112,7 @@ type GeneratedQuestion = {
   analysis: string | null;
   difficulty: number;
   selected: boolean;
+  persistedQuestionId?: string;
 };
 type QuestionTypeSummary = {
   type: QuestionType;
@@ -265,7 +268,7 @@ export function ExamWizardForm({
     essay: 0,
     code: 0,
   });
-  const [aiModel, setAIModel] = useState<AIModelProvider>("qwen");
+  const [aiModel, setAIModel] = useState<AIModelProvider>("deepseek");
   const [aiSelectedKnowledgePoints, setAISelectedKnowledgePoints] = useState<SelectedKnowledgePoint[]>([]);
   const [aiPrompt, setAIPrompt] = useState("");
   const [aiQuestions, setAIQuestions] = useState<GeneratedQuestion[]>([]);
@@ -424,7 +427,7 @@ export function ExamWizardForm({
   );
   const existingAIQuestions = useMemo<GeneratedQuestion[]>(() => {
     return sortedQuestionItems
-      .map((item, index) => {
+      .map<GeneratedQuestion | null>((item, index) => {
         const question = selectedQuestionMap.get(item.question_id);
         if (!question) return null;
 
@@ -432,12 +435,22 @@ export function ExamWizardForm({
           index,
           type: question.type,
           title: question.title,
-          content: question.content,
-          options: question.options,
-          answer: question.answer,
+          content:
+            typeof question.content === "object" && question.content && "text" in question.content
+              ? (question.content as { text: string })
+              : { text: question.title ?? "" },
+          options:
+            question.options && typeof question.options === "object"
+              ? (question.options as Record<string, string>)
+              : null,
+          answer:
+            question.answer && typeof question.answer === "object"
+              ? (question.answer as { text?: string; correct?: string | boolean })
+              : {},
           analysis: question.analysis,
           difficulty: question.difficulty,
           selected: true,
+          persistedQuestionId: item.question_id,
         };
       })
       .filter((question): question is GeneratedQuestion => question !== null);
@@ -928,7 +941,7 @@ export function ExamWizardForm({
       essay: 0,
       code: 0,
     });
-    setAIModel("qwen");
+    setAIModel("deepseek");
     setAISelectedKnowledgePoints([]);
     setAIPrompt("");
     setAIQuestions([]);
@@ -1076,6 +1089,95 @@ export function ExamWizardForm({
     });
   };
 
+  const persistAIQuestions = useCallback(async (
+    questions: GeneratedQuestion[],
+    options: { append?: boolean; showToast?: boolean } = {},
+  ): Promise<number> => {
+    if (questions.length === 0) {
+      toast({
+        title: "请选择题目",
+        description: "请至少生成一道 AI 题目。",
+        variant: "destructive",
+      });
+      return 0;
+    }
+
+    setAIApplying(true);
+    setFlowError(null);
+    try {
+      const banks = await apiRequest<Array<{ id: string; name: string }>>("/question-banks");
+      let bankId = banks.find((bank) => bank.name === "AI题库")?.id;
+      if (!bankId) {
+        const createdBank = await apiRequest<{ id: string }>("/question-banks", {
+          method: "POST",
+          body: JSON.stringify({ name: "AI题库", description: "AI 自动生成的考试题目" }),
+        });
+        bankId = createdBank.id;
+      }
+
+      const createdQuestions = await Promise.all(
+        questions.map((question) =>
+          apiRequest<IQuestion>("/questions", {
+            method: "POST",
+            body: JSON.stringify({
+              type: question.type,
+              title: question.title || question.content.text.slice(0, 120),
+              content: question.content,
+              options: question.options,
+              answer: question.answer,
+              analysis: question.analysis,
+              difficulty: question.difficulty,
+              score: 10,
+              tag_ids: [],
+              knowledge_point_ids: aiSelectedKnowledgePoints.map((item) => item.id),
+              question_bank_id: bankId,
+            }),
+          }),
+        ),
+      );
+
+      const nextQuestionIds = createdQuestions.map((question) => question.id);
+      setForm((prev) => ({
+        ...prev,
+        question_ids: options.append
+          ? Array.from(new Set([...prev.question_ids, ...nextQuestionIds]))
+          : nextQuestionIds,
+      }));
+      setAIQuestions((prev) =>
+        prev.map((question) => {
+          const createdQuestion = createdQuestions[questions.findIndex((item) => item.index === question.index)];
+          return createdQuestion ? { ...question, persistedQuestionId: createdQuestion.id, selected: true } : question;
+        }),
+      );
+      setPersistedAIQuestionKeys((prev) =>
+        Array.from(new Set([...prev, ...questions.map((question) => getGeneratedQuestionPersistKey(question))])),
+      );
+      setAutoGeneratedMeta(null);
+      setAIGeneratedMeta({
+        count: createdQuestions.length,
+        totalScore: createdQuestions.reduce((sum, question) => sum + question.score, 0),
+      });
+      if (options.showToast !== false) {
+        toast({
+          title: "AI 题目已加入考试",
+          description: `已将 ${createdQuestions.length} 道 AI 题目加入当前考试。`,
+        });
+      }
+      return createdQuestions.length;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "AI 题目加入考试失败";
+      setFlowError(message);
+      toast({
+        title: "AI 题目加入考试失败",
+        description: message,
+        variant: "destructive",
+      });
+      return 0;
+    } finally {
+      setAIApplying(false);
+    }
+  }, [aiSelectedKnowledgePoints, toast]);
+
   const handleAIGenerate = useCallback(async () => {
     if (aiAllocMismatch) {
       const message = `当前题型数量之和为 ${aiAllocationState.allocated}，必须与题目总数 ${aiQuestionCount} 一致。`;
@@ -1132,6 +1234,7 @@ export function ExamWizardForm({
       let buffer = "";
       let questionIndex = 0;
       let nextQuestions: GeneratedQuestion[] = [];
+      const persistPromises: Array<Promise<number>> = [];
 
       while (true) {
         const { done, value } = await reader.read();
@@ -1159,16 +1262,24 @@ export function ExamWizardForm({
             };
             nextQuestions = [...nextQuestions, nextQuestion];
             setAIQuestions(nextQuestions);
+            persistPromises.push(persistAIQuestions([nextQuestion], { append: true, showToast: false }));
           } else if (event.type === "error") {
             throw new Error(event.message ?? "AI 生成失败");
           }
         }
       }
 
+      const persistedCount = (await Promise.all(persistPromises)).reduce((sum, count) => sum + count, 0);
       setAIGeneratedMeta({
-        count: nextQuestions.length,
-        totalScore: nextQuestions.length * 10,
+        count: persistedCount,
+        totalScore: persistedCount * 10,
       });
+      if (persistedCount > 0) {
+        toast({
+          title: "AI 题目已加入考试",
+          description: `已自动加入 ${persistedCount} 道 AI 题目。`,
+        });
+      }
     } catch (error) {
       if ((error as Error).name !== "AbortError") {
         const message = error instanceof Error ? error.message : "AI 生成失败";
@@ -1192,104 +1303,23 @@ export function ExamWizardForm({
     aiSelectedKnowledgePoints,
     aiPrompt,
     aiModel,
+    persistAIQuestions,
     toast,
   ]);
-
-  const handleApplyAIQuestions = useCallback(async () => {
-    const selectedAIQuestions = aiQuestions.filter((question) => question.selected);
-    if (selectedAIQuestions.length === 0) {
-      toast({
-        title: "请选择题目",
-        description: "请至少选择一道 AI 生成的题目后再加入考试。",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setAIApplying(true);
-    setFlowError(null);
-    try {
-      const banks = await apiRequest<Array<{ id: string; name: string }>>("/question-banks");
-      let bankId = banks.find((bank) => bank.name === "AI题库")?.id;
-      if (!bankId) {
-        const createdBank = await apiRequest<{ id: string }>("/question-banks", {
-          method: "POST",
-          body: JSON.stringify({ name: "AI题库", description: "AI 自动生成的考试题目" }),
-        });
-        bankId = createdBank.id;
-      }
-
-      const createdQuestions = await Promise.all(
-        selectedAIQuestions.map((question) =>
-          apiRequest<IQuestion>("/questions", {
-            method: "POST",
-            body: JSON.stringify({
-              type: question.type,
-              title: question.title || question.content.text.slice(0, 120),
-              content: question.content,
-              options: question.options,
-              answer: question.answer,
-              analysis: question.analysis,
-              difficulty: question.difficulty,
-              score: 10,
-              tag_ids: [],
-              knowledge_point_ids: aiSelectedKnowledgePoints.map((item) => item.id),
-              question_bank_id: bankId,
-            }),
-          }),
-        ),
-      );
-
-      updateField(
-        "question_ids",
-        createdQuestions.map((question) => question.id),
-      );
-      setPersistedAIQuestionKeys((prev) =>
-        Array.from(new Set([...prev, ...selectedAIQuestions.map((question) => getGeneratedQuestionPersistKey(question))])),
-      );
-      setAutoGeneratedMeta(null);
-      setAIGeneratedMeta({
-        count: createdQuestions.length,
-        totalScore: createdQuestions.reduce((sum, question) => sum + question.score, 0),
-      });
-      toast({
-        title: "AI 题目已加入考试",
-        description: `已将 ${createdQuestions.length} 道 AI 题目加入当前考试。`,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "AI 题目加入考试失败";
-      setFlowError(message);
-      toast({
-        title: "加入考试失败",
-        description: message,
-        variant: "destructive",
-      });
-    } finally {
-      setAIApplying(false);
-    }
-  }, [aiQuestions, aiSelectedKnowledgePoints, toast]);
 
   const stopAIGeneration = () => {
     aiAbortRef.current?.abort();
   };
 
-  const toggleAIQuestionSelection = (index: number) => {
-    setAIQuestions((prev) =>
-      prev.map((question) =>
-        question.index === index ? { ...question, selected: !question.selected } : question,
-      ),
-    );
-  };
-
-  const toggleSelectAllAIQuestions = () => {
-    const allSelected = aiQuestions.every((question) => question.selected);
-    setAIQuestions((prev) =>
-      prev.map((question) => ({ ...question, selected: !allSelected })),
-    );
-  };
-
   const removeAIQuestion = (index: number) => {
+    const target = aiQuestions.find((question) => question.index === index);
     setAIQuestions((prev) => prev.filter((question) => question.index !== index));
+    if (target?.persistedQuestionId) {
+      updateField(
+        "question_ids",
+        form.question_ids.filter((questionId) => questionId !== target.persistedQuestionId),
+      );
+    }
   };
 
   const handleSubmit = (e: React.SyntheticEvent) => {
@@ -1740,19 +1770,16 @@ export function ExamWizardForm({
                   <p className="text-sm font-semibold text-foreground">
                     生成结果
                     <span className="ml-2 text-xs font-normal text-muted-foreground">
-                      已选择 {aiQuestions.filter((question) => question.selected).length}/{aiQuestions.length} 道题目
+                      已自动加入 {aiQuestions.filter((question) => question.persistedQuestionId).length} 道题目
                       {aiGeneratedMeta && <span className="ml-2">· 最近生成 {aiGeneratedMeta.count} 题 / {aiGeneratedMeta.totalScore} 分</span>}
                     </span>
                   </p>
-                  <div className="ml-auto flex gap-2">
-                    <Button type="button" variant="outline" size="sm" onClick={toggleSelectAllAIQuestions} disabled={aiQuestions.length === 0}>
-                      {aiQuestions.every((question) => question.selected) ? "取消全选" : "全选"}
-                    </Button>
-                    <Button type="button" size="sm" onClick={() => void handleApplyAIQuestions()} disabled={aiApplying || aiGenerating || aiQuestions.filter((question) => question.selected).length === 0}>
-                      {aiApplying && <Loader2 size={14} className="mr-1 animate-spin" />}
-                      加入当前考试
-                    </Button>
-                  </div>
+                  {aiApplying ? (
+                    <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+                      <Loader2 className="size-3.5 animate-spin" />
+                      正在自动加入...
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
@@ -1760,7 +1787,6 @@ export function ExamWizardForm({
                     <AIGeneratedQuestionCard
                       key={question.index}
                       question={question}
-                      onToggleSelected={() => toggleAIQuestionSelection(question.index)}
                       onRemove={() => removeAIQuestion(question.index)}
                     />
                   ))}
@@ -2051,18 +2077,136 @@ export function ExamWizardForm({
           )}
 
           {currentStepId === "students" && (
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between gap-3">
+            <Card className="overflow-hidden">
+              <CardHeader className="border-b border-border/70">
+                <div className="flex flex-row items-center justify-between gap-3">
                 <CardTitle>第 3 步：选择考试考生</CardTitle>
                 <p className="text-sm font-normal text-muted-foreground">
                   如果暂时不选，后续在编辑考试时仍可继续添加。
                 </p>
+                </div>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <ClassStudentSelector
-                  selectedIds={form.student_ids}
-                  onChange={(ids) => updateField("student_ids", ids)}
-                />
+              <CardContent className="flex flex-col gap-6 p-6">
+                <div className="grid gap-3 md:grid-cols-2">
+                  {[
+                    {
+                      key: "students",
+                      title: "指定考生",
+                      desc: "从班级或名单中选择参考学生",
+                      icon: Users,
+                      active: !form.public_link_enabled,
+                    },
+                    {
+                      key: "public",
+                      title: "公开链接",
+                      desc: "生成链接，外部考生自行填写信息进入",
+                      icon: Globe2,
+                      active: Boolean(form.public_link_enabled),
+                    },
+                  ].map((option) => {
+                    const Icon = option.icon;
+                    return (
+                      <button
+                        key={option.key}
+                        type="button"
+                        className={cn(
+                          "flex items-start gap-3 rounded-xl border p-4 text-left transition-colors",
+                          option.active
+                            ? "border-primary bg-primary/10"
+                            : "border-border bg-background hover:border-primary/30 hover:bg-muted/30",
+                        )}
+                        onClick={() => {
+                          const enablePublic = option.key === "public";
+                          updateField("public_link_enabled", enablePublic);
+                          if (enablePublic && form.student_ids.length > 0) {
+                            updateField("student_ids", []);
+                          }
+                        }}
+                      >
+                        <span
+                          className={cn(
+                            "flex size-10 shrink-0 items-center justify-center rounded-xl",
+                            option.active
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-muted text-muted-foreground",
+                          )}
+                        >
+                          <Icon className="size-5" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-center gap-2">
+                            <span
+                              className={cn(
+                                "text-sm font-semibold",
+                                option.active ? "text-primary" : "text-foreground",
+                              )}
+                            >
+                              {option.title}
+                            </span>
+                          </span>
+                          <span className="mt-1 block text-xs leading-5 text-muted-foreground">{option.desc}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {form.public_link_enabled ? (
+                  <div className="flex flex-col gap-4">
+                    <div className="flex gap-3 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3">
+                      <CircleAlert className="mt-0.5 size-4 shrink-0 text-primary" />
+                      <p className="text-sm leading-6 text-foreground">
+                        使用公开链接后，无需提前录入考生名单。外部考生通过链接进入，
+                        <span className="font-semibold">填写姓名和手机号</span>
+                        即可参加考试。发布后系统自动生成专属链接。
+                      </p>
+                    </div>
+                    <div className="overflow-hidden rounded-xl border border-border">
+                      <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-4 py-3">
+                        <Link2 className="size-4 text-muted-foreground" />
+                        <span className="text-sm font-semibold text-foreground">考试链接</span>
+                        <span className="ml-auto text-xs text-muted-foreground">发布后自动生成</span>
+                      </div>
+                      <div className="flex flex-col gap-4 p-5 md:flex-row md:items-center">
+                        <div className="grid size-24 shrink-0 grid-cols-3 gap-1 rounded-xl border border-border bg-muted/30 p-3">
+                          {Array.from({ length: 9 }).map((_, index) => (
+                            <span
+                              key={index}
+                              className={cn(
+                                "rounded-sm",
+                                index % 2 === 0 ? "bg-muted-foreground/35" : "bg-background",
+                              )}
+                            />
+                          ))}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 font-mono text-sm text-muted-foreground">
+                            https://.../exam-public?token=发布后生成
+                          </div>
+                          <div className="mt-3 flex flex-col gap-1.5 text-xs text-muted-foreground">
+                            <span className="flex items-center gap-2">
+                              <CheckCircle2 className="size-3.5 text-primary" />
+                              考生通过链接或扫码进入，无需账号
+                            </span>
+                            <span className="flex items-center gap-2">
+                              <CheckCircle2 className="size-3.5 text-primary" />
+                              考生自行填写姓名和手机号完成身份确认
+                            </span>
+                            <span className="flex items-center gap-2">
+                              <CheckCircle2 className="size-3.5 text-primary" />
+                              考试结束后可在后台查看所有参考记录
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <ClassStudentSelector
+                    selectedIds={form.student_ids}
+                    onChange={(ids) => updateField("student_ids", ids)}
+                  />
+                )}
               </CardContent>
             </Card>
           )}

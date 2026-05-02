@@ -62,6 +62,8 @@ class ExamStudentResponse(BaseModel):
     student_id: uuid.UUID
     full_name: str | None = None
     username: str | None = None
+    phone: str | None = None
+    user_type: str | None = None
     started_at: datetime | None = None
     submitted_at: datetime | None = None
     grading_status: str | None = None
@@ -183,6 +185,8 @@ class StudentResultRow(BaseModel):
     student_id: uuid.UUID
     full_name: str | None = None
     username: str | None = None
+    phone: str | None = None
+    user_type: str | None = None
     submitted_at: datetime | None = None
     grading_status: str | None = None
     objective_score: float | None = None

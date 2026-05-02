@@ -1,7 +1,7 @@
 """add teacher student association table
 
-Revision ID: 20260411_teacher_student_association
-Revises: 20260411_teacher_student_ownership
+Revision ID: 20260411_teacher_students
+Revises: 20260411_teacher_owner
 Create Date: 2026-04-11
 """
 
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "20260411_teacher_student_association"
-down_revision = "20260411_teacher_student_ownership"
+revision = "20260411_teacher_students"
+down_revision = "20260411_teacher_owner"
 branch_labels = None
 depends_on = None
 

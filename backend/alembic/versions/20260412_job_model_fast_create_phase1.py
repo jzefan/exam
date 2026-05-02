@@ -1,6 +1,6 @@
 """add job model standard and enterprise metadata
 
-Revision ID: 20260412_job_model_fast_create_phase1
+Revision ID: 20260412_job_fast_phase1
 Revises: 20260411_class_creator_ownership
 Create Date: 2026-04-12
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = "20260412_job_model_fast_create_phase1"
+revision: str = "20260412_job_fast_phase1"
 down_revision: Union[str, None] = "20260411_class_creator_ownership"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

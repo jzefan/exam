@@ -1,7 +1,7 @@
 """add class creator ownership
 
 Revision ID: 20260411_class_creator_ownership
-Revises: 20260411_teacher_student_association
+Revises: 20260411_teacher_students
 Create Date: 2026-04-11
 """
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 revision = "20260411_class_creator_ownership"
-down_revision = "20260411_teacher_student_association"
+down_revision = "20260411_teacher_students"
 branch_labels = None
 depends_on = None
 

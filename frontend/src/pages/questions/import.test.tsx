@@ -299,7 +299,7 @@ describe("QuestionImportPage", () => {
     expect(screen.queryByRole("button", { name: "AI 一键分析整个文件" })).not.toBeInTheDocument();
   });
 
-  it("defaults to fast import mode after document recognition", async () => {
+  it("shows the optimized review workspace after document recognition", async () => {
     fetchMock.mockResolvedValueOnce(
       mockJsonResponse({
         mode: "smart",
@@ -324,9 +324,70 @@ describe("QuestionImportPage", () => {
       target: { files: [file] },
     });
 
-    expect(await screen.findByRole("button", { name: "快速导入（推荐）" })).toHaveAttribute("data-state", "active");
-    expect(screen.getByRole("button", { name: "逐题审核" })).toBeInTheDocument();
-    expect(screen.getByText("第 1 题")).toBeInTheDocument();
+    expect(await screen.findByText("核对导入内容")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "导入 1 道题目" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "全部题目 1" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "选择题 1" })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("搜索题目内容、答案、解析或选项...")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "展开查看答案" })).not.toBeInTheDocument();
+    expect(screen.getByText(/答案：/)).toBeInTheDocument();
+  });
+
+  it("re-recognizes the imported document with AI from the review header", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJsonResponse({
+          mode: "smart",
+          summary: {
+            total: 1,
+            high_confidence: 0,
+            medium_confidence: 1,
+            low_confidence: 0,
+            issue_count: 0,
+            pending_review: 1,
+            approved: 0,
+            skipped: 0,
+          },
+          drafts: [{ ...baseDraft, content_text: "初始题目" }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJsonResponse({
+          mode: "smart",
+          summary: {
+            total: 1,
+            high_confidence: 1,
+            medium_confidence: 0,
+            low_confidence: 0,
+            issue_count: 0,
+            pending_review: 1,
+            approved: 0,
+            skipped: 0,
+          },
+          drafts: [{ ...baseDraft, draft_id: "ai-draft", content_text: "AI重新识别后的题目", difficulty: 3 }],
+        }),
+      );
+
+    render(<QuestionImportPage />);
+
+    const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
+    fireEvent.change(screen.getByTestId("question-import-file-input"), {
+      target: { files: [file] },
+    });
+
+    await screen.findByText("核对导入内容");
+    fireEvent.click(screen.getByRole("button", { name: "AI重新识别" }));
+
+    expect(await screen.findByText("AI正在重新识别")).toBeInTheDocument();
+    await screen.findByText("AI重新识别后的题目");
+    expect(screen.getByText("AI重新识别完成")).toBeInTheDocument();
+    expect(screen.getByText("已重新识别 1 道题目，列表已更新。")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/questions/import/document-recognize",
+      expect.objectContaining({
+        body: expect.stringContaining('"analysis_mode":"ai_full"'),
+      }),
+    );
   });
 
   it("uses the selected question bank from the question list as the default import target", async () => {
@@ -349,7 +410,7 @@ describe("QuestionImportPage", () => {
         }),
       )
       .mockResolvedValueOnce(mockJsonResponse([]))
-      .mockResolvedValueOnce(mockJsonResponse({ created: 1 }));
+      .mockResolvedValueOnce(mockJsonResponse({ created: 1, existing: 0, failed: 0 }));
 
     render(<QuestionImportPage />);
 
@@ -359,7 +420,7 @@ describe("QuestionImportPage", () => {
     });
 
     await screen.findByText("核对导入内容");
-    fireEvent.click(screen.getByRole("button", { name: "导入 1 道题" }));
+    fireEvent.click(screen.getByRole("button", { name: "导入 1 道题目" }));
     fireEvent.click(await screen.findByRole("button", { name: "暂不关联" }));
 
     await waitFor(() => {
@@ -374,9 +435,17 @@ describe("QuestionImportPage", () => {
         ]),
       );
     });
+    expect(await screen.findByText("题目导入完成")).toBeInTheDocument();
+    expect(screen.getByText("本次导入")).toBeInTheDocument();
+    expect(screen.getByText("成功入库")).toBeInTheDocument();
+    expect(screen.getByText("数据库已存在")).toBeInTheDocument();
+    expect(screen.getByText("失败")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看题目列表" }));
+    expect(navigateMock).toHaveBeenCalledWith("/questions");
   });
 
-  it("moves the primary import action out of the header in review mode", async () => {
+  it("shows the primary import action in the top bar", async () => {
     fetchMock.mockResolvedValueOnce(
       mockJsonResponse({
         mode: "smart",
@@ -403,10 +472,10 @@ describe("QuestionImportPage", () => {
 
     await screen.findByText("核对导入内容");
 
-    expect(screen.queryByRole("button", { name: /正式导入/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "导入 1 道题目" })).toBeInTheDocument();
   });
 
-  it("shows only fast-import actions in the default review mode", async () => {
+  it("excludes blocking abnormal drafts from the import count", async () => {
     fetchMock.mockResolvedValueOnce(
       mockJsonResponse({
         mode: "smart",
@@ -436,13 +505,13 @@ describe("QuestionImportPage", () => {
 
     await screen.findByText("核对导入内容");
 
-    expect(screen.getByRole("button", { name: "导入 1 道题" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "进入逐题审核" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "导入 1 道题目" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /解析异常.*1/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "确认并下一题" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "AI 补全当前题" })).not.toBeInTheDocument();
   });
 
-  it("reveals review actions only after switching to manual review mode", async () => {
+  it("opens a dialog editor with preview for each question card", async () => {
     fetchMock.mockResolvedValueOnce(
       mockJsonResponse({
         mode: "smart",
@@ -468,12 +537,12 @@ describe("QuestionImportPage", () => {
     });
 
     await screen.findByText("核对导入内容");
-    fireEvent.click(screen.getByRole("button", { name: "逐题审核" }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
 
-    expect(screen.getByRole("button", { name: "确认并下一题" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "确定全部" })).toBeInTheDocument();
-    expect(screen.getByText("AI 辅助")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "AI 补全当前题" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("dialog")).toHaveTextContent("编辑题目");
+    expect(screen.getByRole("tab", { name: "编辑" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "预览" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存修改" })).toBeInTheDocument();
   });
 
   it("allows opening the import flow directly from fast mode when non-blocking drafts exist", async () => {
@@ -504,91 +573,32 @@ describe("QuestionImportPage", () => {
     });
 
     await screen.findByText("核对导入内容");
-    fireEvent.click(screen.getByRole("button", { name: "导入 1 道题" }));
+    fireEvent.click(screen.getByRole("button", { name: "导入 1 道题目" }));
 
     expect(await screen.findByText("选择主知识点")).toBeInTheDocument();
   });
 
-  it("shows ai-full loading text while analyzing from the review screen", async () => {
-    fetchMock
-      .mockResolvedValueOnce(
-        mockJsonResponse({
-          mode: "smart",
-          summary: {
-            total: 1,
-            high_confidence: 0,
-            medium_confidence: 1,
-            low_confidence: 0,
-            issue_count: 0,
-            pending_review: 1,
-            approved: 0,
-            skipped: 0,
-          },
-          drafts: [{ ...baseDraft }],
-        }),
-      )
-      .mockImplementationOnce(
-        () =>
-          new Promise<Response>((resolve) => {
-            setTimeout(
-              () =>
-                resolve(
-                  mockJsonResponse({
-                    mode: "smart",
-                    summary: {
-                      total: 1,
-                      high_confidence: 0,
-                      medium_confidence: 1,
-                      low_confidence: 0,
-                      issue_count: 0,
-                      pending_review: 1,
-                      approved: 0,
-                      skipped: 0,
-                    },
-                    drafts: [{ ...baseDraft, segment_source: "ai_full+rule" }],
-                  }),
-                ),
-              200,
-            );
-          }),
-      );
-
-    render(<QuestionImportPage />);
-
-    const file = new File(["1. 单选题 示例\nA. 选项A\nB. 选项B\n答案：A"], "questions.md", { type: "text/markdown" });
-    fireEvent.change(screen.getByTestId("question-import-file-input"), {
-      target: { files: [file] },
-    });
-
-    expect(await screen.findByText("核对导入内容")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "逐题审核" }));
-    fireEvent.click(screen.getByText("AI 辅助"));
-    fireEvent.click(screen.getByRole("button", { name: "AI 分析整份导入内容" }));
-
-    expect(await screen.findByText("AI 正在分析整份导入内容")).toBeInTheDocument();
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-  });
-
-  it("stops loading immediately when review-screen ai analysis fails", async () => {
-    fetchMock
-      .mockResolvedValueOnce(
-        mockJsonResponse({
-          mode: "smart",
-          summary: {
-            total: 1,
-            high_confidence: 0,
-            medium_confidence: 1,
-            low_confidence: 0,
-            issue_count: 0,
-            pending_review: 1,
-            approved: 0,
-            skipped: 0,
-          },
-          drafts: [{ ...baseDraft }],
-        }),
-      )
-      .mockResolvedValueOnce(mockJsonResponse({ detail: "AI 分析结果格式异常，请重试" }, false));
+  it("filters questions by warning cards and search text", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockJsonResponse({
+        mode: "smart",
+        summary: {
+          total: 3,
+          high_confidence: 0,
+          medium_confidence: 3,
+          low_confidence: 0,
+          issue_count: 2,
+          pending_review: 3,
+          approved: 0,
+          skipped: 0,
+        },
+        drafts: [
+          { ...baseDraft, draft_id: "ok", content_text: "正常题目" },
+          { ...baseDraft, draft_id: "missing", content_text: "没有答案的题目", answer_text: null, issues: ["未识别到答案"] },
+          { ...baseDraft, draft_id: "abnormal", content_text: "异常题目", issues: ["题型不确定"] },
+        ],
+      }),
+    );
 
     render(<QuestionImportPage />);
 
@@ -599,11 +609,13 @@ describe("QuestionImportPage", () => {
 
     expect(await screen.findByText("核对导入内容")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "逐题审核" }));
-    fireEvent.click(screen.getByText("AI 辅助"));
-    fireEvent.click(screen.getByRole("button", { name: "AI 分析整份导入内容" }));
+    fireEvent.click(screen.getByRole("button", { name: /无答案.*1/ }));
+    expect(screen.getByText("没有答案的题目")).toBeInTheDocument();
+    expect(screen.queryByText("异常题目")).not.toBeInTheDocument();
 
-    expect(await screen.findByText("AI 分析结果格式异常，请重试")).toBeInTheDocument();
-    expect(screen.queryByText("AI 正在分析整份导入内容")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("搜索题目内容、答案、解析或选项..."), {
+      target: { value: "没有答案" },
+    });
+    expect(screen.getByText("没有答案的题目")).toBeInTheDocument();
   });
 });

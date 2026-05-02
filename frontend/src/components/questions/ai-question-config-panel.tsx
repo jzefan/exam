@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { Bot } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
@@ -69,6 +69,8 @@ export function AIQuestionConfigPanel({
   allocationError,
   footer,
 }: AIQuestionConfigPanelProps) {
+  const totalCountId = useId();
+
   return (
     <aside className={cn("space-y-5 rounded-xl border border-border/80 bg-card p-5", className)}>
       <div className="space-y-1">
@@ -76,8 +78,9 @@ export function AIQuestionConfigPanel({
       </div>
 
       <div className="space-y-1.5">
-        <Label>题目总数</Label>
+        <Label htmlFor={totalCountId}>题目总数</Label>
         <Input
+          id={totalCountId}
           type="number"
           min={1}
           max={50}

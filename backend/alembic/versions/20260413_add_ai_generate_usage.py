@@ -1,7 +1,7 @@
 """add ai generate knowledge point usage
 
 Revision ID: 20260413_add_ai_generate_usage
-Revises: 20260412_job_model_fast_create_phase1
+Revises: 20260412_job_fast_phase1
 Create Date: 2026-04-13
 """
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 revision: str = "20260413_add_ai_generate_usage"
-down_revision: Union[str, None] = "20260412_job_model_fast_create_phase1"
+down_revision: Union[str, None] = "20260412_job_fast_phase1"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

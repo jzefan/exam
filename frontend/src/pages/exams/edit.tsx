@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useOne, useUpdate } from "@refinedev/core";
 import { useParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
+import { apiClient } from "@/lib/api";
 import { ExamWizardForm } from "./components/ExamWizardForm";
 import { examStatusOptions } from "./components/ExamStatusBadge";
 import type { IExamQuestion, IExamStudent } from "@/types";
@@ -15,6 +16,10 @@ type ExamDetail = ExamFormValues & {
   questions: IExamQuestion[];
   students: IExamStudent[];
 };
+
+interface PublicLinkResponse {
+  public_url: string;
+}
 
 function toLocalDatetime(iso: string | null): string {
   if (!iso) return "";
@@ -46,6 +51,7 @@ function toExamForm(exam: ExamDetail): ExamFormValues {
       score_override: q.score_override ?? q.question_score ?? null,
     })),
     student_ids: exam.students.map((s) => s.student_id),
+    public_link_enabled: false,
   };
 }
 
@@ -63,23 +69,40 @@ function ExamEditForm({ id, exam }: { id: string; exam: ExamDetail }) {
 
   const handleSubmit = (values: ExamFormValues) => {
     setSubmitError(null);
+    const { public_link_enabled: publicLinkEnabled, ...submitValues } = values;
     update(
       {
         resource: "exams",
         id,
         values: {
-          ...values,
-          start_time: toSubmitDateTime(values.start_time),
-          end_time: toSubmitDateTime(values.end_time),
-          notes_template: values.notes_template || null,
-          position_id: values.position_id || null,
-          category: values.category,
-          question_mode: values.question_mode,
-          question_items: values.question_items,
+          ...submitValues,
+          start_time: toSubmitDateTime(submitValues.start_time),
+          end_time: toSubmitDateTime(submitValues.end_time),
+          notes_template: submitValues.notes_template || null,
+          position_id: submitValues.position_id || null,
+          category: submitValues.category,
+          question_mode: submitValues.question_mode,
+          question_items: submitValues.question_items,
         },
       },
       {
-        onSuccess: (response) => {
+        onSuccess: async (response) => {
+          if (publicLinkEnabled) {
+            try {
+              const link = await apiClient.post<PublicLinkResponse>(`/api/exams/${id}/public-link`);
+              await navigator.clipboard?.writeText(link.data.public_url).catch(() => undefined);
+              toast({
+                title: "公开链接已生成",
+                description: "公开链接已复制，外部考生填写姓名和手机号后即可进入。",
+              });
+            } catch (error) {
+              toast({
+                title: "公开链接生成失败",
+                description: getErrorMessage(error, "考试修改已保存，但公开链接生成失败。"),
+                variant: "destructive",
+              });
+            }
+          }
           setSubmitError(null);
           setCurrentExam(response.data as ExamDetail);
           toast({

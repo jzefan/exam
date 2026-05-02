@@ -15,10 +15,21 @@ from app.exams.invitation_schemas import (
     CandidateImportItem,
     InvitationCreated,
     InvitationListItem,
+    PublicLinkRedeemRequest,
+    PublicLinkResponse,
     RedeemRequest,
     RedeemResponse,
 )
-from app.exams.invitation_service import InvitationError, create_invitation, redeem_token, revoke_invitation
+from app.exams.invitation_service import (
+    InvitationError,
+    create_invitation,
+    create_or_replace_public_link,
+    get_public_link,
+    redeem_public_link,
+    redeem_token,
+    revoke_invitation,
+    revoke_public_link,
+)
 from app.exams.models import Exam
 
 
@@ -111,6 +122,49 @@ async def delete_invitation(
     await db.commit()
 
 
+@router.post(
+    "/exams/{exam_id}/public-link",
+    response_model=PublicLinkResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_public_link(
+    exam_id: uuid.UUID,
+    user: Annotated[User, require_capability("exam.update")],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> PublicLinkResponse:
+    exam = await _exam_or_404(db, exam_id)
+    _ensure_exam_owner(exam, user)
+    result = await create_or_replace_public_link(db, exam, user)
+    await db.commit()
+    return result
+
+
+@router.get("/exams/{exam_id}/public-link", response_model=PublicLinkResponse | None)
+async def read_public_link(
+    exam_id: uuid.UUID,
+    user: Annotated[User, require_capability("exam.read")],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> PublicLinkResponse | None:
+    exam = await _exam_or_404(db, exam_id)
+    _ensure_exam_owner(exam, user)
+    return await get_public_link(db, exam)
+
+
+@router.delete("/exams/{exam_id}/public-link", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_public_link(
+    exam_id: uuid.UUID,
+    user: Annotated[User, require_capability("exam.update")],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    exam = await _exam_or_404(db, exam_id)
+    _ensure_exam_owner(exam, user)
+    try:
+        await revoke_public_link(db, exam)
+    except InvitationError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    await db.commit()
+
+
 @public_router.post("/exam-invite/redeem", response_model=RedeemResponse)
 async def redeem(
     body: RedeemRequest,
@@ -118,6 +172,19 @@ async def redeem(
 ) -> RedeemResponse:
     try:
         result = await redeem_token(db, body.token)
+    except InvitationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    await db.commit()
+    return result
+
+
+@public_router.post("/exam-public/redeem", response_model=RedeemResponse)
+async def redeem_public(
+    body: PublicLinkRedeemRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> RedeemResponse:
+    try:
+        result = await redeem_public_link(db, body)
     except InvitationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     await db.commit()

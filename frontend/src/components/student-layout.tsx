@@ -2,9 +2,10 @@ import { useEffect, useState } from "react";
 import { useLogout, useGetIdentity } from "@refinedev/core";
 import { Link, NavLink, Outlet } from "react-router-dom";
 import axios from "axios";
-import { GraduationCap, Home, ClipboardList, NotebookPen, LogOut } from "lucide-react";
+import { Home, ClipboardList, NotebookPen, LogOut } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { BrandLogoMark } from "@/components/brand-logo";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -83,10 +84,8 @@ export function StudentLayout() {
         <div className="flex h-16 items-center justify-between gap-6 px-4 md:px-6">
           <div className="flex min-w-0 items-center gap-6">
             <Link to="/student" className="flex shrink-0 items-center gap-2.5 transition-opacity hover:opacity-80">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
-                <GraduationCap size={18} />
-              </div>
-              <span className="text-sm font-bold tracking-tight">智评云考试</span>
+              <BrandLogoMark className="h-8 w-8 rounded-lg" />
+              <span className="text-sm font-bold tracking-tight">智评线考试</span>
             </Link>
 
             <nav className="hidden items-center gap-1.5 md:flex">

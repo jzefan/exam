@@ -1,7 +1,7 @@
 """add exam allow retake flag
 
 Revision ID: 20260421_add_exam_allow_retake
-Revises: 20260421_add_student_exam_submission_history
+Revises: 20260421_submission_history
 Create Date: 2026-04-21 22:40:00.000000
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 
 
 revision: str = "20260421_add_exam_allow_retake"
-down_revision: str | Sequence[str] | None = "20260421_add_student_exam_submission_history"
+down_revision: str | Sequence[str] | None = "20260421_submission_history"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

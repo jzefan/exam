@@ -1,0 +1,54 @@
+import { MemoryRouter } from "react-router-dom";
+import { describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
+
+import { render, screen } from "@/test/test-utils";
+
+import { RegisterPage } from "./register";
+
+const registerMock = vi.fn();
+
+vi.mock("@refinedev/core", () => ({
+  useRegister: () => ({ mutate: registerMock, isPending: false }),
+}));
+
+describe("RegisterPage", () => {
+  it("submits evaluator role with selected account persona", async () => {
+    const user = userEvent.setup();
+    registerMock.mockClear();
+
+    render(
+      <MemoryRouter>
+        <RegisterPage />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("radio", { name: /通用测评/ }));
+    await user.type(screen.getByLabelText("用户名"), "assessor");
+    await user.type(screen.getByLabelText("邮箱"), "assessor@example.com");
+    await user.type(screen.getByLabelText("密码"), "123456");
+    await user.type(screen.getByLabelText("确认密码"), "123456");
+    await user.click(screen.getByRole("button", { name: "注册" }));
+
+    expect(registerMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        username: "assessor",
+        email: "assessor@example.com",
+        full_name: "assessor",
+        role_name: "evaluator",
+        persona: "assessor",
+      }),
+    );
+  });
+
+  it("does not suggest phone-based account recovery before SMS is supported", () => {
+    render(
+      <MemoryRouter>
+        <RegisterPage />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByPlaceholderText("请设置登录用户名")).toBeInTheDocument();
+    expect(screen.queryByText("使用手机号作为用户名，后续登录和找回账号会更方便。")).not.toBeInTheDocument();
+  });
+});

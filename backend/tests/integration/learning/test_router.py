@@ -1,5 +1,7 @@
 """Integration tests for knowledge management API."""
 
+import asyncio
+
 import pytest
 from httpx import AsyncClient
 
@@ -145,7 +147,7 @@ async def test_catalog_photo_recognize_returns_paths(admin_client: AsyncClient, 
     assert response.json()["paths"][0] == ["第1章 数据库系统概述", "1.1 数据模型"]
 
 
-def test_parse_catalog_paths_from_paddle_ocr_text():
+def test_parse_catalog_paths_from_recognized_text():
     from app.learning.service import _parse_catalog_paths_from_text
 
     paths = _parse_catalog_paths_from_text(
@@ -175,14 +177,80 @@ def test_parse_catalog_paths_from_paddle_ocr_text():
 
 
 @pytest.mark.asyncio
-async def test_catalog_photo_uses_paddle_ocr_text(monkeypatch):
+async def test_catalog_photo_restores_missing_intermediate_numbered_parents(monkeypatch):
     from app.learning.schemas import CatalogPhotoRecognizeRequest
     from app.learning.service import recognize_catalog_structure_from_images
 
-    async def fake_recognize_image_text(_image: str) -> str:
-        return "第1章 数据库系统概述\n1.1 数据模型\n1.2 数据独立性"
+    async def fake_recognize_catalog_with_deepseek_vl(_images: list[str]) -> list[list[str]]:
+        return [
+            ["第8章 互联网上的音频/视频服务"],
+            ["第8章 互联网上的音频/视频服务", "8.2 流式存储音频/视频"],
+            ["第8章 互联网上的音频/视频服务", "8.2.1 具有无文件的万维网服务器"],
+            ["第8章 互联网上的音频/视频服务", "8.2.2 媒体服务器"],
+            ["第8章 互联网上的音频/视频服务", "8.3 交互式音频/视频"],
+        ]
 
-    monkeypatch.setattr("app.learning.service.recognize_image_text", fake_recognize_image_text)
+    monkeypatch.setattr(
+        "app.learning.service._recognize_catalog_with_deepseek_vl",
+        fake_recognize_catalog_with_deepseek_vl,
+    )
+
+    response = await recognize_catalog_structure_from_images(
+        CatalogPhotoRecognizeRequest(file_name="catalog.png", images=["image-1"])
+    )
+
+    assert response.paths == [
+        ["第8章 互联网上的音频/视频服务"],
+        ["第8章 互联网上的音频/视频服务", "8.2 流式存储音频/视频"],
+        ["第8章 互联网上的音频/视频服务", "8.2 流式存储音频/视频", "8.2.1 具有无文件的万维网服务器"],
+        ["第8章 互联网上的音频/视频服务", "8.2 流式存储音频/视频", "8.2.2 媒体服务器"],
+        ["第8章 互联网上的音频/视频服务", "8.3 交互式音频/视频"],
+    ]
+
+
+def test_catalog_chapter_key_matches_arabic_and_chinese_chapter_numbering():
+    from app.learning.service import _catalog_chapter_key_for_segment
+
+    assert _catalog_chapter_key_for_segment("第6章 应用层") == "6"
+    assert _catalog_chapter_key_for_segment("第六篇 计算机网络体系结构") == "6"
+    assert _catalog_chapter_key_for_segment("第2编 数据结构") == "2"
+    assert _catalog_chapter_key_for_segment("第3单元 网络协议") == "3"
+    assert _catalog_chapter_key_for_segment("第4部分 操作系统") == "4"
+    assert _catalog_chapter_key_for_segment("第十章 网络安全") == "10"
+    assert _catalog_chapter_key_for_segment("第十一章 密码学基础") == "11"
+    assert _catalog_chapter_key_for_segment("Chapter 10 Network Security") == "10"
+    assert _catalog_chapter_key_for_segment("Unit 11 Cryptography") == "11"
+    assert _catalog_chapter_key_for_segment("Part III Application Layer") == "3"
+    assert _catalog_chapter_key_for_segment("10.1 网络安全概述") == "10"
+    assert _catalog_chapter_key_for_segment("11.2.3 对称加密") == "11"
+
+
+def test_catalog_line_level_supports_common_chinese_and_english_directory_formats():
+    from app.learning.service import _catalog_line_level
+
+    assert _catalog_line_level("第六篇 计算机网络体系结构") == (1, "第六篇 计算机网络体系结构")
+    assert _catalog_line_level("第2节 运输层协议") == (2, "第2节 运输层协议")
+    assert _catalog_line_level("Chapter 10 Network Security") == (1, "Chapter 10 Network Security")
+    assert _catalog_line_level("Unit 11 Cryptography") == (1, "Unit 11 Cryptography")
+    assert _catalog_line_level("Section 11.2 Symmetric Encryption") == (2, "Section 11.2 Symmetric Encryption")
+
+
+@pytest.mark.asyncio
+async def test_catalog_photo_uses_deepseek_vision_first(monkeypatch):
+    from app.learning.schemas import CatalogPhotoRecognizeRequest
+    from app.learning.service import recognize_catalog_structure_from_images
+
+    async def fake_recognize_catalog_with_deepseek_vl(_images: list[str]) -> list[list[str]]:
+        return [
+            ["第1章 数据库系统概述"],
+            ["第1章 数据库系统概述", "1.1 数据模型"],
+            ["第1章 数据库系统概述", "1.2 数据独立性"],
+        ]
+
+    monkeypatch.setattr(
+        "app.learning.service._recognize_catalog_with_deepseek_vl",
+        fake_recognize_catalog_with_deepseek_vl,
+    )
 
     response = await recognize_catalog_structure_from_images(
         CatalogPhotoRecognizeRequest(file_name="catalog.png", images=["data:image/png;base64,ZmFrZQ=="])
@@ -196,18 +264,20 @@ async def test_catalog_photo_uses_paddle_ocr_text(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_catalog_photo_falls_back_to_qwen_vl_when_ocr_engine_missing(monkeypatch):
-    from app.learning.ocr import OCREngineUnavailable
+async def test_catalog_photo_falls_back_to_qwen_vl_when_deepseek_unavailable(monkeypatch):
     from app.learning.schemas import CatalogPhotoRecognizeRequest
     from app.learning.service import recognize_catalog_structure_from_images
 
-    async def fake_recognize_image_text(_image: str) -> str:
-        raise OCREngineUnavailable("PaddleOCR is not installed")
+    async def fake_recognize_catalog_with_deepseek_vl(_images: list[str]) -> list[list[str]]:
+        raise RuntimeError("未配置 DeepSeek API Key，请联系管理员。")
 
     async def fake_recognize_catalog_with_qwen_vl(_images: list[str]) -> list[list[str]]:
         return [["第1章 数据库系统概述", "1.1 数据模型"]]
 
-    monkeypatch.setattr("app.learning.service.recognize_image_text", fake_recognize_image_text)
+    monkeypatch.setattr(
+        "app.learning.service._recognize_catalog_with_deepseek_vl",
+        fake_recognize_catalog_with_deepseek_vl,
+    )
     monkeypatch.setattr("app.learning.service._recognize_catalog_with_qwen_vl", fake_recognize_catalog_with_qwen_vl)
 
     response = await recognize_catalog_structure_from_images(
@@ -218,18 +288,409 @@ async def test_catalog_photo_falls_back_to_qwen_vl_when_ocr_engine_missing(monke
 
 
 @pytest.mark.asyncio
-async def test_catalog_photo_returns_friendly_error_when_all_engines_missing(monkeypatch):
-    from app.learning.ocr import OCREngineUnavailable
+async def test_catalog_photo_recognizes_each_image_separately_and_merges_paths(monkeypatch):
     from app.learning.schemas import CatalogPhotoRecognizeRequest
     from app.learning.service import recognize_catalog_structure_from_images
 
-    async def fake_recognize_image_text(_image: str) -> str:
-        raise OCREngineUnavailable("PaddleOCR is not installed")
+    calls: list[list[str]] = []
+
+    async def fake_recognize_catalog_with_deepseek_vl(images: list[str]) -> list[list[str]]:
+        calls.append(images)
+        assert len(images) == 1
+        if images[0] == "image-1":
+            return [
+                ["第1章 数据库系统概述"],
+                ["第1章 数据库系统概述", "1.1 数据模型"],
+            ]
+        if images[0] == "image-2":
+            return [
+                ["第1章 数据库系统概述", "1.1 数据模型"],
+                ["第1章 数据库系统概述", "1.2 数据独立性"],
+            ]
+        return [["第2章 关系数据库"]]
+
+    monkeypatch.setattr(
+        "app.learning.service._recognize_catalog_with_deepseek_vl",
+        fake_recognize_catalog_with_deepseek_vl,
+    )
+
+    response = await recognize_catalog_structure_from_images(
+        CatalogPhotoRecognizeRequest(
+            file_name="catalog.png",
+            images=["image-1", "image-2", "image-3"],
+        )
+    )
+
+    assert sorted(calls) == [["image-1"], ["image-2"], ["image-3"]]
+    assert response.paths == [
+        ["第1章 数据库系统概述"],
+        ["第1章 数据库系统概述", "1.1 数据模型"],
+        ["第1章 数据库系统概述", "1.2 数据独立性"],
+        ["第2章 关系数据库"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_catalog_photo_merges_cross_page_children_back_under_previous_parents(monkeypatch):
+    from app.learning.schemas import CatalogPhotoRecognizeRequest
+    from app.learning.service import recognize_catalog_structure_from_images
+
+    async def fake_recognize_catalog_with_deepseek_vl(images: list[str]) -> list[list[str]]:
+        if images[0] == "image-1":
+            return [
+                ["第4章 网络层"],
+                ["第4章 网络层", "4.2 网际协议 IP"],
+                ["第4章 网络层", "4.2 网际协议 IP", "4.2.3 IP地址与MAC地址"],
+            ]
+        return [
+            ["4.2.4 地址解析协议 ARP"],
+            ["4.2.5 IP 数据报的格式"],
+            ["4.3 IP 层转发分组的过程"],
+        ]
+
+    monkeypatch.setattr(
+        "app.learning.service._recognize_catalog_with_deepseek_vl",
+        fake_recognize_catalog_with_deepseek_vl,
+    )
+
+    response = await recognize_catalog_structure_from_images(
+        CatalogPhotoRecognizeRequest(
+            file_name="catalog.png",
+            images=["image-1", "image-2"],
+        )
+    )
+
+    assert response.paths == [
+        ["第4章 网络层"],
+        ["第4章 网络层", "4.2 网际协议 IP"],
+        ["第4章 网络层", "4.2 网际协议 IP", "4.2.3 IP地址与MAC地址"],
+        ["第4章 网络层", "4.2 网际协议 IP", "4.2.4 地址解析协议 ARP"],
+        ["第4章 网络层", "4.2 网际协议 IP", "4.2.5 IP 数据报的格式"],
+        ["第4章 网络层", "4.3 IP 层转发分组的过程"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_catalog_photo_skips_appendix_and_exercise_paths_when_merging(monkeypatch):
+    from app.learning.schemas import CatalogPhotoRecognizeRequest
+    from app.learning.service import recognize_catalog_structure_from_images
+
+    async def fake_recognize_catalog_with_deepseek_vl(images: list[str]) -> list[list[str]]:
+        if images[0] == "image-1":
+            return [
+                ["第4章 网络层"],
+                ["第4章 网络层", "4.2 网际协议 IP"],
+                ["第4章 网络层", "4.2 网际协议 IP", "4.2.4 地址解析协议 ARP"],
+            ]
+        return [
+            ["第4章 网络层", "4.2 网际协议 IP", "4.2.5 IP 数据报的格式"],
+            ["第4章 网络层", "4.2 网际协议 IP", "习题"],
+            ["附录A 常见协议端口号"],
+            ["Chapter 11 Cryptography", "Exercises"],
+            ["第4章 网络层", "本章小结"],
+            ["第4章 网络层", "练习题"],
+            ["第4章 网络层", "4.3 IP 层转发分组的过程"],
+        ]
+
+    monkeypatch.setattr(
+        "app.learning.service._recognize_catalog_with_deepseek_vl",
+        fake_recognize_catalog_with_deepseek_vl,
+    )
+
+    response = await recognize_catalog_structure_from_images(
+        CatalogPhotoRecognizeRequest(
+            file_name="catalog.png",
+            images=["image-1", "image-2"],
+        )
+    )
+
+    assert response.paths == [
+        ["第4章 网络层"],
+        ["第4章 网络层", "4.2 网际协议 IP"],
+        ["第4章 网络层", "4.2 网际协议 IP", "4.2.4 地址解析协议 ARP"],
+        ["第4章 网络层", "4.2 网际协议 IP", "4.2.5 IP 数据报的格式"],
+        ["第4章 网络层", "4.3 IP 层转发分组的过程"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_catalog_photo_reattaches_same_page_sections_when_chapter_heading_arrives_late(monkeypatch):
+    from app.learning.schemas import CatalogPhotoRecognizeRequest
+    from app.learning.service import recognize_catalog_structure_from_images
+
+    async def fake_recognize_catalog_with_deepseek_vl(images: list[str]) -> list[list[str]]:
+        if images[0] == "image-1":
+            return [
+                ["第5章 运输层"],
+                ["第5章 运输层", "5.9 TCP的运输连接管理"],
+                ["第5章 运输层", "5.9 TCP的运输连接管理", "5.9.3 TCP的有限状态机"],
+            ]
+        return [
+            ["6.1 域名系统 DNS"],
+            ["6.1 域名系统 DNS", "6.1.1 域名系统概述"],
+            ["6.2 文件传送协议"],
+            ["6.4 万维网 WWW"],
+            ["第6章 应用层"],
+            ["第6章 应用层", "6.5 电子邮件"],
+            ["第6章 应用层", "6.5 电子邮件", "6.5.2 简单邮件传送协议 SMTP"],
+        ]
+
+    monkeypatch.setattr(
+        "app.learning.service._recognize_catalog_with_deepseek_vl",
+        fake_recognize_catalog_with_deepseek_vl,
+    )
+
+    response = await recognize_catalog_structure_from_images(
+        CatalogPhotoRecognizeRequest(
+            file_name="catalog.png",
+            images=["image-1", "image-2"],
+        )
+    )
+
+    assert response.paths == [
+        ["第5章 运输层"],
+        ["第5章 运输层", "5.9 TCP的运输连接管理"],
+        ["第5章 运输层", "5.9 TCP的运输连接管理", "5.9.3 TCP的有限状态机"],
+        ["第6章 应用层"],
+        ["第6章 应用层", "6.1 域名系统 DNS"],
+        ["第6章 应用层", "6.1 域名系统 DNS", "6.1.1 域名系统概述"],
+        ["第6章 应用层", "6.2 文件传送协议"],
+        ["第6章 应用层", "6.4 万维网 WWW"],
+        ["第6章 应用层", "6.5 电子邮件"],
+        ["第6章 应用层", "6.5 电子邮件", "6.5.2 简单邮件传送协议 SMTP"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_catalog_photo_reattaches_sections_for_double_digit_chapters(monkeypatch):
+    from app.learning.schemas import CatalogPhotoRecognizeRequest
+    from app.learning.service import recognize_catalog_structure_from_images
+
+    async def fake_recognize_catalog_with_deepseek_vl(images: list[str]) -> list[list[str]]:
+        if images[0] == "image-1":
+            return [
+                ["第9章 网络管理"],
+                ["第9章 网络管理", "9.4 SNMP 协议"],
+            ]
+        return [
+            ["10.1 网络安全概述"],
+            ["10.2 防火墙"],
+            ["第十章 网络安全"],
+            ["第十章 网络安全", "10.3 入侵检测"],
+            ["11.1 密码学概述"],
+            ["第十一章 密码学基础"],
+            ["第十一章 密码学基础", "11.2 对称加密"],
+        ]
+
+    monkeypatch.setattr(
+        "app.learning.service._recognize_catalog_with_deepseek_vl",
+        fake_recognize_catalog_with_deepseek_vl,
+    )
+
+    response = await recognize_catalog_structure_from_images(
+        CatalogPhotoRecognizeRequest(
+            file_name="catalog.png",
+            images=["image-1", "image-2"],
+        )
+    )
+
+    assert response.paths == [
+        ["第9章 网络管理"],
+        ["第9章 网络管理", "9.4 SNMP 协议"],
+        ["第十章 网络安全"],
+        ["第十章 网络安全", "10.1 网络安全概述"],
+        ["第十章 网络安全", "10.2 防火墙"],
+        ["第十章 网络安全", "10.3 入侵检测"],
+        ["第十一章 密码学基础"],
+        ["第十一章 密码学基础", "11.1 密码学概述"],
+        ["第十一章 密码学基础", "11.2 对称加密"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_catalog_photo_supports_part_unit_and_english_chapter_anchors(monkeypatch):
+    from app.learning.schemas import CatalogPhotoRecognizeRequest
+    from app.learning.service import recognize_catalog_structure_from_images
+
+    async def fake_recognize_catalog_with_deepseek_vl(images: list[str]) -> list[list[str]]:
+        if images[0] == "image-1":
+            return [
+                ["2.1 栈与队列"],
+                ["2.2 树与二叉树"],
+                ["第2编 数据结构基础"],
+                ["第2编 数据结构基础", "2.3 图"],
+            ]
+        return [
+            ["11.1 Symmetric Encryption"],
+            ["11.2 Asymmetric Encryption"],
+            ["Chapter 11 Cryptography"],
+            ["Chapter 11 Cryptography", "11.3 Hash Functions"],
+        ]
+
+    monkeypatch.setattr(
+        "app.learning.service._recognize_catalog_with_deepseek_vl",
+        fake_recognize_catalog_with_deepseek_vl,
+    )
+
+    response = await recognize_catalog_structure_from_images(
+        CatalogPhotoRecognizeRequest(
+            file_name="catalog.png",
+            images=["image-1", "image-2"],
+        )
+    )
+
+    assert response.paths == [
+        ["第2编 数据结构基础"],
+        ["第2编 数据结构基础", "2.1 栈与队列"],
+        ["第2编 数据结构基础", "2.2 树与二叉树"],
+        ["第2编 数据结构基础", "2.3 图"],
+        ["Chapter 11 Cryptography"],
+        ["Chapter 11 Cryptography", "11.1 Symmetric Encryption"],
+        ["Chapter 11 Cryptography", "11.2 Asymmetric Encryption"],
+        ["Chapter 11 Cryptography", "11.3 Hash Functions"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_catalog_photo_reattaches_previous_page_sections_when_chapter_anchor_appears_later(monkeypatch):
+    from app.learning.schemas import CatalogPhotoRecognizeRequest
+    from app.learning.service import recognize_catalog_structure_from_images
+
+    async def fake_recognize_catalog_with_deepseek_vl(images: list[str]) -> list[list[str]]:
+        if images[0] == "image-1":
+            return [
+                ["第2章 物理层"],
+                ["第2章 物理层", "2.4 信道复用技术"],
+                ["第2章 物理层", "2.4 信道复用技术", "2.4.3 码分复用"],
+                ["3.1 数据链路层概述"],
+                ["3.2 差错检测"],
+                ["3.3 点对点协议 PPP"],
+                ["3.4 局域网"],
+            ]
+        return [
+            ["第3章 数据链路层"],
+            ["第3章 数据链路层", "3.5 高速以太网"],
+            ["第3章 数据链路层", "3.5.4 使用以太网进行宽带接入"],
+            ["第4章 网络层"],
+            ["第4章 网络层", "4.2 网际协议 IP"],
+        ]
+
+    monkeypatch.setattr(
+        "app.learning.service._recognize_catalog_with_deepseek_vl",
+        fake_recognize_catalog_with_deepseek_vl,
+    )
+
+    response = await recognize_catalog_structure_from_images(
+        CatalogPhotoRecognizeRequest(
+            file_name="catalog.png",
+            images=["image-1", "image-2"],
+        )
+    )
+
+    assert response.paths == [
+        ["第2章 物理层"],
+        ["第2章 物理层", "2.4 信道复用技术"],
+        ["第2章 物理层", "2.4 信道复用技术", "2.4.3 码分复用"],
+        ["第3章 数据链路层"],
+        ["第3章 数据链路层", "3.1 数据链路层概述"],
+        ["第3章 数据链路层", "3.2 差错检测"],
+        ["第3章 数据链路层", "3.3 点对点协议 PPP"],
+        ["第3章 数据链路层", "3.4 局域网"],
+        ["第3章 数据链路层", "3.5 高速以太网"],
+        ["第3章 数据链路层", "3.5 高速以太网", "3.5.4 使用以太网进行宽带接入"],
+        ["第4章 网络层"],
+        ["第4章 网络层", "4.2 网际协议 IP"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_catalog_photo_reattaches_deep_sections_when_previous_chapter_prefix_leaks(monkeypatch):
+    from app.learning.schemas import CatalogPhotoRecognizeRequest
+    from app.learning.service import recognize_catalog_structure_from_images
+
+    async def fake_recognize_catalog_with_deepseek_vl(images: list[str]) -> list[list[str]]:
+        if images[0] == "image-1":
+            return [
+                ["第2章 物理层"],
+                ["第2章 物理层", "2.6 宽带接入技术"],
+            ]
+        return [
+            ["第2章 物理层", "2.6 宽带接入技术", "3.1.1 数据链路和帧"],
+            ["第2章 物理层", "2.6 宽带接入技术", "3.2.3 PPP 协议的工作状态"],
+            ["第3章 数据链路层"],
+            ["第3章 数据链路层", "3.1 数据链路层的几个共同问题"],
+            ["第3章 数据链路层", "3.2 点对点协议 PPP"],
+        ]
+
+    monkeypatch.setattr(
+        "app.learning.service._recognize_catalog_with_deepseek_vl",
+        fake_recognize_catalog_with_deepseek_vl,
+    )
+
+    response = await recognize_catalog_structure_from_images(
+        CatalogPhotoRecognizeRequest(
+            file_name="catalog.png",
+            images=["image-1", "image-2"],
+        )
+    )
+
+    assert response.paths == [
+        ["第2章 物理层"],
+        ["第2章 物理层", "2.6 宽带接入技术"],
+        ["第3章 数据链路层"],
+        ["第3章 数据链路层", "3.1 数据链路层的几个共同问题"],
+        ["第3章 数据链路层", "3.1 数据链路层的几个共同问题", "3.1.1 数据链路和帧"],
+        ["第3章 数据链路层", "3.2 点对点协议 PPP"],
+        ["第3章 数据链路层", "3.2 点对点协议 PPP", "3.2.3 PPP 协议的工作状态"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_catalog_photo_timeout_points_to_specific_image(monkeypatch):
+    from app.learning.schemas import CatalogPhotoRecognizeRequest
+    from app.learning.service import recognize_catalog_structure_from_images
+
+    async def fake_recognize_catalog_with_deepseek_vl(images: list[str]) -> list[list[str]]:
+        if images[0] == "image-2":
+            await asyncio.sleep(0.05)
+        return [["第1章 数据库系统概述"]]
+
+    async def fake_recognize_catalog_with_qwen_vl(images: list[str]) -> list[list[str]]:
+        if images[0] == "image-2":
+            await asyncio.sleep(0.05)
+        return [["第1章 数据库系统概述"]]
+
+    monkeypatch.setattr(
+        "app.learning.service._recognize_catalog_with_deepseek_vl",
+        fake_recognize_catalog_with_deepseek_vl,
+    )
+    monkeypatch.setattr("app.learning.service._recognize_catalog_with_qwen_vl", fake_recognize_catalog_with_qwen_vl)
+    monkeypatch.setattr("app.learning.service._CATALOG_SINGLE_IMAGE_TIMEOUT_SECONDS", 0.01)
+
+    with pytest.raises(RuntimeError, match="第 2 张图片识别超时"):
+        await recognize_catalog_structure_from_images(
+            CatalogPhotoRecognizeRequest(
+                file_name="catalog.png",
+                images=["image-1", "image-2"],
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_catalog_photo_returns_friendly_error_when_all_engines_missing(monkeypatch):
+    from app.learning.schemas import CatalogPhotoRecognizeRequest
+    from app.learning.service import recognize_catalog_structure_from_images
+
+    async def fake_recognize_catalog_with_deepseek_vl(_images: list[str]) -> list[list[str]]:
+        raise RuntimeError("未配置 DeepSeek API Key，请联系管理员。")
 
     async def fake_recognize_catalog_with_qwen_vl(_images: list[str]) -> list[list[str]]:
         raise RuntimeError("未配置 Qwen API Key，请联系管理员。")
 
-    monkeypatch.setattr("app.learning.service.recognize_image_text", fake_recognize_image_text)
+    monkeypatch.setattr(
+        "app.learning.service._recognize_catalog_with_deepseek_vl",
+        fake_recognize_catalog_with_deepseek_vl,
+    )
     monkeypatch.setattr("app.learning.service._recognize_catalog_with_qwen_vl", fake_recognize_catalog_with_qwen_vl)
 
     with pytest.raises(RuntimeError, match="目录识别服务暂不可用，请联系管理员处理"):

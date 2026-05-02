@@ -1,16 +1,23 @@
 import { useState, useRef, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Sparkles, Trash2, Loader2, StopCircle, FileQuestion } from "lucide-react";
+import { Sparkles, Trash2, Loader2, StopCircle, FileQuestion, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import {
   getGeneratedQuestionPersistKey,
   useUnsavedGeneratedQuestionsGuard,
 } from "@/hooks/use-unsaved-generated-questions-guard";
 import { LatexText } from "@/components/ui/latex-text";
-import type { QuestionType } from "@/types";
+import type { IQuestion, QuestionType } from "@/types";
 import { AIGenerateLoadingOverlay } from "./components/ai-generate-loading-overlay";
 import {
   validateTypeAllocation,
@@ -23,6 +30,7 @@ import {
   AIQuestionConfigPanel,
   type SelectedKnowledgePoint,
 } from "@/components/questions/ai-question-config-panel";
+import { QuestionEditFormContent, type QuestionEditSubmitValues } from "./edit";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -79,6 +87,73 @@ function difficultyDots(level: number) {
   ));
 }
 
+function normalizeTrueFalseAnswer(answer: GeneratedQuestion["answer"]) {
+  const value = answer.correct ?? answer.text;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    return ["true", "正确", "对", "是"].includes(value.trim().toLowerCase());
+  }
+  return false;
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function generatedQuestionToEditableQuestion(question: GeneratedQuestion): IQuestion {
+  const answer =
+    question.type === "true_false"
+      ? { correct: normalizeTrueFalseAnswer(question.answer) }
+      : question.answer;
+
+  return {
+    id: `generated-${question.index}`,
+    type: question.type,
+    title: question.title,
+    content: {
+      html: question.content.text ? `<p>${escapeHtml(question.content.text)}</p>` : "",
+      text: question.content.text,
+    },
+    options: question.options,
+    answer,
+    analysis: question.analysis,
+    difficulty: question.difficulty,
+    score: 10,
+    usage_count: 0,
+    question_bank_id: null,
+    question_bank_name: null,
+    tags: [],
+    knowledge_points: [],
+    created_by: "",
+    created_by_name: "",
+    created_at: "",
+    updated_at: "",
+  };
+}
+
+function applyQuestionEditValues(
+  question: GeneratedQuestion,
+  values: QuestionEditSubmitValues,
+): GeneratedQuestion {
+  const contentText = typeof values.content.text === "string" ? values.content.text : values.title;
+
+  return {
+    ...question,
+    type: values.type,
+    title: values.title,
+    content: {
+      text: contentText,
+    },
+    options: values.options,
+    answer: values.answer,
+    analysis: values.analysis,
+    difficulty: values.difficulty,
+  };
+}
+
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
@@ -99,7 +174,7 @@ export function AIGeneratePage() {
     essay: 0,
     code: 0,
   });
-  const [model, setModel] = useState<AIModelProvider>("qwen");
+  const [model, setModel] = useState<AIModelProvider>("deepseek");
   const [selectedKPs, setSelectedKPs] = useState<SelectedKnowledgePoint[]>([]);
   const [customPrompt, setCustomPrompt] = useState("");
 
@@ -108,12 +183,17 @@ export function AIGeneratePage() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [persistedQuestionKeys, setPersistedQuestionKeys] = useState<string[]>([]);
+  const [editingQuestionIndex, setEditingQuestionIndex] = useState<number | null>(null);
 
   const allocationState = validateTypeAllocation(totalCount, typeAlloc);
   const allocSum = allocationState.allocated;
   const allocMismatch = !allocationState.isValid;
 
   const selectedCount = questions.filter((q) => q.selected).length;
+  const editingQuestion = useMemo(
+    () => questions.find((question) => question.index === editingQuestionIndex) ?? null,
+    [editingQuestionIndex, questions],
+  );
   const currentPersistKeys = useMemo(
     () => questions.map((question) => getGeneratedQuestionPersistKey(question)),
     [questions],
@@ -265,6 +345,24 @@ export function AIGeneratePage() {
 
   const removeQuestion = (index: number) => {
     setQuestions((prev) => prev.filter((q) => q.index !== index));
+  };
+
+  const openQuestionEditor = (question: GeneratedQuestion) => {
+    setEditingQuestionIndex(question.index);
+  };
+
+  const closeQuestionEditor = () => {
+    setEditingQuestionIndex(null);
+  };
+
+  const saveQuestionEdit = (values: QuestionEditSubmitValues) => {
+    if (editingQuestionIndex === null) return;
+    setQuestions((prev) =>
+      prev.map((question) =>
+        question.index === editingQuestionIndex ? applyQuestionEditValues(question, values) : question,
+      ),
+    );
+    closeQuestionEditor();
   };
 
   /* ---- save ---- */
@@ -428,6 +526,15 @@ export function AIGeneratePage() {
                     <Button
                       variant="ghost"
                       size="sm"
+                      className="h-7 gap-1 px-2 text-muted-foreground hover:text-foreground"
+                      onClick={() => openQuestionEditor(q)}
+                    >
+                      <Pencil size={13} />
+                      编辑
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
                       onClick={() => removeQuestion(q.index)}
                     >
@@ -496,6 +603,32 @@ export function AIGeneratePage() {
         )}
         {isGenerating && <AIGenerateLoadingOverlay generatedCount={questions.length} />}
       </main>
+
+      <Dialog open={editingQuestion !== null} onOpenChange={(open) => !open && closeQuestionEditor()}>
+        <DialogContent className="max-h-[88vh] max-w-5xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>编辑生成题目</DialogTitle>
+            <DialogDescription>
+              这里复用题目编辑界面，修改后再保存到题库。
+            </DialogDescription>
+          </DialogHeader>
+
+          {editingQuestion ? (
+            <QuestionEditFormContent
+              key={editingQuestion.index}
+              question={generatedQuestionToEditableQuestion(editingQuestion)}
+              banks={[]}
+              allTags={[]}
+              variant="dialog"
+              showHeader={false}
+              showQuestionBankAndTags={false}
+              submitLabel="保存修改"
+              onCancel={closeQuestionEditor}
+              onSubmit={saveQuestionEdit}
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { apiRequest } from "@/pages/grading/api";
 import { Card, CardContent } from "@/components/ui/card";
+import { getPersonaCopy } from "@/lib/persona-copy";
 
 interface DashboardStats {
   total_candidates: number;
@@ -40,7 +41,7 @@ interface StatCardProps {
 function StatCard({ title, value, icon, color, onClick, loading }: StatCardProps) {
   return (
     <Card
-      className={onClick ? "cursor-pointer transition-all hover:border-foreground/40 hover:shadow-sm" : ""}
+      className={onClick ? "cursor-pointer transition-all hover:border-primary/55 hover:bg-primary/[0.015] hover:shadow-sm" : ""}
       onClick={onClick}
     >
       <CardContent className="pt-6">
@@ -75,7 +76,7 @@ function QuickAction({ title, description, icon, onClick }: QuickActionProps) {
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center gap-4 w-full rounded-lg border border-border bg-card p-4 text-left transition-all hover:border-foreground/40 hover:shadow-sm"
+      className="flex w-full items-center gap-4 rounded-lg border border-border bg-card p-4 text-left transition-all hover:border-primary/55 hover:bg-primary/[0.015] hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <div className="h-9 w-9 rounded-lg bg-muted flex items-center justify-center shrink-0 text-foreground">
         {icon}
@@ -91,9 +92,10 @@ function QuickAction({ title, description, icon, onClick }: QuickActionProps) {
 
 export function Dashboard() {
   const navigate = useNavigate();
-  const { data: identity } = useGetIdentity<{ name: string; role?: string }>();
+  const { data: identity } = useGetIdentity<{ name: string; role?: string; persona?: string | null }>();
   const { data: role } = usePermissions<string>({});
   const isAdmin = role === "platform_admin";
+  const personaCopy = getPersonaCopy(identity?.persona);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -129,7 +131,7 @@ export function Dashboard() {
           {greeting}，{identity?.name ?? "用户"} 👋
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          欢迎使用智评云考试管理平台，这里是你的工作台
+          欢迎使用智评线考试管理平台，这里是你的工作台
         </p>
       </div>
 
@@ -178,6 +180,7 @@ export function Dashboard() {
               loading={loading}
               icon={<ClipboardList size={22} className="text-violet-600 dark:text-violet-400" />}
               color="bg-violet-50 dark:bg-violet-950"
+              onClick={() => navigate("/exams/students")}
             />
             <StatCard
               title="待阅卷"
@@ -259,8 +262,8 @@ export function Dashboard() {
           ) : (
             <>
               <QuickAction
-                title="学生管理"
-                description="管理学生账号、班级与导入数据"
+                title={personaCopy.management}
+                description={`管理${personaCopy.person}账号、${personaCopy.group}与导入数据`}
                 icon={<Users size={18} />}
                 onClick={() => navigate("/students")}
               />

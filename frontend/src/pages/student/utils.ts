@@ -47,18 +47,27 @@ export function getEffectiveStudentExamStatus(
     return "completed";
   }
 
+  if (exam.status === "closed") {
+    return "closed";
+  }
+
   const nowMs = now.getTime();
   const startMs = exam.start_time ? new Date(exam.start_time).getTime() : Number.NaN;
   const endMs = exam.end_time ? new Date(exam.end_time).getTime() : Number.NaN;
 
-  if (!Number.isNaN(startMs) && nowMs >= startMs) {
-    if (!Number.isNaN(endMs) && nowMs > endMs) {
-      return "closed";
-    }
+  if (!Number.isNaN(endMs) && nowMs > endMs) {
+    return "closed";
+  }
+
+  if (Number.isNaN(startMs)) {
     return "ongoing";
   }
 
-  return exam.status === "closed" ? "closed" : "upcoming";
+  if (!Number.isNaN(startMs) && nowMs >= startMs) {
+    return "ongoing";
+  }
+
+  return "upcoming";
 }
 
 export function canStudentRetakeExam(exam: StudentExamLike, now = new Date()): boolean {

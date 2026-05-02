@@ -50,6 +50,12 @@ class _FakeAsyncClient:
         return _FakeStreamResponse(self._lines)
 
 
+def test_ai_generate_request_defaults_to_deepseek() -> None:
+    request = AIGenerateRequest()
+
+    assert request.model == "deepseek"
+
+
 @pytest.mark.asyncio
 async def test_ai_generate_endpoint_rejects_mismatched_type_distribution(
     admin_client: AsyncClient,

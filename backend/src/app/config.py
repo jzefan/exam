@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     debug: bool = False
     deepseek_api_key: str | None = None
     deepseek_base_url: str = "https://api.deepseek.com/v1"
-    deepseek_model_name: str = "deepseek-chat"
+    deepseek_model_name: str = "deepseek-v4-flash"
     qwen_api_key: str | None = None
     qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     qwen_model_name: str = "qwen-plus"
@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     grading_dimension_diff_threshold: float = 0.20
     judge_runner_url: str | None = None
     lsp_runner_url: str | None = None
+    frontend_base_url: str = "http://localhost:4000"
+    password_reset_token_expire_minutes: int = 30
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from_email: str | None = None
+    smtp_use_tls: bool = True
 
 
 settings = Settings()

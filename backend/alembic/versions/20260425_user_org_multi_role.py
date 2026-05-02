@@ -1,7 +1,7 @@
 """user_organizations multi-role primary key
 
 Revision ID: 20260425_user_org_multi_role
-Revises: 20260423_add_learning_structure_ownership
+Revises: 20260423_learning_owner
 Create Date: 2026-04-25
 """
 from __future__ import annotations
@@ -13,7 +13,7 @@ from alembic import op
 
 
 revision: str = "20260425_user_org_multi_role"
-down_revision: Union[str, None] = "20260423_add_learning_structure_ownership"
+down_revision: Union[str, None] = "20260423_learning_owner"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

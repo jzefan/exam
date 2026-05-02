@@ -1034,11 +1034,17 @@ def _build_document_ai_prompt(raw_text: str, images: list[QuestionImportImageInp
 要求：
 1. 你会收到整份题目文本与图片列表。
 2. 必须按题目拆分 questions 数组。
-3. 每道题输出 type、content_text、options、answer_text、analysis、difficulty、raw_text、images。
-4. answer_text 没有时返回空字符串，不要臆造。
-5. difficulty 必须是 1 到 5 的整数。
-6. images 字段填写与题目相关的 image_id 数组。
-7. 不要输出解释、Markdown 或代码块。
+3. 只返回一个 JSON 对象，格式为 {{"questions":[...]}}。
+4. 每道题必须输出以下字段：
+   - type: choice | true_false | fill_in | short_answer | essay | code
+   - content_text: 完整题目内容，不要把题型标识放进题目内容
+   - options: 选择题返回选项对象，如 {{"A":"选项1","B":"选项2"}}；非选择题返回 null
+   - answer_text: 标准答案，没有就返回空字符串，不要臆造
+   - analysis: 解析内容，没有就返回空字符串
+   - difficulty: 1 到 5 的整数；没有明确难度时返回 3
+   - raw_text: 该题在原文中的完整片段
+   - images: 与该题相关的 image_id 数组
+5. 不要输出解释、Markdown 或代码块。
 
 图片列表：
 {image_lines or "无"}

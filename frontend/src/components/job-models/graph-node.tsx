@@ -1,12 +1,7 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react"
-import { Minus, Plus, Layers, Lightbulb, Target, Zap } from "lucide-react"
+import { Layers, Lightbulb, Target, Zap } from "lucide-react"
 import type { ComponentType } from "react"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
+import { NodeCollapseToggle } from "@/components/graph/node-collapse-toggle"
 
 interface GraphNodeData {
   label: string
@@ -109,29 +104,7 @@ export function GraphNode({ data }: NodeProps) {
       }}
     >
       {d.hasChildren && !isRoot && (
-        <TooltipProvider delayDuration={150}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                data-graph-toggle
-                aria-label={d.collapsed ? "展开子节点" : "收起子节点"}
-                className="absolute -right-3 top-1/2 -translate-y-1/2 z-10 flex h-6 w-6 items-center justify-center rounded-full border border-primary/40 bg-background text-primary shadow-md ring-2 ring-background hover:bg-primary hover:text-primary-foreground hover:border-primary hover:scale-110 active:scale-95 transition-all cursor-pointer"
-              >
-                {d.collapsed ? (
-                  <Plus className="h-3.5 w-3.5 stroke-[2.5]" />
-                ) : (
-                  <Minus className="h-3.5 w-3.5 stroke-[2.5]" />
-                )}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="right" className="text-xs">
-              {d.collapsed
-                ? `展开子节点（${d.count ?? ""}）`
-                : "收起子节点"}
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <NodeCollapseToggle collapsed={Boolean(d.collapsed)} count={d.count} />
       )}
 
       {!isRoot && (

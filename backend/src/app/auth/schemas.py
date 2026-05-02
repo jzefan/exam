@@ -1,7 +1,10 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, EmailStr
+
+UserPersona = Literal["teacher", "assessor"]
 
 
 class UserCreate(BaseModel):
@@ -12,6 +15,7 @@ class UserCreate(BaseModel):
     org_id: uuid.UUID | None = None
     role_name: str = "student"
     role_names: list[str] | None = None
+    persona: UserPersona = "teacher"
     owner_teacher_id: uuid.UUID | None = None
     teacher_ids: list[uuid.UUID] | None = None
 
@@ -22,6 +26,7 @@ class UserUpdate(BaseModel):
     is_active: bool | None = None
     password: str | None = None
     role_names: list[str] | None = None
+    persona: UserPersona | None = None
     owner_teacher_id: uuid.UUID | None = None
     teacher_ids: list[uuid.UUID] | None = None
 
@@ -46,6 +51,7 @@ class UserResponse(BaseModel):
     email: str
     full_name: str
     is_active: bool
+    persona: UserPersona
     primary_org: UserOrgInfo | None = None
     organizations: list[UserOrgInfo] = []
     system_domain: str
@@ -67,3 +73,22 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
+
+
+class ForgotPasswordRequest(BaseModel):
+    account: str
+
+
+class ForgotPasswordResponse(BaseModel):
+    status: Literal["email_sent", "contact_admin"]
+    message: str
+    email: str | None = None
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str
+
+
+class ResetPasswordResponse(BaseModel):
+    message: str

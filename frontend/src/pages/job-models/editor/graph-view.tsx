@@ -17,6 +17,7 @@ import {
 import "@xyflow/react/dist/style.css"
 import { toPng } from "html-to-image"
 import { Plus, Pencil, Trash2, Download } from "lucide-react"
+import { NODE_COLLAPSE_TOGGLE_SELECTOR } from "@/components/graph/node-collapse-toggle"
 import { GraphNode } from "@/components/job-models/graph-node"
 import {
   AlertDialog,
@@ -296,7 +297,7 @@ export function GraphView({
     (event: React.MouseEvent, node: Node) => {
       if (node.id.startsWith("root-")) return
       const target = event.target as HTMLElement
-      if (target.closest("[data-graph-toggle]")) {
+      if (target.closest(NODE_COLLAPSE_TOGGLE_SELECTOR)) {
         toggleCollapse(node.id)
         return
       }

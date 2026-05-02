@@ -17,7 +17,7 @@ type MockStudent = {
   owner_teacher_id: string | null;
 };
 
-const { apiRequestMock, toastMock, usePermissionsMock, resetStudents, setDefaultApiImplementation } = vi.hoisted(() => {
+const { apiRequestMock, toastMock, usePermissionsMock, useGetIdentityMock, resetStudents, setDefaultApiImplementation } = vi.hoisted(() => {
   const initialStudents: MockStudent[] = [
     {
       id: "student-1",
@@ -76,6 +76,7 @@ const { apiRequestMock, toastMock, usePermissionsMock, resetStudents, setDefault
 
   return {
     usePermissionsMock: vi.fn(() => ({ data: "teacher" })),
+    useGetIdentityMock: vi.fn(() => ({ data: { persona: "teacher" } })),
     toastMock: vi.fn(),
     resetStudents: () => {
       currentStudents = initialStudents.map((student) => ({ ...student }));
@@ -89,6 +90,7 @@ const { apiRequestMock, toastMock, usePermissionsMock, resetStudents, setDefault
 
 vi.mock("@refinedev/core", () => ({
   usePermissions: () => usePermissionsMock(),
+  useGetIdentity: () => useGetIdentityMock(),
 }));
 
 vi.mock("@/hooks/use-toast", () => ({
@@ -106,6 +108,7 @@ describe("StudentManagementPage", () => {
     setDefaultApiImplementation();
     toastMock.mockClear();
     usePermissionsMock.mockReturnValue({ data: "teacher" });
+    useGetIdentityMock.mockReturnValue({ data: { persona: "teacher" } });
     vi.stubGlobal("confirm", vi.fn(() => true));
   });
 
@@ -125,6 +128,19 @@ describe("StudentManagementPage", () => {
     expect(await screen.findByText("李四")).toBeInTheDocument();
     expect(screen.queryByText("张三")).not.toBeInTheDocument();
     expect(screen.getByText("未分班学生")).toBeInTheDocument();
+  });
+
+  it("uses exam candidate and department wording for assessor persona", async () => {
+    useGetIdentityMock.mockReturnValue({ data: { persona: "assessor" } });
+
+    render(<StudentManagementPage />);
+
+    expect(await screen.findByText("张三")).toBeInTheDocument();
+    expect(screen.getByText("部门列表")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "全部考生" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "未分部门" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /添加考生/ })).toBeInTheDocument();
+    expect(screen.queryByText("学生管理")).not.toBeInTheDocument();
   });
 
   it("keeps the current student rows visible while switching class filters", async () => {

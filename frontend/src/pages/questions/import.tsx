@@ -1,7 +1,7 @@
 import { useList } from "@refinedev/core";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertCircle, ArrowLeft, Download, LoaderCircle, Upload } from "lucide-react";
+import { AlertCircle, ArrowLeft, CheckCircle2, Download, LoaderCircle, RefreshCw, Sparkles, Upload } from "lucide-react";
 
 import {
   AlertDialog,
@@ -33,39 +33,35 @@ import {
 import { useBackgroundTaskNotice } from "@/hooks/use-background-task-notice";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
-import { ImportReviewEditor } from "./components/import-review-editor";
-import { ImportReviewSidebar } from "./components/import-review-sidebar";
+import { ImportReviewWorkspace } from "./components/import-review-workspace";
 import { ImportSourceEditor } from "./components/import-source-editor";
 import {
   clearPersistedQuestionImportJobId,
+  isTerminalQuestionImportJobStatus,
   persistQuestionImportJobId,
+  QUESTION_KNOWLEDGE_RECOGNITION_NOTICE_DESCRIPTION,
+  QUESTION_KNOWLEDGE_RECOGNITION_NOTICE_ID,
+  QUESTION_KNOWLEDGE_RECOGNITION_NOTICE_PAGE_PATH,
 } from "./question-knowledge-recognition";
 import type {
-  ImportFilter,
   QuestionBulkCreateResponse,
   QuestionImportBulkCreateJobResponse,
-  QuestionImportImageInput,
   QuestionImportDocumentRecognizeResponse,
   QuestionImportDraft,
   QuestionImportJobResponse,
 } from "./import-types";
 import {
-  approveAllPendingDrafts,
   applySourceDraftEdits,
   buildImportableQuestions,
   buildStandardImportTemplate,
   buildImportSummary,
-  canApproveAllDrafts,
   countFastImportEligibleDrafts,
   emptyImportSummary,
   extractQuestionImportPayload,
   generateImportQuestionTitle,
   getNextDraftIdAfterRemoval,
   getBlockingImportIssues,
-  hasBlockingImportIssues,
-  isEligibleForBulkApprove,
   isEligibleForFastImport,
-  isMissingAnswerIssue,
 } from "./import-utils";
 
 async function questionApiFetch<T>(url: string, options?: RequestInit): Promise<T> {
@@ -108,13 +104,25 @@ async function questionApiFetch<T>(url: string, options?: RequestInit): Promise<
 
 const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024;
 
-function isTerminalImportJobStatus(status: QuestionImportJobResponse["status"]) {
-  return status === "completed" || status === "failed" || status === "partial_failed";
-}
+type ImportResultSummary = {
+  attempted: number;
+  created: number;
+  existing: number;
+  failed: number;
+  importJobId: string | null;
+};
 
-const KNOWLEDGE_RECOGNITION_NOTICE_ID = "question-knowledge-recognition";
-const KNOWLEDGE_RECOGNITION_NOTICE_PAGE_PATH = "/questions/import";
-const KNOWLEDGE_RECOGNITION_NOTICE_DESCRIPTION = "可离开当前页面继续其它操作，系统会在后台继续识别知识点。";
+type ImportDocumentPayload = {
+  fileName: string;
+  rawText: string;
+  sourceFormat: "pdf" | "docx" | "md";
+  images: QuestionImportDraft["images"];
+};
+
+type AiRecognizeOverlayState =
+  | { status: "loading" }
+  | { status: "success"; count: number }
+  | null;
 
 export function QuestionImportPage() {
   const navigate = useNavigate();
@@ -126,22 +134,16 @@ export function QuestionImportPage() {
   const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
   const [sourceFileName, setSourceFileName] = useState("");
   const [loading, setLoading] = useState(false);
-  const [isAnalyzingDocument, setIsAnalyzingDocument] = useState(false);
-  const [recognizingDraftId, setRecognizingDraftId] = useState<string | null>(null);
+  const [aiRecognizing, setAiRecognizing] = useState(false);
+  const [aiRecognizeOverlay, setAiRecognizeOverlay] = useState<AiRecognizeOverlayState>(null);
   const [parseError, setParseError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [questionBankId, setQuestionBankId] = useState<string>(initialQuestionBankId || "__none__");
   const [isDragActive, setIsDragActive] = useState(false);
-  const [filter, setFilter] = useState<ImportFilter>("pending");
   const [duplicatesRemoved, setDuplicatesRemoved] = useState(0);
+  const [documentPayload, setDocumentPayload] = useState<ImportDocumentPayload | null>(null);
   const [mode, setMode] = useState<"review" | "source-edit">("review");
-  const [reviewMode, setReviewMode] = useState<"fast" | "review">("fast");
   const [sourceEdits, setSourceEdits] = useState<Record<string, string>>({});
-  const [sourceImportPayload, setSourceImportPayload] = useState<{
-    rawText: string;
-    sourceFormat: "pdf" | "docx" | "md";
-    images: QuestionImportImageInput[];
-  } | null>(null);
 
   const { query: banksQuery } = useList<IQuestionBank>({
     resource: "question-banks",
@@ -152,6 +154,7 @@ export function QuestionImportPage() {
   const [rootKnowledgePointDialogOpen, setRootKnowledgePointDialogOpen] = useState(false);
   const [selectedRootKnowledgePoints, setSelectedRootKnowledgePoints] = useState<SelectedKnowledgePoint[]>([]);
   const [activeImportJobId, setActiveImportJobId] = useState<string | null>(null);
+  const [importResult, setImportResult] = useState<ImportResultSummary | null>(null);
 
   useEffect(() => {
     if (!activeImportJobId) return;
@@ -166,28 +169,28 @@ export function QuestionImportPage() {
         );
         if (cancelled) return;
 
-        if (isTerminalImportJobStatus(job.status)) {
+        if (isTerminalQuestionImportJobStatus(job.status)) {
           setActiveImportJobId(null);
           clearPersistedQuestionImportJobId();
-          dismissNotice(KNOWLEDGE_RECOGNITION_NOTICE_ID);
+          dismissNotice(QUESTION_KNOWLEDGE_RECOGNITION_NOTICE_ID);
           const summary = `知识点识别完成：成功匹配 ${job.matched_count} 道，未匹配 ${job.unmatched_count} 道，失败 ${job.failed_count} 道`;
           toast({ title: "题目知识点识别完成", description: summary });
           return;
         }
 
         showNotice({
-          id: KNOWLEDGE_RECOGNITION_NOTICE_ID,
+          id: QUESTION_KNOWLEDGE_RECOGNITION_NOTICE_ID,
           title: "知识点正在后台识别",
           progressText: `${job.processed_count}/${job.total_count}`,
-          description: KNOWLEDGE_RECOGNITION_NOTICE_DESCRIPTION,
-          pagePath: KNOWLEDGE_RECOGNITION_NOTICE_PAGE_PATH,
+          description: QUESTION_KNOWLEDGE_RECOGNITION_NOTICE_DESCRIPTION,
+          pagePath: QUESTION_KNOWLEDGE_RECOGNITION_NOTICE_PAGE_PATH,
         });
         timer = window.setTimeout(pollJobStatus, 2000);
       } catch (error) {
         if (cancelled) return;
         setActiveImportJobId(null);
         clearPersistedQuestionImportJobId();
-        dismissNotice(KNOWLEDGE_RECOGNITION_NOTICE_ID);
+        dismissNotice(QUESTION_KNOWLEDGE_RECOGNITION_NOTICE_ID);
         toast({
           title: "知识点识别状态查询失败",
           description: error instanceof Error ? error.message : "请稍后在题目列表中刷新查看结果",
@@ -206,38 +209,10 @@ export function QuestionImportPage() {
     };
   }, [activeImportJobId, dismissNotice, showNotice, toast]);
 
-  const selectedDraft = useMemo(
-    () => drafts.find((draft) => draft.draft_id === selectedDraftId) ?? null,
-    [drafts, selectedDraftId],
-  );
-  const selectedDraftNumber = useMemo(() => {
-    if (!selectedDraftId) return null;
-    const index = drafts.findIndex((draft) => draft.draft_id === selectedDraftId);
-    return index >= 0 ? index + 1 : null;
-  }, [drafts, selectedDraftId]);
   const summary = drafts.length > 0 ? buildImportSummary(drafts) : emptyImportSummary;
-  const completionPercent = summary.total > 0 ? Math.round((summary.approved / summary.total) * 100) : 0;
-  const allowApproveAll = canApproveAllDrafts(drafts);
   const fastImportEligibleCount = countFastImportEligibleDrafts(drafts);
   const blockingIssueCount = drafts.filter((draft) => getBlockingImportIssues(draft).length > 0).length;
-  const missingAnswerCount = drafts.filter(
-    (draft) => !draft.answer_text?.trim() || draft.issues.some(isMissingAnswerIssue),
-  ).length;
   const selectedRootKnowledgePointId = selectedRootKnowledgePoints[0]?.id ?? "";
-
-  useEffect(() => {
-    if (drafts.length === 0) {
-      setReviewMode("fast");
-    }
-  }, [drafts.length]);
-
-  const selectNextReviewTarget = (currentDraftId: string) => {
-    const nextPending = drafts.find(
-      (draft) => draft.draft_id !== currentDraftId && draft.review_status === "pending",
-    );
-    const nextAny = drafts.find((draft) => draft.draft_id !== currentDraftId);
-    setSelectedDraftId(nextPending?.draft_id ?? nextAny?.draft_id ?? currentDraftId);
-  };
 
   const processImportFile = async (
     file: File | null | undefined,
@@ -252,20 +227,13 @@ export function QuestionImportPage() {
     setParseError(null);
     try {
       const payload = await extractQuestionImportPayload(file);
-      setSourceImportPayload(payload);
-      const response = await questionApiFetch<QuestionImportDocumentRecognizeResponse>(
-        "/api/questions/import/document-recognize",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            file_name: file.name,
-            raw_text: payload.rawText,
-            source_format: payload.sourceFormat,
-            analysis_mode: "fast",
-            images: payload.images,
-          }),
-        },
-      );
+      const nextDocumentPayload: ImportDocumentPayload = {
+        fileName: file.name,
+        rawText: payload.rawText,
+        sourceFormat: payload.sourceFormat,
+        images: payload.images,
+      };
+      const response = await recognizeImportDocument(nextDocumentPayload, "fast");
       setDrafts(response.drafts);
       setDuplicatesRemoved(response.summary.duplicates_removed);
       if (response.summary.duplicates_removed > 0) {
@@ -273,14 +241,14 @@ export function QuestionImportPage() {
       }
       setSourceEdits(Object.fromEntries(response.drafts.map((draft) => [draft.draft_id, draft.raw_text])));
       setSelectedDraftId(response.drafts[0]?.draft_id ?? null);
+      setDocumentPayload(nextDocumentPayload);
       setSourceFileName(file.name);
-      setFilter("pending");
       setMode("review");
     } catch (error) {
       setParseError(error instanceof Error ? error.message : "文件解析失败");
       setDrafts([]);
       setDuplicatesRemoved(0);
-      setSourceImportPayload(null);
+      setDocumentPayload(null);
       setSourceEdits({});
       setSelectedDraftId(null);
     } finally {
@@ -291,6 +259,55 @@ export function QuestionImportPage() {
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     await processImportFile(event.target.files?.[0]);
     event.target.value = "";
+  };
+
+  const recognizeImportDocument = async (
+    payload: ImportDocumentPayload,
+    analysisMode: "fast" | "ai_full",
+  ) =>
+    questionApiFetch<QuestionImportDocumentRecognizeResponse>(
+      "/api/questions/import/document-recognize",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          file_name: payload.fileName,
+          raw_text: payload.rawText,
+          source_format: payload.sourceFormat,
+          analysis_mode: analysisMode,
+          images: payload.images ?? [],
+        }),
+      },
+    );
+
+  const handleAiReRecognize = async () => {
+    if (!documentPayload) {
+      setParseError("未找到导入原文，请重新上传文件后再试。");
+      return;
+    }
+
+    setAiRecognizing(true);
+    setAiRecognizeOverlay({ status: "loading" });
+    setParseError(null);
+    try {
+      const response = await recognizeImportDocument(documentPayload, "ai_full");
+      if (response.drafts.length === 0) {
+        throw new Error("AI 未识别到题目，请检查导入文本后重试。");
+      }
+      setDrafts(response.drafts);
+      setDuplicatesRemoved(response.summary.duplicates_removed);
+      setSourceEdits(Object.fromEntries(response.drafts.map((draft) => [draft.draft_id, draft.raw_text])));
+      setSelectedDraftId(response.drafts[0]?.draft_id ?? null);
+      setMode("review");
+      setAiRecognizeOverlay({ status: "success", count: response.summary.total });
+      window.setTimeout(() => {
+        setAiRecognizeOverlay((current) => (current?.status === "success" ? null : current));
+      }, 1600);
+    } catch (error) {
+      setAiRecognizeOverlay(null);
+      setParseError(error instanceof Error ? error.message : "AI重新识别失败，请稍后再试。");
+    } finally {
+      setAiRecognizing(false);
+    }
   };
 
   const updateDraft = (draftId: string, patch: Partial<QuestionImportDraft>) => {
@@ -318,88 +335,15 @@ export function QuestionImportPage() {
     });
   };
 
-  const openSourceEditor = () => {
-    setSourceEdits(Object.fromEntries(drafts.map((draft) => [draft.draft_id, sourceEdits[draft.draft_id] ?? draft.raw_text])));
-    setMode("source-edit");
-  };
-
   const previewSourceEdits = () => {
     setDrafts((current) => applySourceDraftEdits(current, sourceEdits));
     setMode("review");
   };
 
-  const reRecognizeSelectedDraft = async () => {
-    if (!selectedDraft) return;
-    setRecognizingDraftId(selectedDraft.draft_id);
-    setParseError(null);
-    try {
-      const response = await questionApiFetch<QuestionImportDraft>("/api/questions/import/re-recognize", {
-        method: "POST",
-        body: JSON.stringify({ raw_text: selectedDraft.raw_text }),
-      });
-      setDrafts((current) =>
-        current.map((draft) =>
-          draft.draft_id === selectedDraft.draft_id
-            ? { ...response, draft_id: selectedDraft.draft_id, review_status: "pending", review_required: true }
-            : draft,
-        ),
-      );
-    } catch (error) {
-      setParseError(error instanceof Error ? error.message : "AI 补全失败");
-    } finally {
-      setRecognizingDraftId(null);
-    }
-  };
-
-  const analyzeWholeImportedDocument = async () => {
-    if (!sourceImportPayload || !sourceFileName) return;
-    setIsAnalyzingDocument(true);
-    setParseError(null);
-    try {
-      const response = await questionApiFetch<QuestionImportDocumentRecognizeResponse>(
-        "/api/questions/import/document-recognize",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            file_name: sourceFileName,
-            raw_text: sourceImportPayload.rawText,
-            source_format: sourceImportPayload.sourceFormat,
-            analysis_mode: "ai_full",
-            images: sourceImportPayload.images,
-          }),
-        },
-      );
-      setDrafts(response.drafts);
-      setDuplicatesRemoved(response.summary.duplicates_removed);
-      if (response.summary.duplicates_removed > 0) {
-        toast({ title: `已自动去除 ${response.summary.duplicates_removed} 道重复题目` });
-      }
-      setSourceEdits(Object.fromEntries(response.drafts.map((draft) => [draft.draft_id, draft.raw_text])));
-      setSelectedDraftId((current) => response.drafts.find((draft) => draft.draft_id === current)?.draft_id ?? response.drafts[0]?.draft_id ?? null);
-    } catch (error) {
-      setParseError(error instanceof Error ? error.message : "AI 分析失败");
-    } finally {
-      setIsAnalyzingDocument(false);
-    }
-  };
-
-  const bulkApproveEligibleDrafts = () => {
-    const eligibleDrafts = drafts.filter(isEligibleForBulkApprove);
-    if (eligibleDrafts.length === 0) {
-      setParseError("没有可一键确定的题目，请先人工修正异常或补全答案。");
-      return;
-    }
-    setParseError(null);
-    setDrafts((current) => approveAllPendingDrafts(current));
-    toast({ title: `已确定 ${eligibleDrafts.length} 道题目，可直接点击"正式导入"` });
-  };
-
   const openImportCourseDialog = () => {
-    const readyCount = reviewMode === "fast"
-      ? fastImportEligibleCount
-      : drafts.filter((draft) => draft.review_status === "approved" && !hasBlockingImportIssues(draft)).length;
+    const readyCount = fastImportEligibleCount;
     if (readyCount === 0) {
-      setParseError(reviewMode === "fast" ? "暂无可直接导入的题目，请先处理异常题。" : "请先人工确认至少一道题目后再导入。");
+      setParseError("暂无可直接导入的题目，请先处理解析异常题。");
       return;
     }
     setParseError(null);
@@ -407,25 +351,23 @@ export function QuestionImportPage() {
   };
 
   const runImportWithRootKnowledgePoint = async (rootKnowledgePointId: string | null) => {
-    const importDrafts = reviewMode === "fast"
-      ? drafts.map((draft) =>
-          isEligibleForFastImport(draft)
-            ? {
-                ...draft,
-                title: draft.title || generateImportQuestionTitle(draft.content_text),
-                review_status: "approved" as const,
-                review_required: false,
-              }
-            : draft,
-        )
-      : drafts;
+    const importDrafts = drafts.map((draft) =>
+      isEligibleForFastImport(draft)
+        ? {
+            ...draft,
+            title: draft.title || generateImportQuestionTitle(draft.content_text),
+            review_status: "approved" as const,
+            review_required: false,
+          }
+        : draft,
+    );
     const importableDraftIds = importDrafts
-      .filter((draft) => draft.review_status === "approved" && !hasBlockingImportIssues(draft))
+      .filter((draft) => draft.review_status === "approved" && getBlockingImportIssues(draft).length === 0)
       .map((draft) => draft.draft_id);
     const bankId = questionBankId === "__none__" ? null : questionBankId;
     const questions = buildImportableQuestions(importDrafts, bankId);
     if (questions.length === 0 || questions.length !== importableDraftIds.length) {
-      setParseError(reviewMode === "fast" ? "暂无可直接导入的题目，请先处理异常题。" : "请先人工确认至少一道题目后再导入。");
+      setParseError("暂无可直接导入的题目，请先处理解析异常题。");
       return;
     }
 
@@ -447,6 +389,10 @@ export function QuestionImportPage() {
       const importedCount = response.created;
       const existingCount = response.existing ?? 0;
       const failedCount = response.failed ?? 0;
+      const responseJobId =
+        "job_id" in response && typeof response.job_id === "string" ? response.job_id : null;
+      const importJobId =
+        rootKnowledgePointId && importedCount > 0 ? responseJobId : null;
       const successfulIds = new Set(importableDraftIds.slice(0, importedCount + existingCount));
       setDrafts((current) => current.filter((draft) => !successfulIds.has(draft.draft_id)));
       setSourceEdits((current) => {
@@ -461,28 +407,25 @@ export function QuestionImportPage() {
         const nextDraft = drafts.find((draft) => !successfulIds.has(draft.draft_id));
         return nextDraft?.draft_id ?? null;
       });
-      const resultDescription = `导入成功 ${importedCount} 道，已存在 ${existingCount} 道，失败 ${failedCount} 道。`;
+      setImportResult({
+        attempted: questions.length,
+        created: importedCount,
+        existing: existingCount,
+        failed: failedCount,
+        importJobId,
+      });
       if (rootKnowledgePointId) {
-        const importJobResponse = response as QuestionImportBulkCreateJobResponse;
-        if (importedCount > 0) {
-          setActiveImportJobId(importJobResponse.job_id);
-          persistQuestionImportJobId(importJobResponse.job_id);
-          toast({ title: "题目导入完成，知识点正在后台识别", description: resultDescription });
+        if (importedCount > 0 && responseJobId) {
+          setActiveImportJobId(responseJobId);
+          persistQuestionImportJobId(responseJobId);
           showNotice({
-            id: KNOWLEDGE_RECOGNITION_NOTICE_ID,
+            id: QUESTION_KNOWLEDGE_RECOGNITION_NOTICE_ID,
             title: "知识点正在后台识别",
             progressText: `0/${importedCount}`,
-            description: KNOWLEDGE_RECOGNITION_NOTICE_DESCRIPTION,
-            pagePath: KNOWLEDGE_RECOGNITION_NOTICE_PAGE_PATH,
+            description: QUESTION_KNOWLEDGE_RECOGNITION_NOTICE_DESCRIPTION,
+            pagePath: QUESTION_KNOWLEDGE_RECOGNITION_NOTICE_PAGE_PATH,
           });
-        } else {
-          toast({ title: "题目导入完成", description: resultDescription });
         }
-      } else {
-        toast({
-          title: "题目导入完成",
-          description: `${resultDescription}本次未自动关联知识点，可稍后在题库列表中手动关联。`,
-        });
       }
     } catch (error) {
       setParseError(error instanceof Error ? error.message : "导入失败");
@@ -501,6 +444,12 @@ export function QuestionImportPage() {
   const skipRootKnowledgePointAndImport = async () => {
     setRootKnowledgePointDialogOpen(false);
     await runImportWithRootKnowledgePoint(null);
+  };
+
+  const goToQuestionListAfterImport = () => {
+    const importJobId = importResult?.importJobId;
+    setImportResult(null);
+    navigate(importJobId ? `/questions?import_job_id=${importJobId}` : "/questions");
   };
 
   const showReviewer = drafts.length > 0 && !loading;
@@ -566,7 +515,7 @@ export function QuestionImportPage() {
           <div className="flex min-w-0 items-center gap-3">
             {showReviewer && (
               <>
-                <div className="hidden items-center gap-4 border-r border-slate-100 pr-4 xl:flex">
+                <div className="hidden items-center gap-4 border-r border-slate-100 pr-4 lg:flex">
                   <div className="flex items-baseline gap-1">
                     <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">总数</span>
                     <span className="text-base font-black leading-none text-slate-900">{summary.total}</span>
@@ -577,30 +526,13 @@ export function QuestionImportPage() {
                       <span className="text-base font-black leading-none text-orange-500">{duplicatesRemoved}</span>
                     </div>
                   )}
-                  <div className="flex items-baseline gap-1">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">待核对</span>
-                    <span className="text-base font-black leading-none text-amber-500">{summary.pending_review}</span>
-                  </div>
-                  <div className="flex items-baseline gap-1">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">已确认</span>
-                    <span className="text-base font-black leading-none text-emerald-500">{summary.approved}</span>
-                  </div>
                 </div>
 
-                <div className="mr-1 hidden items-center gap-4 border-r border-slate-100 pr-4 lg:flex">
-                   <div className="flex flex-col items-end gap-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[11px] font-bold uppercase tracking-widest text-slate-400">进度</span>
-                        <span className="text-sm font-bold text-primary">{completionPercent}%</span>
-                      </div>
-                      <div className="h-1.5 w-24 overflow-hidden rounded-full bg-slate-100">
-                        <div
-                          className="h-full rounded-full bg-primary shadow-sm shadow-primary/30 transition-all duration-700 ease-out"
-                          style={{ width: `${completionPercent}%` }}
-                        />
-                      </div>
-                   </div>
-                </div>
+                {blockingIssueCount > 0 && (
+                  <Badge className="hidden h-7 border-none bg-amber-100 px-3 text-xs font-bold text-amber-800 md:inline-flex">
+                    {blockingIssueCount} 道解析异常，将跳过导入
+                  </Badge>
+                )}
                 
                 <div className="flex items-center gap-3">
                   <Label className="hidden text-xs font-bold text-slate-400 xl:block">导入至</Label>
@@ -619,6 +551,30 @@ export function QuestionImportPage() {
                   </Select>
                 </div>
 
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={importing || aiRecognizing || !documentPayload}
+                  onClick={handleAiReRecognize}
+                  className="h-9 rounded-lg px-3 text-sm font-bold"
+                >
+                  {aiRecognizing ? (
+                    <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                  )}
+                  AI重新识别
+                </Button>
+
+                <Button
+                  type="button"
+                  disabled={importing || aiRecognizing || fastImportEligibleCount === 0}
+                  onClick={openImportCourseDialog}
+                  className="h-9 rounded-lg px-4 text-sm font-bold shadow-sm shadow-primary/20"
+                >
+                  {importing ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  导入 {fastImportEligibleCount} 道题目
+                </Button>
               </>
             )}
           </div>
@@ -723,72 +679,46 @@ export function QuestionImportPage() {
           </div>
         ) : (
           /* Step 2: Review Interface */
-          <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-white/50 lg:flex-row">
-            <aside className="z-10 flex h-[40vh] shrink-0 flex-col border-b border-slate-100 bg-white shadow-sm lg:h-full lg:w-[clamp(420px,32vw,520px)] lg:border-b-0 lg:border-r">
-               <div className="flex-1 min-h-0">
-                  <ImportReviewSidebar
-                    drafts={drafts}
-                    selectedDraftId={selectedDraftId}
-                    filter={filter}
-                    onFilterChange={setFilter}
-                    onSelect={setSelectedDraftId}
-                    onDelete={removeDraft}
-                  />
-               </div>
-            </aside>
-            <section className="min-h-0 min-w-0 flex-1 overflow-y-auto bg-slate-50/40 p-4 lg:p-6">
-               <div className="relative mx-auto w-full max-w-[1320px]">
-                {isAnalyzingDocument && (
-                  <div className="absolute inset-0 z-20 flex items-center justify-center rounded-3xl bg-white/95">
-                    <div className="flex flex-col items-center gap-3 rounded-3xl border border-slate-200 bg-white px-8 py-7 shadow-xl">
-                      <LoaderCircle className="h-8 w-8 animate-spin text-primary" />
-                      <div className="text-center">
-                        <p className="text-base font-bold text-slate-900">AI 正在分析整份导入内容</p>
-                        <p className="mt-1 text-sm text-slate-500">正在理解题目结构与图片内容，请稍候</p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                <ImportReviewEditor
-                  draft={selectedDraft}
-                  draftNumber={selectedDraftNumber}
-                  reviewMode={reviewMode}
-                  isRecognizing={recognizingDraftId === selectedDraft?.draft_id}
-                  isAnalyzingDocument={isAnalyzingDocument}
-                  canApproveAll={allowApproveAll}
-                  fastImportEligibleCount={fastImportEligibleCount}
-                  totalDraftCount={summary.total}
-                  blockingIssueCount={blockingIssueCount}
-                  missingAnswerCount={missingAnswerCount}
-                  onReviewModeChange={setReviewMode}
-                  onChange={(patch) => {
-                    if (selectedDraft) updateDraft(selectedDraft.draft_id, patch);
-                  }}
-                  onApprove={() => {
-                    if (selectedDraft) {
-                      if (hasBlockingImportIssues(selectedDraft)) {
-                        setParseError("当前题存在异常，请先修正异常后再确认。");
-                        return;
-                      }
-                      updateDraft(selectedDraft.draft_id, {
-                        title: generateImportQuestionTitle(selectedDraft.content_text),
-                        review_status: "approved",
-                        review_required: false,
-                      });
-                      selectNextReviewTarget(selectedDraft.draft_id);
-                    }
-                  }}
-                  onApproveAll={bulkApproveEligibleDrafts}
-                  onFastImport={openImportCourseDialog}
-                  onReRecognize={() => void reRecognizeSelectedDraft()}
-                  onAnalyzeDocument={() => void analyzeWholeImportedDocument()}
-                  onEditSource={openSourceEditor}
-                />
-               </div>
-            </section>
-          </div>
+          <ImportReviewWorkspace
+            drafts={drafts}
+            onChangeDraft={updateDraft}
+            onDeleteDraft={removeDraft}
+          />
         )}
       </main>
+
+      {aiRecognizeOverlay ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 px-6 backdrop-blur-[2px]">
+          <div className="w-full max-w-sm">
+            <div className="flex w-full flex-col items-center rounded-3xl border border-border/60 bg-card px-8 py-7 text-center shadow-xl">
+              {aiRecognizeOverlay.status === "loading" ? (
+                <>
+                  <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                    <LoaderCircle size={28} className="animate-spin" />
+                  </div>
+                  <div className="mb-2 flex items-center gap-2 text-base font-semibold text-foreground">
+                    <Sparkles size={16} />
+                    AI正在重新识别
+                  </div>
+                  <p className="text-sm leading-6 text-muted-foreground">
+                    正在重新分析导入文本，提取题型、题目内容、选项、答案、难度和解析。
+                  </p>
+                </>
+              ) : (
+                <>
+                  <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600">
+                    <CheckCircle2 size={30} />
+                  </div>
+                  <div className="mb-2 text-base font-semibold text-foreground">AI重新识别完成</div>
+                  <p className="text-sm leading-6 text-muted-foreground">
+                    已重新识别 {aiRecognizeOverlay.count} 道题目，列表已更新。
+                  </p>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <AlertDialog open={rootKnowledgePointDialogOpen} onOpenChange={setRootKnowledgePointDialogOpen}>
         <AlertDialogContent className="max-w-2xl">
@@ -843,6 +773,51 @@ export function QuestionImportPage() {
               }}
             >
               关联并导入
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={importResult !== null} onOpenChange={(open) => {
+        if (!open && importResult) {
+          goToQuestionListAfterImport();
+        }
+      }}>
+        <AlertDialogContent className="max-w-xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>题目导入完成</AlertDialogTitle>
+            <AlertDialogDescription>
+              本次导入已处理完成，系统会带你回到题目列表查看结果。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {importResult ? (
+            <div className="grid grid-cols-2 gap-3 py-2 sm:grid-cols-4">
+              <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 text-center">
+                <p className="text-xs font-bold text-muted-foreground">本次导入</p>
+                <p className="mt-2 text-2xl font-black text-slate-900">{importResult.attempted}</p>
+              </div>
+              <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-center">
+                <p className="text-xs font-bold text-emerald-700">成功入库</p>
+                <p className="mt-2 text-2xl font-black text-emerald-600">{importResult.created}</p>
+              </div>
+              <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 text-center">
+                <p className="text-xs font-bold text-amber-700">数据库已存在</p>
+                <p className="mt-2 text-2xl font-black text-amber-600">{importResult.existing}</p>
+              </div>
+              <div className="rounded-2xl border border-red-100 bg-red-50 p-4 text-center">
+                <p className="text-xs font-bold text-red-700">失败</p>
+                <p className="mt-2 text-2xl font-black text-red-600">{importResult.failed}</p>
+              </div>
+            </div>
+          ) : null}
+          <AlertDialogFooter>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault();
+                goToQuestionListAfterImport();
+              }}
+            >
+              查看题目列表
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -206,6 +206,8 @@ def _build_detail_response(exam: Exam) -> ExamDetailResponse:
             student_id=es.student_id,
             full_name=es.student.full_name if es.student else None,
             username=es.student.username if es.student else None,
+            phone=es.student.phone if es.student else None,
+            user_type=es.student.user_type if es.student else None,
             started_at=es.started_at,
             submitted_at=es.submitted_at,
             grading_status=es.grading_status,
@@ -523,6 +525,8 @@ async def list_exam_students(
             student_id=es.student_id,
             full_name=es.student.full_name if es.student else None,
             username=es.student.username if es.student else None,
+            phone=es.student.phone if es.student else None,
+            user_type=es.student.user_type if es.student else None,
             submitted_at=es.submitted_at,
         )
         for es in exam.exam_students
@@ -628,6 +632,8 @@ def _build_analysis_response(
                 student_id=es.student_id,
                 full_name=es.student.full_name if es.student else None,
                 username=es.student.username if es.student else None,
+                phone=es.student.phone if es.student else None,
+                user_type=es.student.user_type if es.student else None,
                 submitted_at=es.submitted_at,
                 grading_status=es.grading_status,
                 objective_score=es.objective_score,

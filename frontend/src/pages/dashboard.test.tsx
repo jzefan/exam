@@ -5,7 +5,7 @@ import { Dashboard } from "./dashboard"
 
 const navigateMock = vi.fn()
 const usePermissionsMock = vi.fn(() => ({ data: "platform_admin" }))
-const useGetIdentityMock = vi.fn(() => ({ data: { name: "平台管理员" } }))
+const useGetIdentityMock = vi.fn(() => ({ data: { name: "平台管理员", persona: "teacher" as string | null } }))
 
 vi.mock("@refinedev/core", () => ({
   useGetIdentity: () => useGetIdentityMock(),
@@ -35,7 +35,7 @@ vi.mock("@/pages/grading/api", () => ({
 describe("Dashboard", () => {
   beforeEach(() => {
     navigateMock.mockReset()
-    useGetIdentityMock.mockReturnValue({ data: { name: "平台管理员" } })
+    useGetIdentityMock.mockReturnValue({ data: { name: "平台管理员", persona: "teacher" } })
     usePermissionsMock.mockReturnValue({ data: "platform_admin" })
   })
 
@@ -58,7 +58,7 @@ describe("Dashboard", () => {
   })
 
   it("shows teacher quick actions in the required order and routes", async () => {
-    useGetIdentityMock.mockReturnValue({ data: { name: "教师" } })
+    useGetIdentityMock.mockReturnValue({ data: { name: "教师", persona: "teacher" } })
     usePermissionsMock.mockReturnValue({ data: "teacher" })
 
     render(
@@ -72,8 +72,12 @@ describe("Dashboard", () => {
     })
 
     expect(screen.queryByText("学生总数")).not.toBeInTheDocument()
+    expect(screen.getByText("考生总数")).toBeInTheDocument()
     expect(screen.getByText("考试/练习数")).toBeInTheDocument()
     expect(screen.getByText("题目数")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText("考生总数"))
+    expect(navigateMock).toHaveBeenLastCalledWith("/exams/students")
 
     fireEvent.click(screen.getByText("考试/练习数"))
     expect(navigateMock).toHaveBeenLastCalledWith("/exams")
@@ -99,5 +103,26 @@ describe("Dashboard", () => {
       fireEvent.click(screen.getByText(title))
       expect(navigateMock).toHaveBeenLastCalledWith(path)
     }
+  })
+
+  it("uses candidate management wording for assessor dashboard", async () => {
+    useGetIdentityMock.mockReturnValue({ data: { name: "测评用户", persona: "assessor" } })
+    usePermissionsMock.mockReturnValue({ data: "evaluator" })
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText("考生管理")).toBeInTheDocument()
+    })
+
+    expect(screen.getByText("管理考生账号、部门与导入数据")).toBeInTheDocument()
+    expect(screen.queryByText("学生管理")).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByText("考生管理"))
+    expect(navigateMock).toHaveBeenLastCalledWith("/students")
   })
 })

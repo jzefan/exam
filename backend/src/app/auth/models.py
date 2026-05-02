@@ -1,5 +1,7 @@
 import uuid
-from sqlalchemy import Boolean, ForeignKey, Index, String, Uuid
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models import BaseModel
@@ -22,6 +24,7 @@ class User(BaseModel):
     full_name: Mapped[str] = mapped_column(String(100), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     user_type: Mapped[str] = mapped_column(String(20), nullable=False, default="internal")
+    persona: Mapped[str] = mapped_column(String(20), nullable=False, default="teacher")
     primary_org_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True
     )
@@ -45,4 +48,24 @@ class User(BaseModel):
             unique=True,
             postgresql_where="deleted_at IS NULL AND user_type = 'external_guest' AND phone IS NOT NULL",
         ),
+    )
+
+
+class PasswordResetToken(BaseModel):
+    __tablename__ = "password_reset_tokens"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped[User] = relationship("User")
+
+    __table_args__ = (
+        Index("ix_password_reset_tokens_token_hash", "token_hash"),
+        Index("ix_password_reset_tokens_user_id", "user_id"),
     )

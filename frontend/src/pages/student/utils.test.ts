@@ -18,6 +18,21 @@ describe("getEffectiveStudentExamStatus", () => {
     ).toBe("ongoing");
   });
 
+  it("treats an exam without a start time as ongoing until it ends", () => {
+    expect(
+      getEffectiveStudentExamStatus(
+        {
+          status: "upcoming",
+          start_time: null,
+          end_time: "2026-04-09T10:00:00.000Z",
+          participated: false,
+          submitted_at: null,
+        },
+        new Date("2026-04-09T09:00:00.000Z"),
+      ),
+    ).toBe("ongoing");
+  });
+
   it("treats a submitted exam as completed even when the exam window is still open", () => {
     expect(
       getEffectiveStudentExamStatus(

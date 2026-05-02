@@ -54,7 +54,10 @@ function extractNonChoiceAnswer(question: IQuestion): string {
   if (question.type === "fill_in") return ""; // handled by fillBlanks state
   if (question.type === "short_answer" || question.type === "essay") {
     const pts = (a.points ?? a.key_points) as string[] | undefined;
-    return pts?.join("\n") ?? "";
+    if (pts?.length) return pts.join("\n");
+    if (typeof a.text === "string") return a.text;
+    if (typeof a.correct === "string") return a.correct;
+    return "";
   }
   if (question.type === "code") return String(a.code ?? "");
   return "";
@@ -107,18 +110,46 @@ function getQuestionTypeDisplay(question: IQuestion): string {
   return questionTypeLabel[question.type];
 }
 
-interface QuestionEditFormProps {
+export interface QuestionEditSubmitValues {
+  type: QuestionType;
+  title: string;
+  content: Record<string, unknown>;
+  options: Record<string, string> | null;
+  answer: Record<string, unknown>;
+  analysis: string | null;
+  difficulty: number;
+  score: number;
+  question_bank_id: string | null;
+  tag_ids: string[];
+}
+
+interface QuestionEditFormContentProps {
   question: IQuestion;
   banks: IQuestionBank[];
   allTags: ITag[];
-  id: string;
+  onSubmit: (values: QuestionEditSubmitValues) => void;
+  onCancel: () => void;
+  isSubmitting?: boolean;
+  submitLabel?: string;
+  cancelLabel?: string;
+  showHeader?: boolean;
+  showQuestionBankAndTags?: boolean;
+  variant?: "page" | "dialog";
 }
 
-function QuestionEditForm({ question, banks, allTags, id }: QuestionEditFormProps) {
-  const navigate = useNavigate();
-  const { mutate, mutation } = useUpdate();
-  const updateLoading = mutation.isPending;
-
+export function QuestionEditFormContent({
+  question,
+  banks,
+  allTags,
+  onSubmit,
+  onCancel,
+  isSubmitting = false,
+  submitLabel = "保存修改",
+  cancelLabel = "取消",
+  showHeader = true,
+  showQuestionBankAndTags = true,
+  variant = "page",
+}: QuestionEditFormContentProps) {
   const isChoice = question.type === "choice";
   const isMultiChoice = Array.isArray(question.answer?.correct);
 
@@ -205,47 +236,42 @@ function QuestionEditForm({ question, banks, allTags, id }: QuestionEditFormProp
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const plainText = htmlToPlainText(form.contentHtml);
-    mutate(
-      {
-        resource: "questions",
-        id,
-        values: {
-          type: question.type,
-          title: plainText,
-          content: buildContent(),
-          options: buildOptions(),
-          answer: buildAnswer(),
-          analysis: form.analysis || null,
-          difficulty: Number(form.difficulty),
-          score: Number(form.score),
-          question_bank_id: questionBankId || null,
-          tag_ids: selectedTagIds,
-        },
-      },
-      { onSuccess: () => navigate("/questions") }
-    );
+    onSubmit({
+      type: question.type,
+      title: plainText,
+      content: buildContent(),
+      options: buildOptions(),
+      answer: buildAnswer(),
+      analysis: form.analysis || null,
+      difficulty: Number(form.difficulty),
+      score: Number(form.score),
+      question_bank_id: questionBankId || null,
+      tag_ids: selectedTagIds,
+    });
   };
 
   return (
-    <div className="mx-auto w-full max-w-[900px]">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-base font-bold text-foreground tracking-tight">
-          编辑题目
-        </h1>
-        <button
-          onClick={() => navigate(-1)}
-          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <ArrowLeft size={16} />
-          返回题目列表
-        </button>
-      </div>
+    <div className={cn("w-full", variant === "page" && "mx-auto max-w-[900px]")}>
+      {showHeader ? (
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-base font-bold text-foreground tracking-tight">
+            编辑题目
+          </h1>
+          <button
+            onClick={onCancel}
+            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <ArrowLeft size={16} />
+            返回题目列表
+          </button>
+        </div>
+      ) : null}
 
       <Card>
         <CardContent className="pt-6">
           <form onSubmit={handleSubmit} className="space-y-5">
             {/* Type (read-only) + Difficulty + Question Bank */}
-            <div className="grid grid-cols-3 gap-4">
+            <div className={cn("grid gap-4", showQuestionBankAndTags ? "grid-cols-3" : "grid-cols-2")}>
               <div className="space-y-1.5">
                 <Label>题型</Label>
                 <div className="flex h-9 items-center rounded-md border border-input bg-muted px-3 text-sm text-muted-foreground">
@@ -270,7 +296,8 @@ function QuestionEditForm({ question, banks, allTags, id }: QuestionEditFormProp
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1.5">
+              {showQuestionBankAndTags ? (
+                <div className="space-y-1.5">
                 <Label>题库（可选）</Label>
                 <Popover open={bankOpen} onOpenChange={setBankOpen}>
                   <PopoverTrigger asChild>
@@ -317,7 +344,8 @@ function QuestionEditForm({ question, banks, allTags, id }: QuestionEditFormProp
                     </Command>
                   </PopoverContent>
                 </Popover>
-              </div>
+                </div>
+              ) : null}
             </div>
 
             {/* Content */}
@@ -732,37 +760,70 @@ function QuestionEditForm({ question, banks, allTags, id }: QuestionEditFormProp
               />
             </div>
 
-            {/* Tags */}
-            <div className="space-y-1.5">
-              <Label>标签（可选）</Label>
-              <TagSelector
-                allTags={allTags}
-                selectedTagIds={selectedTagIds}
-                onChange={setSelectedTagIds}
-              />
-            </div>
+            {showQuestionBankAndTags ? (
+              <div className="space-y-1.5">
+                <Label>标签（可选）</Label>
+                <TagSelector
+                  allTags={allTags}
+                  selectedTagIds={selectedTagIds}
+                  onChange={setSelectedTagIds}
+                />
+              </div>
+            ) : null}
 
             <Separator />
 
             <div className="flex items-center gap-3 pt-1">
-              <Button type="submit" disabled={updateLoading}>
-                {updateLoading ? (
+              <Button type="submit" disabled={isSubmitting}>
+                {isSubmitting ? (
                   <span className="flex items-center gap-2">
                     <span className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                     保存中...
                   </span>
                 ) : (
-                  "保存修改"
+                  submitLabel
                 )}
               </Button>
-              <Button type="button" variant="outline" onClick={() => navigate(-1)}>
-                取消
+              <Button type="button" variant="outline" onClick={onCancel}>
+                {cancelLabel}
               </Button>
             </div>
           </form>
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+interface QuestionEditFormProps {
+  question: IQuestion;
+  banks: IQuestionBank[];
+  allTags: ITag[];
+  id: string;
+}
+
+function QuestionEditForm({ question, banks, allTags, id }: QuestionEditFormProps) {
+  const navigate = useNavigate();
+  const { mutate, mutation } = useUpdate();
+
+  return (
+    <QuestionEditFormContent
+      question={question}
+      banks={banks}
+      allTags={allTags}
+      isSubmitting={mutation.isPending}
+      onCancel={() => navigate(-1)}
+      onSubmit={(values) =>
+        mutate(
+          {
+            resource: "questions",
+            id,
+            values,
+          },
+          { onSuccess: () => navigate("/questions") },
+        )
+      }
+    />
   );
 }
 

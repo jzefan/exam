@@ -1,7 +1,7 @@
 """add teacher ownership for students
 
-Revision ID: 20260411_teacher_student_ownership
-Revises: 20260411_teacher_data_visibility_primitives
+Revision ID: 20260411_teacher_owner
+Revises: 20260411_teacher_visibility
 Create Date: 2026-04-11
 """
 
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "20260411_teacher_student_ownership"
-down_revision = "20260411_teacher_data_visibility_primitives"
+revision = "20260411_teacher_owner"
+down_revision = "20260411_teacher_visibility"
 branch_labels = None
 depends_on = None
 

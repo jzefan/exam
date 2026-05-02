@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Background,
   Controls,
@@ -12,8 +12,16 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
+import { NODE_COLLAPSE_TOGGLE_SELECTOR } from "@/components/graph/node-collapse-toggle";
 import { KnowledgeNode } from "./KnowledgeNode";
 import { PrerequisiteEdge } from "./PrerequisiteEdge";
+import {
+  buildKnowledgeChildCountMap,
+  getAnchoredViewport,
+  layoutVisibleKnowledgeTree,
+  toggleKnowledgeNodeCollapse,
+} from "./knowledge-tree-visibility";
+import type { IKnowledgePointDetail } from "./types";
 
 const nodeTypes = { knowledgeNode: KnowledgeNode };
 const edgeTypes = { prerequisite: PrerequisiteEdge };
@@ -86,20 +94,34 @@ export function KnowledgeTreeCanvas({
   onRenameSubmit,
   onRenameCancel,
 }: Props) {
-  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+  const [collapsedNodeIds, setCollapsedNodeIds] = useState<Set<string>>(new Set());
+  const rootNodeId = useMemo(
+    () => initialNodes.find((node) => !(node.data as IKnowledgePointDetail).parent_id)?.id ?? null,
+    [initialNodes],
+  );
+  const childCountById = useMemo(() => buildKnowledgeChildCountMap(initialNodes), [initialNodes]);
+  const visibleGraph = useMemo(
+    () => layoutVisibleKnowledgeTree(initialNodes, initialEdges, rootNodeId, collapsedNodeIds),
+    [collapsedNodeIds, initialEdges, initialNodes, rootNodeId],
+  );
+  const [nodes, setNodes, onNodesChange] = useNodesState(visibleGraph.nodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(visibleGraph.edges);
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance | null>(null);
+  const pendingViewportRef = useRef<ReturnType<typeof getAnchoredViewport> | null>(null);
 
-  useEffect(() => {
-    const incomingTargets = new Set(initialEdges.map((edge) => edge.target));
-    const outgoingSources = new Set(initialEdges.map((edge) => edge.source));
+  useLayoutEffect(() => {
+    const incomingTargets = new Set(visibleGraph.edges.map((edge) => edge.target));
+    const outgoingSources = new Set(visibleGraph.edges.map((edge) => edge.source));
     setNodes(
-      initialNodes.map((node) => ({
+      visibleGraph.nodes.map((node) => ({
         ...node,
         data: {
           ...(node.data as Record<string, unknown>),
           hasIncomingEdge: incomingTargets.has(node.id),
           hasOutgoingEdge: outgoingSources.has(node.id),
+          hasChildren: (childCountById.get(node.id) ?? 0) > 0,
+          childCount: childCountById.get(node.id) ?? 0,
+          collapsed: collapsedNodeIds.has(node.id),
           isSelected: selectedNodeId === node.id,
           isEditing: editingNodeId === node.id,
           renameDraft: editingNodeId === node.id ? renameDraft : "",
@@ -114,11 +136,39 @@ export function KnowledgeTreeCanvas({
         },
       })),
     );
-  }, [editingNodeId, initialEdges, initialNodes, onAddChild, onDelete, onEdit, onRenameCancel, onRenameDraftChange, onRenameSubmit, onSetPrerequisite, onViewResources, renameDraft, selectedNodeId, setNodes]);
+    setEdges(visibleGraph.edges);
+    if (flowInstance && pendingViewportRef.current) {
+      flowInstance.setViewport(pendingViewportRef.current);
+      pendingViewportRef.current = null;
+    }
+  }, [
+    childCountById,
+    collapsedNodeIds,
+    editingNodeId,
+    onAddChild,
+    onDelete,
+    onEdit,
+    onRenameCancel,
+    onRenameDraftChange,
+    onRenameSubmit,
+    onSetPrerequisite,
+    onViewResources,
+    renameDraft,
+    selectedNodeId,
+    setNodes,
+    setEdges,
+    flowInstance,
+    visibleGraph.edges,
+    visibleGraph.nodes,
+  ]);
 
   useEffect(() => {
-    setEdges(initialEdges);
-  }, [initialEdges, setEdges]);
+    const visibleNodeIds = new Set(initialNodes.map((node) => node.id));
+    setCollapsedNodeIds((current) => {
+      const next = new Set([...current].filter((nodeId) => visibleNodeIds.has(nodeId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [initialNodes]);
 
   useEffect(() => {
     if (!flowInstance || initialNodes.length === 0) {
@@ -136,7 +186,28 @@ export function KnowledgeTreeCanvas({
     return () => window.cancelAnimationFrame(frame);
   }, [flowInstance, initialNodes]);
 
-  const handleNodeClick: NodeMouseHandler = (_, node) => {
+  const handleNodeClick: NodeMouseHandler = (event, node) => {
+    const target = event.target as HTMLElement;
+    if (target.closest(NODE_COLLAPSE_TOGGLE_SELECTOR)) {
+      const nextCollapsedNodeIds = toggleKnowledgeNodeCollapse(collapsedNodeIds, node.id);
+      const anchorBefore = node.position;
+      const anchorAfter = layoutVisibleKnowledgeTree(
+        initialNodes,
+        initialEdges,
+        rootNodeId,
+        nextCollapsedNodeIds,
+      ).nodes.find((item) => item.id === node.id)?.position;
+
+      if (flowInstance && anchorAfter) {
+        pendingViewportRef.current = getAnchoredViewport(
+          flowInstance.getViewport(),
+          anchorBefore,
+          anchorAfter,
+        );
+      }
+      setCollapsedNodeIds(nextCollapsedNodeIds);
+      return;
+    }
     onSelectNode(node.id);
   };
 

@@ -13,6 +13,8 @@ const { apiRequestMock } = vi.hoisted(() => ({
 const useGetIdentityMock = vi.fn();
 const useListMock = vi.fn();
 const navigateMock = vi.fn();
+const FUTURE_START_TIME = "2026-05-20T10:00";
+const FUTURE_END_TIME = "2026-05-20T12:00";
 
 const QUESTION_FIXTURES = [
   {
@@ -133,8 +135,8 @@ function createInitialValues(): ExamFormValues {
     category: "exam",
     title: "Java 后端岗位笔试",
     description: "",
-    start_time: "2026-04-10T10:00",
-    end_time: "2026-04-10T12:00",
+    start_time: FUTURE_START_TIME,
+    end_time: FUTURE_END_TIME,
     duration_minutes: 120,
     total_score: 100,
     status: "draft",
@@ -159,6 +161,12 @@ describe("ExamWizardForm", () => {
       }
       if (path === "/questions/ai-generate/frequent-knowledge-points") {
         return Promise.resolve({ recent: [], frequent: [] });
+      }
+      if (path === "/rbac/students") {
+        return Promise.resolve([]);
+      }
+      if (path === "/rbac/students/classes") {
+        return Promise.resolve([]);
       }
       return Promise.reject(new Error(`Unexpected API call: ${path}`));
     });
@@ -304,8 +312,8 @@ describe("ExamWizardForm", () => {
         mode="create"
         initialValues={{
           ...createInitialValues(),
-          start_time: "2026-04-20T10:00",
-          end_time: "2026-04-20T12:00",
+          start_time: FUTURE_START_TIME,
+          end_time: FUTURE_END_TIME,
           total_score: 0,
           question_ids: [],
           question_items: [],
@@ -332,8 +340,8 @@ describe("ExamWizardForm", () => {
         mode="create"
         initialValues={{
           ...createInitialValues(),
-          start_time: "2026-04-20T10:00",
-          end_time: "2026-04-20T12:00",
+          start_time: FUTURE_START_TIME,
+          end_time: FUTURE_END_TIME,
         }}
         isPending={false}
         submitError={null}
@@ -364,8 +372,8 @@ describe("ExamWizardForm", () => {
         mode="create"
         initialValues={{
           ...createInitialValues(),
-          start_time: "2026-04-20T10:00",
-          end_time: "2026-04-20T12:00",
+          start_time: FUTURE_START_TIME,
+          end_time: FUTURE_END_TIME,
           student_ids: ["student-1"],
         }}
         isPending={false}
@@ -397,8 +405,8 @@ describe("ExamWizardForm", () => {
         mode="create"
         initialValues={{
           ...createInitialValues(),
-          start_time: "2026-04-20T10:00",
-          end_time: "2026-04-20T12:00",
+          start_time: FUTURE_START_TIME,
+          end_time: FUTURE_END_TIME,
         }}
         isPending={false}
         submitError={null}
@@ -418,7 +426,7 @@ describe("ExamWizardForm", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it("generates AI questions and adds selected ones to the current exam", async () => {
+  it("automatically adds every generated AI question even when fewer than requested are returned", async () => {
     const user = userEvent.setup();
     const generatedEvent = {
       type: "question",
@@ -448,6 +456,12 @@ describe("ExamWizardForm", () => {
       }
       if (path === "/questions/ai-generate/frequent-knowledge-points") {
         return Promise.resolve({ recent: [], frequent: [] });
+      }
+      if (path === "/rbac/students") {
+        return Promise.resolve([]);
+      }
+      if (path === "/rbac/students/classes") {
+        return Promise.resolve([]);
       }
       if (path === "/question-banks") {
         return Promise.resolve([{ id: "ai-bank-1", name: "AI题库" }]);
@@ -482,8 +496,8 @@ describe("ExamWizardForm", () => {
         mode="create"
         initialValues={{
           ...createInitialValues(),
-          start_time: "2026-04-20T10:00",
-          end_time: "2026-04-20T12:00",
+          start_time: FUTURE_START_TIME,
+          end_time: FUTURE_END_TIME,
           total_score: 0,
           question_ids: [],
           question_items: [],
@@ -498,16 +512,21 @@ describe("ExamWizardForm", () => {
     await user.click(screen.getByRole("button", { name: /AI出题/i }));
     expect(screen.getByText("AI出题设置")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "开始生成" }));
-    expect(await screen.findByText("AI 生成选择题")).toBeInTheDocument();
+    const totalCountInput = screen.getByLabelText("题目总数");
+    await user.clear(totalCountInput);
+    await user.type(totalCountInput, "2");
 
-    await user.click(screen.getByRole("button", { name: "加入当前考试" }));
+    await user.click(screen.getByRole("button", { name: "开始生成" }));
+    expect(await screen.findByText("下面哪个选项正确？")).toBeInTheDocument();
 
     await waitFor(() => {
       expect(apiRequestMock).toHaveBeenCalledWith(
         "/questions",
         expect.objectContaining({ method: "POST" }),
       );
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/已自动加入 1 道题目/)).toBeInTheDocument();
     });
 
     await user.click(screen.getByRole("button", { name: "下一步" }));
@@ -525,8 +544,8 @@ describe("ExamWizardForm", () => {
         mode="create"
         initialValues={{
           ...createInitialValues(),
-          start_time: "2026-04-20T10:00",
-          end_time: "2026-04-20T12:00",
+          start_time: FUTURE_START_TIME,
+          end_time: FUTURE_END_TIME,
           question_ids: ["question-1", "question-2", "question-3"],
           question_items: [
             { question_id: "question-1", order: 0, score_override: 10 },
@@ -573,8 +592,8 @@ describe("ExamWizardForm", () => {
         mode="create"
         initialValues={{
           ...createInitialValues(),
-          start_time: "2026-04-20T10:00",
-          end_time: "2026-04-20T12:00",
+          start_time: FUTURE_START_TIME,
+          end_time: FUTURE_END_TIME,
         }}
         isPending={false}
         submitError={null}
@@ -605,8 +624,8 @@ describe("ExamWizardForm", () => {
         mode="create"
         initialValues={{
           ...createInitialValues(),
-          start_time: "2026-04-20T10:00",
-          end_time: "2026-04-20T12:00",
+          start_time: FUTURE_START_TIME,
+          end_time: FUTURE_END_TIME,
         }}
         isPending={false}
         submitError={null}

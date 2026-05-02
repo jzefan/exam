@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_NOTES, toSubmitDateTime, validateExamForm, type ExamFormValues } from "./exam-form-utils";
+import {
+  DEFAULT_NOTES,
+  getPublishedExamStatus,
+  toSubmitDateTime,
+  validateExamForm,
+  type ExamFormValues,
+} from "./exam-form-utils";
 
 function createForm(overrides: Partial<ExamFormValues> = {}): ExamFormValues {
   return {
@@ -78,6 +84,20 @@ describe("validateExamForm", () => {
 
     expect(errors.start_time).toBeUndefined();
     expect(errors.end_time).toBeUndefined();
+  });
+});
+
+describe("getPublishedExamStatus", () => {
+  it("treats a published exam without a start time as ongoing before the end time", () => {
+    const status = getPublishedExamStatus(
+      createForm({
+        start_time: "",
+        end_time: "2026-04-09T12:00",
+      }),
+      new Date("2026-04-09T10:00:00"),
+    );
+
+    expect(status).toBe("ongoing");
   });
 });
 

@@ -28,6 +28,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
+import { BrandLogoMark } from "@/components/brand-logo";
 import { useBrand } from "@/lib/brand";
 import { UserDropdown } from "./user-dropdown";
 import { ThemeCustomizer } from "./theme-customizer";
@@ -100,7 +101,7 @@ function NavItem({
 
 export function Layout() {
   const { mutate: logout } = useLogout();
-  const { data: identity } = useGetIdentity<{ name: string; primary_org?: { role_name: string } | null }>();
+  const { data: identity } = useGetIdentity<{ name: string; persona?: string | null; primary_org?: { role_name: string } | null }>();
   const location = useLocation();
   const navigate = useNavigate();
   const { resolved: themeMode } = useTheme();
@@ -108,7 +109,7 @@ export function Layout() {
 
   const isActive = (prefix: string) => location.pathname.startsWith(prefix);
   const role = identity ? getUserRole(identity) : "";
-  const isTeacher = role === "teacher";
+  const isTeacher = role === "teacher" || role === "evaluator";
   const isEnterprise = canAccessJobModels(role) && role !== "platform_admin";
   const isAdmin = role === "platform_admin";
   const isKnowledgePage = location.pathname.startsWith("/knowledge");
@@ -142,9 +143,7 @@ export function Layout() {
         <div className="flex items-center h-14 px-4 sm:px-6">
           {/* Logo */}
           <Link to="/" className="flex items-center gap-2.5 shrink-0">
-            <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center">
-              <GraduationCap size={18} className="text-white" />
-            </div>
+            <BrandLogoMark className="h-8 w-8 rounded-lg" />
             <span className="text-base font-bold text-foreground tracking-tight hidden sm:inline">
               {brand.name}
             </span>
@@ -335,7 +334,12 @@ export function Layout() {
             <ThemeCustomizer />
             {(isTeacher || isAdmin) && <NotificationCenter />}
             <Separator orientation="vertical" className="mx-1 h-5" />
-            <UserDropdown name={identity?.name ?? "用户"} role={identity ? getUserRole(identity) : undefined} onLogout={() => logout()} />
+            <UserDropdown
+              name={identity?.name ?? "用户"}
+              role={identity ? getUserRole(identity) : undefined}
+              persona={identity?.persona}
+              onLogout={() => logout()}
+            />
           </div>
         </div>
       </header>

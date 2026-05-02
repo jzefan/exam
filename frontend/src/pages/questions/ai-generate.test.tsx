@@ -16,6 +16,25 @@ vi.mock("@/components/ui/latex-text", () => ({
   LatexText: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
+vi.mock("@/components/ui/rich-text-editor", () => ({
+  RichTextEditor: ({
+    value,
+    onChange,
+    placeholder,
+  }: {
+    value: string;
+    onChange: (html: string) => void;
+    placeholder?: string;
+  }) => (
+    <textarea
+      aria-label={placeholder}
+      value={value.replace(/^<p>|<\/p>$/g, "")}
+      onChange={(event) => onChange(`<p>${event.target.value}</p>`)}
+    />
+  ),
+  htmlToPlainText: (html: string) => html.replace(/<[^>]+>/g, "").trim(),
+}));
+
 vi.mock("./components/ai-generate-loading-overlay", () => ({
   AIGenerateLoadingOverlay: () => null,
 }));
@@ -261,5 +280,65 @@ describe("AIGeneratePage unsaved guards", () => {
 
     await screen.findByText("题库列表");
     expect(screen.queryByText("离开当前页面？")).not.toBeInTheDocument();
+  });
+
+  it("allows editing generated questions before saving", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        mockStreamResponse({
+          type: "question",
+          data: {
+            type: "choice",
+            title: "MySQL 默认端口是？",
+            content: { text: "MySQL 默认端口是？" },
+            options: { A: "3306", B: "8080" },
+            answer: { correct: "A" },
+            analysis: "3306 是默认端口",
+            difficulty: 2,
+          },
+        }),
+      )
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => [{ id: "bank-1", name: "AI题库" }],
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ created: 1 }),
+      } as Response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={["/questions/ai-generate"]}>
+        <Routes>
+          <Route path="/" element={<TestLayout />}>
+            <Route path="questions/ai-generate" element={<AIGeneratePage />} />
+            <Route path="questions" element={<div>题库列表</div>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "开始生成" }));
+    await screen.findByText("MySQL 默认端口是？");
+
+    await user.click(screen.getByRole("button", { name: /编辑/ }));
+    await user.clear(screen.getByLabelText("输入题目内容..."));
+    await user.type(screen.getByLabelText("输入题目内容..."), "MySQL 默认监听端口是哪个？");
+    await user.click(screen.getByRole("button", { name: "保存修改" }));
+
+    expect(screen.getByText("MySQL 默认监听端口是哪个？")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /保存到题库/ }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+    const saveRequest = JSON.parse(String(fetchMock.mock.calls[2][1]?.body));
+    expect(saveRequest.questions[0].title).toBe("MySQL 默认监听端口是哪个？");
+    expect(saveRequest.questions[0].content.text).toBe("MySQL 默认监听端口是哪个？");
+    expect(saveRequest.questions[0].answer.correct).toBe("A");
   });
 });

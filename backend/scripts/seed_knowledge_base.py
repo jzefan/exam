@@ -16,6 +16,7 @@ from app.auth.models import User
 from app.common.data_visibility import VisibilityScope
 from app.database import async_session
 from app.learning.models import Direction, KnowledgePoint, Major
+from app.rbac.models import Role, UserOrganization
 import app.rbac.models  # Ensure all models like 'Class' are registered
 import app.questions.models  # Ensure association tables like 'question_knowledge_points' are registered
 
@@ -1061,11 +1062,32 @@ CURRICULUM: dict[str, dict[str, dict[str, dict[str, list[str]]]]] = {
 
 async def seed() -> None:
     async with async_session() as session:
-        # --- Get admin user as owner ---
+        # Prefer a platform admin as the owner for platform-level seed data.
         result = await session.execute(
-            select(User).where(User.deleted_at.is_(None)).limit(1)
+            select(User)
+            .join(UserOrganization, UserOrganization.user_id == User.id)
+            .join(Role, Role.id == UserOrganization.role_id)
+            .where(
+                User.deleted_at.is_(None),
+                Role.name == "platform_admin",
+            )
+            .order_by(UserOrganization.is_primary.desc(), User.created_at)
+            .limit(1)
         )
         user = result.scalar_one_or_none()
+        if user is None:
+            result = await session.execute(
+                select(User)
+                .where(User.username == "admin", User.deleted_at.is_(None))
+                .order_by(User.created_at)
+                .limit(1)
+            )
+            user = result.scalar_one_or_none()
+        if user is None:
+            result = await session.execute(
+                select(User).where(User.deleted_at.is_(None)).order_by(User.created_at).limit(1)
+            )
+            user = result.scalar_one_or_none()
         if user is None:
             print("ERROR: No users found. Create a user first.")
             return

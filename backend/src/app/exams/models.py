@@ -11,6 +11,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    Index,
     JSON,
     String,
     Text,
@@ -256,4 +257,9 @@ class Exam(OwnerMixin, BaseModel):
     )
     exam_students: Mapped[list[ExamStudent]] = relationship(
         "ExamStudent", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+    __table_args__ = (
+        Index("ix_exams_owner_id_deleted_at", "owner_id", "deleted_at"),
+        Index("ix_exams_created_by_deleted_at", "created_by", "deleted_at"),
     )

@@ -87,7 +87,7 @@ export function ExamStudentsPage() {
     const keyword = searchText.trim().toLowerCase();
     if (!keyword) return students;
     return students.filter((student) =>
-      [student.full_name ?? "", student.username ?? ""].join(" ").toLowerCase().includes(keyword),
+      [student.full_name ?? "", student.username ?? "", student.phone ?? ""].join(" ").toLowerCase().includes(keyword),
     );
   }, [searchText, students]);
 
@@ -206,10 +206,15 @@ export function ExamStudentsPage() {
                             >
                               {submitted ? "已提交" : "未提交"}
                             </span>
+                            {student.user_type === "external_guest" ? (
+                              <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-700">
+                                外部考生
+                              </span>
+                            ) : null}
                           </div>
                           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                             <Users className="h-3.5 w-3.5" />
-                            <span>{student.username || "无学号"}</span>
+                            <span>{student.username || student.phone || "无学号"}</span>
                           </div>
                         </div>
 

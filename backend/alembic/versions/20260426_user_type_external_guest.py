@@ -1,6 +1,6 @@
 """add user type and primary organization
 
-Revision ID: 20260426_user_type_external_guest
+Revision ID: 20260426_user_ext_guest
 Revises: 20260425_user_org_multi_role
 Create Date: 2026-04-26
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision: str = "20260426_user_type_external_guest"
+revision: str = "20260426_user_ext_guest"
 down_revision: Union[str, None] = "20260425_user_org_multi_role"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

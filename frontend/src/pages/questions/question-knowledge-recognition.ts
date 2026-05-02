@@ -1,8 +1,16 @@
 import type { QuestionImportJobResponse } from "./import-types";
 
 export const ACTIVE_QUESTION_IMPORT_JOB_ID_STORAGE_KEY = "active_question_import_job_id";
+export const QUESTION_KNOWLEDGE_RECOGNITION_NOTICE_ID = "question-knowledge-recognition";
+export const QUESTION_KNOWLEDGE_RECOGNITION_NOTICE_PAGE_PATH = "/questions/import";
+export const QUESTION_KNOWLEDGE_RECOGNITION_NOTICE_DESCRIPTION =
+  "可离开当前页面继续其它操作，系统会在后台继续识别知识点。";
 
 export type QuestionKnowledgeRecognitionStatus = "waiting" | "running";
+
+export function isTerminalQuestionImportJobStatus(status: QuestionImportJobResponse["status"]) {
+  return status === "completed" || status === "failed" || status === "partial_failed";
+}
 
 export function isActiveQuestionImportJob(job: QuestionImportJobResponse | null | undefined): job is QuestionImportJobResponse {
   return job?.status === "pending" || job?.status === "running";

@@ -1,6 +1,6 @@
 """add question import jobs
 
-Revision ID: 20260420_add_question_import_jobs
+Revision ID: 20260420_q_import_jobs
 Revises: 20260420_add_notifications
 Create Date: 2026-04-20
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision: str = "20260420_add_question_import_jobs"
+revision: str = "20260420_q_import_jobs"
 down_revision: Union[str, None] = "20260420_add_notifications"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

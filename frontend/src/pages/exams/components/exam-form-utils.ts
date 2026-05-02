@@ -22,6 +22,7 @@ export interface ExamFormValues {
   question_ids: string[];
   question_items: ExamQuestionFormItem[];
   student_ids: string[];
+  public_link_enabled?: boolean;
 }
 
 export function getPublishedExamStatus(
@@ -37,6 +38,10 @@ export function getPublishedExamStatus(
   }
 
   if (Number.isFinite(start) && start <= current) {
+    return "ongoing";
+  }
+
+  if (!Number.isFinite(start)) {
     return "ongoing";
   }
 

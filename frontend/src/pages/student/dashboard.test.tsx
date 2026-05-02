@@ -32,71 +32,84 @@ describe("StudentDashboard", () => {
     useGetIdentityMock.mockReturnValue({
       data: { name: "stud-11" },
     });
-    useListMock.mockReturnValue({
-      query: {
-        data: {
-          data: [
-            {
-              id: "ongoing-1",
-              title: "[测试] 7天持续进行中考试",
-              description: "当前可进入",
-              status: "ongoing",
-              start_time: "2026-04-09T08:00:00.000Z",
-              end_time: "2026-04-09T10:00:00.000Z",
-              started_at: null,
-              duration_minutes: 120,
-              total_score: 100,
-              max_switch_count: 0,
-              allow_retake: false,
-              notes_template: null,
-              total_questions: 20,
-              score: null,
-              participated: false,
-              submitted_at: null,
-              created_by_name: "张老师",
+    useListMock.mockImplementation(({ resource }: { resource: string }) => {
+      if (resource === "wrong-answers") {
+        return {
+          query: {
+            data: {
+              data: [{ id: "wrong-1" }],
+              total: 1,
             },
-            {
-              id: "upcoming-1",
-              title: "[测试] Python 进阶练习",
-              description: null,
-              status: "upcoming",
-              start_time: "2026-04-10T08:00:00.000Z",
-              end_time: "2026-04-10T09:30:00.000Z",
-              started_at: null,
-              duration_minutes: 90,
-              total_score: 100,
-              max_switch_count: 0,
-              allow_retake: false,
-              notes_template: null,
-              total_questions: 18,
-              score: null,
-              participated: false,
-              submitted_at: null,
-              created_by_name: "李老师",
-            },
-            {
-              id: "completed-1",
-              title: "[测试] 数据库原理阶段测验",
-              description: null,
-              status: "completed",
-              start_time: "2026-04-01T08:00:00.000Z",
-              end_time: "2026-04-01T09:00:00.000Z",
-              started_at: "2026-04-01T08:02:00.000Z",
-              duration_minutes: 60,
-              total_score: 100,
-              max_switch_count: 0,
-              allow_retake: false,
-              notes_template: null,
-              total_questions: 15,
-              score: 86,
-              participated: true,
-              submitted_at: "2026-04-01T09:00:00.000Z",
-              created_by_name: "王老师",
-            },
-          ],
+            isLoading: false,
+          },
+        };
+      }
+      return {
+        query: {
+          data: {
+            data: [
+              {
+                id: "ongoing-1",
+                title: "[测试] 7天持续进行中考试",
+                description: "当前可进入",
+                status: "ongoing",
+                start_time: "2026-04-09T08:00:00.000Z",
+                end_time: "2026-04-09T10:00:00.000Z",
+                started_at: null,
+                duration_minutes: 120,
+                total_score: 100,
+                max_switch_count: 0,
+                allow_retake: false,
+                notes_template: null,
+                total_questions: 20,
+                score: null,
+                participated: false,
+                submitted_at: null,
+                created_by_name: "张老师",
+              },
+              {
+                id: "upcoming-1",
+                title: "[测试] Python 进阶练习",
+                description: null,
+                status: "upcoming",
+                start_time: "2026-04-10T08:00:00.000Z",
+                end_time: "2026-04-10T09:30:00.000Z",
+                started_at: null,
+                duration_minutes: 90,
+                total_score: 100,
+                max_switch_count: 0,
+                allow_retake: false,
+                notes_template: null,
+                total_questions: 18,
+                score: null,
+                participated: false,
+                submitted_at: null,
+                created_by_name: "李老师",
+              },
+              {
+                id: "completed-1",
+                title: "[测试] 数据库原理阶段测验",
+                description: null,
+                status: "completed",
+                start_time: "2026-04-01T08:00:00.000Z",
+                end_time: "2026-04-01T09:00:00.000Z",
+                started_at: "2026-04-01T08:02:00.000Z",
+                duration_minutes: 60,
+                total_score: 100,
+                max_switch_count: 0,
+                allow_retake: false,
+                notes_template: null,
+                total_questions: 15,
+                score: 86,
+                participated: true,
+                submitted_at: "2026-04-01T09:00:00.000Z",
+                created_by_name: "王老师",
+              },
+            ],
+          },
+          isLoading: false,
         },
-        isLoading: false,
-      },
+      };
     });
 
     render(
@@ -121,6 +134,7 @@ describe("StudentDashboard", () => {
     expect(screen.getByRole("columnheader", { name: /用时/i })).toBeInTheDocument();
     expect(screen.getByText("平均得分")).toBeInTheDocument();
     expect(screen.getByText("已过考试")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "立即复习错题" })).toBeEnabled();
     const expectedTimeCell = `${new Date("2026-04-01T08:00:00.000Z").toLocaleString(getStudentDateLocale("zh"), {
       month: "numeric",
       day: "numeric",
@@ -155,32 +169,45 @@ describe("StudentDashboard", () => {
     useGetIdentityMock.mockReturnValue({
       data: { name: "stud-11" },
     });
-    useListMock.mockReturnValue({
-      query: {
-        data: {
-          data: [
-            {
-              id: "closed-1",
-              title: "[测试] 已结束未提交考试",
-              description: null,
-              status: "closed",
-              start_time: "2026-04-09T08:00:00.000Z",
-              end_time: "2026-04-09T09:00:00.000Z",
-              started_at: "2026-04-09T08:03:00.000Z",
-              duration_minutes: 60,
-              total_score: 100,
-              max_switch_count: 0,
-              allow_retake: false,
-              notes_template: null,
-              total_questions: 15,
-              score: null,
-              participated: false,
-              submitted_at: null,
+    useListMock.mockImplementation(({ resource }: { resource: string }) => {
+      if (resource === "wrong-answers") {
+        return {
+          query: {
+            data: {
+              data: [],
+              total: 0,
             },
-          ],
+            isLoading: false,
+          },
+        };
+      }
+      return {
+        query: {
+          data: {
+            data: [
+              {
+                id: "closed-1",
+                title: "[测试] 已结束未提交考试",
+                description: null,
+                status: "closed",
+                start_time: "2026-04-09T08:00:00.000Z",
+                end_time: "2026-04-09T09:00:00.000Z",
+                started_at: "2026-04-09T08:03:00.000Z",
+                duration_minutes: 60,
+                total_score: 100,
+                max_switch_count: 0,
+                allow_retake: false,
+                notes_template: null,
+                total_questions: 15,
+                score: null,
+                participated: false,
+                submitted_at: null,
+              },
+            ],
+          },
+          isLoading: false,
         },
-        isLoading: false,
-      },
+      };
     });
 
     render(
@@ -192,6 +219,7 @@ describe("StudentDashboard", () => {
     expect(screen.getByText("当前没有待参加的考试，去复习下错题吧。")).toBeInTheDocument();
     expect(screen.queryByText("[测试] 已结束未提交考试")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "详情" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "立即复习错题" })).toBeDisabled();
 
     vi.useRealTimers();
   });

@@ -232,6 +232,14 @@ export function KnowledgeManagementPage() {
     [nodes],
   );
 
+  const catalogExistingRootNames = useMemo(
+    () =>
+      treeLoading || treeError
+        ? []
+        : rootKnowledgePoints.map((point) => point.name),
+    [rootKnowledgePoints, treeError, treeLoading],
+  );
+
   const visibleFlow = useMemo(
     () => getKnowledgeSubtree(nodes, edges, selectedRootKnowledgeId),
     [edges, nodes, selectedRootKnowledgeId],
@@ -1083,6 +1091,7 @@ export function KnowledgeManagementPage() {
       />
 
       <KnowledgeCatalogPhotoDialog
+        existingRootNames={catalogExistingRootNames}
         onImport={handleImportKnowledgePaths}
         onOpenChange={setCatalogPhotoDialogOpen}
         onRecognize={handleRecognizeCatalogPhoto}

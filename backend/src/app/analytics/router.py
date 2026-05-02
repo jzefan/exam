@@ -1,5 +1,6 @@
 from typing import Annotated
-import uuid
+import logging
+from time import perf_counter
 from fastapi import APIRouter, Depends
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,12 +18,14 @@ from app.job_models.models import JobModel
 from app.analytics.schemas import DashboardStats
 
 router = APIRouter(tags=["analytics"])
+logger = logging.getLogger(__name__)
 
 @router.get("/dashboard-stats", response_model=DashboardStats)
 async def get_dashboard_stats(
     db: Annotated[AsyncSession, Depends(get_db)],
     user: CurrentUser
 ):
+    started_at = perf_counter()
     primary = await get_user_primary_org(db, user.id)
     org_id = primary.org_id if primary else None
 
@@ -30,7 +33,9 @@ async def get_dashboard_stats(
 
     # Determine role name
     role_name: str | None = None
-    if primary and primary.role_id:
+    if primary and primary.role:
+        role_name = primary.role.name
+    elif primary and primary.role_id:
         role_res = await db.execute(select(Role.name).where(Role.id == primary.role_id))
         role_name = role_res.scalar_one_or_none()
 
@@ -45,9 +50,17 @@ async def get_dashboard_stats(
             stats.total_jobs = (await db.execute(select(func.count(JobModel.id)))).scalar_one() or 0
         except Exception as e:
             print(f"ERROR in admin dashboard stats: {str(e)}")
+        finished_at = perf_counter()
+        if finished_at - started_at >= 0.5:
+            logger.warning(
+                "Slow dashboard stats user_id=%s role=%s total_ms=%.1f",
+                user.id,
+                role_name,
+                (finished_at - started_at) * 1000,
+            )
         return stats
 
-    is_teacher = await user_has_role(db, user.id, "teacher", "evaluator")
+    is_teacher = role_name in {"teacher", "evaluator"} or await user_has_role(db, user.id, "teacher", "evaluator")
     if is_teacher:
         try:
             stats.total_exams = (
@@ -99,9 +112,25 @@ async def get_dashboard_stats(
             stats.total_students = student_res.scalar_one() or 0
         except Exception as e:
             print(f"ERROR in teacher dashboard stats: {str(e)}")
+        finished_at = perf_counter()
+        if finished_at - started_at >= 0.5:
+            logger.warning(
+                "Slow dashboard stats user_id=%s role=%s total_ms=%.1f",
+                user.id,
+                role_name,
+                (finished_at - started_at) * 1000,
+            )
         return stats
 
     if not org_id:
+        finished_at = perf_counter()
+        if finished_at - started_at >= 0.5:
+            logger.warning(
+                "Slow dashboard stats user_id=%s role=%s total_ms=%.1f",
+                user.id,
+                role_name,
+                (finished_at - started_at) * 1000,
+            )
         return stats
 
     try:
@@ -147,4 +176,12 @@ async def get_dashboard_stats(
     except Exception as e:
         print(f"ERROR in get_dashboard_stats: {str(e)}")
         
+    finished_at = perf_counter()
+    if finished_at - started_at >= 0.5:
+        logger.warning(
+            "Slow dashboard stats user_id=%s role=%s total_ms=%.1f",
+            user.id,
+            role_name,
+            (finished_at - started_at) * 1000,
+        )
     return stats

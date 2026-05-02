@@ -1,7 +1,7 @@
 """fix question import job completed_at type
 
-Revision ID: 20260420_fix_question_import_job_completed_at
-Revises: 20260420_add_question_import_jobs
+Revision ID: 20260420_q_import_completed
+Revises: 20260420_q_import_jobs
 Create Date: 2026-04-20
 """
 
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "20260420_fix_question_import_job_completed_at"
-down_revision: Union[str, None] = "20260420_add_question_import_jobs"
+revision: str = "20260420_q_import_completed"
+down_revision: Union[str, None] = "20260420_q_import_jobs"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

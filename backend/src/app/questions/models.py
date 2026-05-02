@@ -4,7 +4,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, Column, DateTime, Enum, Float, ForeignKey, Integer, String, Table, Text, UniqueConstraint, Uuid
+from sqlalchemy import JSON, Column, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Table, Text, UniqueConstraint, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -97,6 +97,11 @@ class Question(OwnerMixin, BaseModel):
     tags: Mapped[list[Tag]] = relationship(secondary=question_tags, back_populates="questions", lazy="selectin")
     knowledge_points: Mapped[list[KnowledgePoint]] = relationship(
         secondary=question_knowledge_points, back_populates="questions", lazy="selectin"
+    )
+
+    __table_args__ = (
+        Index("ix_questions_owner_id_deleted_at", "owner_id", "deleted_at"),
+        Index("ix_questions_question_bank_id_deleted_at", "question_bank_id", "deleted_at"),
     )
 
 

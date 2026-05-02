@@ -5,6 +5,25 @@ import { getUserRole } from "../types/rbac";
 
 const API_URL = "/api";
 
+function getResponseDetail(error: unknown): string | undefined {
+  if (axios.isAxiosError(error)) {
+    const detail = error.response?.data?.detail;
+    return typeof detail === "string" ? detail : undefined;
+  }
+  return undefined;
+}
+
+function getLoginErrorMessage(error: unknown): string {
+  const detail = getResponseDetail(error);
+  if (detail === "External guests must use invitation links to access exams") {
+    return "访客账号请使用邀请链接进入考试";
+  }
+  if (detail === "Invalid credentials" || detail === undefined) {
+    return "用户名或密码错误，请检查后重试";
+  }
+  return detail;
+}
+
 export const authProvider: AuthProvider = {
   login: async ({ username, password }) => {
     try {
@@ -15,8 +34,8 @@ export const authProvider: AuthProvider = {
       localStorage.setItem("access_token", data.access_token);
       localStorage.setItem("user", JSON.stringify(data.user));
       return { success: true, redirectTo: "/" };
-    } catch {
-      return { success: false, error: { name: "Login Error", message: "Invalid credentials" } };
+    } catch (error) {
+      return { success: false, error: { name: "登录失败", message: getLoginErrorMessage(error) } };
     }
   },
 
@@ -48,6 +67,7 @@ export const authProvider: AuthProvider = {
     return {
       id: user.id,
       name: user.full_name,
+      persona: user.persona,
       primary_org: user.primary_org,
       organizations: user.organizations,
       avatar: undefined,
@@ -61,7 +81,7 @@ export const authProvider: AuthProvider = {
     return { error };
   },
 
-  register: async ({ username, email, password, full_name, role_name }: Record<string, string>) => {
+  register: async ({ username, email, password, full_name, role_name, persona }: Record<string, string>) => {
     try {
       const normalizedEmail = email?.trim();
       await axios.post(`${API_URL}/auth/register`, {
@@ -70,6 +90,7 @@ export const authProvider: AuthProvider = {
         password,
         full_name,
         role_name: role_name || "student",
+        persona: persona || "teacher",
       });
       return { success: true, redirectTo: "/login" };
     } catch {

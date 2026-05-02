@@ -60,7 +60,7 @@ const PROVIDERS = [
     value: "deepseek",
     title: "DeepSeek",
     providerLabel: "DeepSeek",
-    defaultModel: "DeepSeek Chat",
+    defaultModel: "deepseek-v4-flash",
     capabilityTags: ["工具调用"],
   },
   {

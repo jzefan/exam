@@ -1,7 +1,7 @@
 """add exam invitations table
 
 Revision ID: 20260426_exam_invitations
-Revises: 20260426_user_type_external_guest
+Revises: 20260426_user_ext_guest
 Create Date: 2026-04-26
 """
 from __future__ import annotations
@@ -13,7 +13,7 @@ from alembic import op
 
 
 revision: str = "20260426_exam_invitations"
-down_revision: Union[str, None] = "20260426_user_type_external_guest"
+down_revision: Union[str, None] = "20260426_user_ext_guest"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

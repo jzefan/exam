@@ -3,7 +3,7 @@
 import enum
 import uuid
 
-from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, ForeignKey, Index, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models import Base, BaseModel, TimestampMixin
@@ -126,4 +126,8 @@ class TeacherStudent(Base, TimestampMixin):
     )
     student: Mapped["app.auth.models.User"] = relationship(
         "User", foreign_keys=[student_id], lazy="joined"
+    )
+
+    __table_args__ = (
+        Index("ix_teacher_students_student_id", "student_id"),
     )

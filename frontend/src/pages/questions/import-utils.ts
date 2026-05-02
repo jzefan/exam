@@ -318,7 +318,7 @@ export function htmlToImportText(html: string, images: QuestionImportImageInput[
     .trim();
 }
 
-function buildAnswerPayload(type: QuestionType, answerText: string | null) {
+export function buildAnswerPayload(type: QuestionType, answerText: string | null) {
   const text = answerText ?? "";
   if (type === "choice") return { correct: text };
   if (type === "true_false") return { correct: /^(正确|对|true|t|√)$/i.test(text.trim()) };

@@ -36,3 +36,17 @@ class RedeemResponse(BaseModel):
     access_token: str
     exam_id: uuid.UUID
     candidate_name: str
+
+
+class PublicLinkResponse(BaseModel):
+    id: uuid.UUID
+    exam_id: uuid.UUID
+    public_url: str
+    expires_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
+class PublicLinkRedeemRequest(BaseModel):
+    token: str = Field(min_length=20)
+    full_name: str = Field(min_length=1, max_length=100)
+    phone: str = Field(min_length=5, max_length=20)

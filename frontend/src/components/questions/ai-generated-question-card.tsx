@@ -17,6 +17,7 @@ export type AIGeneratedQuestionPreview = {
   analysis: string | null;
   difficulty: number;
   selected: boolean;
+  persistedQuestionId?: string;
 };
 
 function toPreviewQuestion(question: AIGeneratedQuestionPreview): IQuestion {
@@ -50,7 +51,7 @@ export function AIGeneratedQuestionCard({
   className,
 }: {
   question: AIGeneratedQuestionPreview;
-  onToggleSelected: () => void;
+  onToggleSelected?: () => void;
   onRemove?: () => void;
   className?: string;
 }) {
@@ -69,21 +70,24 @@ export function AIGeneratedQuestionCard({
       )}
       trailing={
         <div className="flex items-center gap-2">
-          <Checkbox
-            checked={question.selected}
-            aria-label={question.selected ? "取消选择题目" : "选择题目"}
-            onCheckedChange={onToggleSelected}
-          />
+          {onToggleSelected ? (
+            <Checkbox
+              checked={question.selected}
+              aria-label={question.selected ? "取消选择题目" : "选择题目"}
+              onCheckedChange={onToggleSelected}
+            />
+          ) : null}
           {onRemove ? (
             <Button
               type="button"
               variant="ghost"
               size="sm"
-              className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-              aria-label="删除题目"
+              className="h-8 text-muted-foreground hover:text-destructive"
+              aria-label="移除题目"
               onClick={onRemove}
             >
-              <Trash2 size={14} />
+              <Trash2 data-icon="inline-start" />
+              移除
             </Button>
           ) : null}
         </div>

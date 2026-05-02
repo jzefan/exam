@@ -15,7 +15,7 @@ export const TEACHER_ROLES = ["teacher", "evaluator", "enterprise_admin", "schoo
 export const ENTERPRISE_ROLES = ["enterprise_user", "enterprise_admin", "school_admin", "platform_admin"]
 
 /** Roles allowed to manage student accounts */
-export const STUDENT_MANAGEMENT_ROLES = ["teacher", "school_admin", "platform_admin"]
+export const STUDENT_MANAGEMENT_ROLES = ["teacher", "evaluator", "school_admin", "platform_admin"]
 
 /** Roles allowed to manage system users */
 export const USER_MANAGEMENT_ROLES = ["platform_admin"]

@@ -7,9 +7,9 @@ import {
 
 describe("catalog photo import utils", () => {
   it("keeps images unchanged when already within the max edge", () => {
-    expect(scaleDimensionsToMaxEdge(1200, 900)).toEqual({
-      width: 1200,
-      height: 900,
+    expect(scaleDimensionsToMaxEdge(1513, 1240)).toEqual({
+      width: 1513,
+      height: 1240,
       scale: 1,
     });
   });
@@ -17,8 +17,8 @@ describe("catalog photo import utils", () => {
   it("scales large images down to the configured max edge", () => {
     expect(scaleDimensionsToMaxEdge(4000, 3000)).toEqual({
       width: DEFAULT_CATALOG_IMAGE_MAX_EDGE,
-      height: 960,
-      scale: 0.32,
+      height: 1536,
+      scale: 0.512,
     });
   });
 });

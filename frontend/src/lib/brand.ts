@@ -10,7 +10,7 @@ export type Brand = {
 
 export const BRANDS: Record<Brand["key"], Brand> = {
   gwmx: { key: "gwmx", name: "工教桥", fullName: "工教桥岗位能力建模平台", browserTitle: "云教桥" },
-  default: { key: "default", name: "智评云", fullName: "智评云考试管理平台", browserTitle: "智评云" },
+  default: { key: "default", name: "智评线", fullName: "智评线考试管理平台", browserTitle: "智评线" },
 }
 
 const STORAGE_KEY = "brand"

@@ -32,6 +32,7 @@ import type {
 import { KnowledgeImportTreePreview } from "./KnowledgeImportTreePreview";
 
 type KnowledgeCatalogPhotoDialogProps = {
+  existingRootNames: string[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onRecognize: (payload: {
@@ -43,6 +44,7 @@ type KnowledgeCatalogPhotoDialogProps = {
 };
 
 export function KnowledgeCatalogPhotoDialog({
+  existingRootNames,
   open,
   onOpenChange,
   onRecognize,
@@ -63,6 +65,14 @@ export function KnowledgeCatalogPhotoDialog({
   );
 
   const trimmedRootName = rootName.trim();
+  const duplicateRootName = useMemo(
+    () =>
+      Boolean(
+        trimmedRootName &&
+          existingRootNames.some((name) => name.trim() === trimmedRootName),
+      ),
+    [existingRootNames, trimmedRootName],
+  );
   const effectivePaths = useMemo<KnowledgeImportPath[]>(
     () =>
       trimmedRootName ? paths.map((path) => [trimmedRootName, ...path]) : paths,
@@ -138,6 +148,15 @@ export function KnowledgeCatalogPhotoDialog({
       });
       return;
     }
+    if (duplicateRootName) {
+      toast({
+        title: "主知识点名称已存在",
+        description: "当前方向下已存在同名主知识点，请换一个名称。",
+        position: "top",
+        variant: "destructive",
+      });
+      return;
+    }
     setImporting(true);
     setError(null);
     try {
@@ -188,7 +207,7 @@ export function KnowledgeCatalogPhotoDialog({
   };
 
   const canImport =
-    !recognizing && !importing && paths.length > 0;
+    !recognizing && !importing && paths.length > 0 && !duplicateRootName;
 
   return (
     <Dialog onOpenChange={handleOpenChange} open={open}>
@@ -302,14 +321,25 @@ export function KnowledgeCatalogPhotoDialog({
                 主知识点名称 <span className="text-red-500">*</span>
               </Label>
               <Input
+                aria-describedby={duplicateRootName ? "catalog-root-name-error" : undefined}
+                aria-invalid={duplicateRootName}
                 id="catalog-root-name"
                 onChange={(event) => setRootName(event.target.value)}
                 placeholder="例如：高等数学上册 / 数据结构导论"
                 value={rootName}
               />
-              <p className="text-xs text-stone-500 dark:text-stone-400">
-                识别出的全部章节会作为该主知识点的子节点导入。
-              </p>
+              {duplicateRootName ? (
+                <p
+                  className="text-xs font-medium text-red-600 dark:text-red-400"
+                  id="catalog-root-name-error"
+                >
+                  当前方向下已存在同名主知识点，请换一个名称。
+                </p>
+              ) : (
+                <p className="text-xs text-stone-500 dark:text-stone-400">
+                  识别出的全部章节会作为该主知识点的子节点导入。
+                </p>
+              )}
             </div>
 
             <div className="relative flex-1 rounded-2xl border border-stone-200 dark:border-stone-800">
