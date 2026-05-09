@@ -11,6 +11,7 @@ from app.models import Base
 # Import all models so Alembic can detect them
 from app.auth.models import User  # noqa: F401
 from app.notifications.models import Notification  # noqa: F401
+from app.papers.models import Paper, PaperImportSession, PaperQuestion  # noqa: F401
 from app.questions.models import KnowledgePoint, Question, QuestionBank, Tag  # noqa: F401
 from app.exams.models import Exam  # noqa: F401
 from app.rbac.models import Organization, Role, Permission  # noqa: F401

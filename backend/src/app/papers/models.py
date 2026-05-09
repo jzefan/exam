@@ -4,7 +4,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, JSON, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, JSON, String, Text, UniqueConstraint, Uuid, true
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -23,14 +23,14 @@ class Paper(OwnerMixin, BaseModel):
 
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    source_type: Mapped[PaperSourceType] = mapped_column(String(30), nullable=False, default=PaperSourceType.MANUAL.value)
+    source_type: Mapped[str] = mapped_column(String(30), nullable=False, default=PaperSourceType.MANUAL.value)
     source_paper_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("papers.id", ondelete="SET NULL"), nullable=True
     )
     root_knowledge_point_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("knowledge_points.id", ondelete="SET NULL"), nullable=True
     )
-    is_reusable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    is_reusable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=true())
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False)
 
@@ -55,7 +55,7 @@ class PaperQuestion(Base, TimestampMixin):
     question_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("questions.id", ondelete="RESTRICT"), primary_key=True
     )
-    order: Mapped[int] = mapped_column(nullable=False, default=0)
+    order: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
     score_override: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     question: Mapped["app.questions.models.Question"] = relationship("Question", lazy="joined")  # type: ignore[name-defined]

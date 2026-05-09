@@ -3,7 +3,7 @@ from sqlalchemy import select
 
 from app.auth.schemas import UserCreate
 from app.auth.service import create_user
-from app.papers.models import Paper, PaperQuestion, PaperSourceType
+from app.papers.models import Paper, PaperImportSession, PaperQuestion, PaperSourceType
 from app.questions.models import Question, QuestionType
 from app.rbac.models import Organization, Role
 
@@ -44,7 +44,7 @@ async def test_paper_model_links_questions_without_import_status(db_session):
     paper = Paper(
         title="历史试卷 A",
         description=None,
-        source_type=PaperSourceType.IMPORT,
+        source_type=PaperSourceType.IMPORT.value,
         source_paper_id=None,
         root_knowledge_point_id=None,
         is_reusable=True,
@@ -55,8 +55,27 @@ async def test_paper_model_links_questions_without_import_status(db_session):
     await db_session.flush()
     db_session.add(PaperQuestion(paper_id=paper.id, question_id=question.id, order=0, score_override=10))
     await db_session.commit()
+    db_session.expunge_all()
 
     saved = (await db_session.execute(select(Paper).where(Paper.id == paper.id))).scalar_one()
-    assert saved.source_type == PaperSourceType.IMPORT
+    assert saved.source_type == PaperSourceType.IMPORT.value
     assert not hasattr(saved, "import_status")
     assert len(saved.paper_questions) == 1
+
+
+@pytest.mark.asyncio
+async def test_paper_import_session_keeps_preview_without_status(db_session):
+    teacher = await _teacher(db_session, username="paper-import-teacher")
+    session = PaperImportSession(
+        file_name="history-paper.pdf",
+        source_format="pdf",
+        preview_payload={"questions": [{"title": "题目 1"}]},
+        created_by=teacher.id,
+    )
+    db_session.add(session)
+    await db_session.commit()
+    db_session.expunge_all()
+
+    saved = (await db_session.execute(select(PaperImportSession).where(PaperImportSession.id == session.id))).scalar_one()
+    assert saved.preview_payload["questions"][0]["title"] == "题目 1"
+    assert not hasattr(saved, "status")
