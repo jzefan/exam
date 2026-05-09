@@ -12,10 +12,19 @@ from app.common.resource_access import can_write_owned_resource
 from app.database import get_db
 from app.papers.models import Paper
 from app.papers.schemas import PaperCreate, PaperDetailResponse, PaperQuestionResponse, PaperResponse, PaperUpdate
+from app.papers.schemas import (
+    PaperImportConfirmRequest,
+    PaperImportRecognizeRequest,
+    PaperImportRecognizeResponse,
+    PaperImportSessionResponse,
+)
 from app.papers.service import (
     archive_paper,
+    confirm_import_session,
+    create_import_session_from_recognition,
     create_paper,
     get_paper_by_id,
+    get_import_session,
     list_papers_for_user,
     soft_delete_paper,
     update_paper,
@@ -128,6 +137,65 @@ async def create_paper_endpoint(
         paper = await create_paper(db, body, user=user, is_admin=is_admin)
     except ValueError as exc:
         _raise_from_service_error(exc)
+    await db.commit()
+    refreshed = await get_paper_by_id(db, paper.id, user=user, is_admin=is_admin)
+    if refreshed is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paper not found")
+    return build_paper_detail_response(refreshed)
+
+
+@router.post("/import/recognize", response_model=PaperImportRecognizeResponse)
+async def recognize_paper_import(
+    body: PaperImportRecognizeRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: WriteUser,
+) -> PaperImportRecognizeResponse:
+    try:
+        session, recognition = await create_import_session_from_recognition(db, user=user, request=body)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    await db.commit()
+    return PaperImportRecognizeResponse(
+        session_id=session.id,
+        mode=recognition.mode.value if hasattr(recognition.mode, "value") else str(recognition.mode),
+        summary=recognition.summary,
+        drafts=recognition.drafts,
+    )
+
+
+@router.get("/import/sessions/{session_id}", response_model=PaperImportSessionResponse)
+async def get_import_session_endpoint(
+    session_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+) -> PaperImportSessionResponse:
+    session = await get_import_session(db, session_id, user=user, is_admin=await _is_paper_admin(db, user.id))
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paper import session not found")
+    return PaperImportSessionResponse.model_validate(session)
+
+
+@router.post("/import/sessions/{session_id}/confirm", response_model=PaperDetailResponse, status_code=status.HTTP_201_CREATED)
+async def confirm_import_session_endpoint(
+    session_id: uuid.UUID,
+    body: PaperImportConfirmRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: WriteUser,
+) -> PaperDetailResponse:
+    is_admin = await _is_paper_admin(db, user.id)
+    session = await get_import_session(db, session_id, user=user, is_admin=is_admin)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paper import session not found")
+    try:
+        paper = await confirm_import_session(db, session, body, user=user, is_admin=is_admin)
+    except ValueError as exc:
+        await db.commit()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        await db.commit()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
     await db.commit()
     refreshed = await get_paper_by_id(db, paper.id, user=user, is_admin=is_admin)
     if refreshed is None:

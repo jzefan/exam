@@ -1,5 +1,6 @@
 """Core service functions for reusable paper assets."""
 
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -11,9 +12,23 @@ from app.auth.models import User
 from app.common.data_visibility import VisibilityScope
 from app.common.resource_access import can_write_owned_resource, teacher_owned_resource_filter, teacher_visible_resource_filter
 from app.learning.models import KnowledgePoint
-from app.papers.models import Paper, PaperQuestion
-from app.papers.schemas import PaperCreate, PaperQuestionItem, PaperUpdate
+from app.papers.models import Paper, PaperImportSession, PaperQuestion
+from app.papers.schemas import (
+    PaperCreate,
+    PaperImportConfirmRequest,
+    PaperImportRecognizeRequest,
+    PaperQuestionItem,
+    PaperUpdate,
+)
 from app.questions.models import Question, QuestionBank
+from app.questions.schemas import (
+    ImportReviewStatus,
+    QuestionCreate,
+    QuestionImportDocumentRecognizeRequest,
+    QuestionImportDocumentRecognizeResponse,
+    QuestionImportDraft,
+)
+from app.questions.service import bulk_create_questions_fast, recognize_question_document
 
 
 def paper_base_query() -> Select:
@@ -225,3 +240,137 @@ async def archive_paper(db: AsyncSession, paper: Paper) -> Paper:
 async def soft_delete_paper(db: AsyncSession, paper: Paper) -> None:
     paper.deleted_at = datetime.now(timezone.utc)
     await db.flush()
+
+
+def _blocking_import_issues(draft: QuestionImportDraft) -> list[str]:
+    return [issue for issue in draft.issues if not re.search(r"未识别到答案|缺少答案|缺答案", issue)]
+
+
+def question_create_from_import_draft(
+    draft: QuestionImportDraft,
+    root_knowledge_point_id: uuid.UUID | None,
+) -> QuestionCreate:
+    answer_text = draft.answer_text or ""
+    if draft.type.value == "choice":
+        answer = {"correct": answer_text}
+    elif draft.type.value == "true_false":
+        answer = {"correct": answer_text.strip().lower() in {"正确", "对", "true", "t", "√"}}
+    elif draft.type.value == "fill_in":
+        answer = {"correct": [part.strip() for part in re.split(r"[;,；\n]", answer_text) if part.strip()]}
+    elif draft.type.value == "code":
+        answer = {"code": answer_text}
+    else:
+        answer = {"points": [part.strip() for part in answer_text.splitlines() if part.strip()]}
+
+    return QuestionCreate(
+        type=draft.type,
+        title=(draft.title or draft.content_text[:120] or "未命名题目")[:500],
+        content={"text": draft.content_text},
+        options=draft.options if draft.type.value == "choice" else None,
+        answer=answer,
+        analysis=draft.analysis,
+        difficulty=draft.difficulty,
+        score=10,
+        knowledge_point_ids=[root_knowledge_point_id] if root_knowledge_point_id else [],
+        tag_ids=[],
+        question_bank_id=None,
+    )
+
+
+async def create_import_session_from_recognition(
+    db: AsyncSession,
+    *,
+    user: User,
+    request: PaperImportRecognizeRequest,
+) -> tuple[PaperImportSession, QuestionImportDocumentRecognizeResponse]:
+    recognition = await recognize_question_document(
+        QuestionImportDocumentRecognizeRequest(
+            file_name=request.file_name,
+            raw_text=request.raw_text,
+            source_format=request.source_format,
+            images=request.images,
+        )
+    )
+    session = PaperImportSession(
+        file_name=request.file_name,
+        source_format=request.source_format,
+        root_knowledge_point_id=request.root_knowledge_point_id,
+        preview_payload=recognition.model_dump(mode="json"),
+        error_detail=None,
+        created_by=user.id,
+    )
+    db.add(session)
+    await db.flush()
+    return session, recognition
+
+
+async def get_import_session(
+    db: AsyncSession,
+    session_id: uuid.UUID,
+    *,
+    user: User,
+    is_admin: bool,
+) -> PaperImportSession | None:
+    stmt = select(PaperImportSession).where(
+        PaperImportSession.id == session_id,
+        PaperImportSession.deleted_at.is_(None),
+    )
+    if not is_admin:
+        stmt = stmt.where(PaperImportSession.created_by == user.id)
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def confirm_import_session(
+    db: AsyncSession,
+    session: PaperImportSession,
+    body: PaperImportConfirmRequest,
+    *,
+    user: User,
+    is_admin: bool,
+) -> Paper:
+    root_id = body.root_knowledge_point_id or session.root_knowledge_point_id
+    approved_drafts = [
+        draft
+        for draft in body.drafts
+        if draft.review_status == ImportReviewStatus.APPROVED and not _blocking_import_issues(draft)
+    ]
+    if not approved_drafts:
+        session.error_detail = "没有可入库的题目"
+        await db.flush()
+        raise ValueError("没有可入库的题目")
+
+    questions = [question_create_from_import_draft(draft, root_id) for draft in approved_drafts]
+    try:
+        result = await bulk_create_questions_fast(db, questions, user.id)
+        if not result.created_question_ids:
+            session.error_detail = "没有可入库的题目"
+            await db.flush()
+            raise ValueError("没有可入库的题目")
+
+        paper = await create_paper(
+            db,
+            PaperCreate(
+                title=body.title,
+                description=body.description,
+                source_type="import",
+                root_knowledge_point_id=root_id,
+                question_items=[
+                    PaperQuestionItem(
+                        question_id=question_id,
+                        order=index,
+                        score_override=result.created_questions[index].score,
+                    )
+                    for index, question_id in enumerate(result.created_question_ids)
+                ],
+            ),
+            user=user,
+            is_admin=is_admin,
+        )
+        session.created_paper_id = paper.id
+        session.error_detail = None
+        await db.flush()
+        return paper
+    except Exception as exc:
+        session.error_detail = str(exc)
+        await db.flush()
+        raise

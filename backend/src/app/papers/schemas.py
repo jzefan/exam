@@ -6,7 +6,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.questions.schemas import KnowledgePointResponse, QuestionCreate, QuestionResponse
+from app.questions.schemas import (
+    KnowledgePointResponse,
+    QuestionCreate,
+    QuestionImportDocumentSummary,
+    QuestionImportDraft,
+    QuestionImportImageInput,
+    QuestionResponse,
+)
 
 PaperSourceTypeLiteral = Literal["manual", "import", "ai_generated"]
 
@@ -69,3 +76,39 @@ class PaperImportQuestionDraft(BaseModel):
     question: QuestionCreate
     order: int = Field(default=0, ge=0)
     score_override: float | None = Field(default=None, ge=0)
+
+
+class PaperImportRecognizeRequest(BaseModel):
+    file_name: str = Field(min_length=1, max_length=255)
+    raw_text: str = Field(min_length=1, max_length=200000)
+    source_format: str = Field(pattern="^(pdf|docx|md)$")
+    root_knowledge_point_id: uuid.UUID | None = None
+    images: list[QuestionImportImageInput] = Field(default_factory=list, max_length=200)
+
+
+class PaperImportRecognizeResponse(BaseModel):
+    session_id: uuid.UUID
+    mode: str
+    summary: QuestionImportDocumentSummary
+    drafts: list[QuestionImportDraft]
+
+
+class PaperImportSessionResponse(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: uuid.UUID
+    file_name: str
+    source_format: str
+    root_knowledge_point_id: uuid.UUID | None
+    error_detail: str | None
+    preview_payload: dict
+    created_paper_id: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PaperImportConfirmRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    description: str | None = None
+    root_knowledge_point_id: uuid.UUID | None = None
+    drafts: list[QuestionImportDraft] = Field(min_length=1, max_length=500)
