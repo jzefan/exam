@@ -13,7 +13,7 @@ PaperSourceTypeLiteral = Literal["manual", "import", "ai_generated"]
 
 class PaperQuestionItem(BaseModel):
     question_id: uuid.UUID
-    order: int = Field(default=0, ge=0)
+    order: int | None = Field(default=None, ge=0)
     score_override: float | None = Field(default=None, ge=0)
 
 
@@ -69,4 +69,3 @@ class PaperImportQuestionDraft(BaseModel):
     question: QuestionCreate
     order: int = Field(default=0, ge=0)
     score_override: float | None = Field(default=None, ge=0)
-
