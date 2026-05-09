@@ -11,7 +11,15 @@ from app.auth.models import User
 from app.common.resource_access import can_write_owned_resource
 from app.database import get_db
 from app.papers.models import Paper
-from app.papers.schemas import PaperCreate, PaperDetailResponse, PaperQuestionResponse, PaperResponse, PaperUpdate
+from app.papers.schemas import (
+    PaperCreate,
+    PaperDetailResponse,
+    PaperExamSeedResponse,
+    PaperQuestionItem,
+    PaperQuestionResponse,
+    PaperResponse,
+    PaperUpdate,
+)
 from app.papers.schemas import (
     PaperImportConfirmRequest,
     PaperImportRecognizeRequest,
@@ -211,6 +219,35 @@ async def get_paper_endpoint(
 ) -> PaperDetailResponse:
     paper = await _get_visible_paper_or_404(db, paper_id, user)
     return build_paper_detail_response(paper)
+
+
+@router.get("/{paper_id}/exam-seed", response_model=PaperExamSeedResponse)
+async def get_paper_exam_seed(
+    paper_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+) -> PaperExamSeedResponse:
+    paper = await _get_visible_paper_or_404(db, paper_id, user)
+    question_items: list[PaperQuestionItem] = []
+    for item in sorted(paper.paper_questions, key=lambda value: value.order):
+        if item.question is None:
+            continue
+        score_override = item.score_override if item.score_override is not None else item.question.score
+        question_items.append(
+            PaperQuestionItem(
+                question_id=item.question_id,
+                order=item.order,
+                score_override=float(score_override) if score_override is not None else None,
+            )
+        )
+    total_score = sum(float(item.score_override or 0) for item in question_items)
+    return PaperExamSeedResponse(
+        paper_id=paper.id,
+        title=paper.title,
+        description=paper.description,
+        total_score=total_score,
+        question_items=question_items,
+    )
 
 
 @router.patch("/{paper_id}", response_model=PaperDetailResponse)

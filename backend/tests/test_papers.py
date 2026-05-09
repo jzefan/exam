@@ -372,3 +372,40 @@ async def test_paper_crud_api(client, db_session):
     archive_response = await client.post(f"/api/papers/{paper_id}/archive")
     assert archive_response.status_code == 200
     assert archive_response.json()["archived_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_get_paper_exam_seed_returns_question_items(client, db_session):
+    teacher = await _teacher(db_session, "paper-seed-teacher")
+    question = Question(
+        type=QuestionType.CHOICE,
+        title="种子题",
+        content={"text": "种子题"},
+        options={"A": "是", "B": "否"},
+        answer={"correct": "A"},
+        difficulty=2,
+        score=6,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    paper = Paper(
+        title="种子试卷",
+        source_type=PaperSourceType.MANUAL,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    db_session.add_all([question, paper])
+    await db_session.flush()
+    db_session.add(PaperQuestion(paper_id=paper.id, question_id=question.id, order=0, score_override=6))
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    response = await client.get(f"/api/papers/{paper.id}/exam-seed")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["paper_id"] == str(paper.id)
+    assert payload["title"] == "种子试卷"
+    assert payload["total_score"] == 6.0
+    assert payload["question_items"] == [
+        {"question_id": str(question.id), "order": 0, "score_override": 6.0}
+    ]

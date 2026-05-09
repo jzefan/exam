@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCreate, useList, useOne, useUpdate } from "@refinedev/core";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowRight,
   BookCopy,
@@ -72,6 +72,20 @@ type PracticeDetail = {
   question_mode?: QuestionMode | null;
   questions: IExamQuestion[];
   students: IExamStudent[];
+};
+
+type PracticeQuestionItem = {
+  question_id: string;
+  order: number;
+  score_override: number | null;
+};
+
+type PaperExamSeedResponse = {
+  paper_id: string;
+  title: string;
+  description: string | null;
+  total_score: number;
+  question_items: PracticeQuestionItem[];
 };
 
 interface PublicLinkResponse {
@@ -163,6 +177,7 @@ function getDefaultAITypeAlloc(): Record<QuestionType, number> {
 
 export function PracticeCreate() {
   const { id } = useParams<{ id?: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { toast } = useToast();
   const { mutate: create, mutation } = useCreate();
@@ -170,7 +185,9 @@ export function PracticeCreate() {
   const abortRef = useRef<AbortController | null>(null);
   const hydratedExamRef = useRef(false);
   const hydratedQuestionMetaRef = useRef(false);
+  const hydratedPaperSeedRef = useRef<string | null>(null);
   const isEditMode = Boolean(id);
+  const seedPaperId = searchParams.get("paper_id");
 
   const { result: practice, query: practiceQuery } = useOne<PracticeDetail>({
     resource: "exams",
@@ -186,6 +203,7 @@ export function PracticeCreate() {
   const [selectedKnowledgePoints, setSelectedKnowledgePoints] = useState<SelectedKnowledgePoint[]>([]);
   const [questionMode, setQuestionMode] = useState<QuestionMode>("manual");
   const [questionIds, setQuestionIds] = useState<string[]>([]);
+  const [questionItems, setQuestionItems] = useState<PracticeQuestionItem[]>([]);
   const [isManualQuestionFullscreen, setIsManualQuestionFullscreen] = useState(false);
   const [studentIds, setStudentIds] = useState<string[]>([]);
   const [publicLinkEnabled, setPublicLinkEnabled] = useState(false);
@@ -195,6 +213,7 @@ export function PracticeCreate() {
   const [endTime, setEndTime] = useState("");
   const [showResult, setShowResult] = useState(true);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [seedLoading, setSeedLoading] = useState(false);
 
   const [aiQuestionCount, setAIQuestionCount] = useState(10);
   const [aiDifficulty, setAIDifficulty] = useState(3);
@@ -240,6 +259,10 @@ export function PracticeCreate() {
       ),
     [selectedQuestionQuery.query.data?.data],
   );
+  const selectedQuestionMap = useMemo(
+    () => new Map(selectedQuestions.map((question) => [question.id, question])),
+    [selectedQuestions],
+  );
   const todayPracticeTitlePrefix = useMemo(() => getDefaultPracticeTitle(), []);
   const practiceTitleSuggestionQuery = useList<PracticeDetail>({
     resource: "exams",
@@ -262,7 +285,16 @@ export function PracticeCreate() {
     setTitle(practice.title ?? "");
     setDescription(practice.description ?? "");
     setQuestionMode(practice.question_mode === "ai" ? "ai" : "manual");
-    setQuestionIds(practice.questions.map((question) => question.question_id));
+    const orderedItems = practice.questions
+      .slice()
+      .sort((left, right) => left.order - right.order)
+      .map((question, index) => ({
+        question_id: question.question_id,
+        order: index,
+        score_override: question.score_override ?? question.question_score ?? null,
+      }));
+    setQuestionIds(orderedItems.map((item) => item.question_id));
+    setQuestionItems(orderedItems);
     setStudentIds(practice.students.map((student) => student.student_id));
     setPublicLinkEnabled(false);
     setDurationMinutes(practice.duration_minutes ?? 60);
@@ -318,15 +350,32 @@ export function PracticeCreate() {
     }
   }, [isEditMode, practice?.question_mode, questionMode, selectedQuestions]);
 
+  useEffect(() => {
+    setQuestionItems((prev) => {
+      const existingMap = new Map(prev.map((item) => [item.question_id, item]));
+      const next = questionIds.map((questionId, index) => {
+        const existing = existingMap.get(questionId);
+        const question = selectedQuestionMap.get(questionId);
+        return {
+          question_id: questionId,
+          order: index,
+          score_override: existing?.score_override ?? question?.score ?? null,
+        };
+      });
+      return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+    });
+  }, [questionIds, selectedQuestionMap]);
+
   const totalScore = useMemo(
-    () => selectedQuestions.reduce((sum, question) => sum + (Number(question.score) || 0), 0),
-    [selectedQuestions],
+    () => questionItems.reduce((sum, item) => sum + (Number(item.score_override) || 0), 0),
+    [questionItems],
   );
 
   useEffect(() => {
     abortRef.current?.abort();
     hydratedExamRef.current = false;
     hydratedQuestionMetaRef.current = false;
+    hydratedPaperSeedRef.current = null;
 
     setCurrentStep(0);
     setMaxVisitedStep(0);
@@ -347,6 +396,7 @@ export function PracticeCreate() {
     setSelectedKnowledgePoints([]);
     setQuestionMode("manual");
     setQuestionIds([]);
+    setQuestionItems([]);
     setStudentIds([]);
     setPublicLinkEnabled(false);
     setDurationMinutes(60);
@@ -360,6 +410,78 @@ export function PracticeCreate() {
     setAIModel("deepseek");
     setAIPrompt("");
   }, [id, isEditMode]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (isEditMode) {
+      setSeedLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+    if (!seedPaperId) {
+      setSeedLoading(false);
+      if (hydratedPaperSeedRef.current) {
+        hydratedPaperSeedRef.current = null;
+        setTitle(getDefaultPracticeTitle());
+        setIsTitleManuallyEdited(false);
+        setDescription("");
+        setSelectedKnowledgePoints([]);
+        setQuestionMode("manual");
+        setQuestionIds([]);
+        setQuestionItems([]);
+        setSubmitError(null);
+      }
+      return () => {
+        cancelled = true;
+      };
+    }
+    if (hydratedPaperSeedRef.current === seedPaperId) {
+      setSeedLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+    setSeedLoading(true);
+    setSubmitError(null);
+    apiClient
+      .get<PaperExamSeedResponse>(`/api/papers/${seedPaperId}/exam-seed`)
+      .then((response) => {
+        if (cancelled) return;
+        const orderedItems = response.data.question_items
+          .slice()
+          .sort((left, right) => left.order - right.order)
+          .map((item, index) => ({
+            question_id: item.question_id,
+            order: index,
+            score_override: item.score_override,
+          }));
+        setQuestionMode("manual");
+        setQuestionIds(orderedItems.map((item) => item.question_id));
+        setQuestionItems(orderedItems);
+        setTitle(response.data.title || getDefaultPracticeTitle());
+        setIsTitleManuallyEdited(true);
+        setDescription(response.data.description ?? "");
+        hydratedPaperSeedRef.current = seedPaperId;
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setSubmitError(getErrorMessage(error, "无法读取试卷题目，请返回试卷列表重试。"));
+        toast({
+          title: "试卷加载失败",
+          description: getErrorMessage(error, "无法读取试卷题目，请返回试卷列表重试。"),
+          variant: "destructive",
+        });
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setSeedLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isEditMode, seedPaperId, toast]);
 
   useEffect(() => {
     if (isEditMode || isTitleManuallyEdited) return;
@@ -684,10 +806,10 @@ export function PracticeCreate() {
       notes_template: null,
       question_mode: questionMode,
       question_ids: [],
-      question_items: selectedQuestions.map((question, index) => ({
-        question_id: question.id,
+      question_items: questionItems.map((item, index) => ({
+        question_id: item.question_id,
         order: index,
-        score_override: question.score,
+        score_override: item.score_override,
       })),
       student_ids: studentIds,
     };
@@ -770,6 +892,14 @@ export function PracticeCreate() {
     return (
       <div className="flex items-center justify-center py-20">
         <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary/30 border-t-primary" />
+      </div>
+    );
+  }
+
+  if (!isEditMode && seedPaperId && seedLoading) {
+    return (
+      <div className="flex items-center justify-center py-20 text-muted-foreground">
+        正在加载试卷题目...
       </div>
     );
   }

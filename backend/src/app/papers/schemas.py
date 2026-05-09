@@ -72,6 +72,14 @@ class PaperDetailResponse(PaperResponse):
     questions: list[PaperQuestionResponse] = Field(default_factory=list)
 
 
+class PaperExamSeedResponse(BaseModel):
+    paper_id: uuid.UUID
+    title: str
+    description: str | None
+    total_score: float
+    question_items: list[PaperQuestionItem] = Field(default_factory=list)
+
+
 class PaperImportQuestionDraft(BaseModel):
     question: QuestionCreate
     order: int = Field(default=0, ge=0)
