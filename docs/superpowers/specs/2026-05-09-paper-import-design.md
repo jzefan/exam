@@ -148,7 +148,6 @@ V1 可新增轻量导入会话表，也可以先使用前端内存状态。推�
 - `file_name`
 - `source_format`
 - `root_knowledge_point_id`
-- `status`: `uploaded | parsed | parse_failed | imported | import_failed`
 - `error_detail`
 - `preview_payload`
 - `created_paper_id`
@@ -156,7 +155,7 @@ V1 可新增轻量导入会话表，也可以先使用前端内存状态。推�
 - `created_at`
 - `updated_at`
 
-这里的状态只描述导入会话，不出现在 `Paper` 上，也不进入试卷资产列表。用户需要恢复失败时，从导入历史或导入向导入口进入。
+导入会话不定义状态机。成功创建试卷后写入 `created_paper_id`，失败时写入 `error_detail`，是否已导入由这两个字段直接判断。用户需要恢复失败时，从导入历史或导入向导入口读取 `preview_payload` 后重试。
 
 ## 6. 后端 API
 
@@ -199,13 +198,13 @@ V1 可新增轻量导入会话表，也可以先使用前端内存状态。推�
   - 行为：调用现有 `recognize_question_document`。
 
 - `GET /api/papers/import/sessions/{session_id}`
-  - 输出：导入会话状态、错误、预览草稿。
+  - 输出：导入会话错误、预览草稿、已创建试卷 ID。
 
 - `POST /api/papers/import/sessions/{session_id}/confirm`
   - 输入：校对后的题目草稿、试卷名称、主知识点、分数策略。
   - 行为：批量创建题目，创建 `Paper`，创建 `PaperQuestion`。
   - 成功输出：`paper_id`。
-  - 失败行为：更新导入会话为 `import_failed`，保留 `preview_payload` 和 `error_detail`。
+  - 失败行为：写入 `error_detail`，保留 `preview_payload`。
 
 - `POST /api/papers/import/sessions/{session_id}/retry`
   - 用于解析失败后重新解析，或入库失败后基于保留草稿重试。
@@ -339,8 +338,8 @@ V1 可新增轻量导入会话表，也可以先使用前端内存状态。推�
 
 失败处理：
 
-- 解析失败：导入会话记录 `parse_failed` 和错误详情，允许重新上传或重试解析。
-- 入库失败：导入会话记录 `import_failed`，保留草稿，允许用户修正后重试。
+- 解析失败：返回错误详情，允许重新上传或重试解析；未成功解析时不创建试卷资产。
+- 入库失败：导入会话记录错误详情，保留草稿，允许用户修正后重试。
 - 失败不会创建 `Paper`，也不会污染试卷列表。
 
 ### 8.2 生成链路
