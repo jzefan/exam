@@ -10,6 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import type { IPaper, IPaperDetail, PaperSourceType } from "@/types";
 
 import { paperApiRequest } from "./api";
+import { PaperAIGenerateDialog } from "./ai-generate-dialog";
 
 const SOURCE_LABELS: Record<PaperSourceType, string> = {
   manual: "手工",
@@ -29,6 +30,7 @@ export function PaperListPage() {
   const [keyword, setKeyword] = useState("");
   const [sourceFilter, setSourceFilter] = useState<"all" | PaperSourceType>("all");
   const [busyPaperId, setBusyPaperId] = useState<string | null>(null);
+  const [aiDialogPaper, setAiDialogPaper] = useState<IPaper | null>(null);
 
   const { query } = useList<IPaper>({
     resource: "papers",
@@ -190,7 +192,13 @@ export function PaperListPage() {
                       <Button variant="ghost" size="icon" onClick={() => handleCopy(paper)} disabled={isBusy} title="复制">
                         <Copy className="h-4 w-4" />
                       </Button>
-                      <Button variant="ghost" size="icon" disabled title="AI生成新试卷（即将支持）">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setAiDialogPaper(paper)}
+                        disabled={isBusy || Boolean(paper.archived_at)}
+                        title="AI生成新试卷"
+                      >
                         <Sparkles className="h-4 w-4" />
                       </Button>
                       <Button variant="ghost" size="icon" onClick={() => handleArchive(paper)} disabled={isBusy} title="归档">
@@ -207,6 +215,20 @@ export function PaperListPage() {
           </tbody>
         </table>
       </div>
+
+      {aiDialogPaper ? (
+        <PaperAIGenerateDialog
+          open={Boolean(aiDialogPaper)}
+          onOpenChange={(open) => {
+            if (!open) {
+              setAiDialogPaper(null);
+            }
+          }}
+          paperId={aiDialogPaper.id}
+          paperTitle={aiDialogPaper.title}
+          rootKnowledgePointName={aiDialogPaper.root_knowledge_point?.name}
+        />
+      ) : null}
     </div>
   );
 }

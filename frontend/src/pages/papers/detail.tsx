@@ -9,6 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import type { IPaperDetail } from "@/types";
 
 import { paperApiRequest } from "./api";
+import { PaperAIGenerateDialog } from "./ai-generate-dialog";
 
 function formatDateTime(iso: string) {
   const date = new Date(iso);
@@ -21,6 +22,7 @@ export function PaperDetailPage() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const [busy, setBusy] = useState(false);
+  const [aiDialogOpen, setAiDialogOpen] = useState(false);
 
   const { result: paper, query } = useOne<IPaperDetail>({
     resource: "papers",
@@ -112,7 +114,7 @@ export function PaperDetailPage() {
             <Archive className="mr-1.5 h-4 w-4" />
             归档
           </Button>
-          <Button variant="outline" disabled>
+          <Button variant="outline" onClick={() => setAiDialogOpen(true)} disabled={busy || Boolean(paper.archived_at)}>
             <Sparkles className="mr-1.5 h-4 w-4" />
             AI生成新试卷
           </Button>
@@ -176,6 +178,14 @@ export function PaperDetailPage() {
           </tbody>
         </table>
       </div>
+
+      <PaperAIGenerateDialog
+        open={aiDialogOpen}
+        onOpenChange={setAiDialogOpen}
+        paperId={paper.id}
+        paperTitle={paper.title}
+        rootKnowledgePointName={paper.root_knowledge_point?.name}
+      />
     </div>
   );
 }
