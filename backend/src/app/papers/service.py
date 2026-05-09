@@ -17,13 +17,18 @@ from app.questions.models import Question, QuestionBank
 
 
 def paper_base_query() -> Select:
+    question_load = selectinload(Paper.paper_questions).joinedload(PaperQuestion.question)
     return (
         select(Paper)
         .where(Paper.deleted_at.is_(None))
         .options(
             joinedload(Paper.creator),
             joinedload(Paper.root_knowledge_point),
-            selectinload(Paper.paper_questions).joinedload(PaperQuestion.question),
+            question_load,
+            question_load.joinedload(Question.creator),
+            question_load.joinedload(Question.question_bank),
+            question_load.selectinload(Question.tags),
+            question_load.selectinload(Question.knowledge_points),
         )
         .execution_options(populate_existing=True)
     )

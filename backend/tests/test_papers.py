@@ -2,6 +2,7 @@ import pytest
 from sqlalchemy import select
 
 from app.auth.schemas import UserCreate
+from app.auth.security import create_access_token
 from app.auth.service import create_user
 from app.common.data_visibility import VisibilityScope
 from app.learning.models import KnowledgePoint
@@ -340,3 +341,34 @@ async def test_update_paper_rejects_cross_owner_paper_even_if_instance_is_passed
 
     await db_session.refresh(foreign_paper)
     assert foreign_paper.title == "别人的试卷"
+
+
+@pytest.mark.asyncio
+async def test_paper_crud_api(client, db_session):
+    teacher = await _teacher(db_session, "paper-api-teacher")
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+
+    create_response = await client.post(
+        "/api/papers",
+        json={"title": "API 试卷", "description": None, "question_items": []},
+    )
+    assert create_response.status_code == 201
+    paper_id = create_response.json()["id"]
+    assert create_response.json()["question_count"] == 0
+
+    list_response = await client.get("/api/papers")
+    assert list_response.status_code == 200
+    assert list_response.headers["x-total-count"] == "1"
+    assert [item["title"] for item in list_response.json()] == ["API 试卷"]
+
+    detail_response = await client.get(f"/api/papers/{paper_id}")
+    assert detail_response.status_code == 200
+    assert detail_response.json()["title"] == "API 试卷"
+
+    patch_response = await client.patch(f"/api/papers/{paper_id}", json={"title": "改名试卷"})
+    assert patch_response.status_code == 200
+    assert patch_response.json()["title"] == "改名试卷"
+
+    archive_response = await client.post(f"/api/papers/{paper_id}/archive")
+    assert archive_response.status_code == 200
+    assert archive_response.json()["archived_at"] is not None

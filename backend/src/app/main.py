@@ -26,6 +26,7 @@ from app.analytics.router import router as analytics_router
 from app.ai_pipeline.router import router as ai_pipeline_router
 from app.uploads.router import router as uploads_router
 from app.notifications.router import router as notifications_router
+from app.papers.router import router as papers_router
 
 
 @asynccontextmanager
@@ -99,6 +100,7 @@ app.include_router(job_template_router, prefix="/api/job-models/templates", tags
 app.include_router(ai_pipeline_router, prefix="/api/ai-pipeline", tags=["ai-pipeline"])
 app.include_router(ai_generate_router, prefix="/api/questions/ai-generate", tags=["ai-generate"])
 app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"])
+app.include_router(papers_router, prefix="/api/papers", tags=["papers"])
 
 
 @app.get("/api/health")
