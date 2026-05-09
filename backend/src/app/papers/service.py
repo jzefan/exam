@@ -9,7 +9,7 @@ from sqlalchemy.orm import joinedload, selectinload
 
 from app.auth.models import User
 from app.common.data_visibility import VisibilityScope
-from app.common.resource_access import teacher_owned_resource_filter, teacher_visible_resource_filter
+from app.common.resource_access import can_write_owned_resource, teacher_owned_resource_filter, teacher_visible_resource_filter
 from app.learning.models import KnowledgePoint
 from app.papers.models import Paper, PaperQuestion
 from app.papers.schemas import PaperCreate, PaperQuestionItem, PaperUpdate
@@ -193,6 +193,8 @@ async def create_paper(db: AsyncSession, data: PaperCreate, *, user: User, is_ad
 
 
 async def update_paper(db: AsyncSession, paper: Paper, data: PaperUpdate, *, user: User, is_admin: bool) -> Paper:
+    if not can_write_owned_resource(is_platform_admin=is_admin, current_user_id=user.id, owner_id=paper.owner_id):
+        raise ValueError("paper not found or not writable")
     await _ensure_paper_references_visible(
         db,
         user=user,

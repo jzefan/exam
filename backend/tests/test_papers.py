@@ -314,3 +314,29 @@ async def test_create_paper_rejects_cross_owner_source_paper_and_root_knowledge_
             user=teacher,
             is_admin=False,
         )
+
+
+@pytest.mark.asyncio
+async def test_update_paper_rejects_cross_owner_paper_even_if_instance_is_passed(db_session):
+    teacher = await _teacher(db_session, "paper-update-secure-teacher")
+    other = await _teacher(db_session, "paper-update-secure-other")
+    foreign_paper = Paper(
+        title="别人的试卷",
+        source_type=PaperSourceType.MANUAL.value,
+        created_by=other.id,
+        owner_id=other.id,
+    )
+    db_session.add(foreign_paper)
+    await db_session.flush()
+
+    with pytest.raises(ValueError, match="paper"):
+        await update_paper(
+            db_session,
+            foreign_paper,
+            PaperUpdate(title="不该成功"),
+            user=teacher,
+            is_admin=False,
+        )
+
+    await db_session.refresh(foreign_paper)
+    assert foreign_paper.title == "别人的试卷"
