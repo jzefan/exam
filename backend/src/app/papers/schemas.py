@@ -80,6 +80,19 @@ class PaperExamSeedResponse(BaseModel):
     question_items: list[PaperQuestionItem] = Field(default_factory=list)
 
 
+class PaperAIGenerateRequest(BaseModel):
+    count: int = Field(default=1, ge=1, le=1)
+    difficulty_strategy: Literal["similar", "easier", "harder"] = "similar"
+    question_type_strategy: Literal["inherit"] = "inherit"
+    prefer_root_knowledge_point: bool = True
+    model: Literal["qwen", "deepseek", "claude"] = "deepseek"
+
+
+class PaperAIGenerateResponse(BaseModel):
+    paper_id: uuid.UUID
+    generated_question_count: int
+
+
 class PaperImportQuestionDraft(BaseModel):
     question: QuestionCreate
     order: int = Field(default=0, ge=0)

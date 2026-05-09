@@ -1,5 +1,7 @@
 """Core service functions for reusable paper assets."""
 
+from collections import Counter
+from dataclasses import dataclass
 import re
 import uuid
 from datetime import datetime, timezone
@@ -14,12 +16,14 @@ from app.common.resource_access import can_write_owned_resource, teacher_owned_r
 from app.learning.models import KnowledgePoint
 from app.papers.models import Paper, PaperImportSession, PaperQuestion
 from app.papers.schemas import (
+    PaperAIGenerateRequest,
     PaperCreate,
     PaperImportConfirmRequest,
     PaperImportRecognizeRequest,
     PaperQuestionItem,
     PaperUpdate,
 )
+from app.questions.ai_generate import AIGenerateRequest, AIModelProvider, generate_questions_stream
 from app.questions.models import Question, QuestionBank
 from app.questions.schemas import (
     ImportReviewStatus,
@@ -29,6 +33,102 @@ from app.questions.schemas import (
     QuestionImportDraft,
 )
 from app.questions.service import bulk_create_questions_fast, recognize_question_document
+
+
+@dataclass
+class PaperGenerationProfile:
+    total_count: int
+    type_distribution: dict[str, int]
+    difficulty: int
+    knowledge_point_ids: list[uuid.UUID | str]
+    prompt: str
+
+
+def build_paper_generation_profile(
+    source_questions: list[dict],
+    root_knowledge_point_id: uuid.UUID | str | None,
+    difficulty_strategy: str,
+) -> PaperGenerationProfile:
+    if not source_questions:
+        return PaperGenerationProfile(
+            total_count=0,
+            type_distribution={},
+            difficulty=3,
+            knowledge_point_ids=[root_knowledge_point_id] if root_knowledge_point_id else [],
+            prompt="请参考源试卷结构生成一份新试卷。",
+        )
+
+    distribution = Counter(str(item.get("type") or "choice") for item in source_questions)
+    difficulties = [int(item.get("difficulty") or 3) for item in source_questions]
+    average = round(sum(difficulties) / len(difficulties)) if difficulties else 3
+    if difficulty_strategy == "easier":
+        average -= 1
+    elif difficulty_strategy == "harder":
+        average += 1
+    difficulty = min(5, max(1, average))
+    return PaperGenerationProfile(
+        total_count=len(source_questions),
+        type_distribution=dict(distribution),
+        difficulty=difficulty,
+        knowledge_point_ids=[root_knowledge_point_id] if root_knowledge_point_id else [],
+        prompt="请参考源试卷的题型结构、难度和考查范围，生成一份内容不同但能力要求接近的新试卷。",
+    )
+
+
+def _question_create_from_ai_payload(
+    payload: dict,
+    *,
+    profile: PaperGenerationProfile,
+) -> QuestionCreate:
+    raw_content = payload.get("content")
+    if isinstance(raw_content, dict):
+        content = raw_content
+    elif isinstance(raw_content, str) and raw_content.strip():
+        content = {"text": raw_content}
+    else:
+        content = {"text": str(payload.get("title") or "").strip()}
+
+    raw_answer = payload.get("answer")
+    if isinstance(raw_answer, dict):
+        answer = raw_answer
+    else:
+        answer = {"text": str(raw_answer or "").strip()}
+
+    raw_options = payload.get("options")
+    options = raw_options if isinstance(raw_options, dict) else None
+
+    difficulty_raw = payload.get("difficulty")
+    difficulty = profile.difficulty
+    if isinstance(difficulty_raw, (int, float)):
+        difficulty = int(difficulty_raw)
+    elif isinstance(difficulty_raw, str) and difficulty_raw.strip():
+        try:
+            difficulty = int(difficulty_raw.strip())
+        except ValueError:
+            difficulty = profile.difficulty
+    difficulty = min(5, max(1, difficulty))
+
+    knowledge_point_ids = [kp for kp in profile.knowledge_point_ids if isinstance(kp, uuid.UUID)]
+    title = str(payload.get("title") or content.get("text") or "AI 生成题目").strip()[:500]
+    if not title:
+        title = "AI 生成题目"
+    question_type = str(payload.get("type") or "choice")
+    if question_type not in {"choice", "true_false", "fill_in", "short_answer", "essay", "code"}:
+        question_type = "choice"
+
+    return QuestionCreate(
+        type=question_type,
+        title=title,
+        content=content,
+        options=options,
+        answer=answer,
+        analysis=str(payload.get("analysis")).strip() if payload.get("analysis") is not None else None,
+        difficulty=difficulty,
+        score=10,
+        knowledge_point_ids=knowledge_point_ids,
+        tag_ids=[],
+        question_bank_id=None,
+    )
 
 
 def paper_base_query() -> Select:
@@ -374,3 +474,81 @@ async def confirm_import_session(
         session.error_detail = str(exc)
         await db.flush()
         raise
+
+
+async def generate_paper_from_source(
+    db: AsyncSession,
+    source: Paper,
+    body: PaperAIGenerateRequest,
+    *,
+    user: User,
+    is_admin: bool,
+) -> Paper:
+    source_questions: list[dict] = []
+    for item in sorted(source.paper_questions, key=lambda question_item: question_item.order):
+        if item.question is None:
+            continue
+        source_questions.append(
+            {
+                "type": item.question.type.value if hasattr(item.question.type, "value") else str(item.question.type),
+                "difficulty": item.question.difficulty,
+                "knowledge_point_ids": [knowledge_point.id for knowledge_point in item.question.knowledge_points],
+            }
+        )
+    if not source_questions:
+        raise ValueError("源试卷没有可用于生成的题目")
+
+    profile = build_paper_generation_profile(
+        source_questions,
+        source.root_knowledge_point_id if body.prefer_root_knowledge_point else None,
+        body.difficulty_strategy,
+    )
+
+    request = AIGenerateRequest(
+        total_count=profile.total_count,
+        difficulty=profile.difficulty,
+        type_distribution=profile.type_distribution,
+        knowledge_point_ids=[kp for kp in profile.knowledge_point_ids if isinstance(kp, uuid.UUID)],
+        prompt=profile.prompt,
+        model=AIModelProvider(body.model),
+    )
+
+    generated_questions: list[QuestionCreate] = []
+    async for event in generate_questions_stream(db, request, user.id):
+        event_type = str(event.get("type") or "")
+        if event_type == "error":
+            raise ValueError(str(event.get("message") or "AI 生成失败"))
+        if event_type != "question":
+            continue
+        payload = event.get("data")
+        if not isinstance(payload, dict):
+            continue
+        generated_questions.append(_question_create_from_ai_payload(payload, profile=profile))
+
+    if len(generated_questions) != profile.total_count:
+        raise ValueError("AI 生成题目数量不足")
+
+    result = await bulk_create_questions_fast(db, generated_questions, user.id)
+    if len(result.created_question_ids) != profile.total_count:
+        raise ValueError("AI 生成题目入库数量不足")
+
+    return await create_paper(
+        db,
+        PaperCreate(
+            title=f"{source.title} - AI 生成",
+            description=source.description,
+            source_type="ai_generated",
+            source_paper_id=source.id,
+            root_knowledge_point_id=source.root_knowledge_point_id,
+            question_items=[
+                PaperQuestionItem(
+                    question_id=question_id,
+                    order=index,
+                    score_override=generated_questions[index].score,
+                )
+                for index, question_id in enumerate(result.created_question_ids)
+            ],
+        ),
+        user=user,
+        is_admin=is_admin,
+    )

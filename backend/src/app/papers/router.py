@@ -12,6 +12,8 @@ from app.common.resource_access import can_write_owned_resource
 from app.database import get_db
 from app.papers.models import Paper
 from app.papers.schemas import (
+    PaperAIGenerateRequest,
+    PaperAIGenerateResponse,
     PaperCreate,
     PaperDetailResponse,
     PaperExamSeedResponse,
@@ -31,6 +33,7 @@ from app.papers.service import (
     confirm_import_session,
     create_import_session_from_recognition,
     create_paper,
+    generate_paper_from_source,
     get_paper_by_id,
     get_import_session,
     list_papers_for_user,
@@ -219,6 +222,29 @@ async def get_paper_endpoint(
 ) -> PaperDetailResponse:
     paper = await _get_visible_paper_or_404(db, paper_id, user)
     return build_paper_detail_response(paper)
+
+
+@router.post("/{paper_id}/ai-generate", response_model=PaperAIGenerateResponse)
+async def ai_generate_paper_endpoint(
+    paper_id: uuid.UUID,
+    body: PaperAIGenerateRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: WriteUser,
+) -> PaperAIGenerateResponse:
+    is_admin = await _is_paper_admin(db, user.id)
+    source = await _get_writable_paper_or_404(db, paper_id, user)
+    try:
+        paper = await generate_paper_from_source(db, source, body, user=user, is_admin=is_admin)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    await db.commit()
+    refreshed = await get_paper_by_id(db, paper.id, user=user, is_admin=is_admin)
+    if refreshed is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paper not found")
+    return PaperAIGenerateResponse(
+        paper_id=refreshed.id,
+        generated_question_count=len(refreshed.paper_questions),
+    )
 
 
 @router.get("/{paper_id}/exam-seed", response_model=PaperExamSeedResponse)
