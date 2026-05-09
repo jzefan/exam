@@ -14,6 +14,7 @@ import {
   Send,
   LayoutDashboard,
   Network,
+  FileText,
 } from "lucide-react";
 import {
   NavigationMenu,
@@ -202,7 +203,7 @@ export function Layout() {
                           type="button"
                           className={cn(
                             navigationMenuTriggerStyle(),
-                            isActive("/exams") ? "bg-accent/50 text-accent-foreground" : "",
+                            isActive("/exams") || isActive("/papers") ? "bg-accent/50 text-accent-foreground" : "",
                           )}
                         >
                           <ClipboardList size={16} className="mr-1.5" />
@@ -222,6 +223,12 @@ export function Layout() {
                           </NavItem>
                           <NavItem href="/exams/students" title="考试考生" icon={<Send size={14} />} onNavigate={() => setExamMenuOpen(false)}>
                             查看各场考试下的考生列表
+                          </NavItem>
+                          <NavItem href="/papers" title="试卷列表" icon={<FileText size={14} />} onNavigate={() => setExamMenuOpen(false)}>
+                            管理手工与导入试卷资产
+                          </NavItem>
+                          <NavItem href="/papers/import" title="导入试卷" icon={<Upload size={14} />} onNavigate={() => setExamMenuOpen(false)}>
+                            识别历史试卷并入库复用
                           </NavItem>
                         </ul>
                       </DropdownMenuContent>

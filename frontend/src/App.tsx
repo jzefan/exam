@@ -74,6 +74,9 @@ const PracticeCreate = lazyNamed(() => import("./pages/exams/practice-create"), 
 const ExamStudentsPage = lazyNamed(() => import("./pages/exams/students"), "ExamStudentsPage");
 const ExamAnalysisPage = lazyNamed(() => import("./pages/exams/analysis"), "ExamAnalysisPage");
 const ExamPaperViewPage = lazyNamed(() => import("./pages/exams/view"), "ExamPaperViewPage");
+const PaperListPage = lazyNamed(() => import("./pages/papers/list"), "PaperListPage");
+const PaperDetailPage = lazyNamed(() => import("./pages/papers/detail"), "PaperDetailPage");
+const PaperImportPage = lazyNamed(() => import("./pages/papers/import"), "PaperImportPage");
 const ExamTaking = lazyNamed(() => import("./pages/student/exam-taking"), "ExamTaking");
 const EditorPage = lazyNamed(() => import("./pages/job-models/editor"), "EditorPage");
 const JobModelList = lazyNamed(() => import("./pages/job-models/list"), "JobModelList");
@@ -160,6 +163,12 @@ function App() {
                 meta: { label: "考试管理" },
               },
               {
+                name: "papers",
+                list: "/papers",
+                create: "/papers/import",
+                meta: { label: "试卷列表" },
+              },
+              {
                 name: "knowledge",
                 list: "/knowledge",
                 meta: { label: "知识点管理" },
@@ -238,6 +247,11 @@ function App() {
                       <Route path=":id/analysis" element={<ExamAnalysisPage />} />
                       <Route path="edit/:id" element={<ExamEdit />} />
                       <Route path="students" element={<ExamStudentsPage />} />
+                    </Route>
+                    <Route path="/papers">
+                      <Route index element={<PaperListPage />} />
+                      <Route path="import" element={<PaperImportPage />} />
+                      <Route path=":id" element={<PaperDetailPage />} />
                     </Route>
                     <Route path="/tags" element={<TagList />} />
                     <Route path="/knowledge" element={<KnowledgeManagementPage />} />

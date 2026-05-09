@@ -87,6 +87,7 @@ export interface IQuestionBank {
 export type ExamStatus = "draft" | "upcoming" | "ongoing" | "completed" | "closed";
 export type ExamGradingStatus = "pending_ai" | "ai_scored" | "reviewed";
 export type ExamCategory = "exam" | "practice";
+export type PaperSourceType = "manual" | "import" | "ai_generated";
 
 export interface IExam {
   id: string;
@@ -120,6 +121,95 @@ export interface IExam {
   owner_id: string;
   created_by: string;
   created_by_name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IPaperQuestion {
+  question_id: string;
+  order: number;
+  score_override: number | null;
+  question: IQuestion | null;
+}
+
+export interface IPaper {
+  id: string;
+  title: string;
+  description: string | null;
+  source_type: PaperSourceType;
+  source_paper_id: string | null;
+  root_knowledge_point_id: string | null;
+  root_knowledge_point: IKnowledgePoint | null;
+  is_reusable: boolean;
+  archived_at: string | null;
+  question_count: number;
+  total_score: number;
+  owner_id: string;
+  created_by: string;
+  created_by_name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IPaperDetail extends IPaper {
+  questions: IPaperQuestion[];
+}
+
+export interface IPaperImportImageInput {
+  image_id: string;
+  url: string;
+  order: number;
+  page?: number;
+  alt?: string | null;
+}
+
+export interface IPaperImportDraft {
+  draft_id: string;
+  raw_text: string;
+  title: string;
+  type: QuestionType;
+  content_text: string;
+  options: Record<string, string> | null;
+  answer_text: string | null;
+  analysis: string | null;
+  difficulty: number;
+  segment_source: string;
+  type_confidence: "high" | "medium" | "low";
+  boundary_confidence: "high" | "medium" | "low";
+  issues: string[];
+  images: IPaperImportImageInput[];
+  comparison_flags: string[];
+  review_status: "pending" | "approved" | "skipped";
+  review_required: boolean;
+}
+
+export interface IPaperImportSummary {
+  total: number;
+  duplicates_removed: number;
+  high_confidence: number;
+  medium_confidence: number;
+  low_confidence: number;
+  issue_count: number;
+  pending_review: number;
+  approved: number;
+  skipped: number;
+}
+
+export interface IPaperImportRecognizeResponse {
+  session_id: string;
+  mode: "template" | "smart";
+  summary: IPaperImportSummary;
+  drafts: IPaperImportDraft[];
+}
+
+export interface IPaperImportSession {
+  id: string;
+  file_name: string;
+  source_format: "pdf" | "docx" | "md";
+  root_knowledge_point_id: string | null;
+  error_detail: string | null;
+  preview_payload: Record<string, unknown>;
+  created_paper_id: string | null;
   created_at: string;
   updated_at: string;
 }
