@@ -422,6 +422,9 @@ function escapeHtml(value: string): string {
 }
 
 export function buildImportSummary(drafts: QuestionImportDraft[]): QuestionImportDocumentSummary {
+  const incomplete_choice_count = drafts.filter(
+    (draft) => draft.type === "choice" && draft.issues.includes("选择题选项不完整"),
+  ).length;
   return {
     total: drafts.length,
     duplicates_removed: 0,
@@ -438,6 +441,8 @@ export function buildImportSummary(drafts: QuestionImportDraft[]): QuestionImpor
     pending_review: drafts.filter((draft) => draft.review_status === "pending").length,
     approved: drafts.filter((draft) => draft.review_status === "approved").length,
     skipped: drafts.filter((draft) => draft.review_status === "skipped").length,
+    incomplete_choice_count,
+    visual_retry_recommended: false,
   };
 }
 
