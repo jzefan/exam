@@ -56,6 +56,14 @@ function formatPlay(n: number): string {
   return String(n)
 }
 
+async function getErrorMessage(res: Response): Promise<string> {
+  const payload = await res.json().catch(() => null)
+  if (payload && typeof payload.detail === "string") {
+    return payload.detail
+  }
+  return `请求失败（${res.status}）`
+}
+
 export function VideoSearchDialog({
   open,
   onOpenChange,
@@ -71,6 +79,24 @@ export function VideoSearchDialog({
   const [savedBvids, setSavedBvids] = useState<Set<string>>(new Set())
   const [previewBvid, setPreviewBvid] = useState<string | null>(null)
 
+  const doSearch = useCallback(async (kw: string) => {
+    if (!kw.trim()) return
+    setIsSearching(true)
+    try {
+      const params = new URLSearchParams({ keyword: kw.trim() })
+      const res = await fetch(`/api/job-models/models/search-videos?${params}`, {
+        headers: authHeaders(),
+      })
+      if (!res.ok) throw new Error(await getErrorMessage(res))
+      const data: VideoResult[] = await res.json()
+      setResults(data)
+    } catch (err) {
+      toast({ title: "搜索失败", description: (err as Error).message, variant: "destructive" })
+    } finally {
+      setIsSearching(false)
+    }
+  }, [toast])
+
   // Auto-search when dialog opens
   useEffect(() => {
     if (open && nodeName) {
@@ -82,25 +108,7 @@ export function VideoSearchDialog({
       setSavedBvids(new Set())
       setPreviewBvid(null)
     }
-  }, [open, nodeName])
-
-  const doSearch = useCallback(async (kw: string) => {
-    if (!kw.trim()) return
-    setIsSearching(true)
-    try {
-      const params = new URLSearchParams({ keyword: kw.trim(), page_size: "12" })
-      const res = await fetch(`/api/job-models/models/search-videos?${params}`, {
-        headers: authHeaders(),
-      })
-      if (!res.ok) throw new Error(`${res.status}`)
-      const data: VideoResult[] = await res.json()
-      setResults(data)
-    } catch (err) {
-      toast({ title: "搜索失败", description: (err as Error).message, variant: "destructive" })
-    } finally {
-      setIsSearching(false)
-    }
-  }, [toast])
+  }, [doSearch, open, nodeName])
 
   const handleSearch = useCallback(() => {
     doSearch(keyword)
@@ -122,7 +130,7 @@ export function VideoSearchDialog({
           }),
         }
       )
-      if (!res.ok) throw new Error(`${res.status}`)
+      if (!res.ok) throw new Error(await getErrorMessage(res))
       setSavedBvids((prev) => new Set(prev).add(video.bvid))
       toast({ title: "已保存到学习资料" })
       onSaved()

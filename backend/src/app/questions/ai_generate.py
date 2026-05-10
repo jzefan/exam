@@ -45,7 +45,13 @@ class AIGenerateRequest(BaseModel):
     knowledge_point_ids: list[uuid.UUID] = Field(default_factory=list)
     knowledge_keywords: str = Field(default="", max_length=500)
     prompt: str = Field(default="", max_length=2000)
-    model: AIModelProvider = AIModelProvider.DEEPSEEK
+    # 学习资料原文（PDF/Word/Markdown 等抽取后的纯文本）。
+    # 与 prompt 分开，避免短指令字段被长正文淹没/截断。
+    material_text: str = Field(default="", max_length=200000)
+    # 学习资料图片（PDF 整页渲染、docx/pptx 嵌入图），data URL 形式。
+    # 非空时切换到多模态模型；上限 50 张以控制 token 成本。
+    material_images: list[str] = Field(default_factory=list, max_length=50)
+    model: AIModelProvider = AIModelProvider.QWEN
 
 
 class FrequentKnowledgePointItem(BaseModel):
@@ -217,6 +223,7 @@ async def generate_questions_stream(
         type_distribution=request.type_distribution,
         knowledge_keywords=request.knowledge_keywords,
         user_prompt=request.prompt,
+        material_text=request.material_text,
         knowledge_contexts=knowledge_contexts,
     )
 
@@ -225,11 +232,30 @@ async def generate_questions_stream(
         yield {"type": "error", "message": f"{provider_name} API key is not configured"}
         return
 
+    # 多模态分支：仅在有图片且 provider 为 Qwen 时启用，强制切到 qwen-vl 模型。
+    use_vision = bool(request.material_images) and request.model == AIModelProvider.QWEN
+    if use_vision:
+        model_name = settings.qwen_vl_model_name
+        user_content: Any = [
+            {"type": "text", "text": "请开始生成题目。以下为学习资料的整页/嵌入图片，请结合图中信息出题。"},
+        ]
+        for image_url in request.material_images:
+            user_content.append({"type": "image_url", "image_url": {"url": image_url}})
+    elif request.material_images and request.model != AIModelProvider.QWEN:
+        logger.info(
+            "Skipping %d material images: provider %s does not support vision in this build",
+            len(request.material_images),
+            request.model.value,
+        )
+        user_content = "请开始生成题目。"
+    else:
+        user_content = "请开始生成题目。"
+
     payload = {
         "model": model_name,
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": "请开始生成题目。"},
+            {"role": "user", "content": user_content},
         ],
         "temperature": 0.8,
         "stream": True,

@@ -9,6 +9,7 @@ from app.questions.service import (
     build_import_draft_from_segment,
     detect_import_template_mode,
     parse_template_document,
+    preprocess_paper_import_text,
     segment_question_document,
 )
 
@@ -189,6 +190,202 @@ B. Redis
     assert "请简述事务的 ACID 特性。" in segments[1].raw_text
 
 
+def test_segments_paper_questions_by_chinese_section_and_arabic_numbered_paragraphs() -> None:
+    raw_text = """
+一、单项选择题
+
+1. 下面关于数据分析说法正确的是（ ）
+A. 只做统计
+B. 服务决策
+C. 无需清洗
+D. 不能可视化
+
+2 数据清洗的主要目的是什么（ ）
+A. 删除所有数据
+B. 提升数据质量
+C. 增加字段数量
+D. 改变业务含义
+
+二.
+
+3	NumPy 主要用于下面哪类计算（ ）
+A. 数值计算
+B. 文档排版
+C. 视频剪辑
+D. 网络布线
+"""
+
+    segments = segment_question_document(raw_text)
+
+    assert len(segments) == 3
+    assert segments[0].raw_text.startswith("1. 下面关于数据分析说法正确的是")
+    assert segments[1].raw_text.startswith("2 数据清洗的主要目的是什么")
+    assert segments[2].raw_text.startswith("3\tNumPy 主要用于下面哪类计算")
+    assert all("一、" not in segment.raw_text and "二." not in segment.raw_text for segment in segments)
+
+
+def test_build_draft_keeps_choice_options_when_stem_has_blank_parentheses() -> None:
+    draft = build_import_draft_from_segment(
+        """
+1. 下面关于数据分析说法正确的是（ ）
+A. 只做统计
+B. 服务决策
+C. 无需清洗
+D. 不能可视化
+"""
+    )
+
+    assert draft.type.value == "choice"
+    assert draft.options == {
+        "A": "只做统计",
+        "B": "服务决策",
+        "C": "无需清洗",
+        "D": "不能可视化",
+    }
+
+
+def test_paper_section_heading_type_is_inherited_without_polluting_content() -> None:
+    raw_text = """
+一、单项选择题
+
+1. 下面关于数据分析说法正确的是（ ）
+A. 只做统计
+B. 服务决策
+C. 无需清洗
+D. 不能可视化
+
+二、判断题
+
+2. NumPy 只能处理文本数据。
+"""
+
+    drafts = [
+        build_import_draft_from_segment(segment.raw_text, type_hint=segment.type_hint)
+        for segment in segment_question_document(raw_text)
+    ]
+
+    assert len(drafts) == 2
+    assert drafts[0].type.value == "choice"
+    assert drafts[0].options and drafts[0].options["B"] == "服务决策"
+    assert "单项选择题" not in drafts[0].content_text
+    assert drafts[1].type.value == "true_false"
+
+
+def test_paper_section_splits_continuous_word_text_and_keeps_choice_options() -> None:
+    raw_text = """
+一、单项选择题
+1. 下面关于数据分析说法正确的是（ ）
+A.数据分析是数学、统计学理论结合科学的统计分析方法
+B.数据分析是一种数学分析方法
+C.数据分析是统计学分析方法
+D.数据分析是大数据分析方法
+2. 下列关于数据分析的描述，说法错误的是（ ）
+A.模型优化步骤可以与分析和建模步骤同步进行
+B.数据分析过程中最核心的步骤是分析与建模
+C.数据分析时只能够使用数值型数据
+D.广义的数据分析包括狭义数据分析和数据挖掘
+3. 下列关于NumPy的说法错误的是（ ）。
+A.NumPy 可快速高效处理多维数组
+B.NumPy 可提供在算法之间传递数据的容器
+C.NumPy 可实现线性代数运算、傅里叶变换和随机数生成
+D.NumPy 不具备将 C++代码继承到 Python 的功能
+4. 下列关于 pandas 说法错误的是（ ）。
+A.pandas 是 Python 的数据分析核心库
+B.pandas 能够快捷处理结构化数据
+C.pandas 没有 NumPy 的高性能数字计算功能
+D.pandas 提供复杂精细的索引功能
+二、填空题
+5. NumPy 的核心数据结构是______。
+"""
+
+    preprocessed = preprocess_paper_import_text(raw_text, [])
+    drafts = [
+        build_import_draft_from_segment(segment.raw_text, type_hint=segment.type_hint)
+        for segment in segment_question_document(preprocessed)
+    ]
+
+    assert len(drafts) == 5
+    assert [draft.type.value for draft in drafts[:4]] == ["choice", "choice", "choice", "choice"]
+    assert drafts[0].content_text == "下面关于数据分析说法正确的是（ ）"
+    assert drafts[0].options and drafts[0].options["A"].startswith("数据分析是数学")
+    assert drafts[1].options and drafts[1].options["D"] == "广义的数据分析包括狭义数据分析和数据挖掘"
+    assert drafts[2].content_text == "下列关于NumPy的说法错误的是（ ）。"
+    assert drafts[3].options and drafts[3].options["C"] == "pandas 没有 NumPy 的高性能数字计算功能"
+    assert drafts[4].type.value == "fill_in"
+
+
+def test_build_import_draft_maps_ordered_list_markers_to_choice_options() -> None:
+    draft = build_import_draft_from_segment(
+        """
+        1. 下面关于数据分析说法正确的是（ ）
+        [OL] 数据分析是数学、统计学理论结合科学的统计分析方法
+        [OL] 数据分析是一种数学分析方法
+        [OL] 数据分析是统计学分析方法
+        [OL] 数据分析是大数据分析方法
+        """
+    )
+
+    assert draft.type == "choice"
+    assert draft.options == {
+        "A": "数据分析是数学、统计学理论结合科学的统计分析方法",
+        "B": "数据分析是一种数学分析方法",
+        "C": "数据分析是统计学分析方法",
+        "D": "数据分析是大数据分析方法",
+    }
+    assert draft.content_text == "下面关于数据分析说法正确的是（ ）"
+
+
+def test_build_import_draft_keeps_unordered_steps_inside_non_choice_content() -> None:
+    draft = build_import_draft_from_segment(
+        """
+        1. 请提交今日课堂作业：
+        [UL] 提交 PDM 截图
+        [UL] 提交 MySQL 数据库脚本截图
+        [答案]
+        """
+    )
+
+    assert draft.type == "short_answer"
+    assert draft.options is None
+    assert "提交 PDM 截图" in draft.content_text
+    assert "提交 MySQL 数据库脚本截图" in draft.content_text
+
+
+def test_build_import_draft_does_not_treat_simple_stem_as_question_type_keyword() -> None:
+    draft = build_import_draft_from_segment("1. 简单说明数据库事务的概念。\n答案：略")
+
+    assert draft.type == "short_answer"
+    assert draft.content_text == "简单说明数据库事务的概念。"
+
+
+def test_paper_preprocess_drops_cover_before_first_chinese_type_heading() -> None:
+    raw_text = """
+江苏卫生健康职业学院 2025～2026 学年第 二 学期
+《大数据分析技术》期末考试试卷（A）
+
+1. （24年级、卫生信息管理专业）
+
+答题时限：90 分钟    考试形式：闭卷笔试
+班级________ 学号________ 姓名________ 得分________
+
+一、单项选择题
+
+1. 下面关于数据分析说法正确的是（ ）
+A. 只做统计
+B. 服务决策
+C. 无需清洗
+D. 不能可视化
+"""
+
+    preprocessed = preprocess_paper_import_text(raw_text, [])
+    segments = segment_question_document(preprocessed)
+
+    assert "24年级" not in preprocessed
+    assert "答题时限" not in preprocessed
+    assert len(segments) == 1
+    assert segments[0].raw_text.startswith("1. 下面关于数据分析说法正确的是")
+
+
 def test_segments_docx_style_extracted_text_into_multiple_questions() -> None:
     raw_text = """
 1. 请提交今日课堂作业：
@@ -331,6 +528,38 @@ def test_build_import_draft_marks_choice_with_missing_options_as_issue() -> None
 
     assert draft.type == "choice"
     assert "选择题选项不完整" in draft.issues
+
+
+async def test_document_summary_flags_docx_for_manual_review_when_choice_options_still_incomplete(
+    monkeypatch,
+) -> None:
+    from app.questions.schemas import QuestionImportDocumentRecognizeRequest
+    from app.questions.service import recognize_question_document
+
+    async def keep_draft_unchanged(draft):
+        return draft
+
+    monkeypatch.setattr("app.questions.service.complete_import_draft_with_ai", keep_draft_unchanged)
+
+    response = await recognize_question_document(
+        QuestionImportDocumentRecognizeRequest(
+            file_name="questions.docx",
+            source_format="docx",
+            raw_text=(
+                "1. 单选题 下列哪项属于关系型数据库？\n"
+                "A. MySQL\n"
+                "答案：A\n\n"
+                "2. 单选题 Redis 属于哪一类数据库？\n"
+                "A. 关系型数据库\n"
+                "答案：A"
+            ),
+        )
+    )
+
+    assert response.summary.total == 2
+    assert response.summary.incomplete_choice_count == 2
+    assert response.summary.visual_retry_recommended is True
+    assert response.summary.issue_count == 2
 
 
 def test_build_import_draft_collects_multiline_answer_until_next_field() -> None:

@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ChangeEvent, type ReactNode } from "react";
-import { Search, Check, Upload, Plus, Users } from "lucide-react";
+import { Search, Check, Upload, Plus, Users, ChevronDown } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -44,13 +44,16 @@ export function ClassStudentSelector({
   onChange,
   summaryLabel = "名考生",
   emptySummaryText = "还没有选择对象，可以优先按班级选择，导入和手动添加作为补充方式。",
+  defaultSupplementCollapsed = false,
 }: {
   selectedIds: string[];
   onChange: (ids: string[]) => void;
   summaryLabel?: string;
   emptySummaryText?: string;
+  defaultSupplementCollapsed?: boolean;
 }) {
   const [supplementMode, setSupplementMode] = useState<SupplementMode>("import");
+  const [isSupplementCollapsed, setIsSupplementCollapsed] = useState(defaultSupplementCollapsed);
   const [search, setSearch] = useState("");
   const [selectedClassFilter, setSelectedClassFilter] = useState<string>("__all__");
   const [users, setUsers] = useState<StudentRecord[]>([]);
@@ -542,28 +545,40 @@ export function ClassStudentSelector({
       </div>
 
       <div className="overflow-hidden rounded-xl border border-border bg-background">
-        <div className="flex flex-col gap-1 px-4 py-3">
-          <p className="text-sm font-semibold text-foreground">补充方式</p>
-          <p className="text-xs text-muted-foreground">如果列表里没有，也可以导入或手动新增后直接选中。</p>
-        </div>
-
-        <Tabs
-          value={supplementMode}
-          onValueChange={(value) => setSupplementMode(value as SupplementMode)}
-          className="border-t border-border"
+        <button
+          type="button"
+          className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/30"
+          aria-expanded={!isSupplementCollapsed}
+          onClick={() => setIsSupplementCollapsed((value) => !value)}
         >
-          <TabsList className="h-10 rounded-none bg-muted/30 p-0">
-            {supplementModes.map((m) => (
-              <TabsTrigger
-                key={m.key}
-                value={m.key}
-                className="h-10 rounded-none border-b-2 border-transparent px-5 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-primary data-[state=active]:shadow-none"
-              >
-                {m.icon}
-                {m.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
+          <span className="flex min-w-0 flex-col gap-1">
+            <span className="text-sm font-semibold text-foreground">补充方式</span>
+            <span className="text-xs text-muted-foreground">如果列表里没有，也可以导入或手动新增后直接选中。</span>
+          </span>
+          <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-muted-foreground">
+            {isSupplementCollapsed ? "展开补充方式" : "收起补充方式"}
+            <ChevronDown className={cn("size-4 transition-transform", !isSupplementCollapsed && "rotate-180")} />
+          </span>
+        </button>
+
+        {!isSupplementCollapsed && (
+          <Tabs
+            value={supplementMode}
+            onValueChange={(value) => setSupplementMode(value as SupplementMode)}
+            className="border-t border-border"
+          >
+            <TabsList className="h-10 rounded-none bg-muted/30 p-0">
+              {supplementModes.map((m) => (
+                <TabsTrigger
+                  key={m.key}
+                  value={m.key}
+                  className="h-10 rounded-none border-b-2 border-transparent px-5 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-primary data-[state=active]:shadow-none"
+                >
+                  {m.icon}
+                  {m.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
 
           <TabsContent value="import" className="m-0 flex flex-col gap-3 p-5">
             <div className="flex flex-col items-center gap-3 rounded-lg py-4 text-center">
@@ -734,7 +749,8 @@ export function ClassStudentSelector({
               </div>
             )}
           </TabsContent>
-        </Tabs>
+          </Tabs>
+        )}
       </div>
     </div>
   );

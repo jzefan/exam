@@ -2,10 +2,14 @@
 
 from collections import Counter
 from dataclasses import dataclass
+from io import BytesIO
 import re
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
+import pdfplumber
+from docx import Document
 from sqlalchemy import Select, and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
@@ -28,6 +32,7 @@ from app.questions.models import Question, QuestionBank
 from app.questions.schemas import (
     ImportReviewStatus,
     QuestionCreate,
+    QuestionImportAnalysisMode,
     QuestionImportDocumentRecognizeRequest,
     QuestionImportDocumentRecognizeResponse,
     QuestionImportDraft,
@@ -42,6 +47,66 @@ class PaperGenerationProfile:
     difficulty: int
     knowledge_point_ids: list[uuid.UUID | str]
     prompt: str
+
+
+def _format_docx_table(table: object, order: int) -> str:
+    rows: list[list[str]] = []
+    for row in table.rows:
+        values = [cell.text.strip() for cell in row.cells]
+        if any(values):
+            rows.append(values)
+    if not rows:
+        return ""
+    lines = [f"[TABLE:{order}]"]
+    for values in rows:
+        lines.append(" | ".join(values))
+    return "\n".join(lines)
+
+
+def extract_paper_import_file_content(file_name: str, file_bytes: bytes) -> tuple[str, str]:
+    if not file_bytes:
+        raise ValueError("文件内容为空")
+
+    extension = Path(file_name).suffix.lower()
+    if extension == ".markdown":
+        extension = ".md"
+    if extension not in {".pdf", ".docx", ".md"}:
+        raise ValueError("暂不支持该文件格式，请上传 PDF、Word(docx) 或 Markdown 文件。")
+
+    if extension == ".md":
+        text = file_bytes.decode("utf-8-sig")
+        if not text.strip():
+            raise ValueError("文件内容为空")
+        return text.strip(), "md"
+
+    if extension == ".pdf":
+        try:
+            with pdfplumber.open(BytesIO(file_bytes)) as pdf:
+                text = "\n\n".join(page.extract_text() or "" for page in pdf.pages)
+        except Exception as exc:
+            raise ValueError("PDF 文件解析失败，请检查文件后重试。") from exc
+        if not text.strip():
+            raise ValueError("未能从 PDF 中提取文字，请上传可复制文本的 PDF 或改用图片识别。")
+        return text.strip(), "pdf"
+
+    try:
+        document = Document(BytesIO(file_bytes))
+    except Exception as exc:
+        raise ValueError("Word 文件解析失败，请检查文件后重试。") from exc
+
+    parts: list[str] = []
+    for paragraph in document.paragraphs:
+        text = paragraph.text.strip()
+        if text:
+            parts.append(text)
+    for index, table in enumerate(document.tables, start=1):
+        table_text = _format_docx_table(table, index)
+        if table_text:
+            parts.append(table_text)
+    text = "\n\n".join(parts).strip()
+    if not text:
+        raise ValueError("未能从 Word 文件中提取文字，请检查文件内容。")
+    return text, "docx"
 
 
 def build_paper_generation_profile(
@@ -389,6 +454,10 @@ async def create_import_session_from_recognition(
             raw_text=request.raw_text,
             source_format=request.source_format,
             images=request.images,
+            tables=request.tables,
+            analysis_mode=QuestionImportAnalysisMode.AI_FULL,
+            import_context="paper",
+            recognition_prompt=request.recognition_prompt,
         )
     )
     session = PaperImportSession(

@@ -1,5 +1,10 @@
 """API routes for job competency model management."""
 
+import asyncio
+import html
+import logging
+import re
+import time
 import uuid
 from typing import Annotated
 
@@ -71,6 +76,7 @@ from app.rbac.dependencies import CurrentOrgId
 from pydantic import BaseModel, Field
 model_router = APIRouter()
 template_router = APIRouter()
+logger = logging.getLogger(__name__)
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 
@@ -101,6 +107,30 @@ class AddedSkillInput(BaseModel):
     level: str | None = None
     dimension_id: uuid.UUID | None = None
     dimension_name: str | None = Field(default=None, max_length=200)
+
+
+def _parse_bilibili_search_results(items: list[dict]) -> list[BilibiliSearchResult]:
+    results: list[BilibiliSearchResult] = []
+    for item in items:
+        bvid = item.get("bvid", "")
+        if not bvid:
+            continue
+        title = html.unescape(re.sub(r"<[^>]+>", "", item.get("title", "")))
+        pic = item.get("pic", "")
+        if pic.startswith("//"):
+            pic = "https:" + pic
+        results.append(
+            BilibiliSearchResult(
+                bvid=bvid,
+                title=title,
+                author=item.get("author", ""),
+                play=item.get("play", 0),
+                duration=item.get("duration", ""),
+                pic=pic,
+                description=item.get("description", "")[:200],
+            )
+        )
+    return results
 
 
 class AddedKnowledgePointInput(BaseModel):
@@ -286,62 +316,60 @@ async def proxy_bilibili_cover(
         )
 
 
+_BILI_CACHE_TTL_SECONDS = 60.0
+_bili_search_cache: dict[tuple[str, int], tuple[float, list["BilibiliSearchResult"]]] = {}
+_bili_search_lock = asyncio.Lock()
+
+
+async def _bilibili_search_via_library(keyword: str, page: int) -> list[dict]:
+    """Call bilibili-api-python which handles WBI signing + buvid cookies."""
+    from bilibili_api import search
+
+    raw = await search.search_by_type(
+        keyword=keyword,
+        search_type=search.SearchObjectType.VIDEO,
+        page=page,
+    )
+    return raw.get("result", []) or []
+
+
 @model_router.get("/search-videos", response_model=list[BilibiliSearchResult])
 async def search_bilibili_videos(
     _user: CurrentUser,
     keyword: str = Query(..., min_length=1, max_length=100),
     page: int = Query(1, ge=1, le=10),
-    page_size: int = Query(10, ge=1, le=20),
 ) -> list["BilibiliSearchResult"]:
-    """Search Bilibili for educational videos by keyword."""
-    import httpx
-    import re
+    """Search Bilibili for educational videos by keyword.
 
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        ),
-        "Referer": "https://www.bilibili.com",
-    }
+    Uses bilibili-api-python which handles WBI signing and buvid3 cookies to
+    avoid the -412/-352 risk-control rejection that plain HTTP calls hit.
+    Results are cached for 60s per (keyword, page) to reduce request rate.
+    """
+    cache_key = (keyword.strip(), page)
+    now = time.monotonic()
+    cached = _bili_search_cache.get(cache_key)
+    if cached and now - cached[0] < _BILI_CACHE_TTL_SECONDS:
+        return cached[1]
 
-    async with httpx.AsyncClient(headers=headers, timeout=15) as client:
-        await client.get("https://www.bilibili.com", follow_redirects=True)
-        resp = await client.get(
-            "https://api.bilibili.com/x/web-interface/search/type",
-            params={
-                "search_type": "video",
-                "keyword": keyword,
-                "page": page,
-                "page_size": page_size,
-            },
-        )
-        if resp.status_code != 200:
-            raise HTTPException(status_code=502, detail="B站搜索接口异常")
+    async with _bili_search_lock:
+        cached = _bili_search_cache.get(cache_key)
+        if cached and time.monotonic() - cached[0] < _BILI_CACHE_TTL_SECONDS:
+            return cached[1]
 
-        data = resp.json()
-        if data.get("code") != 0:
-            raise HTTPException(status_code=502, detail=data.get("message", "搜索失败"))
+        try:
+            items = await _bilibili_search_via_library(keyword, page)
+        except Exception as exc:  # bilibili_api raises various subclasses; degrade gracefully
+            logger.warning("Bilibili video search failed for keyword=%r page=%d: %s", keyword, page, exc)
+            return []
 
-        results = []
-        for item in data.get("data", {}).get("result", []) or []:
-            bvid = item.get("bvid", "")
-            if not bvid:
-                continue
-            import html as _html
-            title = _html.unescape(re.sub(r"<[^>]+>", "", item.get("title", "")))
-            pic = item.get("pic", "")
-            if pic.startswith("//"):
-                pic = "https:" + pic
-            results.append(BilibiliSearchResult(
-                bvid=bvid,
-                title=title,
-                author=item.get("author", ""),
-                play=item.get("play", 0),
-                duration=item.get("duration", ""),
-                pic=pic,
-                description=item.get("description", "")[:200],
-            ))
+        results = _parse_bilibili_search_results(items)
+        _bili_search_cache[cache_key] = (time.monotonic(), results)
+
+        if len(_bili_search_cache) > 256:
+            cutoff = time.monotonic() - _BILI_CACHE_TTL_SECONDS
+            for key, (ts, _) in list(_bili_search_cache.items()):
+                if ts < cutoff:
+                    _bili_search_cache.pop(key, None)
 
         return results
 
@@ -924,6 +952,25 @@ async def list_node_resources(
     return [LearningResourceResponse.model_validate(r) for r in resources]
 
 
+async def _ensure_unique_learning_resource_title(
+    db: DbSession,
+    *,
+    node_id: uuid.UUID,
+    node_type: str,
+    title: str,
+) -> None:
+    normalized_title = title.strip()
+    existing = await db.scalar(
+        select(LearningResource.id).where(
+            LearningResource.node_id == node_id,
+            LearningResource.node_type == node_type,
+            LearningResource.title == normalized_title,
+        )
+    )
+    if existing is not None:
+        raise HTTPException(status_code=400, detail="当前知识点下已存在同名学习资料，请先删除或更换名称。")
+
+
 @model_router.post(
     "/nodes/{node_id}/resources",
     response_model=LearningResourceResponse,
@@ -937,11 +984,17 @@ async def create_node_resource(
     node_type: str = Query(..., pattern="^(dimension|skill|kp)$"),
 ) -> LearningResourceResponse:
     """Create a learning resource (link or video URL) for a node."""
+    await _ensure_unique_learning_resource_title(
+        db,
+        node_id=node_id,
+        node_type=node_type,
+        title=body.title,
+    )
     resource = LearningResource(
         node_id=node_id,
         node_type=node_type,
         resource_type=body.resource_type,
-        title=body.title,
+        title=body.title.strip(),
         url=body.url,
         file_path=body.file_path,
         description=body.description,
@@ -975,6 +1028,14 @@ async def upload_node_resource(
     if len(contents) > max_size:
         raise HTTPException(status_code=400, detail="文件大小不能超过 50MB")
 
+    normalized_title = title.strip()
+    await _ensure_unique_learning_resource_title(
+        db,
+        node_id=node_id,
+        node_type=node_type,
+        title=normalized_title,
+    )
+
     ext = pathlib.Path(file.filename or "file").suffix or ""
     filename = f"{uuid.uuid4().hex}{ext}"
     filepath = UPLOAD_DIR / filename
@@ -988,7 +1049,7 @@ async def upload_node_resource(
         node_id=node_id,
         node_type=node_type,
         resource_type=resource_type,
-        title=title,
+        title=normalized_title,
         url=f"/api/uploads/files/{filename}",
         file_path=str(filepath),
         description=description or None,

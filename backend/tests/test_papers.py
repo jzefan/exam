@@ -7,8 +7,14 @@ from app.auth.service import create_user
 from app.common.data_visibility import VisibilityScope
 from app.learning.models import KnowledgePoint
 from app.papers.models import Paper, PaperImportSession, PaperQuestion, PaperSourceType
-from app.papers.schemas import PaperCreate, PaperQuestionItem, PaperUpdate
-from app.papers.service import create_paper, get_paper_by_id, list_papers_for_user, update_paper
+from app.papers.schemas import PaperCreate, PaperImportRecognizeRequest, PaperQuestionItem, PaperUpdate
+from app.papers.service import (
+    create_import_session_from_recognition,
+    create_paper,
+    get_paper_by_id,
+    list_papers_for_user,
+    update_paper,
+)
 from app.questions.models import Question, QuestionType
 from app.rbac.models import Organization, Role
 
@@ -87,6 +93,47 @@ async def test_paper_import_session_keeps_preview_without_status(db_session):
     saved = (await db_session.execute(select(PaperImportSession).where(PaperImportSession.id == session.id))).scalar_one()
     assert saved.preview_payload["questions"][0]["title"] == "题目 1"
     assert not hasattr(saved, "status")
+
+
+@pytest.mark.asyncio
+async def test_paper_import_filters_header_and_answer_sheet_blocks(db_session):
+    teacher = await _teacher(db_session, username="paper-import-filter-teacher")
+    raw_text = """
+江苏卫生健康职业学院 2025～2026 学年第二学期
+《大数据分析技术》期末考试试卷（A）
+答题时限：90 分钟 考试形式：闭卷笔试
+班级__________ 学号__________ 姓名__________ 得分__________
+得分统计表：
+题号 一 二 三 四 核查人签名
+得分
+阅卷教师
+
+一、单项选择题（请从 4 个备选答案中选择最适合的一项，每小题 2 分，共 50 分）
+选择题答案请填写下表中！
+1. 2. 3. 4. 5.
+6. 7. 8. 9. 10.
+11. 12. 13. 14. 15.
+16. 17. 18. 19. 20.
+21. 22. 23. 24. 25.
+
+1. 数据清洗的主要目的是什么？
+A. 删除所有数据
+B. 提升数据质量
+C. 增加字段数量
+D. 改变业务含义
+答案：B
+"""
+
+    _session, recognition = await create_import_session_from_recognition(
+        db_session,
+        user=teacher,
+        request=PaperImportRecognizeRequest(file_name="paper.docx", raw_text=raw_text, source_format="docx"),
+    )
+
+    assert recognition.summary.total == 1
+    assert recognition.drafts[0].content_text.startswith("数据清洗的主要目的")
+    assert "江苏卫生健康职业学院" not in recognition.drafts[0].raw_text
+    assert "选择题答案请填写下表中" not in recognition.drafts[0].raw_text
 
 
 @pytest.mark.asyncio

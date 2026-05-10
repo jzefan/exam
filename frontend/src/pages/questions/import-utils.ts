@@ -4,6 +4,7 @@ import type {
   ImportRecognitionMode,
   ImportReviewStatus,
   QuestionImportImageInput,
+  QuestionImportTableInput,
   QuestionImportDocumentSummary,
   QuestionImportDraft,
 } from "./import-types";
@@ -18,6 +19,8 @@ export const emptyImportSummary: QuestionImportDocumentSummary = {
   pending_review: 0,
   approved: 0,
   skipped: 0,
+  incomplete_choice_count: 0,
+  visual_retry_recommended: false,
 };
 
 export function detectQuestionImportFormat(fileName: string): "pdf" | "docx" | "md" {
@@ -62,6 +65,7 @@ export async function extractQuestionImportPayload(file: File): Promise<{
   rawText: string;
   sourceFormat: "pdf" | "docx" | "md";
   images: QuestionImportImageInput[];
+  tables: QuestionImportTableInput[];
 }> {
   const format = detectQuestionImportFormat(file.name);
 
@@ -71,6 +75,7 @@ export async function extractQuestionImportPayload(file: File): Promise<{
       rawText: normalized.html,
       sourceFormat: format,
       images: normalized.images,
+      tables: [],
     };
   }
 
@@ -93,6 +98,7 @@ export async function extractQuestionImportPayload(file: File): Promise<{
       rawText: htmlToImportText(result.value, images),
       sourceFormat: format,
       images,
+      tables: extractHtmlTables(result.value),
     };
   }
 
@@ -130,6 +136,7 @@ export async function extractQuestionImportPayload(file: File): Promise<{
     rawText: chunks.join("\n"),
     sourceFormat: format,
     images,
+    tables: [],
   };
 }
 
@@ -249,6 +256,27 @@ function appendMergedInlineText(
   }
 }
 
+function appendListItems(
+  target: string[],
+  list: HTMLOListElement | HTMLUListElement,
+  marker: "[OL]" | "[UL]",
+  imageIndex: Map<string, QuestionImportImageInput>,
+) {
+  Array.from(list.children).forEach((child) => {
+    if (child instanceof HTMLLIElement) {
+      const lineParts: string[] = [];
+      appendMergedInlineText(lineParts, collectInlineParts(child, imageIndex));
+      if (lineParts[0]) {
+        target.push(`${marker} ${lineParts[0]}`);
+      }
+      for (const extra of lineParts.slice(1)) {
+        target.push(extra);
+      }
+    }
+  });
+  target.push("");
+}
+
 export function htmlToImportText(html: string, images: QuestionImportImageInput[] = []): string {
   const document = new DOMParser().parseFromString(html, "text/html");
   const parts: string[] = [];
@@ -262,36 +290,12 @@ export function htmlToImportText(html: string, images: QuestionImportImageInput[
     }
 
     if (node instanceof HTMLOListElement) {
-      Array.from(node.children).forEach((child) => {
-        if (child instanceof HTMLLIElement) {
-          const lineParts: string[] = [];
-          appendMergedInlineText(lineParts, collectInlineParts(child, imageIndex));
-          if (lineParts[0]) {
-            parts.push(`- ${lineParts[0]}`);
-          }
-          for (const extra of lineParts.slice(1)) {
-            parts.push(extra);
-          }
-        }
-      });
-      parts.push("");
+      appendListItems(parts, node, "[OL]", imageIndex);
       return;
     }
 
     if (node instanceof HTMLUListElement) {
-      Array.from(node.children).forEach((child) => {
-        if (child instanceof HTMLLIElement) {
-          const lineParts: string[] = [];
-          appendMergedInlineText(lineParts, collectInlineParts(child, imageIndex));
-          if (lineParts[0]) {
-            parts.push(`- ${lineParts[0]}`);
-          }
-          for (const extra of lineParts.slice(1)) {
-            parts.push(extra);
-          }
-        }
-      });
-      parts.push("");
+      appendListItems(parts, node, "[UL]", imageIndex);
       return;
     }
 
@@ -316,6 +320,21 @@ export function htmlToImportText(html: string, images: QuestionImportImageInput[
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+export function extractHtmlTables(html: string): QuestionImportTableInput[] {
+  const document = new DOMParser().parseFromString(html, "text/html");
+  return Array.from(document.querySelectorAll("table"))
+    .map((table, index) => {
+      const rows = Array.from(table.querySelectorAll("tr"))
+        .map((row) =>
+          Array.from(row.querySelectorAll("th,td"))
+            .map((cell) => (cell.textContent ?? "").replace(/\s+/g, " ").trim()),
+        )
+        .filter((row) => row.some(Boolean));
+      return { order: index + 1, rows };
+    })
+    .filter((table) => table.rows.length > 0);
 }
 
 export function buildAnswerPayload(type: QuestionType, answerText: string | null) {

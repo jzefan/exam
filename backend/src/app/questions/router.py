@@ -24,6 +24,8 @@ from app.questions.schemas import (
     QuestionBankClearResponse,
     QuestionBulkCreateRequest,
     QuestionBulkCreateResponse,
+    SaveGeneratedToCourseBankRequest,
+    SaveGeneratedToCourseBankResponse,
     QuestionBulkDeleteRequest,
     QuestionBulkDeleteResponse,
     QuestionBulkMoveRequest,
@@ -60,6 +62,7 @@ from app.questions.service import (
     get_question_bank_by_id,
     get_question_by_id,
     get_tag_by_id,
+    get_or_create_named_private_question_bank,
     analyze_imported_question,
     build_import_draft_from_segment,
     complete_import_draft_with_ai,
@@ -71,6 +74,7 @@ from app.questions.service import (
     get_question_import_job_by_id,
     process_question_import_job,
     list_tags,
+    save_generated_questions_to_default_course_bank,
     soft_delete_question,
     soft_delete_question_bank,
     update_question,
@@ -476,6 +480,40 @@ async def bulk_create_questions_endpoint(
 
 
 @questions_router.post(
+    "/save-generated-to-course-bank",
+    response_model=SaveGeneratedToCourseBankResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def save_generated_to_course_bank_endpoint(
+    data: SaveGeneratedToCourseBankRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+) -> SaveGeneratedToCourseBankResponse:
+    is_admin = await _is_question_admin(db, user)
+    knowledge_point_ids = {
+        knowledge_point_id
+        for question in data.questions
+        for knowledge_point_id in question.knowledge_point_ids
+    }
+    try:
+        await _ensure_can_read_knowledge_points(db, list(knowledge_point_ids), user, is_admin)
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_404_NOT_FOUND:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No permission to read some knowledge points",
+            ) from exc
+        raise
+    result = await save_generated_questions_to_default_course_bank(db, data.questions, user.id)
+    return SaveGeneratedToCourseBankResponse(
+        created=result.created,
+        existing=result.existing,
+        failed=result.failed,
+        created_question_ids=[str(question_id) for question_id in result.created_question_ids],
+    )
+
+
+@questions_router.post(
     "/import/bulk-create-job",
     response_model=QuestionImportBulkCreateJobResponse,
     status_code=status.HTTP_201_CREATED,
@@ -719,6 +757,20 @@ async def create_question_bank_endpoint(
     user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
 ) -> QuestionBankResponse:
     bank = await create_question_bank(db, data, user.id)
+    return QuestionBankResponse.model_validate(bank)
+
+
+@question_banks_router.post("/ensure-course-bank", response_model=QuestionBankResponse)
+async def ensure_course_question_bank_endpoint(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+) -> QuestionBankResponse:
+    bank = await get_or_create_named_private_question_bank(
+        db,
+        user_id=user.id,
+        name="课程题库",
+        description="课程学习资料关联的智能出题结果",
+    )
     return QuestionBankResponse.model_validate(bank)
 
 

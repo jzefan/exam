@@ -1,8 +1,9 @@
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { QuestionImportDraft } from "./import-types";
 import { QuestionImportPage } from "./import";
+import * as importUtils from "./import-utils";
 import {
   applySourceDraftEdits,
   approveAllPendingDrafts,
@@ -11,6 +12,7 @@ import {
   buildImportSummary,
   canApproveAllDrafts,
   countFastImportEligibleDrafts,
+  extractHtmlTables,
   extractQuestionImportPayload,
   getBlockingImportIssues,
   getDraftPreviewText,
@@ -72,6 +74,10 @@ beforeEach(() => {
   localStorage.clear();
   window.history.pushState({}, "", "/questions/import");
   vi.stubGlobal("fetch", fetchMock);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("question import helpers", () => {
@@ -260,7 +266,7 @@ describe("question import helpers", () => {
     ]);
   });
 
-  it("preserves docx paragraph and ordered-list boundaries so multiple questions stay separable", () => {
+  it("preserves ordered list items as [OL] markers for backend parsing", () => {
     const html = `
       <p>1. 请提交今日课堂作业：</p>
       <ol>
@@ -283,10 +289,47 @@ describe("question import helpers", () => {
     const text = htmlToImportText(html);
 
     expect(text).toContain("1. 请提交今日课堂作业：");
-    expect(text).toContain("- 提交 PDM 截图；");
-    expect(text).toContain("- 提交 MySQL 脚本截图；");
+    expect(text).toContain("[OL] 提交 PDM 截图；");
+    expect(text).toContain("[OL] 提交 MySQL 脚本截图；");
     expect(text).toContain("\n\n2. 请提交今日课堂作业：");
     expect(text).not.toContain("提交 PDM 截图；提交 MySQL 脚本截图；");
+  });
+
+  it("preserves unordered list items as [UL] markers instead of flattening them", () => {
+    const html = `
+      <p>题目要求：</p>
+      <ul>
+        <li>先完成草图；</li>
+        <li>再提交最终版本；</li>
+      </ul>
+      <p>[答案]</p>
+    `;
+
+    const text = htmlToImportText(html);
+
+    expect(text).toContain("题目要求：");
+    expect(text).toContain("[UL] 先完成草图；");
+    expect(text).toContain("[UL] 再提交最终版本；");
+    expect(text).not.toContain("先完成草图；再提交最终版本；");
+  });
+
+  it("extracts docx html tables as structured rows", () => {
+    const html = `
+      <table>
+        <tr><td>题号</td><td>一</td><td>二</td></tr>
+        <tr><td>得分</td><td></td><td>10</td></tr>
+      </table>
+    `;
+
+    expect(extractHtmlTables(html)).toEqual([
+      {
+        order: 1,
+        rows: [
+          ["题号", "一", "二"],
+          ["得分", "", "10"],
+        ],
+      },
+    ]);
   });
 });
 
@@ -340,6 +383,7 @@ describe("QuestionImportPage", () => {
           mode: "smart",
           summary: {
             total: 1,
+            duplicates_removed: 0,
             high_confidence: 0,
             medium_confidence: 1,
             low_confidence: 0,
@@ -347,6 +391,8 @@ describe("QuestionImportPage", () => {
             pending_review: 1,
             approved: 0,
             skipped: 0,
+            incomplete_choice_count: 0,
+            visual_retry_recommended: false,
           },
           drafts: [{ ...baseDraft, content_text: "初始题目" }],
         }),
@@ -356,6 +402,7 @@ describe("QuestionImportPage", () => {
           mode: "smart",
           summary: {
             total: 1,
+            duplicates_removed: 0,
             high_confidence: 1,
             medium_confidence: 0,
             low_confidence: 0,
@@ -363,6 +410,8 @@ describe("QuestionImportPage", () => {
             pending_review: 1,
             approved: 0,
             skipped: 0,
+            incomplete_choice_count: 0,
+            visual_retry_recommended: false,
           },
           drafts: [{ ...baseDraft, draft_id: "ai-draft", content_text: "AI重新识别后的题目", difficulty: 3 }],
         }),
@@ -388,6 +437,146 @@ describe("QuestionImportPage", () => {
         body: expect.stringContaining('"analysis_mode":"ai_full"'),
       }),
     );
+  });
+
+  it("shows a docx quality warning when the backend recommends extra review", async () => {
+    vi.spyOn(importUtils, "extractQuestionImportPayload").mockResolvedValue({
+      rawText: "1. 单选题 示例",
+      sourceFormat: "docx",
+      images: [],
+      tables: [{ order: 1, rows: [["题号", "一"]] }],
+    });
+
+    fetchMock.mockResolvedValueOnce(
+      mockJsonResponse({
+        mode: "smart",
+        summary: {
+          total: 2,
+          duplicates_removed: 0,
+          high_confidence: 0,
+          medium_confidence: 2,
+          low_confidence: 0,
+          issue_count: 2,
+          pending_review: 2,
+          approved: 0,
+          skipped: 0,
+          incomplete_choice_count: 2,
+          visual_retry_recommended: true,
+        },
+        drafts: [
+          { ...baseDraft, draft_id: "docx-1", issues: ["选择题选项不完整"] },
+          { ...baseDraft, draft_id: "docx-2", issues: ["选择题选项不完整"] },
+        ],
+      }),
+    );
+
+    render(<QuestionImportPage />);
+
+    const file = new File(["docx-body"], "questions.docx", {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+    fireEvent.change(screen.getByTestId("question-import-file-input"), {
+      target: { files: [file] },
+    });
+
+    expect(await screen.findByText(/当前 Word 文档可能使用了自动编号/)).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/questions/import/document-recognize",
+      expect.objectContaining({
+        body: expect.stringContaining('"tables":[{"order":1,"rows":[["题号","一"]]}]'),
+      }),
+    );
+
+    fireEvent.click(screen.getAllByRole("button")[0]);
+    await waitFor(() => {
+      expect(screen.queryByText(/当前 Word 文档可能使用了自动编号/)).not.toBeInTheDocument();
+    });
+  });
+
+  it("keeps drafts in review when the bulk import response includes failures", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJsonResponse({
+          mode: "smart",
+          summary: {
+            total: 2,
+            duplicates_removed: 0,
+            high_confidence: 2,
+            medium_confidence: 0,
+            low_confidence: 0,
+            issue_count: 0,
+            pending_review: 2,
+            approved: 0,
+            skipped: 0,
+            incomplete_choice_count: 0,
+            visual_retry_recommended: false,
+          },
+          drafts: [
+            { ...baseDraft, draft_id: "ok-1", content_text: "题目一" },
+            { ...baseDraft, draft_id: "ok-2", content_text: "题目二" },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJsonResponse([]))
+      .mockResolvedValueOnce(mockJsonResponse({ created: 1, existing: 0, failed: 1 }));
+
+    render(<QuestionImportPage />);
+
+    const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
+    fireEvent.change(screen.getByTestId("question-import-file-input"), {
+      target: { files: [file] },
+    });
+
+    await screen.findByText("核对导入内容");
+    fireEvent.click(screen.getByRole("button", { name: "导入 2 道题目" }));
+    fireEvent.click(await screen.findByRole("button", { name: "暂不关联" }));
+
+    expect(await screen.findByText("题目导入完成")).toBeInTheDocument();
+    expect(screen.getByText("本次导入")).toBeInTheDocument();
+    expect(screen.getByText("成功入库")).toBeInTheDocument();
+    expect(screen.getByText("失败")).toBeInTheDocument();
+  });
+
+  it("removes all importable drafts only when bulk import has no failures", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJsonResponse({
+          mode: "smart",
+          summary: {
+            total: 2,
+            duplicates_removed: 0,
+            high_confidence: 2,
+            medium_confidence: 0,
+            low_confidence: 0,
+            issue_count: 0,
+            pending_review: 2,
+            approved: 0,
+            skipped: 0,
+            incomplete_choice_count: 0,
+            visual_retry_recommended: false,
+          },
+          drafts: [
+            { ...baseDraft, draft_id: "ok-1", content_text: "题目一" },
+            { ...baseDraft, draft_id: "ok-2", content_text: "题目二" },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJsonResponse([]))
+      .mockResolvedValueOnce(mockJsonResponse({ created: 1, existing: 1, failed: 0 }));
+
+    render(<QuestionImportPage />);
+
+    const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
+    fireEvent.change(screen.getByTestId("question-import-file-input"), {
+      target: { files: [file] },
+    });
+
+    await screen.findByText("核对导入内容");
+    fireEvent.click(screen.getByRole("button", { name: "导入 2 道题目" }));
+    fireEvent.click(await screen.findByRole("button", { name: "暂不关联" }));
+
+    expect(await screen.findByText("题目导入完成")).toBeInTheDocument();
+    expect(screen.queryByText("核对导入内容")).not.toBeInTheDocument();
   });
 
   it("uses the selected question bank from the question list as the default import target", async () => {

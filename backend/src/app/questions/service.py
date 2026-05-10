@@ -3,6 +3,7 @@
 import json
 import re
 import uuid
+from typing import Any
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -31,6 +32,7 @@ from app.questions.schemas import (
     QuestionImportDocumentSummary,
     QuestionImportDraft,
     QuestionImportImageInput,
+    QuestionImportTableInput,
     QuestionImportRecognizeResponse,
     QuestionCreate,
     QuestionImportAnalyzeResponse,
@@ -444,6 +446,63 @@ async def _request_deepseek_json(prompt: str) -> dict:
     return json.loads(payload)
 
 
+def _is_ai_service_unavailable_error(exc: Exception) -> bool:
+    return isinstance(exc, (httpx.HTTPError, RuntimeError)) and (
+        isinstance(exc, httpx.HTTPError)
+        or "DeepSeek API Key" in str(exc)
+        or "DeepSeek 分析失败" in str(exc)
+        or "DeepSeek 没有返回分析结果" in str(exc)
+    )
+
+
+def _ensure_image_data_url(image: str) -> str:
+    if image.strip().lower().startswith("data:"):
+        return image
+    return f"data:image/jpeg;base64,{image}"
+
+
+async def _request_vision_json(
+    *,
+    provider_name: str,
+    api_key: str | None,
+    base_url: str,
+    model_name: str,
+    prompt: str,
+    images: list[QuestionImportImageInput],
+) -> dict:
+    if not api_key:
+        raise RuntimeError(f"未配置 {provider_name} API Key")
+
+    content: list[dict[str, Any]] = [{"type": "text", "text": prompt.strip()}]
+    for image in images:
+        content.append({"type": "image_url", "image_url": {"url": _ensure_image_data_url(image.url)}})
+
+    client = _get_http_client()
+    response = await client.post(
+        f"{base_url.rstrip('/')}/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": "你只输出合法 JSON。"},
+                {"role": "user", "content": content},
+            ],
+            "temperature": 0.1,
+            "max_tokens": 8192,
+        },
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(response.text.strip() or f"{provider_name} 视觉识别失败")
+    content_text = response.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+    if not isinstance(content_text, str) or not content_text.strip():
+        raise RuntimeError(f"{provider_name} 没有返回识别结果")
+    payload = content_text.strip()
+    if payload.startswith("```"):
+        payload = re.sub(r"^```[a-zA-Z]*\s*", "", payload)
+        payload = re.sub(r"\s*```\s*$", "", payload)
+    return json.loads(payload)
+
+
 async def analyze_imported_question(question: ImportedQuestionDraft) -> QuestionImportAnalyzeResponse:
     prompt = f"""
 你是一名中文题库教研助手。请分析下面这道题，输出 JSON。
@@ -485,10 +544,41 @@ _TEMPLATE_PREFIXES = (
     "[难度]",
 )
 _QUESTION_START_PATTERNS = [
-    re.compile(r"^\s*(\d+[\.．\)）]|[\(\（]\d+[\)）]|\[\d+\]|【\d+】|\d+、)\s*"),
+    re.compile(r"^\s*(\d+(?:[\.．\)）、]|(?=\s+))|[\(\（]\d+[\)）]|\[\d+\]|【\d+】)\s*"),
     re.compile(r"^\s*([一二三四五六七八九十]+[、\.．])\s*"),
     re.compile(r"^\s*(单选题|单选|多选题|多选|选择题|判断题|判断|填空题|填空|简答题|简答|编程题|编程|论述题|论述)\b"),
 ]
+_QUESTION_TYPE_KEYWORDS = (
+    "单项选择题",
+    "单项选择",
+    "单选题",
+    "单选",
+    "多项选择题",
+    "多项选择",
+    "多选选择题",
+    "多选选择",
+    "多选题",
+    "多选",
+    "选择题",
+    "选择",
+    "填空题",
+    "填空",
+    "判断题",
+    "判断",
+    "是非题",
+    "是非",
+    "简答题",
+    "简答",
+    "论述题",
+    "论述",
+    "编程题",
+    "编程",
+    "代码题",
+    "代码",
+    "计算题",
+    "计算",
+)
+_QUESTION_TYPE_KEYWORD_PATTERN = "|".join(re.escape(keyword) for keyword in _QUESTION_TYPE_KEYWORDS)
 
 
 @dataclass(slots=True)
@@ -496,6 +586,7 @@ class SegmentedBlock:
     raw_text: str
     segment_source: str = "rule"
     boundary_confidence: str = "high"
+    type_hint: str | None = None
 
 
 @dataclass(slots=True)
@@ -528,6 +619,10 @@ def _is_question_start(line: str) -> tuple[bool, str]:
         if pattern.search(line):
             return True, "high" if index == 0 else "medium"
     return False, "low"
+
+
+def _is_numbered_question_start(line: str) -> bool:
+    return bool(_QUESTION_START_PATTERNS[0].search(line))
 
 
 def _is_attachment_line(line: str) -> bool:
@@ -565,7 +660,7 @@ def _get_tail_field_type(line: str) -> str | None:
     return None
 
 
-def _split_block_when_question_restarts(block_text: str) -> list[str]:
+def _split_block_when_question_restarts(block_text: str, *, split_numbered_restarts: bool = False) -> list[str]:
     lines = [line.strip() for line in block_text.splitlines() if line.strip()]
     if not lines:
         return []
@@ -578,7 +673,7 @@ def _split_block_when_question_restarts(block_text: str) -> list[str]:
         is_start, _confidence = _is_question_start(line)
         should_split = (
             bool(current)
-            and seen_tail_marker
+            and (seen_tail_marker or (split_numbered_restarts and _is_numbered_question_start(line)))
             and is_start
             and not _is_attachment_line(line)
         )
@@ -621,6 +716,10 @@ def _split_document_into_blocks(raw_text: str) -> list[SegmentedParagraphBlock]:
             kind = "field" if _parse_template_field_line(stripped) else "image" if stripped.startswith("[IMAGE:") else "code"
             blocks.append(SegmentedParagraphBlock(text=stripped, kind=kind))
             continue
+        if stripped.startswith("[试卷题型说明]"):
+            flush_current()
+            blocks.append(SegmentedParagraphBlock(text=stripped, kind="section"))
+            continue
         current.append(stripped)
 
     flush_current()
@@ -644,15 +743,39 @@ def _is_explicit_typed_question_start(line: str) -> bool:
     stripped = _strip_question_start_prefix(line)
     return bool(
         re.match(
-            r"^\[?(单选题|单选|多选题|多选|选择题|判断题|判断|填空题|填空|简答题|简答|编程题|编程|论述题|论述)\]?",
+            rf"^\[?({_QUESTION_TYPE_KEYWORD_PATTERN})\]?",
             stripped,
         )
     )
 
 
+def _is_section_heading_only(block_text: str) -> bool:
+    stripped = block_text.strip()
+    return bool(
+        re.match(
+            rf"^[一二三四五六七八九十]+[、.．]?\s*(?:{_QUESTION_TYPE_KEYWORD_PATTERN})?"
+            r"(?:\s*[（(][^）)]*[）)])?$",
+            stripped,
+        )
+    )
+
+
+def _extract_section_type_hint(block_text: str) -> str | None:
+    stripped = block_text.strip()
+    if stripped.startswith("[试卷题型说明]"):
+        stripped = stripped.removeprefix("[试卷题型说明]").strip()
+    if not re.match(r"^[一二三四五六七八九十]+[、.．]?", stripped):
+        return None
+    match = re.search(_QUESTION_TYPE_KEYWORD_PATTERN, stripped)
+    if not match:
+        return None
+    return match.group(0)
+
+
 def _block_looks_like_question_candidate(block_text: str) -> bool:
     lines = [line.strip() for line in block_text.splitlines() if line.strip()]
-    return bool(_is_explicit_typed_question_start(block_text) or len(_extract_options(lines)) >= 2)
+    options, _ = _extract_options(lines)
+    return bool(_is_explicit_typed_question_start(block_text) or len(options) >= 2)
 
 
 def segment_question_document(raw_text: str) -> list[SegmentedBlock]:
@@ -663,9 +786,23 @@ def segment_question_document(raw_text: str) -> list[SegmentedBlock]:
     current_confidence = "high"
     current_has_tail_marker = False
     current_tail_field_type: str | None = None
+    current_type_hint: str | None = None
 
     for block in paragraph_blocks:
-        sub_blocks = _split_block_when_question_restarts(block.text)
+        section_hint = _extract_section_type_hint(block.text)
+        if block.text.strip().startswith("[试卷题型说明]") or _is_section_heading_only(block.text):
+            if current:
+                text = "\n".join(part for part in current if part.strip()).strip()
+                if text:
+                    blocks.append(SegmentedBlock(raw_text=text, boundary_confidence=current_confidence))
+                current = []
+                current_confidence = "high"
+                current_has_tail_marker = False
+                current_tail_field_type = None
+            if section_hint:
+                current_type_hint = section_hint
+            continue
+        sub_blocks = _split_block_when_question_restarts(block.text, split_numbered_restarts=current_type_hint is not None)
         if not sub_blocks:
             sub_blocks = [block.text]
 
@@ -683,12 +820,22 @@ def segment_question_document(raw_text: str) -> list[SegmentedBlock]:
                 and current
                 and not _is_attachment_line(stripped)
                 and not is_answer_or_analysis_continuation
-                and (current_has_tail_marker or _is_explicit_typed_question_start(stripped))
+                and (
+                    current_has_tail_marker
+                    or _is_explicit_typed_question_start(stripped)
+                    or (_is_numbered_question_start(stripped) and _block_looks_like_question_candidate(stripped))
+                )
             )
             if should_start_new:
                 text = "\n".join(part for part in current if part.strip()).strip()
                 if text:
-                    blocks.append(SegmentedBlock(raw_text=text, boundary_confidence=current_confidence))
+                    blocks.append(
+                        SegmentedBlock(
+                            raw_text=text,
+                            boundary_confidence=current_confidence,
+                            type_hint=current_type_hint,
+                        )
+                    )
                 current = [stripped]
                 current_confidence = confidence
                 current_has_tail_marker = _block_has_question_tail_marker(stripped)
@@ -703,7 +850,13 @@ def segment_question_document(raw_text: str) -> list[SegmentedBlock]:
     if current:
         text = "\n".join(part for part in current if part.strip()).strip()
         if text:
-            blocks.append(SegmentedBlock(raw_text=text, boundary_confidence=current_confidence))
+            blocks.append(
+                SegmentedBlock(
+                    raw_text=text,
+                    boundary_confidence=current_confidence,
+                    type_hint=current_type_hint,
+                )
+            )
 
     return blocks
 
@@ -715,13 +868,69 @@ def _strip_question_start_prefix(text: str) -> str:
     return next_text
 
 
-def _extract_options(lines: list[str]) -> dict[str, str]:
+@dataclass(frozen=True)
+class TaggedListLine:
+    kind: str
+    text: str
+
+
+_TAGGED_LIST_LINE_RE = re.compile(r"^\[(OL|UL)\]\s*(.+)$", re.IGNORECASE)
+_EXPLICIT_OPTION_LINE_RE = re.compile(r"^([A-H])[\.．、\)]\s*(.+)$", re.IGNORECASE)
+
+
+def _parse_tagged_list_line(line: str) -> TaggedListLine | None:
+    match = _TAGGED_LIST_LINE_RE.match(line.strip())
+    if not match:
+        return None
+    return TaggedListLine(kind=match.group(1).upper(), text=match.group(2).strip())
+
+
+def _looks_like_choice_prompt(text: str) -> bool:
+    normalized = text.strip()
+    return bool(
+        re.search(
+            r"(单项选择题|单项选择|单选题|单选|多项选择题|多项选择|多选选择题|多选选择|多选题|多选|选择题|选择)",
+            normalized,
+        )
+        or re.search(r"(下列|以下|下面).*(正确|错误|不正确|不属于|属于|是)", normalized)
+    )
+
+
+def _extract_options(
+    lines: list[str],
+    *,
+    type_hint_text: str = "",
+    answer_text: str = "",
+) -> tuple[dict[str, str], set[int]]:
     options: dict[str, str] = {}
-    for line in lines:
-        match = re.match(r"^([A-H])[\.．、\)]\s*(.+)$", line, re.IGNORECASE)
+    consumed_indexes: set[int] = set()
+
+    for index, line in enumerate(lines):
+        match = _EXPLICIT_OPTION_LINE_RE.match(line)
         if match:
             options[match.group(1).upper()] = match.group(2).strip()
-    return options
+            consumed_indexes.add(index)
+
+    if options:
+        return options, consumed_indexes
+
+    tagged_lines: list[tuple[int, TaggedListLine]] = []
+    for index, line in enumerate(lines):
+        tagged = _parse_tagged_list_line(line)
+        if tagged and tagged.kind == "OL":
+            tagged_lines.append((index, tagged))
+
+    choice_context = _looks_like_choice_prompt("\n".join(part for part in [type_hint_text, *lines] if part)) or bool(
+        re.fullmatch(r"[A-H]+", answer_text.strip(), re.IGNORECASE)
+    )
+    if not choice_context or len(tagged_lines) < 2:
+        return {}, set()
+
+    for offset, (index, tagged) in enumerate(tagged_lines[:8]):
+        options[chr(65 + offset)] = tagged.text
+        consumed_indexes.add(index)
+
+    return options, consumed_indexes
 
 
 def _normalize_difficulty(value: str | None) -> int:
@@ -790,27 +999,25 @@ def _split_template_blocks(raw_text: str) -> list[list[str]]:
 
 
 def _detect_question_type(raw_text: str, options: dict[str, str], answer_text: str) -> tuple[str, str]:
-    if re.search(r"(单选题|单选|多选题|多选|选择题)", raw_text):
+    if re.search(r"(单项选择题|单项选择|单选题|单选|多项选择题|多项选择|多选选择题|多选选择|多选题|多选|选择题|选择)", raw_text) or len(options) >= 2:
         return "choice", "high"
-    if re.search(r"(判断题|判断)", raw_text) or re.fullmatch(
+    if re.search(r"(判断题|判断|是非题|是非)", raw_text) or re.fullmatch(
         r"(正确|错误|对|错|√|×|T|F|True|False)", answer_text.strip(), re.IGNORECASE
     ):
         return "true_false", "high"
     if re.search(r"(_{2,}|（\s*）|\(\s*\)|【\s*】|\[\s*\])", raw_text):
         return "fill_in", "high"
-    if re.search(r"(编程题|程序设计|实现函数|编写程序|示例输入|示例输出|```)", raw_text, re.IGNORECASE):
+    if re.search(r"(编程题|编程|代码题|代码|程序设计|实现函数|编写程序|示例输入|示例输出|```)", raw_text, re.IGNORECASE):
         return "code", "high"
     if re.search(r"(论述题|论述|阐述|分析并评价|结合实际谈谈)", raw_text):
         return "essay", "medium"
-    if len(options) >= 2:
-        return "choice", "medium"
     return "short_answer", "medium"
 
 
 def _is_standalone_question_type_line(line: str) -> bool:
     return bool(
         re.fullmatch(
-            r"(单选题|单选|多选题|多选|选择题|判断题|判断|填空题|填空|简答题|简答|编程题|编程|论述题|论述)",
+            _QUESTION_TYPE_KEYWORD_PATTERN,
             line.strip(),
         )
     )
@@ -829,16 +1036,17 @@ def build_import_draft_from_segment(
     *,
     segment_source: str = "rule",
     boundary_confidence: str = "high",
+    type_hint: str | None = None,
     images: list[QuestionImportImageInput] | None = None,
     comparison_flags: list[str] | None = None,
 ) -> QuestionImportDraft:
     normalized_raw_text = _normalize_inline_tail_fields(raw_text)
     lines = [line.strip() for line in normalized_raw_text.splitlines() if line.strip()]
-    options = _extract_options(lines)
     answer_text = ""
     analysis = ""
     difficulty_text = ""
-    content_lines: list[str] = []
+    type_hint_text = type_hint or ""
+    content_candidates: list[tuple[int, str]] = []
     collecting_field: str | None = None
     answer_lines: list[str] = []
     analysis_lines: list[str] = []
@@ -851,7 +1059,7 @@ def build_import_draft_from_segment(
             analysis = "\n".join(analysis_lines).strip()
         collecting_field = None
 
-    for line in lines:
+    for index, line in enumerate(lines):
         answer_match = re.match(r"^(?:\[(答案|参考答案)\]|(答案|参考答案|answer))[:：]?\s*(.+)$", line, re.IGNORECASE)
         analysis_match = re.match(r"^(?:\[(解析|分析)\]|(解析|分析|analysis))[:：]?\s*(.+)$", line, re.IGNORECASE)
         difficulty_match = re.match(r"^(?:\[(难度|难易度)\]|(难度|难易度|difficulty))[:：]?\s*(.+)$", line, re.IGNORECASE)
@@ -859,7 +1067,7 @@ def build_import_draft_from_segment(
         blank_analysis_field = re.match(r"^(?:\[(解析|分析)\]|(解析|分析|analysis))[:：]?\s*$", line, re.IGNORECASE)
         blank_difficulty_field = re.match(r"^(?:\[(难度|难易度)\]|(难度|难易度|difficulty))[:：]?\s*$", line, re.IGNORECASE)
         time_field = re.match(r"^(?:\[(预计时间|预期时间)\]|(预计时间|预期时间|expected.?time))[:：]?\s*(.*)$", line, re.IGNORECASE)
-        option_match = re.match(r"^([A-H])[\.．、\)]\s*(.+)$", line, re.IGNORECASE)
+        type_field = re.match(r"^(?:\[题型\]|题型[:：])\s*(.+)$", line)
         if blank_answer_field:
             flush_collecting_field()
             answer_lines = []
@@ -881,6 +1089,9 @@ def build_import_draft_from_segment(
             difficulty_text = difficulty_match.group(3).strip()
         elif time_field:
             flush_collecting_field()
+        elif type_field:
+            flush_collecting_field()
+            type_hint_text = type_field.group(1).strip()
         elif _is_standalone_question_type_line(line):
             flush_collecting_field()
             continue
@@ -888,13 +1099,32 @@ def build_import_draft_from_segment(
             answer_lines.append(line)
         elif collecting_field == "analysis":
             analysis_lines.append(line)
-        elif not option_match:
-            content_lines.append(_strip_question_start_prefix(line))
+        else:
+            content_candidates.append((index, line))
 
     flush_collecting_field()
 
+    options, consumed_option_indexes = _extract_options(
+        lines,
+        type_hint_text=type_hint_text,
+        answer_text=answer_text,
+    )
+    content_lines: list[str] = []
+    for index, line in content_candidates:
+        if index in consumed_option_indexes:
+            continue
+        tagged_line = _parse_tagged_list_line(line)
+        if tagged_line:
+            content_lines.append(tagged_line.text)
+            continue
+        content_lines.append(_strip_question_start_prefix(line))
+
     content_text = "\n".join(line for line in content_lines if line).strip()
-    question_type, type_confidence = _detect_question_type(content_text or raw_text, options, answer_text)
+    question_type, type_confidence = _detect_question_type(
+        "\n".join(part for part in [type_hint_text, content_text or raw_text] if part),
+        options,
+        answer_text,
+    )
     issues: list[str] = []
     if not content_text:
         issues.append("题目内容为空")
@@ -968,6 +1198,102 @@ def _collect_segment_images(raw_text: str, images: list[QuestionImportImageInput
     return [index[image_id] for image_id in image_ids if image_id in index]
 
 
+def _is_paper_import_context(payload: QuestionImportDocumentRecognizeRequest) -> bool:
+    return payload.import_context == "paper"
+
+
+def _table_to_import_text(table: QuestionImportTableInput) -> str:
+    lines = [f"[TABLE:{table.order}]"]
+    lines.extend(" | ".join(cell.strip() for cell in row) for row in table.rows if any(cell.strip() for cell in row))
+    return "\n".join(lines)
+
+
+def _looks_like_paper_header_or_answer_sheet(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return True
+    normalized = re.sub(r"\s+", "", stripped)
+    header_keywords = (
+        "学年",
+        "学期",
+        "期末考试试卷",
+        "期中考试试卷",
+        "考试试卷",
+        "答题时限",
+        "考试形式",
+        "闭卷笔试",
+        "班级",
+        "学号",
+        "姓名",
+        "得分",
+        "得分统计表",
+        "阅卷教师",
+        "核查人签名",
+    )
+    if any(keyword in normalized for keyword in header_keywords):
+        return True
+    if re.fullmatch(r"(?:\d+[\.．]?\s*){3,}", stripped):
+        return True
+    if "选择题答案请填写" in normalized or "答案请填写下表" in normalized:
+        return True
+    return False
+
+
+def _looks_like_answer_sheet_number_row(line: str) -> bool:
+    return bool(re.fullmatch(r"(?:\d+[\.．]?\s*){3,}", line.strip()))
+
+
+def _looks_like_paper_section_heading(line: str) -> bool:
+    return bool(
+        re.match(
+            rf"^[一二三四五六七八九十]+[、.．\s]\s*({_QUESTION_TYPE_KEYWORD_PATTERN})",
+            line.strip(),
+        )
+    )
+
+
+def preprocess_paper_import_text(
+    raw_text: str,
+    tables: list[QuestionImportTableInput],
+) -> str:
+    lines = [line.strip() for line in raw_text.replace("\r\n", "\n").splitlines()]
+    kept: list[str] = []
+    section_context: str | None = None
+    seen_question_section = False
+
+    for line in lines:
+        if not line:
+            if kept and kept[-1] != "":
+                kept.append("")
+            continue
+        if _looks_like_paper_section_heading(line):
+            seen_question_section = True
+            section_context = line
+            kept.append(f"[试卷题型说明] {line}")
+            continue
+        if not seen_question_section:
+            continue
+        is_start, _confidence = _is_question_start(line)
+        if _looks_like_paper_header_or_answer_sheet(line) and (
+            _looks_like_answer_sheet_number_row(line) or not (is_start and len(line) > 12)
+        ):
+            continue
+        if is_start and section_context and kept and kept[-1].startswith("[试卷题型说明]"):
+            kept.append(line)
+            continue
+        kept.append(line)
+
+    table_texts = [
+        _table_to_import_text(table)
+        for table in tables
+        if table.rows and not any("得分统计表" in "".join(row) or "选择题答案" in "".join(row) for row in table.rows)
+    ]
+    body = "\n".join(kept).strip()
+    if table_texts:
+        body = "\n\n".join(part for part in [body, *table_texts] if part)
+    return body or raw_text
+
+
 def _build_rule_based_drafts(payload: QuestionImportDocumentRecognizeRequest, mode: str) -> list[QuestionImportDraft]:
     if mode == ImportRecognitionMode.TEMPLATE.value:
         drafts = parse_template_document(payload.raw_text)
@@ -977,6 +1303,7 @@ def _build_rule_based_drafts(payload: QuestionImportDocumentRecognizeRequest, mo
                 segment.raw_text,
                 segment_source=segment.segment_source,
                 boundary_confidence=segment.boundary_confidence,
+                type_hint=segment.type_hint,
                 images=_collect_segment_images(segment.raw_text, payload.images),
             )
             for segment in segment_question_document(payload.raw_text)
@@ -1023,11 +1350,32 @@ async def complete_import_draft_with_ai(draft: QuestionImportDraft) -> QuestionI
     return merged
 
 
-def _build_document_ai_prompt(raw_text: str, images: list[QuestionImportImageInput]) -> str:
+def _build_document_ai_prompt(
+    raw_text: str,
+    images: list[QuestionImportImageInput],
+    *,
+    import_context: str | None = None,
+    recognition_prompt: str | None = None,
+) -> str:
     image_lines = "\n".join(
         f"- {image.image_id}: {image.url} (order={image.order}, page={image.page or 'unknown'}, alt={image.alt or ''})"
         for image in images
     )
+    paper_rules = ""
+    if import_context == "paper":
+        paper_rules = """
+试卷导入额外规则：
+- 试卷封面/表头不是题目：学校名称、学年学期、课程名、试卷 A/B 卷、答题时限、考试形式、班级、学号、姓名、得分栏、得分统计表、阅卷教师/核查人签名均不要生成题目。
+- 题型说明不是题目，例如“一、单项选择题（每小题 2 分，共 50 分）”只作为后续题型、分值和题量上下文。
+- 答题卡/答案填写表不是题目，例如只包含 1. 2. 3...25. 的编号表格不要生成空题；它只能作为题量线索。
+- 不要因为答题卡编号臆造空题。只输出实际看到完整题干的题目。
+"""
+    custom_rules = ""
+    if recognition_prompt and recognition_prompt.strip():
+        custom_rules = f"""
+用户补充识别要求：
+{recognition_prompt.strip()}
+"""
     return f"""
 你是一名中文题库导入助手。请分析整份导入文档，并只输出合法 JSON。
 
@@ -1045,6 +1393,8 @@ def _build_document_ai_prompt(raw_text: str, images: list[QuestionImportImageInp
    - raw_text: 该题在原文中的完整片段
    - images: 与该题相关的 image_id 数组
 5. 不要输出解释、Markdown 或代码块。
+{paper_rules}
+{custom_rules}
 
 图片列表：
 {image_lines or "无"}
@@ -1156,8 +1506,34 @@ async def recognize_question_document_with_ai(
     payload: QuestionImportDocumentRecognizeRequest,
     baseline: list[QuestionImportDraft],
 ) -> list[QuestionImportDraft]:
-    prompt = _build_document_ai_prompt(payload.raw_text, payload.images)
-    data = await _request_deepseek_json(prompt)
+    prompt = _build_document_ai_prompt(
+        payload.raw_text,
+        payload.images,
+        import_context=payload.import_context,
+        recognition_prompt=payload.recognition_prompt,
+    )
+    if _is_paper_import_context(payload) and payload.images:
+        last_error: Exception | None = None
+        for provider_name, api_key, base_url, model_name in (
+            ("DeepSeek", settings.deepseek_api_key, settings.deepseek_base_url, settings.deepseek_model_name),
+            ("Qwen", settings.qwen_api_key, settings.qwen_base_url, settings.qwen_vl_model_name),
+        ):
+            try:
+                data = await _request_vision_json(
+                    provider_name=provider_name,
+                    api_key=api_key,
+                    base_url=base_url,
+                    model_name=model_name,
+                    prompt=prompt,
+                    images=payload.images,
+                )
+                break
+            except (RuntimeError, httpx.HTTPError, json.JSONDecodeError) as exc:
+                last_error = exc
+        else:
+            raise RuntimeError("试卷视觉识别服务暂不可用，请联系管理员处理。") from last_error
+    else:
+        data = await _request_deepseek_json(prompt)
     questions = _validate_ai_document_questions(data)
     ai_drafts = [_build_ai_import_draft(question, payload.images) for question in questions]
     return merge_ai_and_rule_recognition(ai_drafts, baseline)
@@ -1190,7 +1566,15 @@ def deduplicate_drafts(
 def build_import_document_summary(
     drafts: list[QuestionImportDraft],
     duplicates_removed: int = 0,
+    visual_retry_recommended: bool = False,
+    incomplete_choice_count: int | None = None,
 ) -> QuestionImportDocumentSummary:
+    if incomplete_choice_count is None:
+        incomplete_choice_count = sum(
+            1
+            for draft in drafts
+            if draft.type.value == "choice" and "选择题选项不完整" in draft.issues
+        )
     return QuestionImportDocumentSummary(
         total=len(drafts),
         duplicates_removed=duplicates_removed,
@@ -1213,12 +1597,16 @@ def build_import_document_summary(
         pending_review=sum(1 for draft in drafts if draft.review_status == ImportReviewStatus.PENDING),
         approved=sum(1 for draft in drafts if draft.review_status == ImportReviewStatus.APPROVED),
         skipped=sum(1 for draft in drafts if draft.review_status == ImportReviewStatus.SKIPPED),
+        incomplete_choice_count=incomplete_choice_count,
+        visual_retry_recommended=visual_retry_recommended,
     )
 
 
 async def recognize_question_document(
     payload: QuestionImportDocumentRecognizeRequest,
 ) -> QuestionImportDocumentRecognizeResponse:
+    if _is_paper_import_context(payload):
+        payload = payload.model_copy(update={"raw_text": preprocess_paper_import_text(payload.raw_text, payload.tables)})
     mode = (
         ImportRecognitionMode.TEMPLATE.value
         if payload.prefer_template
@@ -1226,13 +1614,31 @@ async def recognize_question_document(
     )
     drafts = _build_rule_based_drafts(payload, mode)
     if payload.analysis_mode == QuestionImportAnalysisMode.AI_FULL:
-        completed = await recognize_question_document_with_ai(payload, drafts)
+        try:
+            completed = await recognize_question_document_with_ai(payload, drafts)
+        except (RuntimeError, httpx.HTTPError) as exc:
+            if _is_paper_import_context(payload) and payload.raw_text.strip() and _is_ai_service_unavailable_error(exc):
+                completed = drafts
+            else:
+                raise
     else:
         completed = [await complete_import_draft_with_ai(draft) for draft in drafts]
     unique_drafts, duplicates_removed = deduplicate_drafts(completed)
+    incomplete_choice_count = sum(
+        1
+        for draft in unique_drafts
+        if draft.type.value == "choice" and "选择题选项不完整" in draft.issues
+    )
+    visual_retry_recommended = payload.source_format == "docx" and incomplete_choice_count >= 2
+
     return QuestionImportDocumentRecognizeResponse(
         mode=mode,  # type: ignore[arg-type]
-        summary=build_import_document_summary(unique_drafts, duplicates_removed),
+        summary=build_import_document_summary(
+            unique_drafts,
+            duplicates_removed,
+            visual_retry_recommended=visual_retry_recommended,
+            incomplete_choice_count=incomplete_choice_count,
+        ),
         drafts=unique_drafts,
     )
 
@@ -1671,24 +2077,47 @@ async def match_and_create_import_question(
     return question, matched_kps
 
 
-async def get_or_create_ai_question_bank(
-    db: AsyncSession, user_id: uuid.UUID
-) -> uuid.UUID:
-    """Get or create the 'AI题库' question bank for the user."""
+async def get_or_create_named_private_question_bank(
+    db: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    name: str,
+    description: str,
+) -> QuestionBank:
     result = await db.execute(
         select(QuestionBank).where(
-            QuestionBank.name == "AI题库", QuestionBank.owner_id == user_id
+            QuestionBank.name == name,
+            QuestionBank.owner_id == user_id,
+            QuestionBank.deleted_at.is_(None),
         )
     )
     bank = result.scalar_one_or_none()
     if bank:
-        return bank.id
+        return bank
     bank = QuestionBank(
-        name="AI题库",
-        description="AI自动生成的题目",
+        name=name,
+        description=description,
         owner_id=user_id,
         visibility=VisibilityScope.PRIVATE,
     )
     db.add(bank)
     await db.flush()
-    return bank.id
+    return bank
+
+
+async def save_generated_questions_to_default_course_bank(
+    db: AsyncSession,
+    questions: list[QuestionCreate],
+    user_id: uuid.UUID,
+) -> BulkCreateQuestionsResult:
+    bank = await get_or_create_named_private_question_bank(
+        db,
+        user_id=user_id,
+        name="课程题库",
+        description="课程学习资料关联的智能出题结果",
+    )
+    scoped_questions = [
+        question.model_copy(update={"question_bank_id": bank.id})
+        for question in questions
+    ]
+    return await bulk_create_questions(db, scoped_questions, user_id)

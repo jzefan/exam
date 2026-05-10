@@ -27,8 +27,11 @@ export function Toaster() {
             key={t.id}
             variant={t.variant}
           >
-            {t.title && <ToastTitle>{t.title}</ToastTitle>}
-            {t.description && <ToastDescription>{t.description}</ToastDescription>}
+            <div className="grid gap-1">
+              {t.title && <ToastTitle>{t.title}</ToastTitle>}
+              {t.description && <ToastDescription>{t.description}</ToastDescription>}
+            </div>
+            {t.action}
             <ToastClose />
           </Toast>
         ))}
@@ -37,8 +40,11 @@ export function Toaster() {
       <ToastProvider>
         {bottomToasts.map((t) => (
         <Toast key={t.id} variant={t.variant}>
-          {t.title && <ToastTitle>{t.title}</ToastTitle>}
-          {t.description && <ToastDescription>{t.description}</ToastDescription>}
+          <div className="grid gap-1">
+            {t.title && <ToastTitle>{t.title}</ToastTitle>}
+            {t.description && <ToastDescription>{t.description}</ToastDescription>}
+          </div>
+          {t.action}
           <ToastClose />
         </Toast>
         ))}

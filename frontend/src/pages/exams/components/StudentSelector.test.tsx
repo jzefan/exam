@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { render, screen, waitFor } from "@/test/test-utils";
 
 import { StudentSelector } from "./StudentSelector";
+import { ClassStudentSelector } from "./ClassStudentSelector";
 
 const { apiRequestMock } = vi.hoisted(() => ({
   apiRequestMock: vi.fn((path: string) => {
@@ -118,6 +119,23 @@ describe("StudentSelector", () => {
     expect(screen.getByLabelText("学号（可选）")).toBeInTheDocument();
     expect(screen.getByRole("combobox")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /添加学生/i })).toBeInTheDocument();
+  });
+
+  it("can render supplement methods collapsed by default and expand them on demand", async () => {
+    const user = userEvent.setup();
+    render(
+      <ClassStudentSelector
+        selectedIds={[]}
+        onChange={vi.fn()}
+        defaultSupplementCollapsed
+      />,
+    );
+
+    expect(screen.queryByRole("tab", { name: /Excel 导入/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /展开补充方式/i }));
+
+    expect(screen.getByRole("tab", { name: /Excel 导入/i })).toBeInTheDocument();
   });
 
   it("autofills phone, student id, and class when the entered name uniquely matches an existing student", async () => {

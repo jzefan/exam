@@ -11,11 +11,11 @@ class Settings(BaseSettings):
     debug: bool = False
     deepseek_api_key: str | None = None
     deepseek_base_url: str = "https://api.deepseek.com/v1"
-    deepseek_model_name: str = "deepseek-v4-flash"
+    deepseek_model_name: str = "deepseek-v4-pro"
     qwen_api_key: str | None = None
     qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    qwen_model_name: str = "qwen-plus"
-    qwen_vl_model_name: str = "qwen-vl-plus"
+    qwen_model_name: str = "qwen-3.6"
+    qwen_vl_model_name: str = "qwen-3.6"
     kimi_api_key: str | None = None
     kimi_base_url: str = "https://api.moonshot.cn/v1"
     kimi_model_name: str = "moonshot-v1-8k"

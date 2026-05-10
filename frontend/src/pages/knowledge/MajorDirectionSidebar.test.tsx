@@ -130,4 +130,34 @@ describe("MajorDirectionSidebar", () => {
     expect(screen.queryByText("软件开发")).not.toBeInTheDocument();
     expect(screen.getByText("机器学习")).toBeInTheDocument();
   });
+
+  it("allows opening another major even when a direction and root knowledge are selected elsewhere", () => {
+    render(
+      <MajorDirectionSidebar
+        majors={majors}
+        selectedDirectionId="direction-1"
+        selectedRootKnowledgeId="knowledge-1"
+        onSelect={vi.fn()}
+        onSelectRootKnowledge={vi.fn()}
+        getDirections={(majorId) => directions.filter((direction) => direction.major_id === majorId)}
+        getRootKnowledgePoints={(directionId) =>
+          rootKnowledgePoints.filter((knowledge) => knowledge.direction_id === directionId)
+        }
+        onCreateMajor={vi.fn()}
+        onEditMajor={vi.fn()}
+        onDeleteMajor={vi.fn()}
+        onCreateDirection={vi.fn()}
+        onCreateRootKnowledge={vi.fn()}
+        onEditDirection={vi.fn()}
+        onDeleteDirection={vi.fn()}
+        onEditRootKnowledge={vi.fn()}
+        onDeleteRootKnowledge={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "人工智能" }));
+
+    expect(screen.queryByText("软件开发")).not.toBeInTheDocument();
+    expect(screen.getByText("机器学习")).toBeInTheDocument();
+  });
 });

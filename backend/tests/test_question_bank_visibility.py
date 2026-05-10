@@ -34,6 +34,20 @@ async def _create_teacher(db_session, org_id, *, username: str, email: str, full
     )
 
 
+async def _create_student(db_session, org_id, *, username: str, email: str, full_name: str):
+    return await create_user(
+        db_session,
+        UserCreate(
+            username=username,
+            email=email,
+            password="studentpass123",
+            full_name=full_name,
+            role_name="student",
+            org_id=org_id,
+        ),
+    )
+
+
 @pytest.mark.asyncio
 async def test_teacher_sees_own_and_platform_banks_only(client: AsyncClient, db_session) -> None:
     org = await _create_org_with_question_roles(db_session)
@@ -640,6 +654,167 @@ async def test_teacher_bulk_create_reports_existing_duplicate_questions(
 
     assert response.status_code == 201
     assert response.json() == {"created": 1, "existing": 1, "failed": 0}
+
+
+@pytest.mark.asyncio
+async def test_student_can_save_generated_questions_to_own_course_bank(
+    client: AsyncClient,
+    db_session,
+) -> None:
+    org = Organization(name="Generated Question School", type="school", is_active=True)
+    student_role = Role(name="student", display_name="Student", is_system=True)
+    db_session.add_all([org, student_role])
+    await db_session.flush()
+
+    student = await _create_student(
+        db_session,
+        org.id,
+        username="student-course-bank",
+        email="student-course-bank@example.com",
+        full_name="Student Course Bank",
+    )
+    student_id = student.id
+
+    major = Major(name="人工智能")
+    db_session.add(major)
+    await db_session.flush()
+    direction = Direction(name="AI应用", major_id=major.id)
+    db_session.add(direction)
+    await db_session.flush()
+    knowledge = KnowledgePoint(
+        name="计算机视觉",
+        direction_id=direction.id,
+        visibility=VisibilityScope.PLATFORM,
+        owner_id=student_id,
+    )
+    db_session.add(knowledge)
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(student_id, '')}"})
+    response = await client.post(
+        "/api/questions/save-generated-to-course-bank",
+        json={
+            "questions": [
+                {
+                    "type": "choice",
+                    "title": "图像分类基础题",
+                    "content": {"text": "下列哪项最接近图像分类任务？"},
+                    "options": {
+                        "A": "预测类别",
+                        "B": "预测边框",
+                        "C": "生成音频",
+                        "D": "删除样本",
+                    },
+                    "answer": {"correct": "A"},
+                    "analysis": "图像分类输出类别标签。",
+                    "difficulty": 2,
+                    "score": 10,
+                    "knowledge_point_ids": [str(knowledge.id)],
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["created"] == 1
+
+    bank = await db_session.scalar(
+        select(QuestionBank).where(
+            QuestionBank.name == "课程题库",
+            QuestionBank.owner_id == student_id,
+        )
+    )
+    assert bank is not None
+    assert bank.visibility == VisibilityScope.PRIVATE
+
+    question = await db_session.scalar(select(Question).where(Question.title == "图像分类基础题"))
+    assert question is not None
+    assert payload["created_question_ids"] == [str(question.id)]
+    assert question.question_bank_id == bank.id
+    assert question.owner_id == student_id
+
+
+@pytest.mark.asyncio
+async def test_save_generated_questions_rejects_unreadable_knowledge_points(
+    client: AsyncClient,
+    db_session,
+) -> None:
+    org = Organization(name="Generated Question Guard School", type="school", is_active=True)
+    student_role = Role(name="student", display_name="Student", is_system=True)
+    teacher_role = Role(name="teacher", display_name="Teacher", is_system=True)
+    db_session.add_all([org, student_role, teacher_role])
+    await db_session.flush()
+
+    student = await _create_student(
+        db_session,
+        org.id,
+        username="student-course-bank-guard",
+        email="student-course-bank-guard@example.com",
+        full_name="Student Course Bank Guard",
+    )
+    student_id = student.id
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-private-kp-owner",
+        email="teacher-private-kp-owner@example.com",
+        full_name="Teacher Private KP Owner",
+    )
+    teacher_id = teacher.id
+
+    major = Major(name="软件工程")
+    db_session.add(major)
+    await db_session.flush()
+    direction = Direction(name="后端方向", major_id=major.id)
+    db_session.add(direction)
+    await db_session.flush()
+    private_knowledge = KnowledgePoint(
+        name="私有知识点",
+        direction_id=direction.id,
+        visibility=VisibilityScope.PRIVATE,
+        owner_id=teacher_id,
+    )
+    db_session.add(private_knowledge)
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(student_id, '')}"})
+    response = await client.post(
+        "/api/questions/save-generated-to-course-bank",
+        json={
+            "questions": [
+                {
+                    "type": "short_answer",
+                    "title": "访问控制题",
+                    "content": {"text": "为什么要进行访问控制？"},
+                    "options": None,
+                    "answer": {"points": ["最小权限"]},
+                    "analysis": "访问控制可以限制未授权访问。",
+                    "difficulty": 2,
+                    "score": 10,
+                    "knowledge_point_ids": [str(private_knowledge.id)],
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 403
+
+    course_bank = await db_session.scalar(
+        select(QuestionBank).where(
+            QuestionBank.name == "课程题库",
+            QuestionBank.owner_id == student_id,
+        )
+    )
+    assert course_bank is None
+
+    leaked_question = await db_session.scalar(
+        select(Question).where(
+            Question.owner_id == student_id,
+            Question.title == "访问控制题",
+        )
+    )
+    assert leaked_question is None
 
 
 @pytest.mark.asyncio

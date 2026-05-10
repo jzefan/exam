@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useMemo } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Sparkles, Trash2, Loader2, StopCircle, FileQuestion, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -49,6 +49,12 @@ interface GeneratedQuestion {
 }
 
 type TypeAllocation = Record<QuestionType, number>;
+const AI_GENERATE_PREFILL_KEY = "ai_generate_prefill_v1";
+
+type AIGeneratePrefill = {
+  selectedKnowledgePoints?: SelectedKnowledgePoint[];
+  customPrompt?: string;
+};
 
 const TYPE_COLORS: Record<keyof TypeAllocation, string> = {
   choice: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
@@ -174,7 +180,7 @@ export function AIGeneratePage() {
     essay: 0,
     code: 0,
   });
-  const [model, setModel] = useState<AIModelProvider>("deepseek");
+  const [model, setModel] = useState<AIModelProvider>("qwen");
   const [selectedKPs, setSelectedKPs] = useState<SelectedKnowledgePoint[]>([]);
   const [customPrompt, setCustomPrompt] = useState("");
 
@@ -206,6 +212,23 @@ export function AIGeneratePage() {
     when: hasUnsavedGeneratedQuestions,
     message: "当前生成的题目尚未保存到题库，确定离开当前页面吗？",
   });
+
+  useEffect(() => {
+    const raw = sessionStorage.getItem(AI_GENERATE_PREFILL_KEY);
+    if (!raw) return;
+    sessionStorage.removeItem(AI_GENERATE_PREFILL_KEY);
+    try {
+      const prefill = JSON.parse(raw) as AIGeneratePrefill;
+      if (prefill.selectedKnowledgePoints?.length) {
+        setSelectedKPs(prefill.selectedKnowledgePoints);
+      }
+      if (prefill.customPrompt) {
+        setCustomPrompt(prefill.customPrompt);
+      }
+    } catch {
+      // Ignore invalid prefill payloads.
+    }
+  }, []);
   /* ---- generation ---- */
 
   const startGeneration = useCallback(async () => {

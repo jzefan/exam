@@ -75,7 +75,7 @@ interface ThemeConfigContextValue {
   reset: () => void;
 }
 
-const defaultConfig: ThemeConfig = { color: "zinc", radius: 0.5, layout: "full" };
+const defaultConfig: ThemeConfig = { color: "blue", radius: 0.5, layout: "full" };
 
 const ThemeConfigContext = createContext<ThemeConfigContextValue>({
   config: defaultConfig,

@@ -208,6 +208,11 @@ class QuestionImportImageInput(BaseModel):
     alt: str | None = Field(default=None, max_length=255)
 
 
+class QuestionImportTableInput(BaseModel):
+    order: int = Field(ge=0)
+    rows: list[list[str]] = Field(default_factory=list, max_length=100)
+
+
 class QuestionImportDraft(BaseModel):
     draft_id: str
     raw_text: str
@@ -238,6 +243,8 @@ class QuestionImportDocumentSummary(BaseModel):
     pending_review: int
     approved: int
     skipped: int
+    incomplete_choice_count: int = 0
+    visual_retry_recommended: bool = False
 
 
 class QuestionImportDocumentRecognizeRequest(BaseModel):
@@ -247,6 +254,9 @@ class QuestionImportDocumentRecognizeRequest(BaseModel):
     prefer_template: bool = False
     analysis_mode: QuestionImportAnalysisMode = QuestionImportAnalysisMode.FAST
     images: list[QuestionImportImageInput] = Field(default_factory=list, max_length=200)
+    tables: list[QuestionImportTableInput] = Field(default_factory=list, max_length=200)
+    import_context: str | None = Field(default=None, max_length=50)
+    recognition_prompt: str | None = Field(default=None, max_length=2000)
 
 
 class QuestionImportDocumentRecognizeResponse(BaseModel):
@@ -259,10 +269,18 @@ class QuestionBulkCreateRequest(BaseModel):
     questions: list[QuestionCreate] = Field(min_length=1, max_length=2000)
 
 
+class SaveGeneratedToCourseBankRequest(BaseModel):
+    questions: list[QuestionCreate] = Field(min_length=1, max_length=2000)
+
+
 class QuestionBulkCreateResponse(BaseModel):
     created: int
     existing: int = 0
     failed: int = 0
+
+
+class SaveGeneratedToCourseBankResponse(QuestionBulkCreateResponse):
+    created_question_ids: list[str] = Field(default_factory=list)
 
 
 class QuestionImportBulkCreateJobRequest(BaseModel):

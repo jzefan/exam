@@ -15,6 +15,11 @@ export interface QuestionImportImageInput {
   alt?: string | null;
 }
 
+export interface QuestionImportTableInput {
+  order: number;
+  rows: string[][];
+}
+
 export interface QuestionImportDraft {
   draft_id: string;
   raw_text: string;
@@ -45,6 +50,8 @@ export interface QuestionImportDocumentSummary {
   pending_review: number;
   approved: number;
   skipped: number;
+  incomplete_choice_count: number;
+  visual_retry_recommended: boolean;
 }
 
 export interface QuestionImportDocumentRecognizeResponse {

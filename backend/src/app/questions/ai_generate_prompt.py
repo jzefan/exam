@@ -132,6 +132,7 @@ def build_ai_generate_system_prompt(
     knowledge_keywords: str,
     user_prompt: str,
     knowledge_contexts: list[KnowledgePointPromptContext] | None = None,
+    material_text: str = "",
 ) -> str:
     difficulty_label = DIFFICULTY_LABELS.get(difficulty, "中等")
 
@@ -168,6 +169,18 @@ def build_ai_generate_system_prompt(
     if user_prompt.strip():
         extra_instruction = f"额外要求：{user_prompt.strip()}"
 
+    material_section = ""
+    trimmed_material = material_text.strip()
+    if trimmed_material:
+        # 防止过长正文吃掉模型上下文，给个保险阈值（远高于通常 PDF 体量也够用）。
+        if len(trimmed_material) > 60000:
+            trimmed_material = trimmed_material[:60000] + "\n...（资料过长，已截断）"
+        material_section = (
+            "\n\n以下为用户提供的学习资料原文，请优先依据其中的概念、步骤和易错点出题，"
+            "题目须能在资料中找到依据：\n"
+            f"<<<MATERIAL>>>\n{trimmed_material}\n<<<END_MATERIAL>>>"
+        )
+
     return f"""你是一位专业的考试命题教师。请根据以下要求生成考试题目。
 
 要求：
@@ -175,7 +188,7 @@ def build_ai_generate_system_prompt(
 - {type_instruction}
 - {knowledge_context_instruction}
 - {keyword_instruction}
-- {extra_instruction}
+- {extra_instruction}{material_section}
 
 支持的题型代码：choice（选择题）、true_false（判断题）、fill_in（填空题）、short_answer（简答题）、essay（论述题）、code（编程题）
 

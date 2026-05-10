@@ -3,7 +3,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser, require_roles, user_has_role
@@ -33,6 +33,7 @@ from app.papers.service import (
     confirm_import_session,
     create_import_session_from_recognition,
     create_paper,
+    extract_paper_import_file_content,
     generate_paper_from_source,
     get_paper_by_id,
     get_import_session,
@@ -163,6 +164,41 @@ async def recognize_paper_import(
 ) -> PaperImportRecognizeResponse:
     try:
         session, recognition = await create_import_session_from_recognition(db, user=user, request=body)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    await db.commit()
+    return PaperImportRecognizeResponse(
+        session_id=session.id,
+        mode=recognition.mode.value if hasattr(recognition.mode, "value") else str(recognition.mode),
+        summary=recognition.summary,
+        drafts=recognition.drafts,
+    )
+
+
+@router.post("/import/recognize-file", response_model=PaperImportRecognizeResponse)
+async def recognize_paper_import_file(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: WriteUser,
+    file: Annotated[UploadFile, File(...)],
+    prompt: Annotated[str | None, Form(max_length=2000)] = None,
+    root_knowledge_point_id: Annotated[uuid.UUID | None, Form()] = None,
+) -> PaperImportRecognizeResponse:
+    try:
+        file_name = file.filename or "paper"
+        raw_text, source_format = extract_paper_import_file_content(file_name, await file.read())
+        session, recognition = await create_import_session_from_recognition(
+            db,
+            user=user,
+            request=PaperImportRecognizeRequest(
+                file_name=file_name,
+                raw_text=raw_text,
+                source_format=source_format,
+                root_knowledge_point_id=root_knowledge_point_id,
+                recognition_prompt=prompt,
+            ),
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except ValueError as exc:

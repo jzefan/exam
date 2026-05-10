@@ -47,6 +47,13 @@ type AIQuestionConfigPanelProps = {
   onCustomPromptChange: (value: string) => void;
   allocationError?: string | null;
   footer?: ReactNode;
+  /**
+   * When provided, the knowledge-point selector is replaced by a read-only
+   * list of locked paths. Use this in flows where the knowledge point is
+   * implied by context (e.g. generating from a learning material attached
+   * to a specific node).
+   */
+  lockedKnowledgePointPaths?: string[];
 };
 
 export function AIQuestionConfigPanel({
@@ -68,6 +75,7 @@ export function AIQuestionConfigPanel({
   onCustomPromptChange,
   allocationError,
   footer,
+  lockedKnowledgePointPaths,
 }: AIQuestionConfigPanelProps) {
   const totalCountId = useId();
 
@@ -149,12 +157,32 @@ export function AIQuestionConfigPanel({
         </Select>
       </div>
 
-      <KnowledgePointSelector
-        fetcher={fetcher}
-        selectedKnowledgePoints={selectedKnowledgePoints}
-        onSelectedKnowledgePointsChange={onSelectedKnowledgePointsChange}
-        storageKey={storageKey}
-      />
+      {lockedKnowledgePointPaths !== undefined ? (
+        <div className="space-y-1.5">
+          <Label>知识点（已锁定）</Label>
+          <div className="space-y-1 rounded-md border border-border/60 bg-muted/30 p-2">
+            {lockedKnowledgePointPaths.length === 0 ? (
+              <p className="text-xs text-muted-foreground">未提供知识点路径</p>
+            ) : (
+              lockedKnowledgePointPaths.map((path, index) => (
+                <p
+                  key={`${path}-${index}`}
+                  className="break-words text-xs leading-snug text-foreground"
+                >
+                  {path}
+                </p>
+              ))
+            )}
+          </div>
+        </div>
+      ) : (
+        <KnowledgePointSelector
+          fetcher={fetcher}
+          selectedKnowledgePoints={selectedKnowledgePoints}
+          onSelectedKnowledgePointsChange={onSelectedKnowledgePointsChange}
+          storageKey={storageKey}
+        />
+      )}
 
       <div className="space-y-1.5">
         <Label>自定义提示</Label>

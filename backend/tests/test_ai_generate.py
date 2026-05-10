@@ -50,10 +50,10 @@ class _FakeAsyncClient:
         return _FakeStreamResponse(self._lines)
 
 
-def test_ai_generate_request_defaults_to_deepseek() -> None:
+def test_ai_generate_request_defaults_to_qwen() -> None:
     request = AIGenerateRequest()
 
-    assert request.model == "deepseek"
+    assert request.model == "qwen"
 
 
 @pytest.mark.asyncio

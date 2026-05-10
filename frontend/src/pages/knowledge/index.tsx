@@ -26,8 +26,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { createRandomId } from "@/lib/random-id";
 import type { IQuestion } from "@/types";
+import {
+  extractMaterialContent,
+  MATERIAL_PAGE_LIMIT,
+  UnsupportedMaterialFormatError,
+} from "./extract-material-content";
+import {
+  loadPersistedResourceContent,
+  persistResourceContent,
+  type StoredMaterialContent,
+} from "./resource-content-storage";
 import { KnowledgeImportDialog } from "./KnowledgeImportDialog";
 import { KnowledgeCatalogPhotoDialog } from "./KnowledgeCatalogPhotoDialog";
 import { KnowledgeTreeCanvas } from "./KnowledgeTreeCanvas";
@@ -41,12 +50,10 @@ import {
 import type { KnowledgeImportPath } from "./import-knowledge-utils";
 import { getFirstKnowledgeImportRootName } from "./import-knowledge-utils";
 import type {
-  AIRecommendationModel,
   IDirection,
   IFlowData,
   IKnowledgePointDetail,
   IMajor,
-  IRecommendationItem,
 } from "./types";
 
 const API = "/api/knowledge";
@@ -170,6 +177,10 @@ export function KnowledgeManagementPage() {
   const [renameDraft, setRenameDraft] = useState("");
   const [resourcesNodeId, setResourcesNodeId] = useState<string | null>(null);
   const [materialsByNode, setMaterialsByNode] = useState<Record<string, LearningMaterial[]>>({});
+  const [materialsLoading, setMaterialsLoading] = useState(false);
+  const [resourceContentById, setResourceContentById] = useState<Record<string, StoredMaterialContent>>(() =>
+    loadPersistedResourceContent(localStorage),
+  );
   const [relatedQuestions, setRelatedQuestions] = useState<IQuestion[]>([]);
   const [relatedQuestionsLoading, setRelatedQuestionsLoading] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
@@ -199,19 +210,12 @@ export function KnowledgeManagementPage() {
   );
 
   useEffect(() => {
-    const stored = localStorage.getItem("knowledge_materials_v1");
-    if (stored) {
-      try {
-        setMaterialsByNode(JSON.parse(stored));
-      } catch {
-        setMaterialsByNode({});
-      }
+    try {
+      persistResourceContent(localStorage, resourceContentById);
+    } catch {
+      // Ignore storage persistence failures; in-memory content remains usable for this session.
     }
-  }, []);
-
-  useEffect(() => {
-    localStorage.setItem("knowledge_materials_v1", JSON.stringify(materialsByNode));
-  }, [materialsByNode]);
+  }, [resourceContentById]);
 
   const getDirections = useCallback(
     (majorId: string) => directions.filter((direction) => direction.major_id === majorId),
@@ -662,13 +666,55 @@ export function KnowledgeManagementPage() {
   }, []);
 
   const resourcesNode = resourcesNodeId ? getKnowledgeNode(resourcesNodeId) ?? null : null;
-  const resourcesDirection = resourcesNode?.direction_id
-    ? directions.find((direction) => direction.id === resourcesNode.direction_id) ?? null
+  const resourcesRootKnowledge = (() => {
+    if (!resourcesNode) {
+      return null;
+    }
+    let current = resourcesNode;
+    const visitedIds = new Set<string>();
+    while (current.parent_id && !visitedIds.has(current.id)) {
+      visitedIds.add(current.id);
+      const parent = getKnowledgeNode(current.parent_id);
+      if (!parent) {
+        break;
+      }
+      current = parent;
+    }
+    return current;
+  })();
+  const resourcesDirectionId = resourcesNode?.direction_id ?? resourcesRootKnowledge?.direction_id ?? null;
+  const resourcesDirection = resourcesDirectionId
+    ? directions.find((direction) => direction.id === resourcesDirectionId) ?? null
     : null;
   const resourcesMajor = resourcesDirection
     ? majors.find((major) => major.id === resourcesDirection.major_id) ?? null
     : null;
-  const currentMaterials = resourcesNodeId ? materialsByNode[resourcesNodeId] ?? [] : [];
+  const currentMaterials = resourcesNodeId
+    ? (materialsByNode[resourcesNodeId] ?? []).map((material) => ({
+        ...material,
+        sourceTextAvailable: Boolean(resourceContentById[material.id]?.sourceText),
+      }))
+    : [];
+
+  const refreshMaterials = useCallback(async (nodeId: string) => {
+    setMaterialsLoading(true);
+    try {
+      const items = await apiFetch<LearningMaterial[]>(`/api/job-models/models/nodes/${nodeId}/resources`);
+      setMaterialsByNode((current) => ({ ...current, [nodeId]: items }));
+    } catch {
+      setMaterialsByNode((current) => ({ ...current, [nodeId]: [] }));
+    } finally {
+      setMaterialsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!resourcesNodeId) {
+      setMaterialsLoading(false);
+      return;
+    }
+    void refreshMaterials(resourcesNodeId);
+  }, [refreshMaterials, resourcesNodeId]);
 
   useEffect(() => {
     if (!resourcesNodeId) {
@@ -707,47 +753,127 @@ export function KnowledgeManagementPage() {
   }, [resourcesNodeId]);
 
   const addMaterial = useCallback(
-    (payload: Omit<LearningMaterial, "id">) => {
+    async (payload: Pick<LearningMaterial, "title" | "url" | "resource_type">) => {
       if (!resourcesNodeId) {
         return;
       }
-      setMaterialsByNode((current) => ({
-        ...current,
-        [resourcesNodeId]: [
-          ...(current[resourcesNodeId] ?? []),
-          { ...payload, id: createRandomId() },
-        ],
-      }));
+      await apiFetch(`/api/job-models/models/nodes/${resourcesNodeId}/resources?node_type=kp`, {
+        method: "POST",
+        body: JSON.stringify({
+          resource_type: payload.resource_type ?? "link",
+          title: payload.title,
+          url: payload.url,
+          source: "manual",
+        }),
+      });
+      await refreshMaterials(resourcesNodeId);
     },
-    [resourcesNodeId],
+    [refreshMaterials, resourcesNodeId],
+  );
+
+  const uploadMaterial = useCallback(
+    async (file: File) => {
+      if (!resourcesNodeId) {
+        return;
+      }
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("title", file.name);
+      formData.append("node_type", "kp");
+      formData.append("description", "");
+      const token = localStorage.getItem("access_token");
+      const response = await fetch(`/api/job-models/models/nodes/${resourcesNodeId}/resources/upload`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        body: formData,
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.detail ?? "上传文件失败");
+      }
+      const created = (await response.json()) as LearningMaterial;
+      try {
+        const extracted = await extractMaterialContent(file);
+        setResourceContentById((current) => ({
+          ...current,
+          [created.id]: {
+            sourceText: extracted.text.trim().slice(0, 120000),
+            images: extracted.images,
+          },
+        }));
+        if (extracted.pageCount > 30) {
+          toast({
+            title: "资料页数较多",
+            description: `当前共 ${extracted.pageCount} 页/张。建议尽量控制在 30 页以内；系统最多处理 ${MATERIAL_PAGE_LIMIT} 页/张。`,
+          });
+        }
+        if (extracted.truncated) {
+          toast({
+            title: "资料已截断处理",
+            description: `系统最多处理前 ${MATERIAL_PAGE_LIMIT} 页/张内容，超出部分已忽略。`,
+          });
+        }
+      } catch (error) {
+        if (error instanceof UnsupportedMaterialFormatError) {
+          toast({
+            title: "该文件暂不支持智能出题",
+            description: error.message,
+            variant: "destructive",
+          });
+        }
+        // Non-fatal: the file can still be stored as a learning material.
+      }
+      await refreshMaterials(resourcesNodeId);
+    },
+    [refreshMaterials, resourcesNodeId],
   );
 
   const deleteMaterial = useCallback(
-    (materialId: string) => {
+    async (materialId: string) => {
       if (!resourcesNodeId) {
         return;
       }
-      setMaterialsByNode((current) => ({
-        ...current,
-        [resourcesNodeId]: (current[resourcesNodeId] ?? []).filter((item) => item.id !== materialId),
-      }));
+      await apiFetch(`/api/job-models/models/resources/${materialId}`, { method: "DELETE" });
+      setResourceContentById((current) => {
+        const next = { ...current };
+        delete next[materialId];
+        return next;
+      });
+      await refreshMaterials(resourcesNodeId);
     },
-    [resourcesNodeId],
+    [refreshMaterials, resourcesNodeId],
   );
 
-  const generateRecommendations = useCallback(
-    async (nodeId: string, model: AIRecommendationModel): Promise<IRecommendationItem[]> => {
-      const response = await apiFetch<{ model: AIRecommendationModel; items: IRecommendationItem[] }>(
-        `${API}/knowledge-points/${nodeId}/recommendations/generate`,
-        {
-          method: "POST",
-          body: JSON.stringify({ model }),
-        },
-      );
-      return response.items;
+  const generateQuestionsFromMaterial = useCallback(
+    (material: LearningMaterial): { sourceText: string; images: string[] } | null => {
+      const extracted = resourceContentById[material.id];
+      if (!resourcesNode || !extracted?.sourceText) {
+        toast({
+          title: "暂不能智能出题",
+          description: "仅支持 PDF、Word(.docx)、PowerPoint(.pptx) 资料；旧版 .doc/.ppt 请先另存为新版格式。",
+          variant: "destructive",
+        });
+        return null;
+      }
+      return extracted;
     },
-    [],
+    [resourceContentById, resourcesNode, toast],
   );
+
+  const refreshRelatedQuestions = useCallback(async () => {
+    if (!resourcesNodeId) return;
+    setRelatedQuestionsLoading(true);
+    try {
+      const items = await apiFetch<IQuestion[]>(
+        `/api/questions?knowledge_point_id=${resourcesNodeId}&_start=0&_end=20&_sort=updated_at&_order=DESC`,
+      );
+      setRelatedQuestions(items);
+    } catch {
+      // Keep current list on failure; toast happens in the AI dialog itself.
+    } finally {
+      setRelatedQuestionsLoading(false);
+    }
+  }, [resourcesNodeId]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -947,7 +1073,7 @@ export function KnowledgeManagementPage() {
         selectedRootKnowledgeId={selectedRootKnowledgeId}
       />
 
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="relative flex flex-1 flex-col overflow-hidden">
         <div className="flex items-center justify-between border-b border-stone-300/80 px-5 py-4 dark:border-stone-800">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-500 dark:text-stone-400">
@@ -981,6 +1107,7 @@ export function KnowledgeManagementPage() {
           )}
         </div>
 
+        <div className="flex flex-1 flex-col overflow-hidden">
         {!selectedDirectionId && (
           <div className="flex flex-1 items-center justify-center px-6">
             <div className="max-w-sm text-center">
@@ -1063,6 +1190,7 @@ export function KnowledgeManagementPage() {
             onAddChild={handleAddChild}
             onDelete={handleDelete}
             onEdit={handleEdit}
+            onCloseResources={() => setResourcesNodeId(null)}
             onRenameCancel={handleRenameCancel}
             onRenameDraftChange={setRenameDraft}
             onRenameSubmit={() => void handleRenameSubmit()}
@@ -1074,6 +1202,28 @@ export function KnowledgeManagementPage() {
             selectedNodeId={selectedNodeId}
           />
         )}
+
+        </div>
+
+        <RelatedResourcesDialog
+          direction={resourcesDirection}
+          major={resourcesMajor}
+          materials={currentMaterials}
+          materialsLoading={materialsLoading}
+          node={resourcesNode}
+          rootKnowledge={resourcesRootKnowledge}
+          relatedQuestions={relatedQuestions}
+          relatedQuestionsLoading={relatedQuestionsLoading}
+          onAddMaterial={addMaterial}
+          onClose={() => setResourcesNodeId(null)}
+          onDeleteMaterial={deleteMaterial}
+          onGenerateQuestionsFromMaterial={generateQuestionsFromMaterial}
+          onQuestionsSaved={() => void refreshRelatedQuestions()}
+          onUploadMaterial={uploadMaterial}
+          onVideoSaved={() => resourcesNodeId && void refreshMaterials(resourcesNodeId)}
+          onViewQuestions={(id) => navigate(`/questions?knowledge_point_id=${id}`)}
+          open={Boolean(resourcesNodeId)}
+        />
       </div>
 
       <NodeDetailPanel
@@ -1105,21 +1255,6 @@ export function KnowledgeManagementPage() {
         onSelect={handlePrereqSelect}
         open={prereqModalOpen}
         targetNodeId={prereqTargetId ?? ""}
-      />
-
-      <RelatedResourcesDialog
-        direction={resourcesDirection}
-        major={resourcesMajor}
-        materials={currentMaterials}
-        node={resourcesNode}
-        relatedQuestions={relatedQuestions}
-        relatedQuestionsLoading={relatedQuestionsLoading}
-        onAddMaterial={addMaterial}
-        onClose={() => setResourcesNodeId(null)}
-        onDeleteMaterial={deleteMaterial}
-        onGenerateRecommendations={generateRecommendations}
-        onViewQuestions={(id) => navigate(`/questions?knowledge_point_id=${id}`)}
-        open={Boolean(resourcesNodeId)}
       />
 
       <Dialog open={formState.open} onOpenChange={(open) => !open && closeForm()}>

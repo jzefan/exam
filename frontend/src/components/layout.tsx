@@ -116,11 +116,12 @@ export function Layout() {
   const isKnowledgePage = location.pathname.startsWith("/knowledge");
   const isGradingPage = location.pathname.startsWith("/grading");
   const isQuestionImportPage = location.pathname === "/questions/import";
+  const isPaperImportPage = location.pathname === "/papers/import";
   const isExamWorkflowPage =
     location.pathname === "/exams/practice/create" ||
     location.pathname.startsWith("/exams/practice/edit/") ||
     /^\/exams\/[^/]+\/view$/.test(location.pathname);
-  const isFullScreenPage = isKnowledgePage || isGradingPage || isQuestionImportPage;
+  const isFullScreenPage = isKnowledgePage || isGradingPage || isQuestionImportPage || isPaperImportPage;
   const [examMenuOpen, setExamMenuOpen] = useState(false);
   const [questionMenuOpen, setQuestionMenuOpen] = useState(false);
 

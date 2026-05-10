@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -50,6 +50,7 @@ export function MajorDirectionSidebar({
   onDeleteRootKnowledge,
 }: Props) {
   const [expandedMajorId, setExpandedMajorId] = useState<string | null>(majors[0]?.id ?? null);
+  const previousSelectedMajorIdRef = useRef<string | null>(null);
   const addActionClassName =
     "flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-stone-500 transition-colors hover:bg-amber-50/80 hover:text-amber-800 dark:text-stone-400 dark:hover:bg-amber-950/30 dark:hover:text-amber-200";
 
@@ -66,9 +67,14 @@ export function MajorDirectionSidebar({
   }, [getDirections, majors, selectedDirectionId]);
 
   useEffect(() => {
-    if (selectedMajorId) {
+    if (selectedMajorId && previousSelectedMajorIdRef.current !== selectedMajorId) {
       setExpandedMajorId(selectedMajorId);
+      previousSelectedMajorIdRef.current = selectedMajorId;
       return;
+    }
+
+    if (!selectedMajorId) {
+      previousSelectedMajorIdRef.current = null;
     }
 
     if (!expandedMajorId || !majors.some((major) => major.id === expandedMajorId)) {

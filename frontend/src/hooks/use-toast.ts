@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react"
+import type { ToastActionElement } from "@/components/ui/toast"
 
 type ToastVariant = "default" | "destructive"
 type ToastPosition = "top" | "bottom"
@@ -9,6 +10,7 @@ interface ToastOptions {
   variant?: ToastVariant
   duration?: number
   position?: ToastPosition
+  action?: ToastActionElement
 }
 
 interface ToastState extends ToastOptions {

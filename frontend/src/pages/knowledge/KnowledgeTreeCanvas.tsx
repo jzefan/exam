@@ -66,6 +66,7 @@ interface Props {
   onSetPrerequisite: (nodeId: string) => void;
   onEdit: (nodeId: string) => void;
   onViewResources: (nodeId: string) => void;
+  onCloseResources: () => void;
   onDelete: (nodeId: string, name: string) => void;
   selectedNodeId: string | null;
   editingNodeId: string | null;
@@ -84,6 +85,7 @@ export function KnowledgeTreeCanvas({
   onSetPrerequisite,
   onEdit,
   onViewResources,
+  onCloseResources,
   onDelete,
   selectedNodeId,
   editingNodeId,
@@ -100,6 +102,20 @@ export function KnowledgeTreeCanvas({
     [initialNodes],
   );
   const childCountById = useMemo(() => buildKnowledgeChildCountMap(initialNodes), [initialNodes]);
+  const resourceEligibleNodeIds = useMemo(() => {
+    const eligibleIds = new Set<string>();
+    if (!rootNodeId) {
+      return eligibleIds;
+    }
+    eligibleIds.add(rootNodeId);
+    for (const node of initialNodes) {
+      const data = node.data as IKnowledgePointDetail;
+      if (data.parent_id === rootNodeId) {
+        eligibleIds.add(node.id);
+      }
+    }
+    return eligibleIds;
+  }, [initialNodes, rootNodeId]);
   const visibleGraph = useMemo(
     () => layoutVisibleKnowledgeTree(initialNodes, initialEdges, rootNodeId, collapsedNodeIds),
     [collapsedNodeIds, initialEdges, initialNodes, rootNodeId],
@@ -122,13 +138,13 @@ export function KnowledgeTreeCanvas({
           hasChildren: (childCountById.get(node.id) ?? 0) > 0,
           childCount: childCountById.get(node.id) ?? 0,
           collapsed: collapsedNodeIds.has(node.id),
+          canViewResources: resourceEligibleNodeIds.has(node.id),
           isSelected: selectedNodeId === node.id,
           isEditing: editingNodeId === node.id,
           renameDraft: editingNodeId === node.id ? renameDraft : "",
           onAddChild,
           onSetPrerequisite,
           onEdit,
-          onViewResources,
           onDelete,
           onRenameDraftChange,
           onRenameSubmit,
@@ -148,11 +164,13 @@ export function KnowledgeTreeCanvas({
     onAddChild,
     onDelete,
     onEdit,
+    onCloseResources,
     onRenameCancel,
     onRenameDraftChange,
     onRenameSubmit,
     onSetPrerequisite,
     onViewResources,
+    resourceEligibleNodeIds,
     renameDraft,
     selectedNodeId,
     setNodes,
@@ -209,6 +227,11 @@ export function KnowledgeTreeCanvas({
       return;
     }
     onSelectNode(node.id);
+    if (resourceEligibleNodeIds.has(node.id)) {
+      onViewResources(node.id);
+    } else {
+      onCloseResources();
+    }
   };
 
   const handleNodeDoubleClick: NodeMouseHandler = (_, node) => {
@@ -236,7 +259,10 @@ export function KnowledgeTreeCanvas({
         nodeTypes={nodeTypes}
         nodes={nodes}
         onInit={setFlowInstance}
-        onPaneClick={() => onSelectNode(null)}
+        onPaneClick={() => {
+          onSelectNode(null);
+          onCloseResources();
+        }}
         onNodeClick={handleNodeClick}
         onNodeDoubleClick={handleNodeDoubleClick}
         onEdgesChange={onEdgesChange}

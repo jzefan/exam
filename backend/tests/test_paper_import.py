@@ -1,4 +1,7 @@
+from io import BytesIO
+
 import pytest
+from docx import Document
 from sqlalchemy import select
 
 from app.auth.schemas import UserCreate
@@ -69,3 +72,61 @@ async def test_paper_import_recognize_and_confirm_creates_paper(client, db_sessi
     assert session_response.status_code == 200
     assert session_response.json()["created_paper_id"] == payload["id"]
     assert session_response.json()["error_detail"] is None
+
+
+@pytest.mark.asyncio
+async def test_paper_import_recognize_file_extracts_docx_tables(client, db_session, monkeypatch):
+    teacher = await _teacher(db_session)
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+
+    async def fake_request(_prompt: str) -> dict:
+        return {
+            "questions": [
+                {
+                    "type": "choice",
+                    "content_text": "下面关于数据分析说法正确的是？",
+                    "options": {"A": "只做统计", "B": "服务决策", "C": "无需清洗", "D": "不能可视化"},
+                    "answer_text": "B",
+                    "analysis": "",
+                    "difficulty": 3,
+                    "raw_text": "下面关于数据分析说法正确的是？",
+                    "images": [],
+                }
+            ]
+        }
+
+    monkeypatch.setattr("app.questions.service._request_deepseek_json", fake_request)
+
+    doc = Document()
+    doc.add_paragraph("江苏卫生健康职业学院 2024-2025 学年试卷")
+    table = doc.add_table(rows=5, cols=2)
+    rows = [
+        ("题号", "1"),
+        ("题干", "下面关于数据分析说法正确的是？"),
+        ("选项", "A. 只做统计\nB. 服务决策\nC. 无需清洗\nD. 不能可视化"),
+        ("答案", "B"),
+        ("解析", "数据分析用于支持业务决策。"),
+    ]
+    for index, (label, value) in enumerate(rows):
+        table.rows[index].cells[0].text = label
+        table.rows[index].cells[1].text = value
+    buffer = BytesIO()
+    doc.save(buffer)
+
+    response = await client.post(
+        "/api/papers/import/recognize-file",
+        files={
+            "file": (
+                "数据分析试卷.docx",
+                buffer.getvalue(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+        data={"prompt": "请严格按试卷题目识别，不要把表头当题目。"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session_id"]
+    assert payload["summary"]["total"] == 1
+    assert payload["drafts"][0]["content_text"] == "下面关于数据分析说法正确的是？"

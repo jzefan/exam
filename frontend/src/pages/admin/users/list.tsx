@@ -51,6 +51,7 @@ const roleLabel: Record<string, string> = {
   enterprise_user: "企业用户",
   school_admin: "学校管理员",
   teacher: "教师",
+  evaluator: "evaluator",
   student: "学生",
 };
 
@@ -60,6 +61,7 @@ const roleBadgeVariant: Record<string, "default" | "secondary" | "outline" | "su
   enterprise_user: "secondary",
   school_admin: "default",
   teacher: "secondary",
+  evaluator: "secondary",
   student: "outline",
 };
 

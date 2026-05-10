@@ -102,38 +102,31 @@ export function PaperListPage() {
     });
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 py-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold text-foreground">试卷列表</h1>
+    <div className="mx-auto max-w-[1200px] space-y-8">
+      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+        <div className="space-y-1">
+          <h1 className="text-xl font-bold tracking-tight text-foreground">试卷列表</h1>
           <p className="text-sm text-muted-foreground">统一管理手工与导入试卷，并支持复用出新卷</p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => navigate("/exams/create")}>
+        <div className="flex flex-wrap gap-2 self-start sm:self-auto">
+          <Button variant="outline" className="h-9 w-fit shrink-0 px-4 font-medium" onClick={() => navigate("/exams/create")}>
             <FilePlus2 className="mr-1.5 h-4 w-4" />
             新建试卷
           </Button>
-          <Button onClick={() => navigate("/papers/import")}>导入试卷</Button>
+          <Button className="h-9 w-fit shrink-0 px-4 font-medium" onClick={() => navigate("/papers/import")}>导入试卷</Button>
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/70 bg-background px-3 py-2">
-        <div className="relative min-w-[240px] flex-1">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={keyword}
-            onChange={(event) => setKeyword(event.target.value)}
-            placeholder="按试卷名称搜索"
-            className="pl-8"
-          />
-        </div>
-        <div className="inline-flex items-center rounded-md border border-border p-1">
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border/40 bg-muted/5 p-4">
+        <div className="inline-flex items-center rounded-lg border border-border/60 bg-background p-1">
           {(["all", "manual", "import", "ai_generated"] as const).map((source) => (
             <button
               key={source}
               type="button"
-              className={`h-8 rounded px-2.5 text-xs ${
-                sourceFilter === source ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+              className={`h-8 rounded-md px-3 text-xs font-semibold ${
+                sourceFilter === source
+                  ? "bg-primary text-primary-foreground shadow-sm"
+                  : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
               }`}
               onClick={() => setSourceFilter(source)}
             >
@@ -141,24 +134,35 @@ export function PaperListPage() {
             </button>
           ))}
         </div>
-        <Button variant="ghost" size="sm" onClick={() => query.refetch()} disabled={query.isLoading}>
+
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/40" />
+          <Input
+            value={keyword}
+            onChange={(event) => setKeyword(event.target.value)}
+            placeholder="按试卷名称搜索"
+            className="h-9 w-[240px] border-border/60 pl-9 text-xs font-medium focus-visible:ring-primary/20"
+          />
+        </div>
+
+        <Button variant="ghost" size="sm" className="h-9 px-3 text-xs font-bold text-muted-foreground hover:text-foreground" onClick={() => query.refetch()} disabled={query.isLoading}>
           <RefreshCcw className="mr-1.5 h-3.5 w-3.5" />
           刷新
         </Button>
       </div>
 
-      <div className="overflow-hidden rounded-lg border border-border/70 bg-card">
+      <div className="overflow-hidden rounded-xl border border-border/40 bg-card">
         <table className="w-full text-sm">
           <thead className="bg-muted/40 text-muted-foreground">
             <tr className="text-left">
-              <th className="px-4 py-3 font-medium">试卷名称</th>
-              <th className="px-4 py-3 font-medium">来源</th>
-              <th className="px-4 py-3 font-medium">主知识点</th>
-              <th className="px-4 py-3 font-medium">题目数</th>
-              <th className="px-4 py-3 font-medium">状态</th>
-              <th className="px-4 py-3 font-medium">创建人</th>
-              <th className="px-4 py-3 font-medium">创建时间</th>
-              <th className="px-4 py-3 font-medium text-right">操作</th>
+              <th className="px-4 py-3 text-xs font-semibold">试卷名称</th>
+              <th className="px-4 py-3 text-xs font-semibold">来源</th>
+              <th className="px-4 py-3 text-xs font-semibold">主知识点</th>
+              <th className="px-4 py-3 text-xs font-semibold">题目数</th>
+              <th className="px-4 py-3 text-xs font-semibold">状态</th>
+              <th className="px-4 py-3 text-xs font-semibold">创建人</th>
+              <th className="px-4 py-3 text-xs font-semibold">创建时间</th>
+              <th className="px-4 py-3 text-right text-xs font-semibold">操作</th>
             </tr>
           </thead>
           <tbody>

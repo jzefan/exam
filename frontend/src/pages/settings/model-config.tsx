@@ -53,14 +53,14 @@ const PROVIDERS = [
     value: "qwen",
     title: "阿里百炼",
     providerLabel: "阿里百炼",
-    defaultModel: "Qwen3.5-27B",
+    defaultModel: "qwen-3.6",
     capabilityTags: ["工具调用", "推理模式"],
   },
   {
     value: "deepseek",
     title: "DeepSeek",
     providerLabel: "DeepSeek",
-    defaultModel: "deepseek-v4-flash",
+    defaultModel: "deepseek-v4-pro",
     capabilityTags: ["工具调用"],
   },
   {

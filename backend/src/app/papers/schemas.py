@@ -12,6 +12,7 @@ from app.questions.schemas import (
     QuestionImportDocumentSummary,
     QuestionImportDraft,
     QuestionImportImageInput,
+    QuestionImportTableInput,
     QuestionResponse,
 )
 
@@ -105,6 +106,8 @@ class PaperImportRecognizeRequest(BaseModel):
     source_format: str = Field(pattern="^(pdf|docx|md)$")
     root_knowledge_point_id: uuid.UUID | None = None
     images: list[QuestionImportImageInput] = Field(default_factory=list, max_length=200)
+    tables: list[QuestionImportTableInput] = Field(default_factory=list, max_length=200)
+    recognition_prompt: str | None = Field(default=None, max_length=2000)
 
 
 class PaperImportRecognizeResponse(BaseModel):

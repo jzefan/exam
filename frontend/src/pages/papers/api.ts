@@ -1,9 +1,10 @@
 export async function paperApiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const token = localStorage.getItem("access_token");
+  const isFormData = init?.body instanceof FormData;
   const response = await fetch(`/api${path}`, {
     ...init,
     headers: {
-      "Content-Type": "application/json",
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init?.headers ?? {}),
     },

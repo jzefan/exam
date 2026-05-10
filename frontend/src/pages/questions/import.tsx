@@ -47,8 +47,10 @@ import type {
   QuestionBulkCreateResponse,
   QuestionImportBulkCreateJobResponse,
   QuestionImportDocumentRecognizeResponse,
+  QuestionImportDocumentSummary,
   QuestionImportDraft,
   QuestionImportJobResponse,
+  QuestionImportTableInput,
 } from "./import-types";
 import {
   applySourceDraftEdits,
@@ -117,6 +119,7 @@ type ImportDocumentPayload = {
   rawText: string;
   sourceFormat: "pdf" | "docx" | "md";
   images: QuestionImportDraft["images"];
+  tables?: QuestionImportTableInput[];
 };
 
 type AiRecognizeOverlayState =
@@ -140,8 +143,8 @@ export function QuestionImportPage() {
   const [importing, setImporting] = useState(false);
   const [questionBankId, setQuestionBankId] = useState<string>(initialQuestionBankId || "__none__");
   const [isDragActive, setIsDragActive] = useState(false);
-  const [duplicatesRemoved, setDuplicatesRemoved] = useState(0);
   const [documentPayload, setDocumentPayload] = useState<ImportDocumentPayload | null>(null);
+  const [recognizedSummary, setRecognizedSummary] = useState<QuestionImportDocumentSummary | null>(null);
   const [mode, setMode] = useState<"review" | "source-edit">("review");
   const [sourceEdits, setSourceEdits] = useState<Record<string, string>>({});
 
@@ -209,10 +212,20 @@ export function QuestionImportPage() {
     };
   }, [activeImportJobId, dismissNotice, showNotice, toast]);
 
-  const summary = drafts.length > 0 ? buildImportSummary(drafts) : emptyImportSummary;
+  const derivedSummary = drafts.length > 0 ? buildImportSummary(drafts) : emptyImportSummary;
+  const summary = recognizedSummary
+    ? {
+        ...derivedSummary,
+        duplicates_removed: recognizedSummary.duplicates_removed,
+        incomplete_choice_count: recognizedSummary.incomplete_choice_count,
+        visual_retry_recommended: recognizedSummary.visual_retry_recommended,
+      }
+    : derivedSummary;
   const fastImportEligibleCount = countFastImportEligibleDrafts(drafts);
   const blockingIssueCount = drafts.filter((draft) => getBlockingImportIssues(draft).length > 0).length;
   const selectedRootKnowledgePointId = selectedRootKnowledgePoints[0]?.id ?? "";
+  const showDocxQualityWarning =
+    documentPayload?.sourceFormat === "docx" && summary.visual_retry_recommended;
 
   const processImportFile = async (
     file: File | null | undefined,
@@ -232,10 +245,11 @@ export function QuestionImportPage() {
         rawText: payload.rawText,
         sourceFormat: payload.sourceFormat,
         images: payload.images,
+        tables: payload.tables,
       };
       const response = await recognizeImportDocument(nextDocumentPayload, "fast");
       setDrafts(response.drafts);
-      setDuplicatesRemoved(response.summary.duplicates_removed);
+      setRecognizedSummary(response.summary);
       if (response.summary.duplicates_removed > 0) {
         toast({ title: `已自动去除 ${response.summary.duplicates_removed} 道重复题目` });
       }
@@ -247,7 +261,7 @@ export function QuestionImportPage() {
     } catch (error) {
       setParseError(error instanceof Error ? error.message : "文件解析失败");
       setDrafts([]);
-      setDuplicatesRemoved(0);
+      setRecognizedSummary(null);
       setDocumentPayload(null);
       setSourceEdits({});
       setSelectedDraftId(null);
@@ -275,6 +289,7 @@ export function QuestionImportPage() {
           source_format: payload.sourceFormat,
           analysis_mode: analysisMode,
           images: payload.images ?? [],
+          tables: payload.tables ?? [],
         }),
       },
     );
@@ -294,7 +309,7 @@ export function QuestionImportPage() {
         throw new Error("AI 未识别到题目，请检查导入文本后重试。");
       }
       setDrafts(response.drafts);
-      setDuplicatesRemoved(response.summary.duplicates_removed);
+      setRecognizedSummary(response.summary);
       setSourceEdits(Object.fromEntries(response.drafts.map((draft) => [draft.draft_id, draft.raw_text])));
       setSelectedDraftId(response.drafts[0]?.draft_id ?? null);
       setMode("review");
@@ -317,8 +332,6 @@ export function QuestionImportPage() {
           ? {
               ...draft,
               ...patch,
-              review_status: patch.review_status ?? "pending",
-              review_required: patch.review_required ?? true,
             }
           : draft,
       ),
@@ -393,20 +406,33 @@ export function QuestionImportPage() {
         "job_id" in response && typeof response.job_id === "string" ? response.job_id : null;
       const importJobId =
         rootKnowledgePointId && importedCount > 0 ? responseJobId : null;
-      const successfulIds = new Set(importableDraftIds.slice(0, importedCount + existingCount));
-      setDrafts((current) => current.filter((draft) => !successfulIds.has(draft.draft_id)));
-      setSourceEdits((current) => {
-        const rest = { ...current };
-        successfulIds.forEach((draftId) => {
-          delete rest[draftId];
+      if (failedCount === 0) {
+        const successfulIds = new Set(importableDraftIds);
+        setDrafts((current) => current.filter((draft) => !successfulIds.has(draft.draft_id)));
+        setSourceEdits((current) => {
+          const rest = { ...current };
+          successfulIds.forEach((draftId) => {
+            delete rest[draftId];
+          });
+          return rest;
         });
-        return rest;
-      });
-      setSelectedDraftId((current) => {
-        if (current && !successfulIds.has(current)) return current;
-        const nextDraft = drafts.find((draft) => !successfulIds.has(draft.draft_id));
-        return nextDraft?.draft_id ?? null;
-      });
+        setSelectedDraftId((current) => {
+          if (current && !successfulIds.has(current)) return current;
+          const nextDraft = drafts.find((draft) => !successfulIds.has(draft.draft_id));
+          return nextDraft?.draft_id ?? null;
+        });
+        const nextSummary = buildImportSummary(importDrafts.filter((draft) => !successfulIds.has(draft.draft_id)));
+        setRecognizedSummary((current) =>
+          current
+            ? {
+                ...nextSummary,
+                duplicates_removed: current.duplicates_removed,
+                incomplete_choice_count: 0,
+                visual_retry_recommended: false,
+              }
+            : nextSummary,
+        );
+      }
       setImportResult({
         attempted: questions.length,
         created: importedCount,
@@ -483,14 +509,21 @@ export function QuestionImportPage() {
       <header className="sticky top-0 z-30 shrink-0 border-b border-slate-100 bg-white">
         <div className="flex min-h-14 items-center justify-between gap-4 px-4 py-2 lg:px-6">
           <div className="flex items-center gap-4">
-            <Button 
-              variant="outline" 
-              size="sm" 
-              onClick={() =>
-                showReviewer
-                  ? setDrafts([])
-                  : navigate(activeImportJobId ? `/questions?import_job_id=${activeImportJobId}` : "/questions")
-              } 
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                if (showReviewer) {
+                  setDrafts([]);
+                  setRecognizedSummary(null);
+                  setDocumentPayload(null);
+                  setSourceEdits({});
+                  setSelectedDraftId(null);
+                  setSourceFileName("");
+                  return;
+                }
+                navigate(activeImportJobId ? `/questions?import_job_id=${activeImportJobId}` : "/questions");
+              }}
               className="size-8 rounded-lg border-slate-200 p-0 transition-all hover:bg-slate-50"
             >
               <ArrowLeft className="h-4 w-4 text-slate-600" />
@@ -520,10 +553,10 @@ export function QuestionImportPage() {
                     <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">总数</span>
                     <span className="text-base font-black leading-none text-slate-900">{summary.total}</span>
                   </div>
-                  {duplicatesRemoved > 0 && (
+                  {summary.duplicates_removed > 0 && (
                     <div className="flex items-baseline gap-1">
                       <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">去重</span>
-                      <span className="text-base font-black leading-none text-orange-500">{duplicatesRemoved}</span>
+                      <span className="text-base font-black leading-none text-orange-500">{summary.duplicates_removed}</span>
                     </div>
                   )}
                 </div>
@@ -589,6 +622,17 @@ export function QuestionImportPage() {
           </Alert>
         </div>
       )}
+
+      {showDocxQualityWarning ? (
+        <div className="mx-8 mt-4">
+          <Alert className="flex items-start gap-3 rounded-[16px] border border-amber-200 bg-amber-50 p-4 text-amber-800 shadow-sm [&>svg]:static [&>svg]:translate-y-0">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <AlertDescription className="text-sm font-medium leading-snug">
+              当前 Word 文档可能使用了自动编号。系统已尽量恢复选项结构，请重点核对这些题目后再导入。
+            </AlertDescription>
+          </Alert>
+        </div>
+      ) : null}
 
       <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {!showReviewer ? (

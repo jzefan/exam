@@ -1,6 +1,6 @@
 import { memo } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { BookOpenText, GitBranchPlus, Pencil, PlusCircle, Trash2 } from "lucide-react";
+import { GitBranchPlus, Pencil, PlusCircle, Trash2 } from "lucide-react";
 
 import { NodeCollapseToggle } from "@/components/graph/node-collapse-toggle";
 import {
@@ -17,7 +17,6 @@ type KnowledgeNodeData = IKnowledgePointDetail & {
   onAddChild: (id: string) => void;
   onSetPrerequisite: (id: string) => void;
   onEdit: (id: string) => void;
-  onViewResources: (id: string) => void;
   onDelete: (id: string, name: string) => void;
   hasIncomingEdge?: boolean;
   hasOutgoingEdge?: boolean;
@@ -133,10 +132,6 @@ export const KnowledgeNode = memo(({ data }: NodeProps) => {
         <ContextMenuItem inset onSelect={() => kp.onEdit(kp.id)}>
           <Pencil className="mr-2 h-3.5 w-3.5" />
           编辑
-        </ContextMenuItem>
-        <ContextMenuItem inset onSelect={() => kp.onViewResources(kp.id)}>
-          <BookOpenText className="mr-2 h-3.5 w-3.5" />
-          查看关联资料
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem className="text-destructive focus:text-destructive" inset onSelect={() => kp.onDelete(kp.id, kp.name)}>
