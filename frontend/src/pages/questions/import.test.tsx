@@ -493,6 +493,44 @@ describe("QuestionImportPage", () => {
     });
   });
 
+  it("shows a page visual recognition button when the backend flags docx for extra review", async () => {
+    vi.spyOn(importUtils, "extractQuestionImportPayload").mockResolvedValue({
+      rawText: "1. 单选题 示例",
+      sourceFormat: "docx",
+      images: [],
+      tables: [],
+    });
+
+    fetchMock.mockResolvedValueOnce(
+      mockJsonResponse({
+        mode: "smart",
+        summary: {
+          total: 2, duplicates_removed: 0, high_confidence: 0,
+          medium_confidence: 2, low_confidence: 0, issue_count: 2,
+          pending_review: 2, approved: 0, skipped: 0,
+          incomplete_choice_count: 2,
+          visual_retry_recommended: true,
+        },
+        drafts: [
+          { ...baseDraft, draft_id: "1", issues: ["选择题选项不完整"] },
+          { ...baseDraft, draft_id: "2", issues: ["选择题选项不完整"] },
+        ],
+      }),
+    );
+
+    render(<QuestionImportPage />);
+
+    const file = new File(["docx-body"], "questions.docx", {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+    fireEvent.change(screen.getByTestId("question-import-file-input"), {
+      target: { files: [file] },
+    });
+
+    expect(await screen.findByText(/当前 Word 文档可能使用了自动编号/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /页面视觉识别/ })).toBeInTheDocument();
+  });
+
   it("keeps drafts in review when the bulk import response includes failures", async () => {
     fetchMock
       .mockResolvedValueOnce(

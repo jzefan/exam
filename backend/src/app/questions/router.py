@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, Response, UploadFile, status
 from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,6 +30,7 @@ from app.questions.schemas import (
     QuestionBulkDeleteResponse,
     QuestionBulkMoveRequest,
     QuestionBulkMoveResponse,
+    ImportRecognitionMode,
     QuestionImportMatchCreateRequest,
     QuestionImportMatchCreateResponse,
     QuestionImportDocumentRecognizeRequest,
@@ -49,6 +50,7 @@ from app.questions.schemas import (
     TagResponse,
     TagUpdate,
 )
+from app.questions.docx_render import recognize_docx_visual
 from app.questions.service import (
     bulk_create_questions,
     bulk_create_questions_fast,
@@ -448,6 +450,26 @@ async def document_recognize_import_endpoint(
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@questions_router.post("/import/document-recognize-visual", response_model=QuestionImportDocumentRecognizeResponse)
+async def document_recognize_visual_endpoint(
+    file: Annotated[UploadFile, File(...)],
+    _user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
+) -> QuestionImportDocumentRecognizeResponse:
+    try:
+        file_bytes = await file.read()
+        drafts, summary = await recognize_docx_visual(file_bytes)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    return QuestionImportDocumentRecognizeResponse(
+        mode=ImportRecognitionMode.VISUAL,
+        summary=summary,
+        drafts=drafts,
+    )
 
 
 @questions_router.post("/import/re-recognize", response_model=QuestionImportDraft)

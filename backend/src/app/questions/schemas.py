@@ -181,6 +181,7 @@ class QuestionImportRecognizeResponse(BaseModel):
 class ImportRecognitionMode(str, Enum):
     TEMPLATE = "template"
     SMART = "smart"
+    VISUAL = "visual"
 
 
 class QuestionImportAnalysisMode(str, Enum):

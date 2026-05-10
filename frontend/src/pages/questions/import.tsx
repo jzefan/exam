@@ -1,7 +1,7 @@
 import { useList } from "@refinedev/core";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertCircle, ArrowLeft, CheckCircle2, Download, LoaderCircle, RefreshCw, Sparkles, Upload } from "lucide-react";
+import { AlertCircle, ArrowLeft, CheckCircle2, Download, Eye, LoaderCircle, RefreshCw, Sparkles, Upload } from "lucide-react";
 
 import {
   AlertDialog,
@@ -325,6 +325,46 @@ export function QuestionImportPage() {
     }
   };
 
+  const handleVisualRecognize = async () => {
+    if (!documentPayload) return;
+    setAiRecognizing(true);
+    setAiRecognizeOverlay({ status: "loading" });
+    setParseError(null);
+    try {
+      const fileInput = fileInputRef.current;
+      if (!fileInput?.files?.[0]) {
+        throw new Error("未找到原始文件，请重新上传后再试。");
+      }
+      const formData = new FormData();
+      formData.append("file", fileInput.files[0]);
+      const token = localStorage.getItem("access_token");
+      const response = await fetch("/api/questions/import/document-recognize-visual", {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error((err as { detail?: string }).detail || "视觉识别失败");
+      }
+      const result = (await response.json()) as QuestionImportDocumentRecognizeResponse;
+      setDrafts(result.drafts);
+      setRecognizedSummary(result.summary);
+      setSourceEdits(Object.fromEntries(result.drafts.map((d) => [d.draft_id, d.raw_text])));
+      setSelectedDraftId(result.drafts[0]?.draft_id ?? null);
+      setMode("review");
+      setAiRecognizeOverlay({ status: "success", count: result.summary.total });
+      window.setTimeout(() => {
+        setAiRecognizeOverlay((current) => (current?.status === "success" ? null : current));
+      }, 1600);
+    } catch (error) {
+      setAiRecognizeOverlay(null);
+      setParseError(error instanceof Error ? error.message : "视觉识别失败");
+    } finally {
+      setAiRecognizing(false);
+    }
+  };
+
   const updateDraft = (draftId: string, patch: Partial<QuestionImportDraft>) => {
     setDrafts((current) =>
       current.map((draft) =>
@@ -598,6 +638,23 @@ export function QuestionImportPage() {
                   )}
                   AI重新识别
                 </Button>
+
+                {showDocxQualityWarning ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={importing || aiRecognizing || !documentPayload}
+                    onClick={handleVisualRecognize}
+                    className="h-9 rounded-lg px-3 text-sm font-bold"
+                  >
+                    {aiRecognizing ? (
+                      <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Eye className="mr-2 h-4 w-4" />
+                    )}
+                    页面视觉识别
+                  </Button>
+                ) : null}
 
                 <Button
                   type="button"
