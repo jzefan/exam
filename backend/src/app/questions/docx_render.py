@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import base64 as _base64
 import io
+import json as _json
 import re
 from dataclasses import dataclass
+
+import httpx
 
 from docx import Document
 from docx.oxml.ns import qn
@@ -247,14 +250,25 @@ async def recognize_docx_visual(file_bytes: bytes) -> tuple[list[QuestionImportD
 以下是从文档中提取的文本（供交叉参考，最终以图像内容为准）：
 {text_block[:4000]}"""
 
-    data = await _request_vision_json(
-        provider_name="DeepSeek",
-        api_key=settings.deepseek_api_key,
-        base_url=settings.deepseek_base_url,
-        model_name=settings.deepseek_model_name,
-        prompt=prompt,
-        images=image_inputs,
-    )
+    last_error: Exception | None = None
+    for provider_name, api_key, base_url, model_name in (
+        ("DeepSeek", settings.deepseek_api_key, settings.deepseek_base_url, settings.deepseek_model_name),
+        ("Qwen", settings.qwen_api_key, settings.qwen_base_url, settings.qwen_vl_model_name),
+    ):
+        try:
+            data = await _request_vision_json(
+                provider_name=provider_name,
+                api_key=api_key,
+                base_url=base_url,
+                model_name=model_name,
+                prompt=prompt,
+                images=image_inputs,
+            )
+            break
+        except (RuntimeError, httpx.HTTPError, _json.JSONDecodeError) as exc:
+            last_error = exc
+    else:
+        raise RuntimeError("视觉识别服务暂不可用，请联系管理员处理。") from last_error
 
     questions = _validate_ai_document_questions(data)
     drafts = [_build_ai_import_draft(q, image_inputs) for q in questions]
