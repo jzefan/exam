@@ -10,7 +10,7 @@ from app.auth.dependencies import CurrentUser, require_roles, user_has_role
 from app.auth.models import User
 from app.common.resource_access import can_write_owned_resource
 from app.database import get_db
-from app.papers.models import Paper
+from app.papers.models import Paper, PaperImportSession
 from app.papers.schemas import (
     PaperAIGenerateRequest,
     PaperAIGenerateResponse,
@@ -42,6 +42,8 @@ from app.papers.service import (
     update_paper,
 )
 from app.questions.schemas import QuestionResponse
+from app.questions.docx_render import recognize_docx_visual
+from app.questions.schemas import QuestionImportDocumentSummary as _QIDSummary
 
 router = APIRouter()
 WriteUser = Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")]
@@ -209,6 +211,41 @@ async def recognize_paper_import_file(
         mode=recognition.mode.value if hasattr(recognition.mode, "value") else str(recognition.mode),
         summary=recognition.summary,
         drafts=recognition.drafts,
+    )
+
+
+@router.post("/import/recognize-visual", response_model=PaperImportRecognizeResponse)
+async def recognize_paper_import_visual(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: WriteUser,
+    file: Annotated[UploadFile, File(...)],
+    prompt: Annotated[str | None, Form(max_length=2000)] = None,
+) -> PaperImportRecognizeResponse:
+    try:
+        file_name = file.filename or "paper"
+        file_bytes = await file.read()
+        drafts, summary = await recognize_docx_visual(file_bytes)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    session = PaperImportSession(
+        file_name=file_name,
+        source_format="docx",
+        root_knowledge_point_id=None,
+        preview_payload={"drafts": [d.model_dump(mode="json") for d in drafts]},
+        error_detail=None,
+        created_by=user.id,
+    )
+    db.add(session)
+    await db.flush()
+    await db.commit()
+    return PaperImportRecognizeResponse(
+        session_id=session.id,
+        mode="visual",
+        summary=summary,
+        drafts=drafts,
     )
 
 

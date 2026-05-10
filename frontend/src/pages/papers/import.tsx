@@ -1,6 +1,6 @@
 import { type ChangeEvent, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertCircle, ArrowLeft, LoaderCircle, RefreshCw, Upload } from "lucide-react";
+import { AlertCircle, ArrowLeft, Eye, LoaderCircle, RefreshCw, Upload } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -229,6 +229,31 @@ export function PaperImportPage() {
     }
   };
 
+  const handleVisualRecognize = async () => {
+    if (!sourcePayload?.originalFile) {
+      setParseError("未找到原始文件，请重新上传后再试。");
+      return;
+    }
+    setLoading(true);
+    setParseError(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", sourcePayload.originalFile);
+      const recognized = await paperApiRequest<IPaperImportRecognizeResponse>(
+        "/papers/import/recognize-visual",
+        { method: "POST", body: formData },
+      );
+      const nextDrafts = recognized.drafts as unknown as QuestionImportDraft[];
+      setSessionId(recognized.session_id);
+      setDrafts(nextDrafts);
+      toast({ title: "视觉识别完成", description: `已识别 ${nextDrafts.length} 道题目` });
+    } catch (error) {
+      setParseError(error instanceof Error ? error.message : "视觉识别失败");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const openConfirmDialog = () => {
     if (importableCount === 0) {
       setParseError("没有可入库的题目，请先处理解析异常题目。");
@@ -357,6 +382,24 @@ export function PaperImportPage() {
                 >
                   {loading ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
                   重新识别
+                </Button>
+
+                {sourcePayload?.sourceFormat === "docx" && sourcePayload?.originalFile ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={loading || importing}
+                    onClick={handleVisualRecognize}
+                    className="h-9 rounded-lg px-3 text-sm font-bold"
+                  >
+                    {loading ? (
+                      <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Eye className="mr-2 h-4 w-4" />
+                    )}
+                    页面视觉识别
+                  </Button>
+                ) : null}
                 </Button>
 
                 <Button
