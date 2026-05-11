@@ -1378,17 +1378,10 @@ def _build_document_ai_prompt(
 {recognition_prompt.strip()}
 """
     truncated = raw_text[:8000]
-    return f"""
-你是中文题库导入助手。分析下面的题目文本，只输出一个 JSON 对象 {{"questions":[...]}}。
-每道题输出: type(content_text/options/answer_text/analysis/difficulty/raw_text/images)
-题型: choice|true_false|fill_in|short_answer|essay|code, 非选择题 options 为 null.
-不输出解释、Markdown 或代码块。
-{paper_rules}
-{custom_rules}
-{image_lines and f'图片: {image_lines}' or ''}
+    return f"""分析题目文本，只输出JSON: {{"questions":[{{"type":"choice|true_false|fill_in|short_answer|essay|code","content_text":"题干","options":{{"A":"..."}}|null,"answer_text":"答案或空","analysis":"解析或空","difficulty":1-5,"raw_text":"原文","images":[]}}]}}
+{paper_rules}{custom_rules}
 文本:
-{truncated}
-"""
+{truncated}"""
 
 
 def _validate_ai_document_questions(data: dict) -> list[dict]:
@@ -1398,20 +1391,21 @@ def _validate_ai_document_questions(data: dict) -> list[dict]:
     validated: list[dict] = []
     for item in questions:
         if not isinstance(item, dict):
-            raise RuntimeError("AI 分析结果格式异常，请重试")
+            continue
         raw_type = str(item.get("type", "")).strip()
         if raw_type not in _VALID_QUESTION_TYPES:
-            raise RuntimeError("AI 分析结果格式异常，请重试")
+            raw_type = "short_answer"
         difficulty = item.get("difficulty", 3)
         try:
             safe_difficulty = max(1, min(5, int(difficulty)))
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError("AI 分析结果格式异常，请重试") from exc
+        except (TypeError, ValueError):
+            safe_difficulty = 3
+        options = item.get("options")
         validated.append(
             {
                 "type": raw_type,
                 "content_text": str(item.get("content_text", "")).strip(),
-                "options": item.get("options") if isinstance(item.get("options"), dict) else None,
+                "options": options if isinstance(options, dict) else None,
                 "answer_text": str(item.get("answer_text", "")).strip(),
                 "analysis": str(item.get("analysis", "")).strip(),
                 "difficulty": safe_difficulty,
