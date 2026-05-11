@@ -28,6 +28,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
+import { consumeExamSeed } from "@/lib/exam-seed";
 import {
   getGeneratedQuestionPersistKey,
   useUnsavedGeneratedQuestionsGuard,
@@ -186,8 +187,10 @@ export function PracticeCreate() {
   const hydratedExamRef = useRef(false);
   const hydratedQuestionMetaRef = useRef(false);
   const hydratedPaperSeedRef = useRef<string | null>(null);
+  const hydratedSeedKeyRef = useRef<string | null>(null);
   const isEditMode = Boolean(id);
   const seedPaperId = searchParams.get("paper_id");
+  const seedKey = searchParams.get("seed_key");
 
   const { result: practice, query: practiceQuery } = useOne<PracticeDetail>({
     resource: "exams",
@@ -419,6 +422,13 @@ export function PracticeCreate() {
         cancelled = true;
       };
     }
+    // 当来自题目列表（seed_key）时，另起一个 effect 处理，paper 路径直接短路。
+    if (seedKey) {
+      setSeedLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
     if (!seedPaperId) {
       setSeedLoading(false);
       if (hydratedPaperSeedRef.current) {
@@ -481,7 +491,43 @@ export function PracticeCreate() {
     return () => {
       cancelled = true;
     };
-  }, [isEditMode, seedPaperId, toast]);
+  }, [isEditMode, seedPaperId, seedKey, toast]);
+
+  // 从题目列表跳过来的 seed_key 分支：一次性从 sessionStorage 取出 payload，
+  // 写入题目/标题/描述，然后路由以 category=practice 为准。
+  useEffect(() => {
+    if (isEditMode || !seedKey) return;
+    if (hydratedSeedKeyRef.current === seedKey) return;
+    hydratedSeedKeyRef.current = seedKey;
+    const payload = consumeExamSeed(seedKey);
+    if (!payload) {
+      toast({
+        title: "预填数据已过期",
+        description: "请回到题目列表重新选择后再进入。",
+        variant: "destructive",
+      });
+      return;
+    }
+    const orderedItems = payload.question_items
+      .slice()
+      .sort((left, right) => left.order - right.order)
+      .map((item, index) => ({
+        question_id: item.question_id,
+        order: index,
+        score_override: item.score_override,
+      }));
+    setQuestionMode("manual");
+    setQuestionIds(orderedItems.map((item) => item.question_id));
+    setQuestionItems(orderedItems);
+    if (payload.title) {
+      setTitle(payload.title);
+      setIsTitleManuallyEdited(true);
+    }
+    if (typeof payload.description === "string") {
+      setDescription(payload.description);
+    }
+    setSubmitError(null);
+  }, [isEditMode, seedKey, toast]);
 
   useEffect(() => {
     if (isEditMode || isTitleManuallyEdited) return;

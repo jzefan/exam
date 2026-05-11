@@ -1,6 +1,12 @@
 import { type ChangeEvent, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertCircle, ArrowLeft, Eye, LoaderCircle, RefreshCw, Upload } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowLeft,
+  LoaderCircle,
+  RefreshCw,
+  Upload,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,9 +23,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { KnowledgePointSelector, type SelectedKnowledgePoint } from "@/components/questions/knowledge-point-selector";
+import {
+  KnowledgePointSelector,
+  type SelectedKnowledgePoint,
+} from "@/components/questions/knowledge-point-selector";
 import { ImportReviewWorkspace } from "@/pages/questions/components/import-review-workspace";
-import type { QuestionImportDraft, QuestionImportImageInput, QuestionImportTableInput } from "@/pages/questions/import-types";
+import type {
+  QuestionImportDraft,
+  QuestionImportImageInput,
+  QuestionImportTableInput,
+} from "@/pages/questions/import-types";
 import {
   buildImportSummary,
   emptyImportSummary,
@@ -44,7 +57,9 @@ const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024;
 const PAPER_PDF_PAGE_IMAGE_QUALITY = 0.92;
 const PAPER_PDF_PAGE_IMAGE_MAX_EDGE = 2048;
 
-async function extractPaperImportPayload(file: File): Promise<ImportDocumentPayload> {
+async function extractPaperImportPayload(
+  file: File,
+): Promise<ImportDocumentPayload> {
   const extension = file.name.split(".").pop()?.toLowerCase();
   if (extension !== "pdf") {
     const payload = await extractQuestionImportPayload(file);
@@ -58,10 +73,11 @@ async function extractPaperImportPayload(file: File): Promise<ImportDocumentPayl
     };
   }
 
-  const [{ getDocument, GlobalWorkerOptions }, { default: pdfWorker }] = await Promise.all([
-    import("pdfjs-dist"),
-    import("pdfjs-dist/build/pdf.worker.min.mjs?url"),
-  ]);
+  const [{ getDocument, GlobalWorkerOptions }, { default: pdfWorker }] =
+    await Promise.all([
+      import("pdfjs-dist"),
+      import("pdfjs-dist/build/pdf.worker.min.mjs?url"),
+    ]);
   GlobalWorkerOptions.workerSrc = pdfWorker;
   const pdf = await getDocument({ data: await file.arrayBuffer() }).promise;
   const images: QuestionImportImageInput[] = [];
@@ -70,7 +86,11 @@ async function extractPaperImportPayload(file: File): Promise<ImportDocumentPayl
     const page = await pdf.getPage(pageNumber);
     const baseViewport = page.getViewport({ scale: 1 });
     const viewport = page.getViewport({
-      scale: Math.min(1.5, PAPER_PDF_PAGE_IMAGE_MAX_EDGE / Math.max(baseViewport.width, baseViewport.height)),
+      scale: Math.min(
+        1.5,
+        PAPER_PDF_PAGE_IMAGE_MAX_EDGE /
+          Math.max(baseViewport.width, baseViewport.height),
+      ),
     });
     const canvas = document.createElement("canvas");
     const context = canvas.getContext("2d");
@@ -107,10 +127,12 @@ export function PaperImportPage() {
 
   const [drafts, setDrafts] = useState<QuestionImportDraft[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [sourcePayload, setSourcePayload] = useState<ImportDocumentPayload | null>(null);
+  const [sourcePayload, setSourcePayload] =
+    useState<ImportDocumentPayload | null>(null);
   const [paperTitle, setPaperTitle] = useState("");
   const [paperDescription, setPaperDescription] = useState("");
-  const [selectedRootKnowledgePoints, setSelectedRootKnowledgePoints] = useState<SelectedKnowledgePoint[]>([]);
+  const [selectedRootKnowledgePoints, setSelectedRootKnowledgePoints] =
+    useState<SelectedKnowledgePoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
@@ -118,18 +140,26 @@ export function PaperImportPage() {
 
   const showReviewer = drafts.length > 0;
   const sourceFileName = sourcePayload?.fileName ?? "";
-  const summary = drafts.length > 0 ? buildImportSummary(drafts) : emptyImportSummary;
+  const summary =
+    drafts.length > 0 ? buildImportSummary(drafts) : emptyImportSummary;
   const importableCount = useMemo(
-    () => drafts.filter((draft) => getBlockingImportIssues(draft).length === 0).length,
+    () =>
+      drafts.filter((draft) => getBlockingImportIssues(draft).length === 0)
+        .length,
     [drafts],
   );
   const blockingIssueCount = useMemo(
-    () => drafts.filter((draft) => getBlockingImportIssues(draft).length > 0).length,
+    () =>
+      drafts.filter((draft) => getBlockingImportIssues(draft).length > 0)
+        .length,
     [drafts],
   );
   const rootKnowledgePointId = selectedRootKnowledgePoints[0]?.id ?? null;
 
-  const updateDraft = (draftId: string, patch: Partial<QuestionImportDraft>) => {
+  const updateDraft = (
+    draftId: string,
+    patch: Partial<QuestionImportDraft>,
+  ) => {
     setDrafts((current) =>
       current.map((draft) =>
         draft.draft_id === draftId
@@ -145,7 +175,9 @@ export function PaperImportPage() {
   };
 
   const removeDraft = (draftId: string) => {
-    setDrafts((current) => current.filter((draft) => draft.draft_id !== draftId));
+    setDrafts((current) =>
+      current.filter((draft) => draft.draft_id !== draftId),
+    );
   };
 
   const recognizePayload = async (payload: ImportDocumentPayload) => {
@@ -157,24 +189,30 @@ export function PaperImportPage() {
         "prompt",
         "请直接识别 Word 试卷中的真实题目。保留题干、选项、答案和解析，不要把封面、题型标题、题号表、答题卡或得分栏当成题目。",
       );
-      recognized = await paperApiRequest<IPaperImportRecognizeResponse>("/papers/import/recognize-file", {
-        method: "POST",
-        body: formData,
-      });
+      recognized = await paperApiRequest<IPaperImportRecognizeResponse>(
+        "/papers/import/recognize-file",
+        {
+          method: "POST",
+          body: formData,
+        },
+      );
     } else {
-      recognized = await paperApiRequest<IPaperImportRecognizeResponse>("/papers/import/recognize", {
-        method: "POST",
-        body: JSON.stringify({
-          file_name: payload.fileName,
-          raw_text: payload.rawText,
-          source_format: payload.sourceFormat,
-          root_knowledge_point_id: null,
-          images: payload.images ?? [],
-          tables: payload.tables ?? [],
-          recognition_prompt:
-            "请直接识别试卷中的真实题目。保留题干、选项、答案和解析，不要把封面、题型标题、题号表、答题卡或得分栏当成题目。",
-        }),
-      });
+      recognized = await paperApiRequest<IPaperImportRecognizeResponse>(
+        "/papers/import/recognize",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            file_name: payload.fileName,
+            raw_text: payload.rawText,
+            source_format: payload.sourceFormat,
+            root_knowledge_point_id: null,
+            images: payload.images ?? [],
+            tables: payload.tables ?? [],
+            recognition_prompt:
+              "请直接识别试卷中的真实题目。保留题干、选项、答案和解析，不要把封面、题型标题、题号表、答题卡或得分栏当成题目。",
+          }),
+        },
+      );
     }
     const nextDrafts = recognized.drafts as unknown as QuestionImportDraft[];
     setSessionId(recognized.session_id);
@@ -190,7 +228,9 @@ export function PaperImportPage() {
   const processImportFile = async (file: File | null | undefined) => {
     if (!file) return;
     if (file.size > MAX_FILE_SIZE_BYTES) {
-      setParseError(`文件过大（${(file.size / 1024 / 1024).toFixed(1)} MB），请上传 20 MB 以内的文件。`);
+      setParseError(
+        `文件过大（${(file.size / 1024 / 1024).toFixed(1)} MB），请上传 20 MB 以内的文件。`,
+      );
       return;
     }
     setLoading(true);
@@ -221,34 +261,12 @@ export function PaperImportPage() {
     setLoading(true);
     try {
       await recognizePayload(sourcePayload);
-      toast({ title: "识别完成", description: `已重新识别 ${summary.total} 道题目` });
+      toast({
+        title: "识别完成",
+        description: `已重新识别 ${summary.total} 道题目`,
+      });
     } catch (error) {
       setParseError(error instanceof Error ? error.message : "重新识别失败");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleVisualRecognize = async () => {
-    if (!sourcePayload?.originalFile) {
-      setParseError("未找到原始文件，请重新上传后再试。");
-      return;
-    }
-    setLoading(true);
-    setParseError(null);
-    try {
-      const formData = new FormData();
-      formData.append("file", sourcePayload.originalFile);
-      const recognized = await paperApiRequest<IPaperImportRecognizeResponse>(
-        "/papers/import/recognize-visual",
-        { method: "POST", body: formData },
-      );
-      const nextDrafts = recognized.drafts as unknown as QuestionImportDraft[];
-      setSessionId(recognized.session_id);
-      setDrafts(nextDrafts);
-      toast({ title: "视觉识别完成", description: `已识别 ${nextDrafts.length} 道题目` });
-    } catch (error) {
-      setParseError(error instanceof Error ? error.message : "视觉识别失败");
     } finally {
       setLoading(false);
     }
@@ -287,7 +305,9 @@ export function PaperImportPage() {
       };
     });
 
-    const approvedCount = reviewedDrafts.filter((draft) => draft.review_status === "approved").length;
+    const approvedCount = reviewedDrafts.filter(
+      (draft) => draft.review_status === "approved",
+    ).length;
     if (approvedCount === 0) {
       setParseError("没有可入库的题目，请先处理解析异常题目。");
       return;
@@ -296,15 +316,18 @@ export function PaperImportPage() {
     setImporting(true);
     setParseError(null);
     try {
-      const paper = await paperApiRequest<IPaperDetail>(`/papers/import/sessions/${sessionId}/confirm`, {
-        method: "POST",
-        body: JSON.stringify({
-          title: paperTitle.trim(),
-          description: paperDescription.trim() || null,
-          root_knowledge_point_id: rootKnowledgePointId,
-          drafts: reviewedDrafts,
-        }),
-      });
+      const paper = await paperApiRequest<IPaperDetail>(
+        `/papers/import/sessions/${sessionId}/confirm`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            title: paperTitle.trim(),
+            description: paperDescription.trim() || null,
+            root_knowledge_point_id: rootKnowledgePointId,
+            drafts: reviewedDrafts,
+          }),
+        },
+      );
       setConfirmDialogOpen(false);
       toast({ title: "导入成功", description: `已创建试卷：${paper.title}` });
       navigate(`/papers/${paper.id}`);
@@ -342,13 +365,18 @@ export function PaperImportPage() {
                   {showReviewer ? "核对导入内容" : "导入试卷"}
                 </h1>
                 {showReviewer && (
-                  <Badge variant="secondary" className="h-5 border-none bg-primary/10 px-2 text-[11px] font-bold text-primary">
+                  <Badge
+                    variant="secondary"
+                    className="h-5 border-none bg-primary/10 px-2 text-[11px] font-bold text-primary"
+                  >
                     审核模式
                   </Badge>
                 )}
               </div>
               <p className="max-w-[360px] truncate text-xs leading-snug text-muted-foreground">
-                {showReviewer ? `正在处理: ${sourceFileName}` : "上传历史试卷并校对后入库"}
+                {showReviewer
+                  ? `正在处理: ${sourceFileName}`
+                  : "上传历史试卷并校对后入库"}
               </p>
             </div>
           </div>
@@ -358,12 +386,20 @@ export function PaperImportPage() {
               <>
                 <div className="hidden items-center gap-4 border-r border-slate-100 pr-4 lg:flex">
                   <div className="flex items-baseline gap-1">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">总数</span>
-                    <span className="text-base font-black leading-none text-slate-900">{summary.total}</span>
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                      总数
+                    </span>
+                    <span className="text-base font-black leading-none text-slate-900">
+                      {summary.total}
+                    </span>
                   </div>
                   <div className="flex items-baseline gap-1">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">可入库</span>
-                    <span className="text-base font-black leading-none text-primary">{importableCount}</span>
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                      可入库
+                    </span>
+                    <span className="text-base font-black leading-none text-primary">
+                      {importableCount}
+                    </span>
                   </div>
                 </div>
 
@@ -380,7 +416,11 @@ export function PaperImportPage() {
                   onClick={handleReRecognize}
                   className="h-9 rounded-lg px-3 text-sm font-bold"
                 >
-                  {loading ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                  {loading ? (
+                    <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                  )}
                   重新识别
                 </Button>
 
@@ -397,7 +437,9 @@ export function PaperImportPage() {
                   onClick={openConfirmDialog}
                   className="h-9 rounded-lg px-4 text-sm font-bold shadow-sm shadow-primary/20"
                 >
-                  {importing ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  {importing ? (
+                    <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                  ) : null}
                   确认入库
                 </Button>
               </>
@@ -408,9 +450,14 @@ export function PaperImportPage() {
 
       {parseError && (
         <div className="mx-8 mt-6">
-          <Alert variant="destructive" className="flex items-start gap-3 rounded-[16px] border-none bg-red-50 p-4 text-red-600 shadow-sm [&>svg]:static [&>svg]:translate-y-0">
+          <Alert
+            variant="destructive"
+            className="flex items-start gap-3 rounded-[16px] border-none bg-red-50 p-4 text-red-600 shadow-sm [&>svg]:static [&>svg]:translate-y-0"
+          >
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <AlertDescription className="text-sm font-medium leading-snug">{parseError}</AlertDescription>
+            <AlertDescription className="text-sm font-medium leading-snug">
+              {parseError}
+            </AlertDescription>
           </Alert>
         </div>
       )}
@@ -429,16 +476,30 @@ export function PaperImportPage() {
               <div className="mx-auto mb-5 flex h-20 w-20 items-center justify-center rounded-[28px] bg-slate-50 text-slate-400">
                 <Upload className="h-10 w-10" />
               </div>
-              <p className="mb-2 text-base font-bold tracking-tight text-slate-900 uppercase">开始导入试卷</p>
-              <p className="mb-6 text-sm leading-snug text-muted-foreground">支持 PDF、Word、Markdown，单文件不超过 20MB</p>
-              <Button onClick={() => fileInputRef.current?.click()} disabled={loading} className="h-11 rounded-xl px-6 text-sm font-semibold shadow-sm shadow-primary/20">
-                {loading ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : null}
+              <p className="mb-2 text-base font-bold tracking-tight text-slate-900 uppercase">
+                开始导入试卷
+              </p>
+              <p className="mb-6 text-sm leading-snug text-muted-foreground">
+                支持 PDF、Word（docx格式），单文件不超过 20MB
+              </p>
+              <Button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={loading}
+                className="h-11 rounded-xl px-6 text-sm font-semibold shadow-sm shadow-primary/20"
+              >
+                {loading ? (
+                  <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                ) : null}
                 选择文件并识别
               </Button>
             </div>
           </div>
         ) : (
-          <ImportReviewWorkspace drafts={drafts} onChangeDraft={updateDraft} onDeleteDraft={removeDraft} />
+          <ImportReviewWorkspace
+            drafts={drafts}
+            onChangeDraft={updateDraft}
+            onDeleteDraft={removeDraft}
+          />
         )}
       </main>
 
@@ -447,7 +508,8 @@ export function PaperImportPage() {
           <DialogHeader>
             <DialogTitle>确认入库试卷</DialogTitle>
             <DialogDescription>
-              确认试卷信息并选择主知识点。主知识点可理解为课程名称，用于后续检索和 AI 生成。
+              确认试卷信息并选择主知识点。主知识点可理解为课程名称，用于后续检索和
+              AI 生成。
             </DialogDescription>
           </DialogHeader>
 
@@ -482,7 +544,9 @@ export function PaperImportPage() {
                 label="主知识点"
                 triggerLabel="搜索或展开知识图谱选择课程名称"
                 popoverSide="bottom"
-                popoverContentStyle={{ maxHeight: "min(340px, calc(100dvh - 260px))" }}
+                popoverContentStyle={{
+                  maxHeight: "min(340px, calc(100dvh - 260px))",
+                }}
                 selectionTarget="root"
                 selectionMode="single"
                 showUsageShortcuts={false}
@@ -491,11 +555,20 @@ export function PaperImportPage() {
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmDialogOpen(false)} disabled={importing}>
+            <Button
+              variant="outline"
+              onClick={() => setConfirmDialogOpen(false)}
+              disabled={importing}
+            >
               取消
             </Button>
-            <Button onClick={handleConfirmImport} disabled={importing || !paperTitle.trim()}>
-              {importing ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : null}
+            <Button
+              onClick={handleConfirmImport}
+              disabled={importing || !paperTitle.trim()}
+            >
+              {importing ? (
+                <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+              ) : null}
               确定入库
             </Button>
           </DialogFooter>

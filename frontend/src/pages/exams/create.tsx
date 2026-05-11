@@ -3,6 +3,7 @@ import { useCreate } from "@refinedev/core";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
+import { consumeExamSeed } from "@/lib/exam-seed";
 import { ExamWizardForm } from "./components/ExamWizardForm";
 import {
   getErrorMessage,
@@ -60,9 +61,48 @@ export function ExamCreate() {
   const [seedLoading, setSeedLoading] = useState(false);
   const { toast } = useToast();
   const seedPaperId = searchParams.get("paper_id");
+  const seedKey = searchParams.get("seed_key");
+
+  // 从题目列表跳转过来的 seed_key 分支：一次性从 sessionStorage 取出预填数据。
+  // 注意：seed_key 必须优先于 paper_id 处理，因为前者是更明确的用户意图。
+  useEffect(() => {
+    if (!seedKey) return;
+    const payload = consumeExamSeed(seedKey);
+    if (!payload) {
+      toast({
+        title: "预填数据已过期",
+        description: "请回到题目列表重新选择后再进入。",
+        variant: "destructive",
+      });
+      return;
+    }
+    // 预填虽然带了 category，但如果对话框跳错了路由，这里以 URL 路由为准。
+    // ExamCreate 对应 category=exam，强制覆盖。
+    setInitialValues({
+      ...createInitialForm(),
+      category: "exam",
+      title: payload.title ?? "",
+      description: payload.description ?? "",
+      question_mode: "manual",
+      question_ids: payload.question_items.map((item) => item.question_id),
+      question_items: payload.question_items.map((item, index) => ({
+        question_id: item.question_id,
+        order: index,
+        score_override: item.score_override,
+      })),
+    });
+    setSubmitError(null);
+  }, [seedKey, toast]);
 
   useEffect(() => {
     let cancelled = false;
+    if (seedKey) {
+      // seed_key 路径独立处理，不走 paper 预填。
+      setSeedLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
     if (!seedPaperId) {
       setSeedLoading(false);
       setInitialValues(createInitialForm());

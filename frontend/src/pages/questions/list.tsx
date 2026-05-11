@@ -1,7 +1,7 @@
 import { useList, useCreate, useDelete, useGetIdentity, useInvalidate, useNavigation, useUpdate } from "@refinedev/core";
 import type { CrudFilter } from "@refinedev/core";
 import type { IQuestion, IQuestionBank, ITag, QuestionType } from "../../types";
-import { Search, BookOpen, Pencil, Trash2, Plus, ChevronDown, ChevronUp, Library, Check, PackageOpen, GraduationCap, SlidersHorizontal, ChevronsDownUp, ChevronsUpDown, Link2, Save, ChevronRight, Lock, Upload, Sparkles, Loader2, Eraser, AlertTriangle, FolderInput } from "lucide-react";
+import { Search, BookOpen, Pencil, Trash2, Plus, ChevronDown, ChevronUp, Library, Check, PackageOpen, GraduationCap, SlidersHorizontal, ChevronsDownUp, ChevronsUpDown, Link2, Save, ChevronRight, Lock, Upload, Sparkles, Loader2, Eraser, AlertTriangle, FolderInput, FilePlus2 } from "lucide-react";
 import { useState, useCallback, useRef, useEffect, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -58,6 +58,9 @@ import {
   persistQuestionImportJobId,
   readPersistedQuestionImportJobId,
 } from "./question-knowledge-recognition";
+import {
+  CreateFromSelectionDialog,
+} from "./components/create-from-selection-dialog";
 import type { QuestionImportJobResponse } from "./import-types";
 import { getQuestionDeleteDescription } from "@/lib/deletion-copy";
 
@@ -266,6 +269,7 @@ export function QuestionList() {
   const [bulkMoveOpen, setBulkMoveOpen] = useState(false);
   const [moveTargetBankId, setMoveTargetBankId] = useState<string>("__none__");
   const [movingQuestions, setMovingQuestions] = useState(false);
+  const [createFromSelectionOpen, setCreateFromSelectionOpen] = useState(false);
   const [knowledgeDialogQuestion, setKnowledgeDialogQuestion] = useState<IQuestion | null>(null);
   const [selectedKnowledgePointIds, setSelectedKnowledgePointIds] = useState<Set<string>>(new Set());
   const [knowledgeSearch, setKnowledgeSearch] = useState("");
@@ -925,6 +929,40 @@ export function QuestionList() {
     setBulkMoveOpen(true);
   };
 
+  const openCreateFromSelectionDialog = () => {
+    if (selectedQuestionIds.length === 0) {
+      toast({
+        title: "请先选择题目",
+        description: "勾选至少一道题目后再发起考试/作业。",
+        variant: "destructive",
+      });
+      return;
+    }
+    setCreateFromSelectionOpen(true);
+  };
+
+  const buildSelectionSummary = useCallback(() => {
+    const byId = new Map<string, IQuestion>();
+    for (const q of questions) {
+      byId.set(q.id, q);
+    }
+    // 保持用户点击时的视觉顺序：以题目列表当前顺序为准。
+    const ordered: IQuestion[] = [];
+    for (const q of questions) {
+      if (selectedQuestionIds.includes(q.id)) ordered.push(q);
+    }
+    return ordered;
+  }, [questions, selectedQuestionIds]);
+
+  // 选中的题目生成有序摘要供 CreateFromSelectionDialog 使用。
+  const selectedQuestionsInOrder = buildSelectionSummary();
+
+  const defaultCreateTitle = (() => {
+    const d = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} 练习`;
+  })();
+
   const closeMoveDialog = () => {
     if (movingQuestions) {
       return;
@@ -1400,6 +1438,16 @@ export function QuestionList() {
                 </span>
                 {selectedQuestionCount > 0 ? (
                   <>
+                    <Button
+                      type="button"
+                      variant="default"
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      onClick={openCreateFromSelectionDialog}
+                    >
+                      <FilePlus2 size={13} />
+                      发起考试/作业
+                    </Button>
                     <Button
                       type="button"
                       variant="outline"
@@ -1996,6 +2044,21 @@ export function QuestionList() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <CreateFromSelectionDialog
+        open={createFromSelectionOpen}
+        onOpenChange={setCreateFromSelectionOpen}
+        selected={selectedQuestionsInOrder.map((q) => ({
+          id: q.id,
+          type: q.type,
+          score: q.score,
+        }))}
+        defaultTitle={defaultCreateTitle}
+        onPublished={(_examId, category) => {
+          const target = category === "exam" ? "/exams" : "/exams/practice";
+          navigate(target);
+        }}
+      />
     </div>
   );
 }

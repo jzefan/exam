@@ -1,20 +1,57 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useOne } from "@refinedev/core";
-import { Archive, ArrowLeft, Copy, FilePlus2, Loader2, Sparkles } from "lucide-react";
+import {
+  Copy,
+  FilePlus2,
+  Filter,
+  Hash,
+  Layers,
+  List,
+  Loader2,
+  Send,
+  Sparkles,
+} from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageIntroHeader } from "@/components/ui/page-intro-header";
+import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import type { IPaperDetail } from "@/types";
+import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
+import type { IPaperDetail, QuestionType } from "@/types";
 
 import { paperApiRequest } from "./api";
 import { PaperAIGenerateDialog } from "./ai-generate-dialog";
+import {
+  PaperQuickPublishDialog,
+  type PaperQuickPublishMode,
+} from "./quick-publish-dialog";
+
+const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {
+  choice: "选择题",
+  true_false: "判断题",
+  fill_in: "填空题",
+  short_answer: "简答题",
+  essay: "论述题",
+  code: "编程题",
+};
+
+const SOURCE_TYPE_LABELS: Record<string, string> = {
+  manual: "手工创建",
+  import: "导入",
+  ai_generated: "AI 生成",
+};
 
 function formatDateTime(iso: string) {
   const date = new Date(iso);
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function getQuestionTypeLabel(type: string | null | undefined): string {
+  if (!type) return "—";
+  return QUESTION_TYPE_LABELS[type as QuestionType] ?? type;
 }
 
 export function PaperDetailPage() {
@@ -23,12 +60,58 @@ export function PaperDetailPage() {
   const { toast } = useToast();
   const [busy, setBusy] = useState(false);
   const [aiDialogOpen, setAiDialogOpen] = useState(false);
+  const [quickPublishMode, setQuickPublishMode] = useState<PaperQuickPublishMode | null>(null);
+  const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
 
   const { result: paper, query } = useOne<IPaperDetail>({
     resource: "papers",
     id: id!,
     queryOptions: { enabled: Boolean(id) },
   });
+
+  const typeBuckets = useMemo(() => {
+    if (!paper) return [] as Array<{ type: string; count: number; totalScore: number }>;
+    const map = new Map<string, { type: string; count: number; totalScore: number }>();
+    for (const item of paper.questions) {
+      const key = item.question?.type ?? "unknown";
+      const bucket = map.get(key) ?? { type: key, count: 0, totalScore: 0 };
+      bucket.count += 1;
+      bucket.totalScore += item.score_override ?? item.question?.score ?? 0;
+      map.set(key, bucket);
+    }
+    return Array.from(map.values()).sort((a, b) => b.count - a.count);
+  }, [paper]);
+
+  const filteredQuestions = useMemo(() => {
+    if (!paper) return [];
+    if (selectedTypes.size === 0) return paper.questions;
+    return paper.questions.filter((item) => selectedTypes.has(item.question?.type ?? "unknown"));
+  }, [paper, selectedTypes]);
+
+  const toggleType = (type: string) => {
+    setSelectedTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(type)) {
+        next.delete(type);
+      } else {
+        next.add(type);
+      }
+      return next;
+    });
+  };
+
+  const toggleExpand = (questionId: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(questionId)) {
+        next.delete(questionId);
+      } else {
+        next.add(questionId);
+      }
+      return next;
+    });
+  };
 
   const handleCopy = async () => {
     if (!paper) return;
@@ -62,121 +145,282 @@ export function PaperDetailPage() {
     }
   };
 
-  const handleArchive = async () => {
-    if (!paper) return;
-    setBusy(true);
-    try {
-      await paperApiRequest(`/papers/${paper.id}/archive`, { method: "POST" });
-      await query.refetch();
-      toast({ title: "已归档", description: paper.title });
-    } catch (error) {
-      toast({
-        title: "归档失败",
-        description: error instanceof Error ? error.message : "请稍后重试",
-        variant: "destructive",
-      });
-    } finally {
-      setBusy(false);
-    }
-  };
-
   if (query.isLoading || !paper) {
     return (
-      <div className="mx-auto flex w-full max-w-6xl items-center justify-center px-6 py-20 text-muted-foreground">
+      <div className="mx-auto flex w-full max-w-[1280px] items-center justify-center px-6 py-20 text-muted-foreground">
         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
         加载试卷中...
       </div>
     );
   }
 
+  const archived = Boolean(paper.archived_at);
+
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 py-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="space-y-1">
+    <div className="mx-auto w-full max-w-[1280px]">
+      <PageIntroHeader
+        title={paper.title}
+        description={paper.description || "试卷详情：查看题目构成、题型分布，并可复制、AI 再生成或直接发起考试。"}
+        onBack={() => navigate("/papers")}
+        backLabel="返回试卷列表"
+        fullBleed
+        className="mb-6"
+        actions={
           <div className="flex items-center gap-2">
-            <h1 className="text-xl font-semibold text-foreground">{paper.title}</h1>
-            <Badge variant={paper.archived_at ? "secondary" : "default"}>
-              {paper.archived_at ? "归档" : "可用"}
-            </Badge>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleCopy}
+              disabled={busy}
+              title="复制出一份新试卷"
+            >
+              <Copy className="h-4 w-4" />
+              复制
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setAiDialogOpen(true)}
+              disabled={busy || archived}
+              title="基于当前试卷 AI 生成新试卷"
+            >
+              <Sparkles className="h-4 w-4" />
+              AI 生成新试卷
+            </Button>
+            <Separator orientation="vertical" className="mx-1 h-6" />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setQuickPublishMode("practice")}
+              disabled={archived || paper.questions.length === 0}
+              title="基于当前试卷快速发布一次练习/作业"
+            >
+              <Send className="h-4 w-4" />
+              发布作业
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => setQuickPublishMode("exam")}
+              disabled={archived || paper.questions.length === 0}
+              title="基于当前试卷快速创建一场考试"
+            >
+              <FilePlus2 className="h-4 w-4" />
+              创建考试
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => navigate("/papers")}
+              title="返回试卷列表"
+            >
+              <List className="h-4 w-4" />
+              返回列表
+            </Button>
           </div>
-          <p className="text-sm text-muted-foreground">{paper.description || "暂无描述"}</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" onClick={() => navigate("/papers")}>
-            <ArrowLeft className="mr-1.5 h-4 w-4" />
-            返回列表
-          </Button>
-          <Button variant="outline" onClick={handleCopy} disabled={busy}>
-            <Copy className="mr-1.5 h-4 w-4" />
-            复制
-          </Button>
-          <Button variant="outline" onClick={handleArchive} disabled={busy || Boolean(paper.archived_at)}>
-            <Archive className="mr-1.5 h-4 w-4" />
-            归档
-          </Button>
-          <Button variant="outline" onClick={() => setAiDialogOpen(true)} disabled={busy || Boolean(paper.archived_at)}>
-            <Sparkles className="mr-1.5 h-4 w-4" />
-            AI生成新试卷
-          </Button>
-          <Button onClick={() => navigate(`/exams/create?paper_id=${paper.id}`)}>
-            <FilePlus2 className="mr-1.5 h-4 w-4" />
-            创建考试
-          </Button>
-          <Button variant="outline" onClick={() => navigate(`/exams/practice/create?paper_id=${paper.id}`)}>
-            发布练习
-          </Button>
-        </div>
-      </div>
+        }
+      />
 
-      <div className="grid gap-3 rounded-lg border border-border/70 bg-card p-4 text-sm md:grid-cols-4">
-        <div>
-          <div className="text-muted-foreground">来源</div>
-          <div className="font-medium">{paper.source_type}</div>
-        </div>
-        <div>
-          <div className="text-muted-foreground">主知识点</div>
-          <div className="font-medium">{paper.root_knowledge_point?.name ?? "—"}</div>
-        </div>
-        <div>
-          <div className="text-muted-foreground">题目数 / 总分</div>
-          <div className="font-medium">
-            {paper.question_count} / {paper.total_score}
-          </div>
-        </div>
-        <div>
-          <div className="text-muted-foreground">创建时间</div>
-          <div className="font-medium">{formatDateTime(paper.created_at)}</div>
-        </div>
-      </div>
+      <div className="grid gap-6 px-4 pb-6 sm:px-6 lg:grid-cols-[260px_minmax(0,1fr)]">
+        {/* Left rail: filters & meta */}
+        <aside className="space-y-5">
+          {/* Paper meta */}
+          <section className="rounded-xl border border-border/60 bg-card p-5">
+            <div className="mb-4 flex items-center gap-2">
+              <Layers className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                试卷信息
+              </span>
+            </div>
+            <dl className="space-y-3 text-sm">
+              <div>
+                <dt className="text-xs text-muted-foreground">状态</dt>
+                <dd className="mt-1">
+                  <Badge variant={archived ? "secondary" : "default"}>
+                    {archived ? "已归档" : "可用"}
+                  </Badge>
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">来源</dt>
+                <dd className="mt-0.5 font-medium">
+                  {SOURCE_TYPE_LABELS[paper.source_type] ?? paper.source_type}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">主知识点</dt>
+                <dd className="mt-0.5 font-medium">{paper.root_knowledge_point?.name ?? "—"}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">题目数 / 总分</dt>
+                <dd className="mt-0.5 font-medium">
+                  <span className="tabular-nums">{paper.question_count}</span>
+                  <span className="mx-1 text-muted-foreground">/</span>
+                  <span className="tabular-nums">{paper.total_score}</span>
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">创建人</dt>
+                <dd className="mt-0.5 font-medium">{paper.created_by_name || "—"}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">创建时间</dt>
+                <dd className="mt-0.5 font-medium tabular-nums">{formatDateTime(paper.created_at)}</dd>
+              </div>
+            </dl>
+          </section>
 
-      <div className="overflow-hidden rounded-lg border border-border/70 bg-card">
-        <table className="w-full text-sm">
-          <thead className="bg-muted/40 text-left text-muted-foreground">
-            <tr>
-              <th className="px-4 py-3 font-medium">序号</th>
-              <th className="px-4 py-3 font-medium">题目</th>
-              <th className="px-4 py-3 font-medium">题型</th>
-              <th className="px-4 py-3 font-medium">分值</th>
-            </tr>
-          </thead>
-          <tbody>
-            {paper.questions.length === 0 && (
-              <tr>
-                <td colSpan={4} className="px-4 py-8 text-center text-muted-foreground">
-                  暂无题目
-                </td>
-              </tr>
+          {/* Type filter */}
+          <section className="rounded-xl border border-border/60 bg-card p-5">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Filter className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  题型筛选
+                </span>
+              </div>
+              {selectedTypes.size > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setSelectedTypes(new Set())}
+                  className="text-xs font-medium text-primary hover:underline"
+                >
+                  清除
+                </button>
+              ) : null}
+            </div>
+
+            {typeBuckets.length === 0 ? (
+              <p className="text-xs text-muted-foreground">暂无题目</p>
+            ) : (
+              <ul className="space-y-1">
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTypes(new Set())}
+                    className={`flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-sm transition-colors ${
+                      selectedTypes.size === 0
+                        ? "bg-primary/10 font-medium text-primary"
+                        : "text-foreground hover:bg-muted/60"
+                    }`}
+                  >
+                    <span>全部</span>
+                    <span className="tabular-nums text-xs text-muted-foreground">
+                      {paper.questions.length}
+                    </span>
+                  </button>
+                </li>
+                {typeBuckets.map((bucket) => {
+                  const active = selectedTypes.has(bucket.type);
+                  return (
+                    <li key={bucket.type}>
+                      <button
+                        type="button"
+                        onClick={() => toggleType(bucket.type)}
+                        className={`flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-sm transition-colors ${
+                          active
+                            ? "bg-primary/10 font-medium text-primary"
+                            : "text-foreground hover:bg-muted/60"
+                        }`}
+                      >
+                        <span className="truncate">{getQuestionTypeLabel(bucket.type)}</span>
+                        <span className="tabular-nums text-xs text-muted-foreground">
+                          {bucket.count}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
             )}
-            {paper.questions.map((item, index) => (
-              <tr key={item.question_id} className="border-t border-border/60">
-                <td className="px-4 py-3">{index + 1}</td>
-                <td className="px-4 py-3">{item.question?.title ?? "未知题目"}</td>
-                <td className="px-4 py-3 text-muted-foreground">{item.question?.type ?? "—"}</td>
-                <td className="px-4 py-3">{item.score_override ?? item.question?.score ?? 0}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          </section>
+        </aside>
+
+        {/* Right content */}
+        <div className="min-w-0 space-y-5">
+          {/* Questions */}
+          <section className="overflow-hidden rounded-xl border border-border/60 bg-card">
+            <div className="flex items-center justify-between border-b border-border/60 bg-muted/20 px-5 py-3">
+              <div className="flex items-center gap-2">
+                <Hash className="h-3.5 w-3.5 text-muted-foreground" />
+                <h2 className="text-sm font-semibold">题目列表</h2>
+                <span className="text-xs text-muted-foreground">
+                  共 {filteredQuestions.length}
+                  {selectedTypes.size > 0 ? ` / ${paper.questions.length}` : ""} 题
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                {selectedTypes.size > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {Array.from(selectedTypes).map((type) => (
+                      <Badge key={type} variant="secondary" className="text-xs">
+                        {getQuestionTypeLabel(type)}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : null}
+                {filteredQuestions.length > 0 ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => {
+                      if (expandedIds.size > 0) {
+                        setExpandedIds(new Set());
+                      } else {
+                        setExpandedIds(
+                          new Set(filteredQuestions.map((item) => item.question_id)),
+                        );
+                      }
+                    }}
+                  >
+                    {expandedIds.size > 0 ? "全部收起" : "全部展开"}
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+
+            {filteredQuestions.length === 0 ? (
+              <div className="px-5 py-16 text-center text-sm text-muted-foreground">
+                {paper.questions.length === 0 ? "暂无题目" : "当前筛选下没有题目"}
+              </div>
+            ) : (
+              <div className="space-y-2 p-3 sm:p-4">
+                {filteredQuestions.map((item, index) => {
+                  if (!item.question) {
+                    return (
+                      <div
+                        key={item.question_id}
+                        className="rounded-lg border border-dashed border-border/60 p-3 text-sm text-muted-foreground"
+                      >
+                        {index + 1}. 未知题目
+                      </div>
+                    );
+                  }
+                  const isExpanded = expandedIds.has(item.question_id);
+                  const score = item.score_override ?? item.question.score;
+                  return (
+                    <button
+                      key={item.question_id}
+                      type="button"
+                      onClick={() => toggleExpand(item.question_id)}
+                      className="block w-full text-left"
+                      aria-expanded={isExpanded}
+                      aria-label={`${isExpanded ? "收起" : "展开"}第 ${index + 1} 题`}
+                    >
+                      <QuestionPreviewCard
+                        question={{ ...item.question, score }}
+                        mode="detailed"
+                        expanded={isExpanded}
+                        index={index + 1}
+                        className="transition-colors hover:border-primary/30 hover:bg-muted/20"
+                      />
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        </div>
       </div>
 
       <PaperAIGenerateDialog
@@ -186,6 +430,18 @@ export function PaperDetailPage() {
         paperTitle={paper.title}
         rootKnowledgePointName={paper.root_knowledge_point?.name}
       />
+
+      {quickPublishMode ? (
+        <PaperQuickPublishDialog
+          open={Boolean(quickPublishMode)}
+          mode={quickPublishMode}
+          paper={paper}
+          onOpenChange={(next) => {
+            if (!next) setQuickPublishMode(null);
+          }}
+          onPublished={() => navigate("/exams")}
+        />
+      ) : null}
     </div>
   );
 }

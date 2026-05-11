@@ -37,7 +37,11 @@ from app.questions.schemas import (
     QuestionImportDocumentRecognizeResponse,
     QuestionImportDraft,
 )
-from app.questions.service import bulk_create_questions_fast, recognize_question_document
+from app.questions.service import (
+    bulk_create_questions_fast,
+    get_or_create_named_private_question_bank,
+    recognize_question_document,
+)
 
 
 @dataclass
@@ -413,6 +417,8 @@ def _blocking_import_issues(draft: QuestionImportDraft) -> list[str]:
 
 def question_create_from_import_draft(
     draft: QuestionImportDraft,
+    *,
+    question_bank_id: uuid.UUID | None = None,
 ) -> QuestionCreate:
     answer_text = draft.answer_text or ""
     if draft.type.value == "choice":
@@ -437,7 +443,7 @@ def question_create_from_import_draft(
         score=10,
         knowledge_point_ids=[],
         tag_ids=[],
-        question_bank_id=None,
+        question_bank_id=question_bank_id,
     )
 
 
@@ -510,7 +516,16 @@ async def confirm_import_session(
         await db.flush()
         raise ValueError("没有可入库的题目")
 
-    questions = [question_create_from_import_draft(draft) for draft in approved_drafts]
+    question_bank = await get_or_create_named_private_question_bank(
+        db,
+        user_id=user.id,
+        name=body.title,
+        description=body.description or body.title,
+    )
+    questions = [
+        question_create_from_import_draft(draft, question_bank_id=question_bank.id)
+        for draft in approved_drafts
+    ]
     try:
         result = await bulk_create_questions_fast(db, questions, user.id)
         if not result.created_question_ids:

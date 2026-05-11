@@ -869,6 +869,46 @@ def _strip_question_start_prefix(text: str) -> str:
     return next_text
 
 
+def _insert_fill_in_blanks(content_text: str, answer_text: str) -> str:
+    """Replace answer text occurrences in content with _____ blanks.
+
+    When the AI fails to mark blanks, try to find answers in the content
+    and substitute them.  Multi-answer strings are split on common
+    separators and each fragment is replaced independently.
+    """
+    if not answer_text:
+        return content_text
+
+    # Split multi-answer strings: ；; ，,  、 /
+    fragments = re.split(r"\s*[；;,，、/]\s*", answer_text.strip())
+    fragments = [f for f in fragments if f]
+
+    result = content_text
+    has_blank = False
+    for fragment in fragments:
+        if fragment and fragment in result:
+            result = result.replace(fragment, "_____", 1)
+            has_blank = True
+
+    if not has_blank and fragments:
+        # Try the full (unsplit) answer if fragments didn't match
+        full = answer_text.strip()
+        if full and full in result:
+            result = result.replace(full, "_____", 1)
+            has_blank = True
+
+    if not has_blank and fragments:
+        # Last resort: try matching each word/character cluster of each fragment
+        for fragment in fragments:
+            for token in re.split(r"\s+", fragment):
+                if len(token) >= 2 and token in result:
+                    result = result.replace(token, "_____", 1)
+                    has_blank = True
+                    break
+
+    return result
+
+
 @dataclass(frozen=True)
 class TaggedListLine:
     kind: str
@@ -1367,9 +1407,10 @@ def _build_document_ai_prompt(
         paper_rules = """
 试卷导入额外规则：
 - 试卷封面/表头不是题目：学校名称、学年学期、课程名、试卷 A/B 卷、答题时限、考试形式、班级、学号、姓名、得分栏、得分统计表、阅卷教师/核查人签名均不要生成题目。
-- 题型说明不是题目，例如“一、单项选择题（每小题 2 分，共 50 分）”只作为后续题型、分值和题量上下文。
+- 题型说明不是题目，例如"一、单项选择题（每小题 2 分，共 50 分）"只作为后续题型、分值和题量上下文。
 - 答题卡/答案填写表不是题目，例如只包含 1. 2. 3...25. 的编号表格不要生成空题；它只能作为题量线索。
 - 不要因为答题卡编号臆造空题。只输出实际看到完整题干的题目。
+- 填空题（fill_in）的 content_text 必须用 "_____"（至少 4 个连续下划线）替代原文中需要学生填写的内容。例如原文"大数据的4V特征是海量（Volume）、高速（Velocity）"，应输出 content_text 为"大数据的4V特征是_____（_____）、_____（_____）"或类似形式。重点：用 "_____" 替换掉答案文字本身，不要保留答案在题干中，也不要只在末尾追加空位。
 """
     custom_rules = ""
     if recognition_prompt and recognition_prompt.strip():
@@ -1377,7 +1418,9 @@ def _build_document_ai_prompt(
 用户补充识别要求：
 {recognition_prompt.strip()}
 """
-    truncated = raw_text[:8000]
+    # Allow up to 120K characters to support large papers (40+ questions).
+    # Schema already validates max_length=200000 upstream.
+    truncated = raw_text[:120000]
     return f"""分析题目文本，只输出JSON: {{"questions":[{{"type":"choice|true_false|fill_in|short_answer|essay|code","content_text":"题干","options":{{"A":"..."}}|null,"answer_text":"答案或空","analysis":"解析或空","difficulty":1-5,"raw_text":"原文","images":[]}}]}}
 {paper_rules}{custom_rules}
 文本:
@@ -1401,10 +1444,14 @@ def _validate_ai_document_questions(data: dict) -> list[dict]:
         except (TypeError, ValueError):
             safe_difficulty = 3
         options = item.get("options")
+        content_text = _strip_question_start_prefix(str(item.get("content_text", "")).strip())
+        if raw_type == "fill_in" and content_text and not re.search(r"_{3,}|（\s*）|\(\s*\)|【\s*】", content_text):
+            answer_text = str(item.get("answer_text", "")).strip()
+            content_text = _insert_fill_in_blanks(content_text, answer_text)
         validated.append(
             {
                 "type": raw_type,
-                "content_text": str(item.get("content_text", "")).strip(),
+                "content_text": content_text,
                 "options": options if isinstance(options, dict) else None,
                 "answer_text": str(item.get("answer_text", "")).strip(),
                 "analysis": str(item.get("analysis", "")).strip(),
@@ -1478,6 +1525,21 @@ def merge_ai_and_rule_recognition(
                 }
             )
         )
+
+    # When AI returns fewer questions than the rule-based baseline (e.g. input
+    # truncation or token limits), fall back to the baseline drafts for the
+    # remaining questions so they aren't silently lost.
+    for index in range(len(ai_drafts), baseline_count):
+        fallback = baseline[index]
+        merged.append(
+            fallback.model_copy(
+                update={
+                    "segment_source": "rule",
+                    "comparison_flags": ["ai_missed"],
+                }
+            )
+        )
+
     return merged
 
 
@@ -1624,6 +1686,7 @@ async def recognize_question_document(
 
 async def recognize_imported_question(raw_text: str) -> QuestionImportRecognizeResponse:
     prompt = f"""识别题目为 JSON: {{"type":"choice|true_false|fill_in|short_answer|essay|code","content_text":"...","options":{{"A":"..."}}|null,"answer_text":"..."}}
+填空题（fill_in）必须用 "_____"（至少 3 个下划线）替换掉原文中的答案文字，不要把答案原文留在题干中。
 文本:
 {raw_text}"""
 
@@ -1634,9 +1697,14 @@ async def recognize_imported_question(raw_text: str) -> QuestionImportRecognizeR
     raw_type = str(data.get("type", "short_answer")).strip()
     safe_type = raw_type if raw_type in _VALID_QUESTION_TYPES else "short_answer"
 
+    content_text = str(data.get("content_text", "")).strip()
+    if safe_type == "fill_in" and content_text and not re.search(r"_{3,}|（\s*）|\(\s*\)|【\s*】", content_text):
+        answer_text = str(data.get("answer_text", "")).strip()
+        content_text = _insert_fill_in_blanks(content_text, answer_text)
+
     return QuestionImportRecognizeResponse(
         type=safe_type,  # type: ignore[arg-type]
-        content_text=str(data.get("content_text", "")).strip(),
+        content_text=content_text,
         options={str(key): str(value).strip() for key, value in options.items()} if options else None,
         answer_text=str(data.get("answer_text", "")).strip() or None,
     )
@@ -1968,23 +2036,64 @@ async def _load_root_descendant_knowledge_points(
     return result
 
 
+def _keyword_score(text: str, keywords: set[str]) -> int:
+    """Count how many normalized keywords appear in the given text."""
+    if not text or not keywords:
+        return 0
+    normalized = text.lower()
+    return sum(1 for kw in keywords if kw in normalized)
+
+
+def _extract_question_keywords(question: QuestionCreate) -> set[str]:
+    """Extract meaningful keyword tokens from a question for pre-filtering."""
+    content_text = ""
+    if isinstance(question.content, dict):
+        content_text = str(question.content.get("text") or question.content.get("html") or "").strip()
+    source = f"{question.title} {content_text}"
+    # Keep Chinese character runs (2+ chars) and alphanumeric tokens (3+ chars)
+    tokens: set[str] = set()
+    for match in re.finditer(r"[一-鿿]{2,}|[a-zA-Z0-9]{3,}", source):
+        tokens.add(match.group(0).lower())
+    return tokens
+
+
 async def match_knowledge_points_with_ai(
     question: QuestionCreate, candidates: list[KnowledgePoint]
 ) -> list[uuid.UUID]:
     """Use AI to pick the most relevant knowledge points; returns ids (possibly empty)."""
     if not candidates:
         return []
+
+    content_text = ""
+    if isinstance(question.content, dict):
+        content_text = str(question.content.get("text") or question.content.get("html") or "").strip()
+
+    # Pre-filter: score candidates by keyword overlap, keep top N to
+    # reduce noise in the AI prompt and improve match accuracy.
+    keywords = _extract_question_keywords(question)
+    MAX_CANDIDATES_FOR_AI = 25
+    if len(candidates) > MAX_CANDIDATES_FOR_AI and keywords:
+        scored = [
+            (
+                _keyword_score(kp.name, keywords) + _keyword_score(kp.description or "", keywords),
+                kp,
+            )
+            for kp in candidates
+        ]
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        filtered = [kp for _, kp in scored[:MAX_CANDIDATES_FOR_AI]]
+    else:
+        filtered = list(candidates)
+
     candidates_payload = [
         {
             "id": str(kp.id),
             "name": kp.name,
             "description": (kp.description or "").strip()[:200],
         }
-        for kp in candidates
+        for kp in filtered
     ]
-    content_text = ""
-    if isinstance(question.content, dict):
-        content_text = str(question.content.get("text") or question.content.get("html") or "").strip()
+
     prompt = f"""
 你是教研知识点匹配助手。给你一道题目和一组候选知识点，请选出与题目内容最相关的知识点。
 
