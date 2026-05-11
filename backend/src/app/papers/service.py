@@ -413,7 +413,6 @@ def _blocking_import_issues(draft: QuestionImportDraft) -> list[str]:
 
 def question_create_from_import_draft(
     draft: QuestionImportDraft,
-    root_knowledge_point_id: uuid.UUID | None,
 ) -> QuestionCreate:
     answer_text = draft.answer_text or ""
     if draft.type.value == "choice":
@@ -436,7 +435,7 @@ def question_create_from_import_draft(
         analysis=draft.analysis,
         difficulty=draft.difficulty,
         score=10,
-        knowledge_point_ids=[root_knowledge_point_id] if root_knowledge_point_id else [],
+        knowledge_point_ids=[],
         tag_ids=[],
         question_bank_id=None,
     )
@@ -497,6 +496,9 @@ async def confirm_import_session(
     user: User,
     is_admin: bool,
 ) -> Paper:
+    from app.questions.models import QuestionImportJob, QuestionImportJobStatus
+    from app.questions.service import process_question_import_job
+
     root_id = body.root_knowledge_point_id or session.root_knowledge_point_id
     approved_drafts = [
         draft
@@ -508,7 +510,7 @@ async def confirm_import_session(
         await db.flush()
         raise ValueError("没有可入库的题目")
 
-    questions = [question_create_from_import_draft(draft, root_id) for draft in approved_drafts]
+    questions = [question_create_from_import_draft(draft) for draft in approved_drafts]
     try:
         result = await bulk_create_questions_fast(db, questions, user.id)
         if not result.created_question_ids:
@@ -538,6 +540,27 @@ async def confirm_import_session(
         session.created_paper_id = paper.id
         session.error_detail = None
         await db.flush()
+
+        if root_id and result.created_question_ids:
+            job = QuestionImportJob(
+                user_id=user.id,
+                status=QuestionImportJobStatus.PENDING,
+                total_count=len(result.created_question_ids),
+                created_question_ids=[str(qid) for qid in result.created_question_ids],
+            )
+            db.add(job)
+            await db.flush()
+            await db.commit()
+            import asyncio
+            asyncio.create_task(
+                process_question_import_job(
+                    job_id=job.id,
+                    user_id=user.id,
+                    root_knowledge_point_id=root_id,
+                    questions=[q.model_dump() for q in questions],
+                )
+            )
+
         return paper
     except Exception as exc:
         session.error_detail = str(exc)
