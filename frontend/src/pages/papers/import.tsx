@@ -384,22 +384,12 @@ export function PaperImportPage() {
                   重新识别
                 </Button>
 
-                {sourcePayload?.sourceFormat === "docx" && sourcePayload?.originalFile ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={loading || importing}
-                    onClick={handleVisualRecognize}
-                    className="h-9 rounded-lg px-3 text-sm font-bold"
-                  >
-                    {loading ? (
-                      <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <Eye className="mr-2 h-4 w-4" />
-                    )}
-                    页面视觉识别
-                  </Button>
-                ) : null}
+                {/*
+                  TODO: re-enable when visual recognition is faster
+                  sourcePayload?.sourceFormat === "docx" && sourcePayload?.originalFile ? (
+                  <Button ...>页面视觉识别</Button>
+                  ) : null
+                */}
 
                 <Button
                   type="button"

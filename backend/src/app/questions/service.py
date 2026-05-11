@@ -423,7 +423,8 @@ async def _request_deepseek_json(prompt: str) -> dict:
                     {"role": "system", "content": "你只输出合法 JSON。"},
                     {"role": "user", "content": prompt.strip()},
                 ],
-                "temperature": 0.4,
+                "temperature": 0.2,
+                "max_tokens": 6000,
             },
         )
 
@@ -1376,31 +1377,17 @@ def _build_document_ai_prompt(
 用户补充识别要求：
 {recognition_prompt.strip()}
 """
+    truncated = raw_text[:8000]
     return f"""
-你是一名中文题库导入助手。请分析整份导入文档，并只输出合法 JSON。
-
-要求：
-1. 你会收到整份题目文本与图片列表。
-2. 必须按题目拆分 questions 数组。
-3. 只返回一个 JSON 对象，格式为 {{"questions":[...]}}。
-4. 每道题必须输出以下字段：
-   - type: choice | true_false | fill_in | short_answer | essay | code
-   - content_text: 完整题目内容，不要把题型标识放进题目内容
-   - options: 选择题返回选项对象，如 {{"A":"选项1","B":"选项2"}}；非选择题返回 null
-   - answer_text: 标准答案，没有就返回空字符串，不要臆造
-   - analysis: 解析内容，没有就返回空字符串
-   - difficulty: 1 到 5 的整数；没有明确难度时返回 3
-   - raw_text: 该题在原文中的完整片段
-   - images: 与该题相关的 image_id 数组
-5. 不要输出解释、Markdown 或代码块。
+你是中文题库导入助手。分析下面的题目文本，只输出一个 JSON 对象 {{"questions":[...]}}。
+每道题输出: type(content_text/options/answer_text/analysis/difficulty/raw_text/images)
+题型: choice|true_false|fill_in|short_answer|essay|code, 非选择题 options 为 null.
+不输出解释、Markdown 或代码块。
 {paper_rules}
 {custom_rules}
-
-图片列表：
-{image_lines or "无"}
-
-原始文本：
-{raw_text}
+{image_lines and f'图片: {image_lines}' or ''}
+文本:
+{truncated}
 """
 
 
@@ -1642,28 +1629,9 @@ async def recognize_question_document(
 
 
 async def recognize_imported_question(raw_text: str) -> QuestionImportRecognizeResponse:
-    prompt = f"""
-你是一名中文题库导入助手。请把下面原始题目文本识别为结构化 JSON。
-
-识别规则：
-1. 判断题：通常是一段文本，后面可能出现打勾/打叉、T/F、True/False、正确/错误、对/错。
-2. 选择题：通常有 4 个选项，但可能少一个或多一个；答案如果存在，通常是文末的英文字母。
-3. 填空题：题干中通常有一个或多个下划线、括号空位（如 ____、（ ）、()）。
-4. 简答题：一般就是一段题目文本，没有明确选项和填空结构。
-5. 论述题：要求考生展开论述、分析或评价某一主题，篇幅较长。
-6. 编程题：要求编写代码，通常含有代码块或编程相关描述。
-7. 如果答案没有给出，answer_text 返回空字符串即可，不要臆造答案。
-8. 必须只输出合法 JSON，不要输出解释。
-
-请返回 JSON 对象，字段如下：
-type: choice | true_false | fill_in | short_answer | essay | code
-content_text: 完整题目内容
-options: 仅选择题返回对象，如 {{"A":"选项1","B":"选项2"}}
-answer_text: 识别到的答案，没有就返回空字符串
-
-原始文本：
-{raw_text}
-"""
+    prompt = f"""识别题目为 JSON: {{"type":"choice|true_false|fill_in|short_answer|essay|code","content_text":"...","options":{{"A":"..."}}|null,"answer_text":"..."}}
+文本:
+{raw_text}"""
 
     data = await _request_deepseek_json(prompt)
     raw_options = data.get("options")
