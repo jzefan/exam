@@ -676,7 +676,7 @@ async def test_ai_full_document_recognize_marks_count_mismatch(monkeypatch) -> N
     )
 
     assert "count_mismatch" in response.drafts[0].comparison_flags
-    assert "AI识别题目数量与规则识别不一致" in response.drafts[0].issues
+    assert "AI识别题目数量与规则识别不一致" not in response.drafts[0].issues
 
 
 async def test_document_recognize_endpoint_returns_pending_review_drafts(

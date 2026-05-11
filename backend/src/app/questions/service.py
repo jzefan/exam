@@ -1487,8 +1487,6 @@ def merge_ai_and_rule_recognition(
         next_issues = list(draft.issues)
         if baseline_draft and baseline_draft.type != draft.type:
             next_flags.append("type_mismatch")
-        if "count_mismatch" in next_flags and "AI识别题目数量与规则识别不一致" not in next_issues:
-            next_issues.append("AI识别题目数量与规则识别不一致")
         merged.append(
             draft.model_copy(
                 update={
