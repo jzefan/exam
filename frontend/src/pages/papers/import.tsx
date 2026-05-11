@@ -474,10 +474,6 @@ export function PaperImportPage() {
             </div>
 
             <div className="flex flex-col gap-2">
-              <div className="flex items-center gap-2">
-                <Label>主知识点</Label>
-                <span className="text-xs text-muted-foreground">课程名称</span>
-              </div>
               <KnowledgePointSelector
                 fetcher={(path, options) => paperApiRequest(path, options)}
                 selectedKnowledgePoints={selectedRootKnowledgePoints}
