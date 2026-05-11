@@ -424,7 +424,7 @@ async def _request_deepseek_json(prompt: str) -> dict:
                     {"role": "user", "content": prompt.strip()},
                 ],
                 "temperature": 0.2,
-                "max_tokens": 6000,
+                "max_tokens": 12000,
             },
         )
 
