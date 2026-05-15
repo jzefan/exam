@@ -1,8 +1,8 @@
 import { useOne, useUpdate, useList } from "@refinedev/core";
 import { useNavigate, useParams } from "react-router-dom";
 import { useState } from "react";
-import { ArrowLeft, Plus, X, ChevronsUpDown, Check } from "lucide-react";
-import type { IQuestion, IQuestionBank, ITag, QuestionType } from "../../types";
+import { ArrowLeft, Plus, X, ChevronsUpDown, Check, AlertTriangle } from "lucide-react";
+import type { IKnowledgePoint, IQuestion, IQuestionBank, ITag, QuestionType } from "../../types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,7 +20,11 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command";
 import { RichTextEditor, htmlToPlainText } from "@/components/ui/rich-text-editor";
 import { TagSelector } from "@/components/ui/tag-selector";
+import { KnowledgePointSelector, type SelectedKnowledgePoint } from "@/components/questions/knowledge-point-selector";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
+import { useToast } from "@/hooks/use-toast";
+import { apiClient } from "@/lib/api";
 import {
   buildCodeQuestionContent,
   extractCodeQuestionDetails,
@@ -121,12 +125,14 @@ export interface QuestionEditSubmitValues {
   score: number;
   question_bank_id: string | null;
   tag_ids: string[];
+  knowledge_point_ids: string[];
 }
 
 interface QuestionEditFormContentProps {
   question: IQuestion;
   banks: IQuestionBank[];
   allTags: ITag[];
+  knowledgePoints: IKnowledgePoint[];
   onSubmit: (values: QuestionEditSubmitValues) => void;
   onCancel: () => void;
   isSubmitting?: boolean;
@@ -141,6 +147,7 @@ export function QuestionEditFormContent({
   question,
   banks,
   allTags,
+  knowledgePoints,
   onSubmit,
   onCancel,
   isSubmitting = false,
@@ -156,6 +163,13 @@ export function QuestionEditFormContent({
   const [questionBankId, setQuestionBankId] = useState<string>(question.question_bank_id ?? "");
   const [bankOpen, setBankOpen] = useState(false);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>(question.tags?.map((t) => t.id) ?? []);
+  const [selectedKnowledgePoints, setSelectedKnowledgePoints] = useState<SelectedKnowledgePoint[]>(
+    question.knowledge_points?.map((item) => ({
+      id: item.id,
+      name: item.name,
+      path: item.name,
+    })) ?? [],
+  );
   const [selectedAnswers, setSelectedAnswers] = useState<string[]>(extractSelectedAnswers(question));
   const [options, setOptions] = useState<OptionItem[]>(extractOptions(question));
   const [fillBlanks, setFillBlanks] = useState<string[]>(extractFillBlanks(question));
@@ -167,6 +181,14 @@ export function QuestionEditFormContent({
     score: String(question.score),
     answer: extractNonChoiceAnswer(question),
   });
+  const editLock = question.edit_lock ?? null;
+  const isInUse = Boolean(editLock?.in_use);
+  const canEditDifficulty = !isInUse || editLock?.allowed_fields.includes("difficulty");
+  const canEditKnowledgePoints = !isInUse || editLock?.allowed_fields.includes("knowledge_point_ids");
+  const canEditAnalysis = !isInUse || editLock?.allowed_fields.includes("analysis");
+  const canEditAnswer = !isInUse || editLock?.allowed_fields.includes("answer");
+  const canEditCodeTestCases = !isInUse || editLock?.allowed_fields.includes("code_test_cases");
+  const isStructureLocked = isInUse;
 
   const updateField = (field: string, value: string) => {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -247,6 +269,7 @@ export function QuestionEditFormContent({
       score: Number(form.score),
       question_bank_id: questionBankId || null,
       tag_ids: selectedTagIds,
+      knowledge_point_ids: selectedKnowledgePoints.map((item) => item.id),
     });
   };
 
@@ -270,6 +293,19 @@ export function QuestionEditFormContent({
       <Card>
         <CardContent className="pt-6">
           <form onSubmit={handleSubmit} className="space-y-5">
+            {isInUse ? (
+              <Alert className="border-amber-200 bg-amber-50/80 text-amber-950">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertTitle>题目内容已锁定</AlertTitle>
+                <AlertDescription className="space-y-1">
+                  <p>这道题正在某些考试或练习中使用，题目内容已锁定。你仍可修改答案、解析、难度、知识点标签和编程题测试用例。</p>
+                  {editLock?.has_submitted_attempts ? (
+                    <p>修改答案或编程题测试用例后，系统会自动重新评分受影响的已提交答卷。</p>
+                  ) : null}
+                </AlertDescription>
+              </Alert>
+            ) : null}
+
             {/* Type (read-only) + Difficulty + Question Bank */}
             <div className={cn("grid gap-4", showQuestionBankAndTags ? "grid-cols-3" : "grid-cols-2")}>
               <div className="space-y-1.5">
@@ -283,6 +319,7 @@ export function QuestionEditFormContent({
                 <Select
                   value={form.difficulty}
                   onValueChange={(v) => updateField("difficulty", v)}
+                  disabled={!canEditDifficulty}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -305,8 +342,10 @@ export function QuestionEditFormContent({
                       type="button"
                       className={cn(
                         "flex h-9 w-full items-center justify-between rounded-md border border-input bg-background px-3 text-sm ring-offset-background",
+                        isStructureLocked && "cursor-not-allowed opacity-60",
                         !questionBankId && "text-muted-foreground",
                       )}
+                      disabled={isStructureLocked}
                     >
                       <span className="truncate">
                         {questionBankId
@@ -351,11 +390,19 @@ export function QuestionEditFormContent({
             {/* Content */}
             <div className="space-y-1.5">
               <Label>题目内容</Label>
-              <RichTextEditor
-                value={form.contentHtml}
-                onChange={(html) => updateField("contentHtml", html)}
-                placeholder="输入题目内容..."
-              />
+              <div className="relative">
+                <RichTextEditor
+                  value={form.contentHtml}
+                  onChange={(html) => updateField("contentHtml", html)}
+                  placeholder="输入题目内容..."
+                />
+                {isStructureLocked ? (
+                  <div
+                    className="absolute inset-0 z-10 cursor-not-allowed rounded-md bg-transparent"
+                    aria-hidden="true"
+                  />
+                ) : null}
+              </div>
             </div>
 
             {question.type === "code" && (
@@ -365,6 +412,7 @@ export function QuestionEditFormContent({
                     <Label>作答模式</Label>
                     <Select
                       value={codeDetails.mode}
+                      disabled={isStructureLocked}
                       onValueChange={(value) => {
                         setCodeDetails((prev) => ({
                           ...prev,
@@ -397,6 +445,7 @@ export function QuestionEditFormContent({
                           id="code-input-description"
                           rows={3}
                           value={codeDetails.inputDescription}
+                          disabled={isStructureLocked}
                           onChange={(e) =>
                             setCodeDetails((prev) => ({
                               ...prev,
@@ -412,6 +461,7 @@ export function QuestionEditFormContent({
                           id="code-output-description"
                           rows={3}
                           value={codeDetails.outputDescription}
+                          disabled={isStructureLocked}
                           onChange={(e) =>
                             setCodeDetails((prev) => ({
                               ...prev,
@@ -430,6 +480,7 @@ export function QuestionEditFormContent({
                           type="button"
                           variant="outline"
                           size="sm"
+                          disabled={isStructureLocked}
                           onClick={() =>
                             setCodeDetails((prev) => ({
                               ...prev,
@@ -449,6 +500,7 @@ export function QuestionEditFormContent({
                               id={`example-input-${index}`}
                               rows={3}
                               value={item.input}
+                              disabled={isStructureLocked}
                               onChange={(e) =>
                                 setCodeDetails((prev) => ({
                                   ...prev,
@@ -465,6 +517,7 @@ export function QuestionEditFormContent({
                               id={`example-output-${index}`}
                               rows={3}
                               value={item.output}
+                              disabled={isStructureLocked}
                               onChange={(e) =>
                                 setCodeDetails((prev) => ({
                                   ...prev,
@@ -486,6 +539,7 @@ export function QuestionEditFormContent({
                           type="button"
                           variant="outline"
                           size="sm"
+                          disabled={!canEditCodeTestCases}
                           onClick={() =>
                             setCodeDetails((prev) => ({
                               ...prev,
@@ -505,6 +559,7 @@ export function QuestionEditFormContent({
                               id={`sample-test-input-${index}`}
                               rows={3}
                               value={item.input}
+                              disabled={!canEditCodeTestCases}
                               onChange={(e) =>
                                 setCodeDetails((prev) => ({
                                   ...prev,
@@ -521,6 +576,7 @@ export function QuestionEditFormContent({
                               id={`sample-test-output-${index}`}
                               rows={3}
                               value={item.expectedOutput}
+                              disabled={!canEditCodeTestCases}
                               onChange={(e) =>
                                 setCodeDetails((prev) => ({
                                   ...prev,
@@ -542,6 +598,7 @@ export function QuestionEditFormContent({
                       <Input
                         id="code-function-name"
                         value={codeDetails.functionName}
+                        disabled={isStructureLocked}
                         onChange={(e) =>
                           setCodeDetails((prev) => ({
                             ...prev,
@@ -556,6 +613,7 @@ export function QuestionEditFormContent({
                       <Input
                         id="code-return-type"
                         value={codeDetails.returnType}
+                        disabled={isStructureLocked}
                         onChange={(e) =>
                           setCodeDetails((prev) => ({
                             ...prev,
@@ -571,6 +629,7 @@ export function QuestionEditFormContent({
                         id="code-signature"
                         rows={3}
                         value={codeDetails.signature}
+                        disabled={isStructureLocked}
                         onChange={(e) =>
                           setCodeDetails((prev) => ({
                             ...prev,
@@ -586,6 +645,7 @@ export function QuestionEditFormContent({
                         id="code-parameters"
                         rows={4}
                         value={codeDetails.parametersText}
+                        disabled={isStructureLocked}
                         onChange={(e) =>
                           setCodeDetails((prev) => ({
                             ...prev,
@@ -615,14 +675,17 @@ export function QuestionEditFormContent({
                         className="flex-1"
                         placeholder={`选项 ${opt.key}`}
                         value={opt.value}
+                        disabled={isStructureLocked}
                         onChange={(e) => updateOption(i, e.target.value)}
                         required
                       />
                       <button
                         type="button"
+                        disabled={!canEditAnswer}
                         onClick={() => isMultiChoice ? toggleMultiAnswer(opt.key) : toggleSingleAnswer(opt.key)}
                         className={cn(
                           "inline-flex items-center gap-1 shrink-0 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors",
+                          !canEditAnswer && "cursor-not-allowed opacity-60",
                           isCorrect
                             ? "border-primary bg-primary text-primary-foreground"
                             : "border-border text-muted-foreground hover:bg-muted",
@@ -636,6 +699,7 @@ export function QuestionEditFormContent({
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8 text-muted-foreground hover:text-red-500"
+                          disabled={isStructureLocked}
                           onClick={() => removeOption(i)}
                         >
                           <X size={14} />
@@ -649,6 +713,7 @@ export function QuestionEditFormContent({
                     type="button"
                     variant="outline"
                     size="sm"
+                    disabled={isStructureLocked}
                     onClick={addOption}
                   >
                     <Plus size={14} className="mr-1" />
@@ -673,6 +738,7 @@ export function QuestionEditFormContent({
                 {question.type === "true_false" ? (
                   <Select
                     value={form.answer}
+                    disabled={!canEditAnswer}
                     onValueChange={(v) => updateField("answer", v)}
                   >
                     <SelectTrigger>
@@ -694,6 +760,7 @@ export function QuestionEditFormContent({
                           className="flex-1"
                           placeholder={`第 ${i + 1} 空的答案`}
                           value={blank}
+                          disabled={!canEditAnswer}
                           onChange={(e) =>
                             setFillBlanks((prev) => prev.map((v, j) => (j === i ? e.target.value : v)))
                           }
@@ -705,6 +772,7 @@ export function QuestionEditFormContent({
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8 text-muted-foreground hover:text-red-500"
+                            disabled={!canEditAnswer}
                             onClick={() => setFillBlanks((prev) => prev.filter((_, j) => j !== i))}
                           >
                             <X size={14} />
@@ -716,6 +784,7 @@ export function QuestionEditFormContent({
                       type="button"
                       variant="outline"
                       size="sm"
+                      disabled={!canEditAnswer}
                       onClick={() => setFillBlanks((prev) => [...prev, ""])}
                     >
                       <Plus size={14} className="mr-1" />
@@ -729,6 +798,7 @@ export function QuestionEditFormContent({
                     }
                     rows={4}
                     value={form.answer}
+                    disabled={!canEditAnswer}
                     onChange={(e) => updateField("answer", e.target.value)}
                     required={question.type !== "code"}
                   />
@@ -745,6 +815,7 @@ export function QuestionEditFormContent({
                 step="0.5"
                 className="w-32"
                 value={form.score}
+                disabled={isStructureLocked}
                 onChange={(e) => updateField("score", e.target.value)}
                 required
               />
@@ -753,22 +824,50 @@ export function QuestionEditFormContent({
             {/* Analysis */}
             <div className="space-y-1.5">
               <Label>解析（可选）</Label>
-              <RichTextEditor
-                value={form.analysis}
-                onChange={(html) => updateField("analysis", html)}
-                placeholder="输入题目解析..."
-              />
+              <div className="relative">
+                <RichTextEditor
+                  value={form.analysis}
+                  onChange={(html) => updateField("analysis", html)}
+                  placeholder="输入题目解析..."
+                />
+                {!canEditAnalysis ? (
+                  <div
+                    className="absolute inset-0 z-10 cursor-not-allowed rounded-md bg-transparent"
+                    aria-hidden="true"
+                  />
+                ) : null}
+              </div>
             </div>
 
             {showQuestionBankAndTags ? (
-              <div className="space-y-1.5">
-                <Label>标签（可选）</Label>
-                <TagSelector
-                  allTags={allTags}
-                  selectedTagIds={selectedTagIds}
-                  onChange={setSelectedTagIds}
-                />
-              </div>
+              <>
+                <div className="space-y-1.5">
+                  <Label>知识点（可选）</Label>
+                  <div className={cn(!canEditKnowledgePoints && "pointer-events-none opacity-60")}>
+                    <KnowledgePointSelector
+                      fetcher={(path, init) =>
+                        apiClient
+                          .get(`/api${path}`, { signal: init?.signal as AbortSignal | undefined })
+                          .then((response) => response.data)
+                      }
+                      selectedKnowledgePoints={selectedKnowledgePoints}
+                      onSelectedKnowledgePointsChange={setSelectedKnowledgePoints}
+                      triggerLabel={knowledgePoints.length > 0 ? "选择知识点" : "暂无可选知识点"}
+                      showUsageShortcuts={false}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>标签（可选）</Label>
+                  <div className={cn(isStructureLocked && "pointer-events-none opacity-60")}>
+                    <TagSelector
+                      allTags={allTags}
+                      selectedTagIds={selectedTagIds}
+                      onChange={setSelectedTagIds}
+                    />
+                  </div>
+                </div>
+              </>
             ) : null}
 
             <Separator />
@@ -799,30 +898,57 @@ interface QuestionEditFormProps {
   question: IQuestion;
   banks: IQuestionBank[];
   allTags: ITag[];
+  knowledgePoints: IKnowledgePoint[];
   id: string;
 }
 
-function QuestionEditForm({ question, banks, allTags, id }: QuestionEditFormProps) {
+function QuestionEditForm({ question, banks, allTags, knowledgePoints, id }: QuestionEditFormProps) {
   const navigate = useNavigate();
   const { mutate, mutation } = useUpdate();
+  const { toast } = useToast();
 
   return (
     <QuestionEditFormContent
       question={question}
       banks={banks}
       allTags={allTags}
+      knowledgePoints={knowledgePoints}
       isSubmitting={mutation.isPending}
       onCancel={() => navigate(-1)}
-      onSubmit={(values) =>
+      onSubmit={(values) => {
+        const originalCodeDetails = question.type === "code" ? extractCodeQuestionDetails(question.content) : null;
+        const nextCodeDetails = question.type === "code" ? extractCodeQuestionDetails(values.content) : null;
+        const willTriggerRegrade = Boolean(
+          question.edit_lock?.has_submitted_attempts &&
+            (
+              JSON.stringify(question.answer ?? {}) !== JSON.stringify(values.answer ?? {}) ||
+              (
+                question.type === "code" &&
+                JSON.stringify(originalCodeDetails?.sampleTests ?? []) !==
+                  JSON.stringify(nextCodeDetails?.sampleTests ?? [])
+              )
+            ),
+        );
+
         mutate(
           {
             resource: "questions",
             id,
             values,
           },
-          { onSuccess: () => navigate("/questions") },
-        )
-      }
+          {
+            onSuccess: () => {
+              if (willTriggerRegrade) {
+                toast({
+                  title: "已保存题目修改",
+                  description: "系统正在重新评分受影响的已提交答卷。",
+                });
+              }
+              navigate("/questions");
+            },
+          },
+        );
+      }}
     />
   );
 }
@@ -846,6 +972,11 @@ export function QuestionEdit() {
     pagination: { currentPage: 1, pageSize: 1000 },
   });
   const allTags = tagsQuery.data?.data ?? [];
+  const { query: knowledgePointsQuery } = useList<IKnowledgePoint>({
+    resource: "knowledge-points",
+    pagination: { currentPage: 1, pageSize: 1000 },
+  });
+  const knowledgePoints = knowledgePointsQuery.data?.data ?? [];
 
   if (oneQuery.isLoading) {
     return (
@@ -869,6 +1000,13 @@ export function QuestionEdit() {
   }
 
   return (
-    <QuestionEditForm key={question.id} question={question} banks={banks} allTags={allTags} id={id!} />
+    <QuestionEditForm
+      key={question.id}
+      question={question}
+      banks={banks}
+      allTags={allTags}
+      knowledgePoints={knowledgePoints}
+      id={id!}
+    />
   );
 }

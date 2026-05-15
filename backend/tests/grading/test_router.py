@@ -484,6 +484,7 @@ async def test_run_grading_task_endpoint_executes_three_role_flow(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr("app.grading.service.settings.arbiter_enabled", True)
     qwen_provider = ProviderConfig(
         key="qwen-direct",
         provider_type="qwen",
@@ -604,6 +605,7 @@ async def test_get_grading_report_returns_rich_code_task_details(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr("app.grading.service.settings.arbiter_enabled", True)
     qwen_provider = ProviderConfig(
         key="qwen-direct",
         provider_type="qwen",
@@ -846,6 +848,7 @@ async def test_grading_candidate_detail_endpoint_returns_llm_comments(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr("app.grading.service.settings.arbiter_enabled", True)
     await _seed_role_binding_v1(db_session)
     monkeypatch.setenv("EXAM_QWEN_API_KEY", "qwen-secret")
     monkeypatch.setenv("EXAM_DEEPSEEK_API_KEY", "deepseek-secret")
@@ -906,6 +909,18 @@ async def test_grading_candidate_detail_endpoint_returns_llm_comments(
     assert [model["stage"] for model in payload["models"]] == ["primary", "review", "arbiter"]
     assert payload["models"][0]["model_label"] == "Qwen Grader / qwen-plus"
     assert payload["models"][0]["process"]
+
+    # Re-grade the same task. After the second run, the inbox detail must
+    # still show exactly one snapshot per role — not 2× Qwen / 2× DeepSeek /
+    # 2× Doubao. Historical snapshots stay in the DB for audit but the
+    # response only surfaces the latest per role.
+    second_run = await admin_client.post(f"/api/grading/tasks/{task_id}/run")
+    assert second_run.status_code == 200
+    second_response = await admin_client.get(f"/api/grading/inbox/tasks/{task_id}")
+    assert second_response.status_code == 200
+    stages = [model["stage"] for model in second_response.json()["models"]]
+    assert stages == ["primary", "review", "arbiter"]
+    assert len(stages) == len(set(stages)), "duplicate roles in inbox detail after re-grade"
 
 
 @pytest.mark.asyncio

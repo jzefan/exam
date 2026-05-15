@@ -241,29 +241,59 @@ def test_deepseek_response_parses_choice_envelope() -> None:
             },
             "dimension_scores",
         ),
-        (
-            {
-                "choices": [
-                    {
-                        "message": {
-                            "content": (
-                                '{"score_total": 82, "dimension_scores": {"coverage": 40}, '
-                                '"deduction_reasons": "missed one key point", '
-                                '"strengths": ["logic is clear"], '
-                                '"improvement_suggestions": ["cover timeout handling"], '
-                                '"evidence_summary": {"matched_points": 3}, "risk_flags": []}'
-                            )
-                        }
-                    }
-                ]
-            },
-            "deduction_reasons",
-        ),
     ],
 )
 def test_malformed_provider_payload_field_types_are_rejected(payload: dict[str, object], expected_message: str) -> None:
     with pytest.raises(ValueError, match=expected_message):
         parse_qwen_response(payload, provider_key="qwen-direct", model_name="qwen-plus")
+
+
+def test_list_of_string_fields_coerce_single_string_to_singleton_list() -> None:
+    # LLM 偶尔会把 list 字段输出成单个字符串。解析端把它包成单元素 list 而不是
+    # 直接拒绝整次评分。
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "content": (
+                        '{"score_total": 82, "dimension_scores": {"coverage": 40}, '
+                        '"deduction_reasons": "missed one key point", '
+                        '"strengths": ["logic is clear"], '
+                        '"improvement_suggestions": ["cover timeout handling"], '
+                        '"evidence_summary": {"matched_points": 3}, "risk_flags": []}'
+                    )
+                }
+            }
+        ]
+    }
+
+    result = parse_qwen_response(payload, provider_key="qwen-direct", model_name="qwen-plus")
+
+    assert result.deduction_reasons == ["missed one key point"]
+
+
+def test_list_of_string_fields_split_multiline_string() -> None:
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "content": (
+                        '{"score_total": 7, "dimension_scores": {"coverage": 7}, '
+                        '"deduction_reasons": [], '
+                        '"strengths": "概念正确\\n表述清晰", '
+                        '"improvement_suggestions": [], '
+                        '"evidence_summary": {}, "risk_flags": null}'
+                    )
+                }
+            }
+        ]
+    }
+
+    result = parse_qwen_response(payload, provider_key="qwen-direct", model_name="qwen-plus")
+
+    assert result.strengths == ["概念正确", "表述清晰"]
+    # null risk_flags should also coerce to empty list, not crash.
+    assert result.risk_flags == []
 
 
 def test_qwen_response_extracts_dimension_comments() -> None:

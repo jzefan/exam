@@ -490,3 +490,56 @@ async def test_seed_grading_defaults_syncs_default_model_names_from_settings(db_
     await db_session.refresh(model)
     assert model.model_name == "doubao-seed-2-0-lite-260428"
     assert model.display_name == "Doubao Seed 2.0 Lite"
+
+
+def test_humanize_doubao_model_name_keeps_display_in_sync_with_model_id() -> None:
+    from app.grading.seed import _humanize_doubao_model_name
+
+    assert _humanize_doubao_model_name("doubao-1-5-pro-32k-250115") == "Doubao 1.5 Pro 32k"
+    assert _humanize_doubao_model_name("doubao-seed-2-0-lite-260428") == "Doubao Seed 2.0 Lite"
+    assert _humanize_doubao_model_name("doubao-pro-128k-241215") == "Doubao Pro 128k"
+    # Non-doubao input (e.g. an ARK endpoint id) is left untouched.
+    assert _humanize_doubao_model_name("ep-20240611105257-xyz") == "ep-20240611105257-xyz"
+
+
+@pytest.mark.asyncio
+async def test_seed_grading_defaults_updates_display_name_when_model_changes(
+    db_session: AsyncSession,
+) -> None:
+    # Regression: switching ``EXAM_DOUBAO_MODEL_NAME`` to a different doubao
+    # variant must refresh ``display_name`` too. Otherwise the UI keeps
+    # showing the old label (e.g. "Doubao Seed 2.0 Lite") even though the
+    # request actually goes to a new model id.
+    provider = ProviderConfig(
+        key="doubao-arbiter",
+        provider_type="doubao",
+        base_url="https://ark.cn-beijing.volces.com/api/v3",
+        credential_env="EXAM_DOUBAO_API_KEY",
+        is_active=True,
+    )
+    db_session.add(provider)
+    await db_session.flush()
+
+    model = ModelConfig(
+        key="doubao-arbiter-v1",
+        display_name="Doubao Seed 2.0 Lite",
+        model_name="doubao-seed-2-0-lite-260428",
+        provider_id=provider.id,
+        temperature=0.0,
+        is_active=True,
+    )
+    db_session.add(model)
+    await db_session.flush()
+
+    from app.grading import seed as grading_seed
+
+    original_model_name = grading_seed.settings.doubao_model_name
+    grading_seed.settings.doubao_model_name = "doubao-1-5-pro-32k-250115"
+    try:
+        await seed_grading_defaults(db_session)
+    finally:
+        grading_seed.settings.doubao_model_name = original_model_name
+
+    await db_session.refresh(model)
+    assert model.model_name == "doubao-1-5-pro-32k-250115"
+    assert model.display_name == "Doubao 1.5 Pro 32k"

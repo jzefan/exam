@@ -119,11 +119,33 @@ def _require_type(value: Any, expected: type[Any] | tuple[type[Any], ...], field
         raise ValueError(f"normalized provider payload field '{field_name}' must be a {readable}")
 
 
-def _require_list_of_strings(value: Any, field_name: str) -> None:
-    if not isinstance(value, list):
-        raise ValueError(f"normalized provider payload field '{field_name}' must be a list")
-    if any(not isinstance(item, str) for item in value):
-        raise ValueError(f"normalized provider payload field '{field_name}' must contain only strings")
+def _coerce_list_of_strings(value: Any, field_name: str) -> list[str]:
+    """LLM 偶尔把 list-of-string 字段输出成单个字符串、null 或混合 list。
+
+    严格校验只会让评分整体失败，意义不大；这里把常见的非 list 形式归一化：
+    - ``None`` → ``[]``
+    - 字符串 → 拆 ``\n`` 后过滤空白；只有一行就直接 ``[value]``
+    - 其它列表 → 每个元素 ``str()`` 强转，过滤空白
+    其它实在没法解释的类型才抛错。
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        parts = [line.strip() for line in value.splitlines() if line.strip()]
+        return parts if parts else [value.strip()] if value.strip() else []
+    if isinstance(value, list):
+        coerced: list[str] = []
+        for item in value:
+            if item is None:
+                continue
+            text = item if isinstance(item, str) else str(item)
+            text = text.strip()
+            if text:
+                coerced.append(text)
+        return coerced
+    raise ValueError(
+        f"normalized provider payload field '{field_name}' must be a list or string"
+    )
 
 
 def _normalize_evidence_summary(value: Any) -> dict[str, Any]:
@@ -132,8 +154,9 @@ def _normalize_evidence_summary(value: Any) -> dict[str, Any]:
     if isinstance(value, str):
         return {"summary": value}
     if isinstance(value, list):
-        _require_list_of_strings(value, "evidence_summary")
-        return {"items": value}
+        return {"items": _coerce_list_of_strings(value, "evidence_summary")}
+    if value is None:
+        return {}
     raise ValueError("normalized provider payload field 'evidence_summary' must be a dict")
 
 
@@ -152,11 +175,19 @@ def _validate_result_types(normalized_payload: dict[str, Any]) -> None:
 
     if not isinstance(normalized_payload["dimension_scores"], dict):
         raise ValueError("normalized provider payload field 'dimension_scores' must be a dict")
-    _require_list_of_strings(normalized_payload["deduction_reasons"], "deduction_reasons")
-    _require_list_of_strings(normalized_payload["strengths"], "strengths")
-    _require_list_of_strings(normalized_payload["improvement_suggestions"], "improvement_suggestions")
+    normalized_payload["deduction_reasons"] = _coerce_list_of_strings(
+        normalized_payload["deduction_reasons"], "deduction_reasons"
+    )
+    normalized_payload["strengths"] = _coerce_list_of_strings(
+        normalized_payload["strengths"], "strengths"
+    )
+    normalized_payload["improvement_suggestions"] = _coerce_list_of_strings(
+        normalized_payload["improvement_suggestions"], "improvement_suggestions"
+    )
     normalized_payload["evidence_summary"] = _normalize_evidence_summary(normalized_payload["evidence_summary"])
-    _require_list_of_strings(normalized_payload["risk_flags"], "risk_flags")
+    normalized_payload["risk_flags"] = _coerce_list_of_strings(
+        normalized_payload["risk_flags"], "risk_flags"
+    )
     normalized_payload["dimension_comments"] = _normalize_dimension_comments(
         normalized_payload.get("dimension_comments")
     )

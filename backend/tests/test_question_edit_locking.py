@@ -301,8 +301,8 @@ async def test_update_question_api_allows_title_change_when_question_in_use(
 
 
 @pytest.mark.asyncio
-async def test_question_is_in_use_only_for_ongoing_exam(db_session) -> None:
-    """Per D2: only ongoing exams lock questions; draft/completed do not."""
+async def test_question_is_in_use_for_any_non_deleted_exam_ref(db_session) -> None:
+    """Any non-deleted exam reference should lock the question for structure edits."""
     admin = await _create_owner_user(db_session, prefix="question-lock-admin")
     question = Question(
         type=QuestionType.SHORT_ANSWER,
@@ -346,16 +346,16 @@ async def test_question_is_in_use_only_for_ongoing_exam(db_session) -> None:
 
     assert await question_is_in_use(db_session, question.id) is False
 
-    # Draft exam: never in use
+    # Draft exam: still in use because the exam reference remains active
     ongoing_exam.deleted_at = None
     ongoing_exam.status = "draft"
     await db_session.flush()
-    assert await question_is_in_use(db_session, question.id) is False
+    assert await question_is_in_use(db_session, question.id) is True
 
-    # Completed exam: not in use
+    # Completed exam: still in use until the exam itself is deleted
     ongoing_exam.status = "completed"
     await db_session.flush()
-    assert await question_is_in_use(db_session, question.id) is False
+    assert await question_is_in_use(db_session, question.id) is True
 
 
 @pytest.mark.asyncio

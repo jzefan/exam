@@ -18,7 +18,7 @@ from app.common.data_visibility import VisibilityScope
 from app.common.resource_access import teacher_owned_resource_filter, teacher_visible_resource_filter
 from app.database import async_session
 from app.config import settings
-from app.exams.models import Exam, ExamQuestion, ExamStatus, ExamStudent, StudentExamAnswer, StudentExamSubmission, StudentExamSubmissionAnswer, StudentQuestionProgress
+from app.exams.models import Exam, ExamQuestion, ExamStudent, StudentExamAnswer, StudentExamSubmission, StudentExamSubmissionAnswer, StudentQuestionProgress
 from app.questions.models import KnowledgePoint, Question, QuestionBank, QuestionImportJob, QuestionImportJobStatus, QuestionType, Tag, question_tags
 from app.questions.schemas import (
     EnhanceDraftInput,
@@ -420,17 +420,13 @@ def _extract_locked_code_content(content: Any) -> dict[str, Any]:
 
 
 async def question_is_in_use(db: AsyncSession, question_id: uuid.UUID) -> bool:
-    """Return True only when the question is in an ongoing exam.
-
-    Completed or draft exams do not lock editing — per product decision D2.
-    """
+    """Return True when the question is referenced by any non-deleted exam."""
     exam_ref = await db.scalar(
         select(ExamQuestion.question_id)
         .join(Exam, Exam.id == ExamQuestion.exam_id)
         .where(
             ExamQuestion.question_id == question_id,
             Exam.deleted_at.is_(None),
-            Exam.status == ExamStatus.ONGOING.value,
         )
         .limit(1)
     )
@@ -626,6 +622,7 @@ async def regrade_submitted_attempts_for_question_update(
         _recompute_historical_submission_scores,
         _recompute_submission_scores,
         create_grading_task,
+        refresh_student_question_progress_for_regrade,
     )
 
     normalized_fields = set(regrade_fields)
@@ -643,6 +640,7 @@ async def regrade_submitted_attempts_for_question_update(
 
         task_ids: list[str] = []
         role_binding_version: int | None = None
+        progress_refresh_keys: set[tuple[uuid.UUID, uuid.UUID]] = set()
 
         for attempt in attempts:
             exam = await db.get(Exam, attempt.exam_id)
@@ -751,6 +749,14 @@ async def regrade_submitted_attempts_for_question_update(
                 exam_student.objective_score = objective_score
                 exam_student.subjective_score = subjective_score
                 exam_student.score = round(objective_score + subjective_score, 2)
+                progress_refresh_keys.add((attempt.student_id, question_id))
+
+        for student_id, refresh_question_id in progress_refresh_keys:
+            await refresh_student_question_progress_for_regrade(
+                db,
+                student_id=student_id,
+                question_id=refresh_question_id,
+            )
 
         await db.commit()
 

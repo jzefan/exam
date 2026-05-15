@@ -755,6 +755,245 @@ async def test_run_grading_task_marks_arbitration_required_on_conflict(db_sessio
 
 
 @pytest.mark.asyncio
+async def test_run_grading_task_pins_final_to_review_when_arbiter_disabled(
+    db_session: AsyncSession,
+) -> None:
+    # ``EXAM_ARBITER_ENABLED=false`` short-circuits arbitration: the reviewer
+    # snapshot becomes the final result verbatim, regardless of how far it
+    # diverges from the primary. No "arbitration_required" status, no
+    # averaging.
+    await _create_role_binding_stack(db_session)
+
+    task = GradingTask(
+        source_type="single_debug",
+        question_type="short_answer",
+        question_content="解释幂等性",
+        max_score=10,
+        student_answer_raw="重复执行结果一致",
+        standard_answers=[{"summary": "重复执行结果一致"}],
+        rubric_definition={"dimensions": [{"key": "coverage", "weight": 1.0}]},
+        role_binding_version=1,
+        status="pending",
+    )
+    db_session.add(task)
+    await db_session.flush()
+
+    primary_provider = FakeProvider(
+        GradingProviderResult(
+            raw_content={"provider": "primary"},
+            score_total=10,
+            dimension_scores={"coverage": 10},
+            deduction_reasons=[],
+            strengths=["完整正确"],
+            improvement_suggestions=[],
+            evidence_summary={},
+            risk_flags=[],
+            provider_key="qwen-direct",
+            provider_name="qwen",
+            model_name="qwen-plus",
+            metadata={},
+        )
+    )
+    review_provider = FakeProvider(
+        GradingProviderResult(
+            raw_content={"provider": "review"},
+            score_total=6,
+            dimension_scores={"coverage": 6},
+            deduction_reasons=["缺少业务场景"],
+            strengths=["主旨正确"],
+            improvement_suggestions=["补充例子"],
+            evidence_summary={"note": "review"},
+            risk_flags=["needs_detail"],
+            provider_key="deepseek-direct",
+            provider_name="deepseek",
+            model_name="deepseek-chat",
+            metadata={},
+        )
+    )
+
+    # Simulates EXAM_ARBITER_ENABLED=false — review pins the final.
+    result = await run_grading_task(
+        db_session,
+        str(task.id),
+        primary_provider,
+        review_provider,
+        None,
+        review_only_final=True,
+    )
+    await db_session.commit()
+
+    assert result["status"] == "completed"
+    assert result["arbitration_required"] is False
+    assert result["arbiter_disabled"] is True
+
+    refreshed = await db_session.get(GradingTask, task.id)
+    assert refreshed is not None
+    assert refreshed.latest_arbitration_snapshot_id is None
+    assert refreshed.latest_final_snapshot_id is not None
+    assert refreshed.latest_final_snapshot.score_total == 6  # review's score, NOT averaged 8
+    assert refreshed.latest_final_snapshot.dimension_scores == {"coverage": 6}
+    assert refreshed.latest_final_snapshot.risk_flags == ["needs_detail"]
+
+    audit_result = await db_session.execute(
+        select(GradingAuditEvent)
+        .where(GradingAuditEvent.task_id == task.id)
+        .order_by(GradingAuditEvent.created_at)
+    )
+    events = list(audit_result.scalars().all())
+    event_types = {event.event_type for event in events}
+    # No arbitration_required / arbiter_failed events when arbiter is disabled.
+    assert "grading.arbitration_required" not in event_types
+    assert "grading.arbiter_failed" not in event_types
+    finalized = next(event for event in events if event.event_type == "grading.finalized")
+    assert finalized.event_payload.get("source") == "review_only"
+
+
+@pytest.mark.asyncio
+async def test_run_grading_task_with_role_binding_skips_arbiter_when_settings_disable_it(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # End-to-end: settings.arbiter_enabled=False must prevent
+    # ``run_grading_task_with_role_binding`` from constructing an arbiter
+    # provider, even when the role binding has one configured.
+    from app.grading import service as grading_service
+
+    monkeypatch.setattr(grading_service.settings, "arbiter_enabled", False)
+    monkeypatch.setenv("EXAM_QWEN_API_KEY", "qwen-secret")
+    monkeypatch.setenv("EXAM_DEEPSEEK_API_KEY", "deepseek-secret")
+    monkeypatch.setenv("EXAM_DOUBAO_API_KEY", "doubao-secret")
+
+    await _create_role_binding_stack(db_session)
+
+    task = GradingTask(
+        source_type="single_debug",
+        question_type="short_answer",
+        question_content="测试",
+        max_score=10,
+        student_answer_raw="answer",
+        standard_answers=[{"summary": "ref"}],
+        rubric_definition={"dimensions": []},
+        role_binding_version=1,
+        status="pending",
+    )
+    db_session.add(task)
+    await db_session.commit()
+
+    call_log: list[str] = []
+
+    async def fake_request_completion(self, payload):
+        call_log.append(self.provider_name)
+        score = 10 if self.provider_name == "qwen" else 6
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            f'{{"score_total": {score}, "dimension_scores": {{}}, '
+                            '"deduction_reasons": [], "strengths": [], '
+                            '"improvement_suggestions": [], '
+                            '"evidence_summary": {}, "risk_flags": []}'
+                        )
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr(
+        "app.grading.providers.base.BaseGradingProvider._request_completion",
+        fake_request_completion,
+    )
+
+    result = await grading_service.run_grading_task_with_role_binding(db_session, str(task.id))
+    await db_session.commit()
+
+    assert result["status"] == "completed"
+    assert result.get("arbiter_disabled") is True
+    # Exactly 2 LLM calls (primary + review). The arbiter leg is skipped, so
+    # we never even build a doubao provider; ``call_log`` therefore has 2
+    # entries, not 3.
+    assert len(call_log) == 2
+
+
+@pytest.mark.asyncio
+async def test_run_grading_task_returns_failed_status_with_detailed_audit_on_primary_error(
+    db_session: AsyncSession,
+) -> None:
+    # 回归：以前 service 在主评 / 复核失败时 raise，外层 wrapper 会 rollback 掉
+    # 这条详细审计，运维只能看到 "stage=dispatch" 的粗糙记录。现在 service
+    # 改成返回 failed dict + 已写入详细 audit，确保异常类型 / provider / 错误
+    # 文案都能落盘。
+    await _create_role_binding_stack(db_session)
+
+    task = GradingTask(
+        source_type="single_debug",
+        question_type="short_answer",
+        question_content="解释幂等性",
+        max_score=10,
+        student_answer_raw="重复执行结果相同。",
+        standard_answers=[{"summary": "重复执行结果一致"}],
+        rubric_definition={"dimensions": [{"key": "coverage", "weight": 1.0}]},
+        role_binding_version=1,
+        status="pending",
+    )
+    db_session.add(task)
+    await db_session.flush()
+
+    primary_provider = FailingProvider(
+        GradingProviderError(
+            message="normalized provider payload field 'strengths' must be a list",
+            provider_name="qwen",
+            model_name="qwen-plus",
+            raw_excerpt='{"strengths": "答得不错"}',
+        )
+    )
+    review_provider = FakeProvider(
+        GradingProviderResult(
+            raw_content={"provider": "review"},
+            score_total=9,
+            dimension_scores={"coverage": 9},
+            deduction_reasons=[],
+            strengths=[],
+            improvement_suggestions=[],
+            evidence_summary={},
+            risk_flags=[],
+            provider_key="deepseek-direct",
+            provider_name="deepseek",
+            model_name="deepseek-chat",
+            metadata={},
+        )
+    )
+
+    result = await run_grading_task(db_session, str(task.id), primary_provider, review_provider)
+    await db_session.commit()
+
+    assert result["status"] == "failed"
+    assert result["arbitration_required"] is False
+    assert result["reason"] == "primary"
+
+    refreshed = await db_session.get(GradingTask, task.id)
+    assert refreshed is not None
+    assert refreshed.status == "failed"
+    assert refreshed.latest_final_snapshot_id is None
+
+    audit_result = await db_session.execute(
+        select(GradingAuditEvent).where(
+            GradingAuditEvent.task_id == task.id,
+            GradingAuditEvent.event_type == "grading.failed",
+        )
+    )
+    failed_events = list(audit_result.scalars().all())
+    assert len(failed_events) == 1
+    payload = failed_events[0].event_payload
+    assert payload["stage"] == "primary"
+    assert payload["provider"] == "qwen"
+    assert payload["model_name"] == "qwen-plus"
+    assert payload["exception_type"].endswith("GradingProviderError")
+    assert "strengths" in payload["message"]
+    assert payload["raw_excerpt"] == '{"strengths": "答得不错"}'
+
+
+@pytest.mark.asyncio
 async def test_run_grading_task_falls_back_to_review_when_arbiter_fails_on_conflict(
     db_session: AsyncSession,
 ) -> None:

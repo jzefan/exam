@@ -50,6 +50,45 @@ def _default_providers() -> list[dict[str, object]]:
     ]
 
 
+def _humanize_doubao_model_name(model_name: str) -> str:
+    """``doubao-1-5-pro-32k-250115`` → ``Doubao 1.5 Pro 32k``.
+
+    Display names live in the DB and are otherwise hardcoded; switching the
+    arbiter model via ``EXAM_DOUBAO_MODEL_NAME`` would leave a stale label
+    like "Doubao Seed 2.0 Lite" in the UI. Derive a readable label from the
+    model id so the two stay in sync.
+    """
+    parts = model_name.split("-")
+    if not parts or parts[0].lower() != "doubao":
+        return model_name
+    parts = parts[1:]
+    # Drop trailing date-like token (6+ digits, e.g. 260428 / 250115).
+    if parts and parts[-1].isdigit() and len(parts[-1]) >= 6:
+        parts = parts[:-1]
+    # Merge consecutive single-digit tokens back into a dotted version
+    # (1, 5 → 1.5; 2, 0 → 2.0).
+    merged: list[str] = []
+    i = 0
+    while i < len(parts):
+        if (
+            i + 1 < len(parts)
+            and parts[i].isdigit()
+            and len(parts[i]) == 1
+            and parts[i + 1].isdigit()
+            and len(parts[i + 1]) == 1
+        ):
+            merged.append(f"{parts[i]}.{parts[i + 1]}")
+            i += 2
+        else:
+            merged.append(parts[i])
+            i += 1
+    pretty_parts = [
+        token if any(ch.isdigit() for ch in token) else token.capitalize()
+        for token in merged
+    ]
+    return " ".join(["Doubao", *pretty_parts]) if pretty_parts else "Doubao"
+
+
 def _default_models() -> list[dict[str, object]]:
     return [
         {
@@ -70,7 +109,7 @@ def _default_models() -> list[dict[str, object]]:
         },
         {
             "key": "doubao-arbiter-v1",
-            "display_name": "Doubao Seed 2.0 Lite",
+            "display_name": _humanize_doubao_model_name(settings.doubao_model_name),
             "model_name": settings.doubao_model_name,
             "provider_key": "doubao-arbiter",
             "temperature": 0.0,

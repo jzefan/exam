@@ -356,6 +356,47 @@ async def test_background_subjective_grading_keeps_completed_score_when_apply_st
 
 
 @pytest.mark.asyncio
+async def test_grading_semaphore_is_shared_across_concurrent_submissions(
+    monkeypatch,
+) -> None:
+    # Regression: 30 students submitting simultaneously used to each get
+    # their own ``asyncio.Semaphore(N)``, so peak concurrency was 30×N — that
+    # stampeded the LLM provider and triggered HTTP 429 across the board.
+    # The semaphore is now process-wide; here we prove that with N=2 a flood
+    # of 30 task ids never crosses 2 in-flight calls.
+    import asyncio as _asyncio
+
+    monkeypatch.setattr(student_router, "_GRADING_CONCURRENCY", 2)
+    monkeypatch.setattr(student_router, "_GRADING_SEMAPHORE", None)
+
+    in_flight = 0
+    peak = 0
+    lock = _asyncio.Lock()
+
+    async def fake_single(_task_id: str) -> None:
+        nonlocal in_flight, peak
+        async with lock:
+            in_flight += 1
+            peak = max(peak, in_flight)
+        # Yield control so other tasks have a chance to enter — without this
+        # we wouldn't observe overlap even with a broken (per-call) semaphore.
+        await _asyncio.sleep(0.01)
+        async with lock:
+            in_flight -= 1
+
+    monkeypatch.setattr(
+        student_router, "_run_single_subjective_grading_task", fake_single
+    )
+
+    # Simulate 30 concurrent submissions, each with 1 task.
+    await _asyncio.gather(
+        *[student_router._run_subjective_grading_tasks([f"task-{i}"]) for i in range(30)]
+    )
+
+    assert peak <= 2, f"shared semaphore breached: peak={peak}, expected ≤ 2"
+
+
+@pytest.mark.asyncio
 async def test_submit_exam_preserves_subjective_answer_attachments_in_grading_task(
     client: AsyncClient, db_session, monkeypatch
 ) -> None:

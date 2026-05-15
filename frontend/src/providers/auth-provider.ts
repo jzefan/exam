@@ -73,6 +73,7 @@ export const authProvider: AuthProvider = {
     return {
       id: user.id,
       name: user.full_name,
+      username: user.username,
       must_change_password: user.must_change_password,
       persona: user.persona,
       primary_org: user.primary_org,

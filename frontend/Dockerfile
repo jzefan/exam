@@ -1,14 +1,16 @@
 ARG NODE_BASE_IMAGE=node:22-alpine
 ARG FRONTEND_NGINX_IMAGE=nginx:1.27-alpine
 ARG PNPM_REGISTRY=https://registry.npmmirror.com
+ARG PNPM_VERSION=10.33.0
 FROM ${NODE_BASE_IMAGE} AS build
 ARG PNPM_REGISTRY
+ARG PNPM_VERSION
 
 # Build the static Vite bundle with pnpm.
 
 WORKDIR /app
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
 RUN pnpm config set registry "${PNPM_REGISTRY}"
 
 COPY package.json pnpm-lock.yaml ./

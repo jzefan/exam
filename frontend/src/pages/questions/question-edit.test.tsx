@@ -5,9 +5,10 @@ import { render, screen } from "@/test/test-utils";
 
 import { QuestionEdit } from "./edit";
 
-const { mutateMock, navigateMock, useUpdateMock, useOneMock, useListMock, paramsMock } = vi.hoisted(() => ({
+const { mutateMock, navigateMock, toastMock, useUpdateMock, useOneMock, useListMock, paramsMock } = vi.hoisted(() => ({
   mutateMock: vi.fn(),
   navigateMock: vi.fn(),
+  toastMock: vi.fn(),
   useUpdateMock: vi.fn(),
   useOneMock: vi.fn(),
   useListMock: vi.fn(),
@@ -74,6 +75,14 @@ vi.mock("@/components/ui/tag-selector", () => ({
   TagSelector: () => <div>TagSelector</div>,
 }));
 
+vi.mock("@/components/questions/knowledge-point-selector", () => ({
+  KnowledgePointSelector: () => <div>KnowledgePointSelector</div>,
+}));
+
+vi.mock("@/hooks/use-toast", () => ({
+  useToast: () => ({ toast: toastMock }),
+}));
+
 vi.mock("@/components/ui/popover", () => ({
   Popover: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   PopoverTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -97,6 +106,7 @@ describe("QuestionEdit", () => {
   beforeEach(() => {
     mutateMock.mockReset();
     navigateMock.mockReset();
+    toastMock.mockReset();
     paramsMock.mockReturnValue({ id: "question-1" });
     useUpdateMock.mockReturnValue({
       mutate: mutateMock,
@@ -134,6 +144,7 @@ describe("QuestionEdit", () => {
             question_bank_name: null,
             tags: [],
             knowledge_points: [],
+            edit_lock: null,
             created_by: "u1",
             created_by_name: "Teacher",
             created_at: "",
@@ -167,9 +178,52 @@ describe("QuestionEdit", () => {
             input_description: "输入两个整数",
             output_description: "输出一个整数，表示它们的和",
           }),
+          knowledge_point_ids: [],
         }),
       }),
       expect.any(Object),
     );
+  });
+
+  it("shows lock banner and disables structure editing when question is in use", () => {
+    useOneMock.mockReturnValue({
+      query: {
+        isLoading: false,
+        data: {
+          data: {
+            id: "question-1",
+            type: "choice",
+            title: "锁定题目",
+            content: { html: "<p>锁定题干</p>", text: "锁定题干" },
+            options: { A: "甲", B: "乙" },
+            answer: { correct: "A" },
+            analysis: "解析",
+            difficulty: 3,
+            score: 10,
+            usage_count: 1,
+            question_bank_id: null,
+            question_bank_name: null,
+            tags: [],
+            knowledge_points: [],
+            edit_lock: {
+              in_use: true,
+              allowed_fields: ["answer", "analysis", "difficulty", "knowledge_point_ids", "code_test_cases"],
+              regrade_on_fields: ["answer", "code_test_cases"],
+              has_submitted_attempts: true,
+            },
+            created_by: "u1",
+            created_by_name: "Teacher",
+            created_at: "",
+            updated_at: "",
+          },
+        },
+      },
+    });
+
+    render(<QuestionEdit />);
+
+    expect(screen.getByText("题目内容已锁定")).toBeInTheDocument();
+    expect(screen.getByText(/系统会自动重新评分受影响的已提交答卷/)).toBeInTheDocument();
+    expect(screen.getByDisplayValue("10")).toBeDisabled();
   });
 });

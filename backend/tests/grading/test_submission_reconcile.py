@@ -21,7 +21,7 @@ from app.exams.models import (
     StudentExamSubmission,
     StudentExamSubmissionAnswer,
 )
-from app.grading.models import GradingTask
+from app.grading.models import GradingResultSnapshot, GradingTask
 from app.grading.service import (
     _has_pending_exam_submission_tasks,
     apply_grading_task_failure_to_exam_submission,
@@ -347,6 +347,76 @@ async def test_recover_pending_exam_submission_tasks_returns_empty_when_clean(
     db_session: AsyncSession,
 ) -> None:
     assert await recover_pending_exam_submission_tasks(db_session) == []
+
+
+@pytest.mark.asyncio
+async def test_recover_pending_exam_submission_tasks_requeues_stuck_arbitration_required(
+    db_session: AsyncSession,
+) -> None:
+    # 历史任务：仲裁失败卡在 arbitration_required 且没有 final snapshot。
+    # 启动恢复应该把它重置为 pending，让新代码（带豆包修复 + review 回退）
+    # 再跑一次，把 final snapshot 写出来。
+    exam, exam_student, question, _answer, submission, _sub_answer = await _seed_submitted_subjective_exam(db_session)
+    stuck = _make_grading_task(
+        exam_id=exam.id,
+        student_id=exam_student.student_id,
+        question_id=question.id,
+        submission_id=submission.id,
+        status="arbitration_required",
+    )
+    db_session.add(stuck)
+    await db_session.flush()
+    assert stuck.latest_final_snapshot_id is None
+
+    recovered = await recover_pending_exam_submission_tasks(db_session)
+    await db_session.refresh(stuck)
+
+    assert str(stuck.id) in set(recovered)
+    assert stuck.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_recover_skips_arbitration_required_with_final_snapshot(
+    db_session: AsyncSession,
+) -> None:
+    # 教师已经人工裁决，task.status 仍是 arbitration_required，但已存在 final
+    # snapshot 的情况下不该被回收（避免覆盖人工分数）。
+    exam, exam_student, question, _answer, submission, _sub_answer = await _seed_submitted_subjective_exam(db_session)
+    resolved = _make_grading_task(
+        exam_id=exam.id,
+        student_id=exam_student.student_id,
+        question_id=question.id,
+        submission_id=submission.id,
+        status="arbitration_required",
+    )
+    db_session.add(resolved)
+    await db_session.flush()
+
+    snapshot = GradingResultSnapshot(
+        task_id=resolved.id,
+        snapshot_type="final",
+        score_total=8,
+        dimension_scores={"coverage": 8},
+        dimension_comments={},
+        deduction_reasons=[],
+        strengths=[],
+        improvement_suggestions=[],
+        evidence_summary={},
+        risk_flags=[],
+        prompt_template_version=resolved.prompt_template_version,
+        role_binding_version=resolved.role_binding_version,
+        created_by="teacher",
+    )
+    db_session.add(snapshot)
+    await db_session.flush()
+    resolved.latest_final_snapshot_id = snapshot.id
+    await db_session.flush()
+
+    recovered = await recover_pending_exam_submission_tasks(db_session)
+    await db_session.refresh(resolved)
+
+    assert str(resolved.id) not in set(recovered)
+    assert resolved.status == "arbitration_required"
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.auth.schemas import UserCreate
 from app.auth.security import create_access_token
 from app.auth.service import create_user
-from app.exams.models import Exam, ExamQuestion, ExamStudent, GradingStatus, StudentExamAnswer, StudentExamSubmission, StudentExamSubmissionAnswer
+from app.exams.models import Exam, ExamQuestion, ExamStudent, GradingStatus, StudentExamAnswer, StudentExamSubmission, StudentExamSubmissionAnswer, StudentQuestionProgress
 from app.grading.models import GradingTask, ModelConfig, ProviderConfig, RoleBinding
 from app.questions.models import Question, QuestionType
 from app.questions.service import regrade_submitted_attempts_for_question_update
@@ -420,6 +420,193 @@ async def test_regrade_objective_question_updates_only_submitted_non_deleted_att
     ).scalar_one()
     assert deleted_exam_answer.score_awarded == 0.0
     assert deleted_exam_answer.is_correct is False
+
+
+@pytest.mark.asyncio
+async def test_regrade_objective_question_removes_fixed_wrong_answer_from_progress(
+    db_session,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("app.questions.service.async_session", lambda: _SessionFactory(db_session))
+
+    teacher = await create_user(
+        db_session,
+        UserCreate(
+            username="question-regrade-progress-fixed-teacher",
+            email="question-regrade-progress-fixed-teacher@example.com",
+            password="teacherpass123",
+            full_name="Question Regrade Progress Teacher",
+            role_name="teacher",
+        ),
+    )
+    student = await create_user(
+        db_session,
+        UserCreate(
+            username="question-regrade-progress-fixed-student",
+            email="question-regrade-progress-fixed-student@example.com",
+            password="studentpass123",
+            full_name="Question Regrade Progress Student",
+            role_name="student",
+        ),
+    )
+
+    question = Question(
+        type=QuestionType.CHOICE,
+        title="选择题",
+        content={"text": "<p>2+2=?</p>"},
+        options={"A": "3", "B": "4"},
+        answer={"correct": "A"},
+        analysis="旧答案",
+        difficulty=1,
+        score=5.0,
+        usage_count=0,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    db_session.add(question)
+    await db_session.flush()
+
+    exam = Exam(
+        title="错题本同步考试",
+        description=None,
+        start_time=datetime.now(timezone.utc) - timedelta(minutes=15),
+        end_time=datetime.now(timezone.utc) + timedelta(minutes=45),
+        duration_minutes=60,
+        total_score=5,
+        status="ongoing",
+        max_switch_count=0,
+        show_result=True,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    db_session.add(exam)
+    await db_session.flush()
+    db_session.add(ExamQuestion(exam_id=exam.id, question_id=question.id, order=0))
+    await _create_submitted_attempt(
+        db_session,
+        exam=exam,
+        question=question,
+        student_id=student.id,
+        answer_content={"selected": ["B"]},
+        score_awarded=0.0,
+        is_correct=False,
+    )
+    db_session.add(
+        StudentQuestionProgress(
+            student_id=student.id,
+            question_id=question.id,
+            last_exam_id=exam.id,
+            wrong_count=1,
+            last_wrong_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+            mastered=False,
+        )
+    )
+    question.answer = {"correct": "B"}
+    await db_session.commit()
+
+    await regrade_submitted_attempts_for_question_update(question.id, {"answer"})
+
+    progress = (
+        await db_session.execute(
+            select(StudentQuestionProgress).where(
+                StudentQuestionProgress.student_id == student.id,
+                StudentQuestionProgress.question_id == question.id,
+            )
+        )
+    ).scalar_one()
+    assert progress.wrong_count == 0
+    assert progress.mastered is True
+    assert progress.last_exam_id is None
+    assert progress.last_wrong_at is None
+    assert progress.mastered_at is not None
+
+
+@pytest.mark.asyncio
+async def test_regrade_objective_question_adds_newly_wrong_answer_to_progress(
+    db_session,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("app.questions.service.async_session", lambda: _SessionFactory(db_session))
+
+    teacher = await create_user(
+        db_session,
+        UserCreate(
+            username="question-regrade-progress-new-teacher",
+            email="question-regrade-progress-new-teacher@example.com",
+            password="teacherpass123",
+            full_name="Question Regrade Progress New Teacher",
+            role_name="teacher",
+        ),
+    )
+    student = await create_user(
+        db_session,
+        UserCreate(
+            username="question-regrade-progress-new-student",
+            email="question-regrade-progress-new-student@example.com",
+            password="studentpass123",
+            full_name="Question Regrade Progress New Student",
+            role_name="student",
+        ),
+    )
+
+    question = Question(
+        type=QuestionType.CHOICE,
+        title="选择题",
+        content={"text": "<p>2+2=?</p>"},
+        options={"A": "3", "B": "4"},
+        answer={"correct": "B"},
+        analysis="旧答案",
+        difficulty=1,
+        score=5.0,
+        usage_count=0,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    db_session.add(question)
+    await db_session.flush()
+
+    exam = Exam(
+        title="错题本新增考试",
+        description=None,
+        start_time=datetime.now(timezone.utc) - timedelta(minutes=15),
+        end_time=datetime.now(timezone.utc) + timedelta(minutes=45),
+        duration_minutes=60,
+        total_score=5,
+        status="ongoing",
+        max_switch_count=0,
+        show_result=True,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    db_session.add(exam)
+    await db_session.flush()
+    db_session.add(ExamQuestion(exam_id=exam.id, question_id=question.id, order=0))
+    await _create_submitted_attempt(
+        db_session,
+        exam=exam,
+        question=question,
+        student_id=student.id,
+        answer_content={"selected": ["B"]},
+        score_awarded=5.0,
+        is_correct=True,
+    )
+    question.answer = {"correct": "A"}
+    await db_session.commit()
+
+    await regrade_submitted_attempts_for_question_update(question.id, {"answer"})
+
+    progress = (
+        await db_session.execute(
+            select(StudentQuestionProgress).where(
+                StudentQuestionProgress.student_id == student.id,
+                StudentQuestionProgress.question_id == question.id,
+            )
+        )
+    ).scalar_one()
+    assert progress.wrong_count == 1
+    assert progress.mastered is False
+    assert progress.last_exam_id == exam.id
+    assert progress.last_wrong_at is not None
 
 
 @pytest.mark.asyncio

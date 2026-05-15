@@ -457,6 +457,12 @@ export interface IQuestion {
   question_bank_name: string | null;
   tags: ITag[];
   knowledge_points: IKnowledgePoint[];
+  edit_lock?: {
+    in_use: boolean;
+    allowed_fields: string[];
+    regrade_on_fields: string[];
+    has_submitted_attempts: boolean;
+  } | null;
   created_by: string;
   created_by_name: string;
   created_at: string;

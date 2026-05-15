@@ -39,10 +39,15 @@ const navItems = [
 
 export function StudentLayout() {
   const { mutate: logout } = useLogout();
-  const { data: identity } = useGetIdentity<{ name: string; primary_org?: { role_name: string } | null }>();
+  const { data: identity } = useGetIdentity<{
+    name: string;
+    username?: string;
+    primary_org?: { role_name: string } | null;
+  }>();
   const [notifications, setNotifications] = useState<IStudentNotification[]>([]);
   const [activeNotification, setActiveNotification] = useState<IStudentNotification | null>(null);
   const name = identity?.name ?? "考生";
+  const account = identity?.username ?? name;
   const initials = name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
 
   useEffect(() => {
@@ -129,7 +134,7 @@ export function StudentLayout() {
               <DropdownMenuContent align="end" className="w-52 rounded-2xl border-border/40 p-1.5 shadow-2xl">
                 <div className="mb-1 border-b border-border/40 px-2 py-2">
                   <p className="text-xs font-black text-foreground">{name}</p>
-                  <p className="truncate text-[10px] font-medium text-muted-foreground">学号：20240407001</p>
+                  <p className="truncate text-[10px] font-medium text-muted-foreground">账号：{account}</p>
                 </div>
                 <DropdownMenuItem onClick={() => logout()} className="rounded-xl font-semibold text-destructive focus:bg-destructive/10 focus:text-destructive">
                   <LogOut size={14} className="mr-2" />

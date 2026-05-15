@@ -1,4 +1,6 @@
 import asyncio
+from collections import Counter
+import hashlib
 import json
 import logging
 import os
@@ -7,6 +9,7 @@ import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Annotated, Any
+import unicodedata
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, WebSocket, WebSocketException, status
 import httpx
@@ -92,6 +95,10 @@ def _strip_html(value: str | None) -> str:
 _FILL_IN_BLANK_PLACEHOLDER_RE = re.compile(r"_{3,}|（\s*）|\(\s*\)|【\s*】")
 _FILL_IN_EDGE_PUNCT_RE = re.compile(r"^[\s,，、.。．;；:：]+|[\s,，、.。．;；:：]+$")
 _FILL_IN_GRADING_MODEL = "deepseek-v4-flash"
+_FILL_IN_INVISIBLE_CHAR_RE = re.compile(r"[\u200b\u200c\u200d\ufeff]")
+_FILL_IN_SIMPLE_SUBSCRIPT_RE = re.compile(r"_\{([a-z0-9]+)\}")
+_FILL_IN_FORMULA_SPACING_RE = re.compile(r"\s*([{}_^=+\-*/(),;:])\s*")
+_FILL_IN_GRADING_CACHE_KEY = "_fill_in_grading_cache"
 
 
 def _get_fill_in_expected_answers(answer: dict[str, Any]) -> list[str]:
@@ -113,11 +120,122 @@ def _count_fill_in_placeholders(content: dict[str, Any]) -> int:
 
 
 def _normalize_fill_in_text(value: str) -> str:
-    return _FILL_IN_EDGE_PUNCT_RE.sub("", _normalize_text(value))
+    normalized = unicodedata.normalize("NFKC", value or "")
+    normalized = _FILL_IN_INVISIBLE_CHAR_RE.sub("", normalized)
+    normalized = (
+        normalized
+        .replace("，", ",")
+        .replace("。", ".")
+        .replace("．", ".")
+        .replace("：", ":")
+        .replace("；", ";")
+        .replace("（", "(")
+        .replace("）", ")")
+    )
+
+    if any(marker in normalized for marker in ("\\", "^", "_", "{", "}")):
+        normalized = normalized.replace(r"\left", "").replace(r"\right", "")
+        normalized = _FILL_IN_SIMPLE_SUBSCRIPT_RE.sub(r"_\1", normalized)
+        normalized = _FILL_IN_FORMULA_SPACING_RE.sub(r"\1", normalized)
+
+    return _FILL_IN_EDGE_PUNCT_RE.sub("", _normalize_text(normalized))
 
 
 def _is_fill_in_exact_match(actual: str, expected: str) -> bool:
     return _normalize_fill_in_text(actual) == _normalize_fill_in_text(expected)
+
+
+def _has_fill_in_answer(provided_list: list[str]) -> bool:
+    return any(_normalize_fill_in_text(item) for item in provided_list)
+
+
+def _is_fill_in_unordered_full_match(provided_list: list[str], expected_list: list[str]) -> bool:
+    if len(provided_list) != len(expected_list):
+        return False
+    normalized_provided = [_normalize_fill_in_text(item) for item in provided_list]
+    normalized_expected = [_normalize_fill_in_text(item) for item in expected_list]
+    if any(not item for item in normalized_provided) or any(not item for item in normalized_expected):
+        return False
+    return Counter(normalized_provided) == Counter(normalized_expected)
+
+
+def _build_fill_in_grading_signature(
+    *,
+    expected_list: list[str],
+    provided_list: list[str],
+    score: float,
+) -> str:
+    payload = {
+        "expected": [_normalize_fill_in_text(item) for item in expected_list],
+        "provided": [_normalize_fill_in_text(item) for item in provided_list],
+        "score": round(float(score), 4),
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _get_cached_fill_in_grading(
+    answer_content: dict[str, Any],
+    signature: str,
+) -> tuple[float, bool, dict[str, Any]] | None:
+    cache = answer_content.get(_FILL_IN_GRADING_CACHE_KEY)
+    if not isinstance(cache, dict) or cache.get("signature") != signature:
+        return None
+    feedback = cache.get("feedback")
+    if not isinstance(feedback, dict):
+        return None
+    try:
+        score = float(cache.get("score_awarded", 0.0))
+    except (TypeError, ValueError):
+        return None
+    return score, bool(cache.get("is_correct")), deepcopy(feedback)
+
+
+def _set_cached_fill_in_grading(
+    answer_content: dict[str, Any],
+    *,
+    signature: str,
+    score_awarded: float,
+    is_correct: bool,
+    feedback: dict[str, Any],
+) -> None:
+    answer_content[_FILL_IN_GRADING_CACHE_KEY] = {
+        "signature": signature,
+        "score_awarded": score_awarded,
+        "is_correct": is_correct,
+        "feedback": deepcopy(feedback),
+        "evaluated_at": _utcnow().isoformat(),
+    }
+
+
+def _strip_internal_answer_metadata(answer_content: Any) -> dict[str, Any]:
+    if not isinstance(answer_content, dict):
+        return {}
+    cleaned = deepcopy(answer_content)
+    cleaned.pop(_FILL_IN_GRADING_CACHE_KEY, None)
+    return cleaned
+
+
+def _build_public_saved_answers(saved_answers: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(saved_answers, dict):
+        return {}
+    return {
+        str(question_id): _strip_internal_answer_metadata(answer_content)
+        for question_id, answer_content in saved_answers.items()
+    }
+
+
+def _carry_forward_fill_in_cache(
+    *,
+    incoming: dict[str, Any],
+    previous: Any,
+) -> dict[str, Any]:
+    answer_content = deepcopy(incoming)
+    if _FILL_IN_GRADING_CACHE_KEY in answer_content:
+        return answer_content
+    if isinstance(previous, dict) and isinstance(previous.get(_FILL_IN_GRADING_CACHE_KEY), dict):
+        answer_content[_FILL_IN_GRADING_CACHE_KEY] = deepcopy(previous[_FILL_IN_GRADING_CACHE_KEY])
+    return answer_content
 
 
 
@@ -372,22 +490,39 @@ def _build_grading_task_payload(
     }
 
 
-# Cap concurrent LLM grading calls. Providers rate-limit aggressively, and we
-# share this budget across all in-flight submissions on the worker. Set via env
-# if more parallelism is safe for your account.
+# Cap concurrent LLM grading calls. Providers rate-limit aggressively (the
+# doubao arbiter account, for example, runs at ~1 QPS). The semaphore is
+# **module-level** so the budget is shared across every in-flight student
+# submission on this worker — otherwise 30 students submitting at once would
+# each get their own Semaphore(N) and 30×N concurrent calls would stampede
+# the upstream provider. Tune via ``EXAM_GRADING_CONCURRENCY`` to match the
+# slowest provider's rate limit.
 _GRADING_CONCURRENCY = int(os.environ.get("EXAM_GRADING_CONCURRENCY", "3") or 3)
+_GRADING_SEMAPHORE: asyncio.Semaphore | None = None
+
+
+def _get_grading_semaphore() -> asyncio.Semaphore:
+    # Lazy init — ``asyncio.Semaphore`` must be created inside a running event
+    # loop on older Pythons, and lazily ensures we pick up the worker's loop
+    # rather than capturing one at import time.
+    global _GRADING_SEMAPHORE
+    if _GRADING_SEMAPHORE is None:
+        _GRADING_SEMAPHORE = asyncio.Semaphore(_GRADING_CONCURRENCY)
+    return _GRADING_SEMAPHORE
 
 
 async def _run_subjective_grading_tasks(task_ids: list[str]) -> None:
     """Drive a batch of grading tasks with bounded concurrency.
 
     Each task owns its own DB session so a failure in one cannot poison the
-    others' transaction state. Concurrency is bounded by ``_GRADING_CONCURRENCY``
-    to avoid stampeding the upstream LLM provider.
+    others' transaction state. Concurrency is bounded by the **shared**
+    process-wide semaphore so that simultaneous submissions don't multiply
+    the LLM call rate (30 submitters × Semaphore(3) ≠ 90 in flight; it's
+    still 3).
     """
     if not task_ids:
         return
-    semaphore = asyncio.Semaphore(_GRADING_CONCURRENCY)
+    semaphore = _get_grading_semaphore()
 
     async def _run(task_id: str) -> None:
         async with semaphore:
@@ -431,6 +566,15 @@ async def _run_single_subjective_grading_task(task_id: str) -> None:
                 task_id,
                 reason=result.get("reason") or "arbitration_required",
                 needs_human_review=True,
+            )
+            return
+        if task_status == "failed":
+            # 主评 / 复核失败：service 已经写了详细审计；这里只做考生侧 reconcile，
+            # 不写额外的 grading.failed（否则会冲淡 service 那条精细记录）。
+            await _reconcile_failed_grading_task(
+                db,
+                task_id,
+                reason=result.get("reason") or "grading_failed",
             )
             return
         if task_status != "completed":
@@ -659,6 +803,65 @@ async def _grade_fill_in_question_with_ai(
     provided = answer_content.get("blanks", [])
     provided_list = [str(item) for item in provided] if isinstance(provided, list) else [str(provided)]
     total = max(len(expected_list), 1)
+    signature = _build_fill_in_grading_signature(
+        expected_list=expected_list,
+        provided_list=provided_list,
+        score=score,
+    )
+
+    cached = _get_cached_fill_in_grading(answer_content, signature)
+    if cached is not None:
+        return cached
+
+    if not _has_fill_in_answer(provided_list):
+        feedback = {
+            "dimensions": [
+                {
+                    "name": "填空准确率",
+                    "score": 0.0,
+                    "max_score": score,
+                    "comment": "尚未作答。",
+                }
+            ],
+            "strengths": [],
+            "deductions": ["未填写答案。"],
+            "suggestions": ["请先填写答案。"],
+        }
+        _set_cached_fill_in_grading(
+            answer_content,
+            signature=signature,
+            score_awarded=0.0,
+            is_correct=False,
+            feedback=feedback,
+        )
+        return 0.0, False, feedback
+
+    if expected_list and _is_fill_in_unordered_full_match(provided_list, expected_list):
+        feedback = {
+            "dimensions": [
+                {
+                    "name": "填空准确率",
+                    "score": score,
+                    "max_score": score,
+                    "comment": f"共命中 {len(expected_list)}/{len(expected_list)} 个空。",
+                }
+            ],
+            "strengths": ["答案内容完整，顺序差异不影响判定。"],
+            "deductions": [],
+            "suggestions": [],
+        }
+        _set_cached_fill_in_grading(
+            answer_content,
+            signature=signature,
+            score_awarded=score,
+            is_correct=True,
+            feedback=feedback,
+        )
+        return (
+            score,
+            True,
+            feedback,
+        )
 
     match_flags = [False] * len(expected_list)
     ai_reasons: dict[int, str] = {}
@@ -697,23 +900,27 @@ async def _grade_fill_in_question_with_ai(
         for index, reason in sorted(ai_reasons.items())
     ]
 
-    return (
-        actual_score,
-        correct,
-        {
-            "dimensions": [
-                {
-                    "name": "填空准确率",
-                    "score": actual_score,
-                    "max_score": score,
-                    "comment": f"共命中 {matched}/{total} 个空。",
-                }
-            ],
-            "strengths": ([f"命中 {matched} 个空。"] if matched else []) + ai_strengths,
-            "deductions": missing_points,
-            "suggestions": ["复查拼写、术语与顺序。"] if not correct else [],
-        },
+    feedback = {
+        "dimensions": [
+            {
+                "name": "填空准确率",
+                "score": actual_score,
+                "max_score": score,
+                "comment": f"共命中 {matched}/{total} 个空。",
+            }
+        ],
+        "strengths": ([f"命中 {matched} 个空。"] if matched else []) + ai_strengths,
+        "deductions": missing_points,
+        "suggestions": ["复查拼写、术语与顺序。"] if not correct else [],
+    }
+    _set_cached_fill_in_grading(
+        answer_content,
+        signature=signature,
+        score_awarded=actual_score,
+        is_correct=correct,
+        feedback=feedback,
     )
+    return actual_score, correct, feedback
 
 
 async def _grade_question_with_ai(
@@ -1039,7 +1246,7 @@ async def start_exam(
         started_at=exam_student.started_at,
         end_time=exam.end_time,
         questions=questions,
-        saved_answers={str(key): value for key, value in (exam_student.saved_answers or {}).items()},
+        saved_answers=_build_public_saved_answers(exam_student.saved_answers),
         switch_count=exam_student.switch_count,
     )
 
@@ -1118,8 +1325,21 @@ async def save_answers(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exam already submitted")
 
     saved_answers = dict(exam_student.saved_answers or {})
+    exam_questions_by_id = {item.question_id: item for item in exam.exam_questions}
     for item in payload.answers:
-        saved_answers[str(item.question_id)] = deepcopy(item.answer_content)
+        previous_answer = saved_answers.get(str(item.question_id))
+        answer_content = _carry_forward_fill_in_cache(
+            incoming=deepcopy(item.answer_content),
+            previous=previous_answer,
+        )
+        exam_question = exam_questions_by_id.get(item.question_id)
+        if exam_question is not None:
+            question = exam_question.question
+            question_type = question.type.value if isinstance(question.type, QuestionType) else str(question.type)
+            if question_type == QuestionType.FILL_IN.value:
+                question_score = exam_question.score_override if exam_question.score_override is not None else question.score
+                await _grade_question_with_ai(question, answer_content, question_score)
+        saved_answers[str(item.question_id)] = answer_content
     exam_student.saved_answers = saved_answers
     await db.commit()
     return {"saved": len(payload.answers)}
@@ -1156,8 +1376,10 @@ async def submit_exam(
 
     answers_map = dict(exam_student.saved_answers or {})
     for item in payload.answers if payload else []:
-        answers_map[str(item.question_id)] = deepcopy(item.answer_content)
-    exam_student.saved_answers = answers_map
+        answers_map[str(item.question_id)] = _carry_forward_fill_in_cache(
+            incoming=deepcopy(item.answer_content),
+            previous=answers_map.get(str(item.question_id)),
+        )
 
     now = _utcnow()
     next_attempt_no = exam_student.submission_count + 1
@@ -1195,6 +1417,8 @@ async def submit_exam(
     for exam_question in sorted_exam_questions:
         question = exam_question.question
         answer_content = deepcopy(answers_map.get(str(question.id), {}))
+        if not isinstance(answer_content, dict):
+            answer_content = {}
         question_score = exam_question.score_override if exam_question.score_override is not None else question.score
         question_type = question.type.value if isinstance(question.type, QuestionType) else str(question.type)
         is_subjective = _is_subjective_question_type(question_type)
@@ -1220,12 +1444,14 @@ async def submit_exam(
             score_awarded, is_correct, feedback = await _grade_question_with_ai(question, answer_content, question_score)
             objective_score += score_awarded
 
+        answers_map[str(question.id)] = deepcopy(answer_content)
+        public_answer_content = _strip_internal_answer_metadata(answer_content)
         answer_rows.append(
             StudentExamAnswer(
                 exam_id=exam.id,
                 student_id=user.id,
                 question_id=question.id,
-                answer_content=answer_content,
+                answer_content=public_answer_content,
                 score_awarded=score_awarded,
                 is_correct=is_correct,
                 feedback=feedback,
@@ -1237,7 +1463,7 @@ async def submit_exam(
                 exam_id=exam.id,
                 student_id=user.id,
                 question_id=question.id,
-                answer_content=answer_content,
+                answer_content=deepcopy(public_answer_content),
                 score_awarded=score_awarded,
                 is_correct=is_correct,
                 feedback=feedback,
@@ -1257,6 +1483,7 @@ async def submit_exam(
         task_ids.append(str(task.id))
 
     exam_student.submitted_at = now
+    exam_student.saved_answers = answers_map
     exam_student.latest_submission_id = submission.id
     exam_student.submission_count = next_attempt_no
     exam_student.objective_score = round(objective_score, 2)

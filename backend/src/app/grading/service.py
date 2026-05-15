@@ -12,7 +12,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -27,6 +27,7 @@ from app.exams.models import (
     StudentExamSubmission,
     StudentExamSubmissionAnswer,
     StudentNotification,
+    StudentQuestionProgress,
 )
 from app.grading.models import GradingAuditEvent, GradingResultSnapshot, GradingTask, ModelConfig, RoleBinding
 from app.questions.models import Question, QuestionType
@@ -551,6 +552,19 @@ def _trim_failure_detail(value: str | None, max_length: int = 240) -> str | None
     return f"{compact[:max_length].rstrip()}..."
 
 
+def _exception_message(exc: BaseException) -> str:
+    """Best-effort human-readable exception message.
+
+    httpx and some asyncio exceptions have empty ``str()`` (e.g.
+    ``RemoteProtocolError("")``), which makes audit logs useless. Fall back
+    to the exception class so operators always know what failed.
+    """
+    text = str(exc).strip()
+    if text:
+        return text
+    return f"{type(exc).__module__}.{type(exc).__name__}: {exc!r}"
+
+
 async def _load_role_binding(db: AsyncSession, version: int) -> RoleBinding:
     result = await db.execute(
         select(RoleBinding)
@@ -588,8 +602,25 @@ async def run_grading_task_with_role_binding(
     binding = await _load_role_binding(db, task.role_binding_version)
     primary_provider = _build_provider_for_model(binding.grader_model)
     review_provider = _build_provider_for_model(binding.reviewer_model)
-    arbiter_provider = _build_optional_provider_for_model(binding.arbiter_model)
-    return await run_grading_task(db, task_id, primary_provider, review_provider, arbiter_provider, locale)
+    # ``EXAM_ARBITER_ENABLED=false`` skips the arbiter entirely and pins the
+    # final score to the reviewer's. Keep it off until the upstream account
+    # has enough QPS quota to absorb concurrent arbitration calls under
+    # exam load.
+    arbiter_enabled = bool(settings.arbiter_enabled)
+    arbiter_provider = (
+        _build_optional_provider_for_model(binding.arbiter_model)
+        if arbiter_enabled
+        else None
+    )
+    return await run_grading_task(
+        db,
+        task_id,
+        primary_provider,
+        review_provider,
+        arbiter_provider,
+        locale,
+        review_only_final=not arbiter_enabled,
+    )
 
 
 async def create_grading_task(
@@ -803,9 +834,11 @@ async def get_grading_candidate_detail(
             select(GradingTask)
             .options(
                 selectinload(GradingTask.snapshots).selectinload(GradingResultSnapshot.model_config),
+                selectinload(GradingTask.latest_primary_snapshot),
+                selectinload(GradingTask.latest_review_snapshot),
+                selectinload(GradingTask.latest_arbitration_snapshot),
                 selectinload(GradingTask.latest_final_snapshot),
                 selectinload(GradingTask.latest_manual_snapshot),
-                selectinload(GradingTask.latest_arbitration_snapshot),
                 selectinload(GradingTask.audit_events),
             )
             .where(GradingTask.id == uuid.UUID(task_id))
@@ -908,11 +941,22 @@ async def get_grading_candidate_detail(
         ),
     }
     
-    # Base model results
-    snapshots = sorted(
-        [snapshot for snapshot in task.snapshots if snapshot.snapshot_type in {"primary", "review", "arbiter"}],
-        key=lambda snapshot: SNAPSHOT_TYPE_ORDER.get(snapshot.snapshot_type, 99),
-    )
+    # Base model results — only show the *latest* snapshot per role. Each
+    # re-run creates new primary/review/arbiter snapshots; we don't want the
+    # UI to show "Qwen × 2, DeepSeek × 2, Doubao × 2" after a regrade. Read
+    # directly from the eagerly-loaded ``latest_*`` relations so a stale
+    # ``task.snapshots`` collection (left over from an earlier load in the
+    # same session) can't reintroduce duplicates.
+    snapshots = [
+        snapshot
+        for snapshot in (
+            task.latest_primary_snapshot,
+            task.latest_review_snapshot,
+            task.latest_arbitration_snapshot,
+        )
+        if snapshot is not None
+    ]
+    snapshots.sort(key=lambda snapshot: SNAPSHOT_TYPE_ORDER.get(snapshot.snapshot_type, 99))
     
     # Follow-up results grouped by review round, not by prompt text.
     follow_up_snapshots = sorted(
@@ -1485,6 +1529,69 @@ async def _recompute_historical_submission_scores(
     return round(objective_score, 2), round(subjective_score, 2)
 
 
+async def refresh_student_question_progress_for_regrade(
+    db: AsyncSession,
+    *,
+    student_id: uuid.UUID,
+    question_id: uuid.UUID,
+) -> None:
+    wrong_rows = (
+        await db.execute(
+            select(StudentExamAnswer.exam_id, ExamStudent.submitted_at)
+            .join(Exam, Exam.id == StudentExamAnswer.exam_id)
+            .join(
+                ExamStudent,
+                and_(
+                    ExamStudent.exam_id == StudentExamAnswer.exam_id,
+                    ExamStudent.student_id == StudentExamAnswer.student_id,
+                ),
+            )
+            .where(
+                StudentExamAnswer.student_id == student_id,
+                StudentExamAnswer.question_id == question_id,
+                StudentExamAnswer.is_correct.is_(False),
+                Exam.deleted_at.is_(None),
+                ExamStudent.submitted_at.is_not(None),
+            )
+        )
+    ).all()
+
+    progress = (
+        await db.execute(
+            select(StudentQuestionProgress).where(
+                StudentQuestionProgress.student_id == student_id,
+                StudentQuestionProgress.question_id == question_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+    if not wrong_rows:
+        if progress is not None:
+            progress.wrong_count = 0
+            progress.last_exam_id = None
+            progress.last_wrong_at = None
+            progress.mastered = True
+            progress.mastered_at = _utcnow()
+        return
+
+    latest_exam_id, latest_wrong_at = max(
+        wrong_rows,
+        key=lambda item: item[1] or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    if progress is None:
+        progress = StudentQuestionProgress(
+            student_id=student_id,
+            question_id=question_id,
+        )
+        db.add(progress)
+
+    progress.wrong_count = len(wrong_rows)
+    progress.last_exam_id = latest_exam_id
+    progress.last_wrong_at = latest_wrong_at
+    progress.mastered = False
+    progress.mastered_at = None
+
+
 # Only tasks that are actively being processed should keep an exam submission in
 # PENDING_AI. Terminal-but-not-completed states (failed, arbitration_required)
 # must not strand the entire submission — those questions get surfaced
@@ -1578,6 +1685,11 @@ async def apply_grading_task_result_to_exam_submission(db: AsyncSession, task_id
             exam_student.grading_status = GradingStatus.AI_SCORED.value
             exam_student.ai_scored_at = now
         exam_student.graded_at = now
+        await refresh_student_question_progress_for_regrade(
+            db,
+            student_id=student_id,
+            question_id=answer.question_id,
+        )
     elif submission is not None:
         if await _has_pending_exam_submission_tasks(
             db,
@@ -1701,17 +1813,29 @@ async def recover_pending_exam_submission_tasks(db: AsyncSession) -> list[str]:
     forever and the matching ``exam_student.grading_status`` stays in
     ``PENDING_AI``. We reset ``running`` to ``pending`` (so the dispatcher will
     treat them as fresh work) and return all task ids that should be re-run.
+
+    We also re-queue ``arbitration_required`` tasks that never produced a final
+    snapshot. Historically those got stuck when the arbiter provider failed
+    (e.g. doubao 400/429) before we added the review-fallback path; once the
+    fix is deployed, re-running them lets the new code finalize a snapshot
+    instead of leaving the candidate at "AI 尚未评估".
     """
     result = await db.execute(
         select(GradingTask).where(
             GradingTask.source_type == "exam_submission",
-            GradingTask.status.in_(("pending", "running")),
+            or_(
+                GradingTask.status.in_(("pending", "running")),
+                and_(
+                    GradingTask.status == "arbitration_required",
+                    GradingTask.latest_final_snapshot_id.is_(None),
+                ),
+            ),
         )
     )
     tasks = result.scalars().all()
     task_ids: list[str] = []
     for task in tasks:
-        if task.status == "running":
+        if task.status in ("running", "arbitration_required"):
             task.status = "pending"
         task_ids.append(str(task.id))
     if tasks:
@@ -1861,9 +1985,11 @@ async def get_final_report(
             selectinload(GradingTask.snapshots).selectinload(GradingResultSnapshot.model_config),
             selectinload(GradingTask.snapshots).selectinload(GradingResultSnapshot.provider_config),
             selectinload(GradingTask.audit_events),
+            selectinload(GradingTask.latest_primary_snapshot),
+            selectinload(GradingTask.latest_review_snapshot),
+            selectinload(GradingTask.latest_arbitration_snapshot),
             selectinload(GradingTask.latest_final_snapshot),
             selectinload(GradingTask.latest_manual_snapshot),
-            selectinload(GradingTask.latest_arbitration_snapshot),
         )
         .where(GradingTask.id == uuid.UUID(task_id))
     )
@@ -1881,8 +2007,29 @@ async def get_final_report(
         binding = await _load_role_binding(db, task.role_binding_version)
     except ValueError:
         binding = None
+    # Keep only the *latest* primary/review/arbiter snapshots — historical
+    # ones from earlier grading runs would otherwise duplicate model entries
+    # in the inbox detail. The latest 3 role snapshots are sourced directly
+    # from ``task.latest_*_snapshot`` so a stale ``task.snapshots`` cache
+    # (left over from a prior load in the same session) can't reintroduce
+    # duplicates. ``final``/``manual``/``follow_up`` come from ``task.snapshots``
+    # as-is.
+    role_snapshots = [
+        snapshot
+        for snapshot in (
+            task.latest_primary_snapshot,
+            task.latest_review_snapshot,
+            task.latest_arbitration_snapshot,
+        )
+        if snapshot is not None
+    ]
+    other_snapshots = [
+        snapshot
+        for snapshot in task.snapshots
+        if snapshot.snapshot_type not in {"primary", "review", "arbiter"}
+    ]
     snapshots = sorted(
-        task.snapshots,
+        role_snapshots + other_snapshots,
         key=lambda snapshot: (
             SNAPSHOT_TYPE_ORDER.get(snapshot.snapshot_type, 99),
             snapshot.created_at,
@@ -2283,8 +2430,15 @@ async def run_grading_task(
     review_provider: GradingProvider,
     arbiter_provider: GradingProvider | None = None,
     locale: str | None = None,
+    *,
+    review_only_final: bool = False,
 ) -> dict[str, Any]:
-    """Execute the primary/review grading flow for a task."""
+    """Execute the primary/review grading flow for a task.
+
+    When ``review_only_final`` is True, the function pins the final score to
+    the reviewer's result and skips arbitration entirely. Callers wire this
+    up from ``settings.arbiter_enabled``.
+    """
 
     task = await db.get(GradingTask, uuid.UUID(task_id))
     if task is None:
@@ -2327,36 +2481,34 @@ async def run_grading_task(
             )
         )
     except Exception as exc:
+        # 主评 / 复核失败：写详细审计后返回 failed 状态。
+        # 注意：不要 raise——否则上层 try/except 会 rollback 这条详细审计，
+        # 只剩一条 "stage=dispatch" 的粗糙记录，运维无从排查（曾经的坑）。
+        stage = (
+            "review"
+            if "review_result" not in locals() and "primary_result" in locals()
+            else "primary"
+        )
+        failing_provider = (
+            review_provider
+            if stage == "review"
+            else primary_provider
+        )
+        exc_message = _exception_message(exc)
         task.status = "failed"
         db.add(
             GradingAuditEvent(
                 task_id=task.id,
                 event_type="grading.failed",
                 event_payload={
-                    "message": str(exc),
-                    "detail": _trim_failure_detail(str(exc)),
-                    "stage": (
-                        "review"
-                        if "review_result" not in locals()
-                        and "primary_result" in locals()
-                        else "primary"
-                    ),
-                    "provider": (
-                        getattr(exc, "provider_name", None)
-                        or (
-                            getattr(review_provider, "provider_name", None)
-                            if "review_result" not in locals() and "primary_result" in locals()
-                            else getattr(primary_provider, "provider_name", None)
-                        )
-                    ),
-                    "model_name": (
-                        getattr(exc, "model_name", None)
-                        or (
-                            getattr(review_provider, "model_name", None)
-                            if "review_result" not in locals() and "primary_result" in locals()
-                            else getattr(primary_provider, "model_name", None)
-                        )
-                    ),
+                    "message": exc_message,
+                    "detail": _trim_failure_detail(exc_message),
+                    "exception_type": f"{type(exc).__module__}.{type(exc).__name__}",
+                    "stage": stage,
+                    "provider": getattr(exc, "provider_name", None)
+                    or getattr(failing_provider, "provider_name", None),
+                    "model_name": getattr(exc, "model_name", None)
+                    or getattr(failing_provider, "model_name", None),
                     "raw_excerpt": (
                         exc.raw_excerpt
                         if isinstance(exc, GradingProviderError)
@@ -2368,7 +2520,42 @@ async def run_grading_task(
             )
         )
         await db.flush()
-        raise
+        return {
+            "status": "failed",
+            "arbitration_required": False,
+            "reason": stage,
+        }
+
+    # Arbiter disabled (EXAM_ARBITER_ENABLED=false): final score pins to the
+    # reviewer's result. Skip arbitration evaluation entirely so we don't
+    # surface "arbitration required" UI state, and don't average — the user
+    # explicitly asked for "以 reviewer 角色的分数为准". Re-enable the arbiter
+    # once the upstream QPS quota is raised.
+    if review_only_final:
+        final_snapshot = _build_final_snapshot_from_result(task, review_result)
+        db.add(final_snapshot)
+        await db.flush()
+        task.latest_final_snapshot = final_snapshot
+        task.status = "completed"
+        db.add(
+            GradingAuditEvent(
+                task_id=task.id,
+                event_type="grading.finalized",
+                event_payload={
+                    "snapshot_id": str(final_snapshot.id),
+                    "source": "review_only",
+                },
+                operator_type="system",
+                operator_id="system",
+            )
+        )
+        await db.flush()
+        return {
+            "status": task.status,
+            "arbitration_required": False,
+            "reason": None,
+            "arbiter_disabled": True,
+        }
 
     triggered, reason = evaluate_arbitration(
         {
@@ -2410,13 +2597,15 @@ async def run_grading_task(
                 )
             except Exception as exc:
                 # 仲裁失败：不阻塞流程，回退使用复核模型分数作为最终分。
+                exc_message = _exception_message(exc)
                 db.add(
                     GradingAuditEvent(
                         task_id=task.id,
                         event_type="grading.arbiter_failed",
                         event_payload={
-                            "message": str(exc),
-                            "detail": _trim_failure_detail(str(exc)),
+                            "message": exc_message,
+                            "detail": _trim_failure_detail(exc_message),
+                            "exception_type": f"{type(exc).__module__}.{type(exc).__name__}",
                             "reason": reason,
                             "required": True,
                             "fallback": "review",
@@ -2489,13 +2678,15 @@ async def run_grading_task(
         try:
             arbiter_result = await arbiter_provider.score(arbiter_system_prompt, arbiter_user_prompt)
         except Exception as exc:
+            exc_message = _exception_message(exc)
             db.add(
                 GradingAuditEvent(
                     task_id=task.id,
                     event_type="grading.arbiter_failed",
                     event_payload={
-                        "message": str(exc),
-                        "detail": _trim_failure_detail(str(exc)),
+                        "message": exc_message,
+                        "detail": _trim_failure_detail(exc_message),
+                        "exception_type": f"{type(exc).__module__}.{type(exc).__name__}",
                         "reason": "no_conflict_model_output",
                         "required": False,
                         "provider": getattr(exc, "provider_name", None)

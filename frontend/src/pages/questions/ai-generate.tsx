@@ -642,6 +642,7 @@ export function AIGeneratePage() {
               question={generatedQuestionToEditableQuestion(editingQuestion)}
               banks={[]}
               allTags={[]}
+              knowledgePoints={[]}
               variant="dialog"
               showHeader={false}
               showQuestionBankAndTags={false}

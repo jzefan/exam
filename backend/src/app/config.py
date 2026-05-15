@@ -24,7 +24,12 @@ class Settings(BaseSettings):
     openrouter_model_name: str = "anthropic/claude-3.5-sonnet"
     doubao_api_key: str | None = None
     doubao_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
-    doubao_model_name: str = "doubao-seed-2-0-lite-260428"
+    doubao_model_name: str = "doubao-1-5-pro-32k-250115"
+    # Toggle the arbiter (doubao) leg of the grading flow. When False we skip
+    # arbitration entirely and use the reviewer model's score as the final
+    # score. Keep this off until the upstream QPS quota is high enough that
+    # the arbiter call doesn't get rate-limited under exam load.
+    arbiter_enabled: bool = False
     grading_score_diff_threshold: float = 0.15
     grading_dimension_diff_threshold: float = 0.20
     judge_runner_url: str | None = None

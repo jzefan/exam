@@ -165,6 +165,140 @@ async def test_student_exam_flow(client: AsyncClient, db_session) -> None:
 
 
 @pytest.mark.asyncio
+async def test_fill_in_answer_is_evaluated_on_save_and_reused_on_submit(
+    monkeypatch, client: AsyncClient, db_session
+) -> None:
+    org = await _create_org_with_roles(db_session)
+
+    teacher = await create_user(
+        db_session,
+        UserCreate(
+            username="teacher_fill_in_save",
+            email="teacher_fill_in_save@example.com",
+            password="teacherpass123",
+            full_name="Teacher Fill In Save",
+            role_name="teacher",
+            org_id=org.id,
+        ),
+    )
+    student = await create_user(
+        db_session,
+        UserCreate(
+            username="student_fill_in_save",
+            email="student_fill_in_save@example.com",
+            password="studentpass123",
+            full_name="Student Fill In Save",
+            role_name="student",
+            org_id=org.id,
+        ),
+    )
+
+    question = Question(
+        type=QuestionType.FILL_IN,
+        title="填空题保存时评估",
+        content={"text": "<p>请填写____、____。</p>"},
+        options=None,
+        answer={"blanks": ["A", "B"]},
+        analysis="两个空均正确即可得分。",
+        difficulty=2,
+        score=4,
+        usage_count=0,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    db_session.add(question)
+    await db_session.flush()
+
+    exam = Exam(
+        title="填空题保存评估考试",
+        description="验证下一题保存时触发填空题评估",
+        start_time=datetime.now(timezone.utc) - timedelta(minutes=10),
+        end_time=datetime.now(timezone.utc) + timedelta(minutes=50),
+        duration_minutes=60,
+        total_score=4,
+        status="ongoing",
+        max_switch_count=0,
+        show_result=True,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    db_session.add(exam)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            ExamQuestion(exam_id=exam.id, question_id=question.id, order=0),
+            ExamStudent(exam_id=exam.id, student_id=student.id),
+        ]
+    )
+    await db_session.commit()
+
+    calls = 0
+
+    async def fake_ai(*, expected_answers, student_answers, **_kwargs):
+        nonlocal calls
+        calls += 1
+        assert expected_answers == ["A", "B"]
+        assert student_answers == ["甲", "乙"]
+        return [
+            {"is_correct": True, "reason": "甲可等价于 A。"},
+            {"is_correct": True, "reason": "乙可等价于 B。"},
+        ]
+
+    monkeypatch.setattr("app.exams.student_router._request_fill_in_equivalence_with_deepseek", fake_ai)
+    client.headers.update({"Authorization": f"Bearer {create_access_token(student.id, '')}"})
+
+    start_response = await client.post(f"/api/student/exams/{exam.id}/start")
+    assert start_response.status_code == 200
+
+    save_response = await client.post(
+        f"/api/student/exams/{exam.id}/answers",
+        json={
+            "answers": [
+                {
+                    "question_id": str(question.id),
+                    "answer_content": {"blanks": ["甲", "乙"]},
+                }
+            ]
+        },
+    )
+    assert save_response.status_code == 200
+    assert calls == 1
+
+    exam_student = (
+        await db_session.execute(
+            select(ExamStudent).where(ExamStudent.exam_id == exam.id, ExamStudent.student_id == student.id)
+        )
+    ).scalar_one()
+    saved_answer = exam_student.saved_answers[str(question.id)]
+    assert saved_answer["_fill_in_grading_cache"]["score_awarded"] == 4
+
+    restart_response = await client.post(f"/api/student/exams/{exam.id}/start")
+    assert restart_response.status_code == 200
+    public_saved_answer = restart_response.json()["saved_answers"][str(question.id)]
+    assert public_saved_answer == {"blanks": ["甲", "乙"]}
+
+    submit_response = await client.post(f"/api/student/exams/{exam.id}/submit")
+    assert submit_response.status_code == 200
+    assert submit_response.json()["score"] == 4
+    assert calls == 1
+
+    submission_answer = (
+        await db_session.execute(
+            select(StudentExamSubmissionAnswer).where(
+                StudentExamSubmissionAnswer.exam_id == exam.id,
+                StudentExamSubmissionAnswer.student_id == student.id,
+                StudentExamSubmissionAnswer.question_id == question.id,
+            )
+        )
+    ).scalar_one()
+    assert submission_answer.answer_content == {"blanks": ["甲", "乙"]}
+
+    result_response = await client.get(f"/api/student/exams/{exam.id}/result")
+    assert result_response.status_code == 200
+    assert result_response.json()["questions"][0]["answer_content"] == {"blanks": ["甲", "乙"]}
+
+
+@pytest.mark.asyncio
 async def test_student_can_submit_with_final_answers_after_exam_end(
     client: AsyncClient, db_session
 ) -> None:
