@@ -159,6 +159,30 @@ def _is_fill_in_unordered_full_match(provided_list: list[str], expected_list: li
     return Counter(normalized_provided) == Counter(normalized_expected)
 
 
+def _build_fill_in_unordered_exact_match_flags(
+    provided_list: list[str],
+    expected_list: list[str],
+) -> list[bool]:
+    match_flags = [False] * len(expected_list)
+    expected_indices_by_answer: dict[str, list[int]] = {}
+    for index, expected_item in enumerate(expected_list):
+        normalized = _normalize_fill_in_text(expected_item)
+        if normalized:
+            expected_indices_by_answer.setdefault(normalized, []).append(index)
+
+    for provided_item in provided_list:
+        normalized = _normalize_fill_in_text(provided_item)
+        if not normalized:
+            continue
+        candidate_indices = expected_indices_by_answer.get(normalized)
+        if not candidate_indices:
+            continue
+        expected_index = candidate_indices.pop(0)
+        match_flags[expected_index] = True
+
+    return match_flags
+
+
 def _build_fill_in_grading_signature(
     *,
     expected_list: list[str],
@@ -278,7 +302,7 @@ async def _request_fill_in_equivalence_with_deepseek(
 判定原则：
 1. 不要求字符串完全相同，允许大小写、末尾标点、轻微格式差异、常见中英文术语写法差异。
 2. 只有语义或术语确实等价时才判为正确，不能因为主题相关就判正确。
-3. 每个空独立判定，不要跨空合并给分。
+3. 多个空按无序集合判定：学生答案顺序可以不同，但每个学生答案最多只能匹配一个标准答案。
 4. 技术类等价写法应视为正确，包括但不限于：
    - 模块/包路径：学生只写末尾组件也算正确，例如标准答案为 numpy.random，学生答 random，应给分；matplotlib.pyplot → pyplot 同理。
    - 函数/方法引用：省略类名或模块前缀但指向同一目标时，视为正确。
@@ -296,7 +320,7 @@ async def _request_fill_in_equivalence_with_deepseek(
     {{"is_correct": true, "reason": "简短理由"}}
   ]
 }}
-matches 的长度必须等于标准答案长度，顺序与标准答案一致。
+matches 的长度必须等于标准答案长度，顺序与标准答案一致；每一项表示对应标准答案能否在学生答案集合中找到可接受答案。
 """
 
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -863,11 +887,8 @@ async def _grade_fill_in_question_with_ai(
             feedback,
         )
 
-    match_flags = [False] * len(expected_list)
+    match_flags = _build_fill_in_unordered_exact_match_flags(provided_list, expected_list)
     ai_reasons: dict[int, str] = {}
-    for index, expected_item in enumerate(expected_list):
-        actual = provided_list[index] if index < len(provided_list) else ""
-        match_flags[index] = _is_fill_in_exact_match(actual, expected_item)
 
     if expected_list and not all(match_flags):
         try:
