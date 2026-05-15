@@ -329,7 +329,7 @@ async def assign_unowned_students_to_single_teacher(db: AsyncSession) -> int:
                 .join(Role, Role.id == UserOrganization.role_id)
                 .where(
                     User.deleted_at.is_(None),
-                    Role.name == "teacher",
+                    Role.name.in_(["teacher", "evaluator"]),
                 )
                 .distinct()
             )
@@ -412,7 +412,8 @@ async def create_student(
         owner_teacher_id=owner_teacher_id,
         full_name=data.full_name,
         password_hash=password_hash,
-        is_active=True
+        is_active=True,
+        must_change_password=True,
     )
     db.add(user)
     await db.flush()

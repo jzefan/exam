@@ -195,6 +195,34 @@ describe("question import helpers", () => {
     expect(html).toContain("<img src=\"/api/uploads/files/chart.png\" alt=\"图表\" />");
   });
 
+  it("renders markdown table blocks as real <table> with thead and tbody", () => {
+    const content = [
+      "设某路由器建立了如下转发表",
+      "| 目的网络 | 子网掩码 | 下一跳 |",
+      "| --- | --- | --- |",
+      "| 128.96.39.0 | 255.255.255.128 | 接口 m0 |",
+      "| 192.4.153.0 | 255.255.255.192 | R3 |",
+      "试分别计算其下一跳。",
+    ].join("\n");
+    const html = importTextToHtml(content);
+
+    expect(html).toContain("<p>设某路由器建立了如下转发表</p>");
+    expect(html).toContain("<table>");
+    expect(html).toContain("<thead><tr><th>目的网络</th><th>子网掩码</th><th>下一跳</th></tr></thead>");
+    expect(html).toContain("<td>128.96.39.0</td><td>255.255.255.128</td><td>接口 m0</td>");
+    expect(html).toContain("<td>192.4.153.0</td><td>255.255.255.192</td><td>R3</td>");
+    expect(html).not.toContain("---");
+    expect(html).toContain("<p>试分别计算其下一跳。</p>");
+  });
+
+  it("renders markdown tables without a header separator as a body-only table", () => {
+    const html = importTextToHtml("| 列1 | 列2 |\n| 值1 | 值2 |");
+
+    expect(html).toContain("<tbody>");
+    expect(html).not.toContain("<thead>");
+    expect(html).toContain("<td>列1</td><td>列2</td>");
+  });
+
   it("selects the next draft after removing the current selected draft", () => {
     const drafts = [
       { ...baseDraft, draft_id: "draft-1" },
@@ -311,6 +339,26 @@ describe("question import helpers", () => {
     expect(text).toContain("[UL] 先完成草图；");
     expect(text).toContain("[UL] 再提交最终版本；");
     expect(text).not.toContain("先完成草图；再提交最终版本；");
+  });
+
+  it("emits a [TABLE:N] marker inline where a table appears so AI can place it next to its question", () => {
+    const html = `
+      <p>3. 设某路由器建立了如下转发表</p>
+      <table>
+        <tr><td>目的网络</td><td>子网掩码</td><td>下一跳</td></tr>
+        <tr><td>128.96.39.0</td><td>255.255.255.128</td><td>接口 m0</td></tr>
+      </table>
+      <p>现共收到 5 个分组，试分别计算其下一跳。</p>
+    `;
+
+    const text = htmlToImportText(html);
+
+    expect(text).toContain("3. 设某路由器建立了如下转发表");
+    expect(text).toContain("[TABLE:1]");
+    expect(text.indexOf("3. 设某路由器")).toBeLessThan(text.indexOf("[TABLE:1]"));
+    expect(text.indexOf("[TABLE:1]")).toBeLessThan(text.indexOf("现共收到 5 个分组"));
+    expect(text).not.toContain("目的网络");
+    expect(text).not.toContain("128.96.39.0");
   });
 
   it("extracts docx html tables as structured rows", () => {

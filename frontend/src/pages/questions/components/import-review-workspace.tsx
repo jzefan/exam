@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   FileWarning,
+  HelpCircle,
   Pencil,
   Search,
   Trash2,
@@ -51,7 +52,7 @@ import {
   isMissingAnswerIssue,
 } from "../import-utils";
 
-type WorkspaceFilter = "all" | "issues" | "missing_answer" | QuestionType;
+type WorkspaceFilter = "all" | "issues" | "missing_answer" | "doubt" | QuestionType;
 
 const typeFilterOptions: Array<{ value: QuestionType; label: string; dotClass: string }> = [
   { value: "choice", label: "选择题", dotClass: "bg-blue-500" },
@@ -105,6 +106,12 @@ function DraftStatusBadges({ draft }: { draft: QuestionImportDraft }) {
         <Badge className="h-5 gap-1 rounded-full border-none bg-violet-100 px-2 text-[11px] font-bold text-violet-700">
           <FileWarning className="h-3 w-3" />
           无答案
+        </Badge>
+      ) : null}
+      {draft.doubt ? (
+        <Badge className="h-5 gap-1 rounded-full border-none bg-orange-100 px-2 text-[11px] font-bold text-orange-700">
+          <HelpCircle className="h-3 w-3" />
+          存疑
         </Badge>
       ) : null}
     </>
@@ -163,7 +170,9 @@ function QuestionCard({
           ? "border-amber-200"
           : missingAnswer
             ? "border-violet-200"
-            : "border-slate-100",
+            : draft.doubt
+              ? "border-orange-200"
+              : "border-slate-100",
       )}
     >
       <QuestionPreviewCard
@@ -202,6 +211,29 @@ function QuestionCard({
       {blockingIssues.length > 0 ? (
         <div className="mt-3 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs font-medium leading-5 text-amber-800">
           {blockingIssues.join("；")}
+        </div>
+      ) : null}
+
+      {draft.doubt && draft.doubt_reason ? (
+        <div className="mt-3 rounded-xl border border-orange-100 bg-orange-50 px-3 py-2 text-xs font-medium leading-5 text-orange-800">
+          <span className="font-bold">存疑：</span>
+          {draft.doubt_reason}
+        </div>
+      ) : null}
+
+      {draft.suggested_knowledge_points &&
+      draft.suggested_knowledge_points.length > 0 ? (
+        <div className="mt-2 flex flex-wrap items-center gap-1">
+          <span className="text-[11px] text-slate-400">关联知识点：</span>
+          {draft.suggested_knowledge_points.map((kp) => (
+            <Badge
+              key={kp.id}
+              variant="secondary"
+              className="h-5 text-[11px]"
+            >
+              {kp.name}
+            </Badge>
+          ))}
         </div>
       ) : null}
     </article>
@@ -390,6 +422,49 @@ function ImportEditDialog({
                     />
                   </div>
                 </div>
+
+                {editingDraft.doubt || editingDraft.doubt_reason ? (
+                  <div className="rounded-xl border border-orange-100 bg-orange-50 px-3 py-2 text-xs font-medium leading-5 text-orange-800">
+                    <div className="flex items-center gap-2">
+                      <label className="flex items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={!editingDraft.doubt}
+                          onChange={(e) =>
+                            setEditingDraft((current) =>
+                              current
+                                ? { ...current, doubt: !e.target.checked, doubt_reason: e.target.checked ? null : current.doubt_reason }
+                                : current,
+                            )
+                          }
+                          className="size-3.5 rounded border-orange-300 text-primary accent-primary"
+                        />
+                        <span className="font-bold">存疑</span>
+                      </label>
+                    </div>
+                    {editingDraft.doubt_reason ? (
+                      <p className="mt-1">{editingDraft.doubt_reason}</p>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {editingDraft.suggested_knowledge_points &&
+                editingDraft.suggested_knowledge_points.length > 0 ? (
+                  <div className="flex flex-wrap items-center gap-1">
+                    <span className="text-[11px] text-slate-400">
+                      关联知识点：
+                    </span>
+                    {editingDraft.suggested_knowledge_points.map((kp) => (
+                      <Badge
+                        key={kp.id}
+                        variant="secondary"
+                        className="h-5 text-[11px]"
+                      >
+                        {kp.name}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             </TabsContent>
 
@@ -422,6 +497,8 @@ function ImportEditDialog({
                 options: editingDraft.type === "choice" ? editingDraft.options : null,
                 answer_text: editingDraft.answer_text,
                 analysis: editingDraft.analysis,
+                doubt: editingDraft.doubt,
+                doubt_reason: editingDraft.doubt_reason,
                 review_status: "pending",
                 review_required: true,
               });
@@ -458,13 +535,18 @@ export function ImportReviewWorkspace({
     () => drafts.filter((draft) => getBlockingImportIssues(draft).length === 0 && hasMissingAnswer(draft)).length,
     [drafts],
   );
+  const doubtCount = useMemo(
+    () => drafts.filter((draft) => Boolean(draft.doubt)).length,
+    [drafts],
+  );
 
   const visibleDrafts = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return drafts.filter((draft) => {
       if (filter === "issues" && getBlockingImportIssues(draft).length === 0) return false;
       if (filter === "missing_answer" && (getBlockingImportIssues(draft).length > 0 || !hasMissingAnswer(draft))) return false;
-      if (!["all", "issues", "missing_answer"].includes(filter) && draft.type !== filter) return false;
+      if (filter === "doubt" && !draft.doubt) return false;
+      if (!["all", "issues", "missing_answer", "doubt"].includes(filter) && draft.type !== filter) return false;
       if (!normalizedQuery) return true;
       return searchableText(draft).includes(normalizedQuery);
     });
@@ -475,7 +557,7 @@ export function ImportReviewWorkspace({
   return (
     <div className="flex h-full min-h-0 bg-slate-50">
       <aside className="flex w-[240px] shrink-0 flex-col gap-5 border-r border-slate-100 bg-white p-4">
-        {(blockingIssueCount > 0 || missingAnswerCount > 0) ? (
+        {(blockingIssueCount > 0 || missingAnswerCount > 0 || doubtCount > 0) ? (
           <div className="flex flex-col gap-2">
             {blockingIssueCount > 0 ? (
               <button
@@ -513,6 +595,25 @@ export function ImportReviewWorkspace({
                   <span className="mt-0.5 block text-[11px] font-medium text-violet-700">可继续导入</span>
                 </span>
                 <Badge className="border-none bg-violet-200 text-violet-900">{missingAnswerCount}</Badge>
+              </button>
+            ) : null}
+            {doubtCount > 0 ? (
+              <button
+                type="button"
+                onClick={() => setFilter(filter === "doubt" ? "all" : "doubt")}
+                className={cn(
+                  "flex w-full items-center gap-3 rounded-xl border p-3 text-left transition-all",
+                  filter === "doubt"
+                    ? "border-orange-400 bg-orange-50 shadow-sm"
+                    : "border-orange-100 bg-orange-50/50 hover:border-orange-300",
+                )}
+              >
+                <HelpCircle className="h-4 w-4 shrink-0 text-orange-700" />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-xs font-black text-orange-900">存疑项</span>
+                  <span className="mt-0.5 block text-[11px] font-medium text-orange-700">建议人工核对</span>
+                </span>
+                <Badge className="border-none bg-orange-200 text-orange-900">{doubtCount}</Badge>
               </button>
             ) : null}
           </div>

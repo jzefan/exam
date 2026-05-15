@@ -10,7 +10,9 @@ import { useToast } from "@/hooks/use-toast";
 import {
   generatePaperFromSource,
   getDifficultyStrategyLabel,
+  PAPER_SOURCE_REUSE_RATE_OPTIONS,
   type PaperDifficultyStrategy,
+  type PaperSourceReuseRate,
 } from "./api";
 import {
   Dialog,
@@ -42,6 +44,7 @@ export function PaperAIGenerateDialog({
   const { toast } = useToast();
   const [difficultyStrategy, setDifficultyStrategy] = useState<PaperDifficultyStrategy>("similar");
   const [preferRootKnowledgePoint, setPreferRootKnowledgePoint] = useState(true);
+  const [sourceReuseRate, setSourceReuseRate] = useState<PaperSourceReuseRate>(0);
   const [submitting, setSubmitting] = useState(false);
   const hasRootKnowledgePoint = Boolean(rootKnowledgePointName);
 
@@ -49,6 +52,7 @@ export function PaperAIGenerateDialog({
     if (!open) return;
     setDifficultyStrategy("similar");
     setPreferRootKnowledgePoint(hasRootKnowledgePoint);
+    setSourceReuseRate(0);
   }, [open, hasRootKnowledgePoint, paperId]);
 
   const handleGenerate = async () => {
@@ -59,6 +63,7 @@ export function PaperAIGenerateDialog({
         difficulty_strategy: difficultyStrategy,
         question_type_strategy: "inherit",
         prefer_root_knowledge_point: hasRootKnowledgePoint ? preferRootKnowledgePoint : false,
+        source_reuse_rate: sourceReuseRate,
       });
       toast({
         title: "生成成功",
@@ -113,6 +118,30 @@ export function PaperAIGenerateDialog({
           <div className="space-y-2">
             <Label>题型配比</Label>
             <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">继承原卷</div>
+          </div>
+
+          <div className="space-y-2">
+            <Label>题目重复率</Label>
+            <div className="inline-flex w-full rounded-md border border-border p-1">
+              {PAPER_SOURCE_REUSE_RATE_OPTIONS.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  disabled={submitting}
+                  onClick={() => setSourceReuseRate(option)}
+                  className={`h-9 flex-1 rounded text-sm ${
+                    sourceReuseRate === option
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {option === 0 ? "不重复" : `≤ ${option}%`}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              新试卷中最多复用源试卷题目的占比，其余由 AI 生成。
+            </p>
           </div>
 
           <div className="space-y-2">

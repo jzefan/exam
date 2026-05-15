@@ -47,6 +47,16 @@ vi.mock("react-router-dom", async () => {
 
 import { ExamTaking } from "./exam-taking";
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("ExamTaking", () => {
   beforeEach(() => {
     axiosPostMock.mockReset();
@@ -180,6 +190,45 @@ describe("ExamTaking", () => {
     await user.click(await screen.findByRole("button", { name: /下一题/i }));
     expect(flushQuestion).toHaveBeenCalledWith("q-1");
     expect(setCurrentIndex).toHaveBeenCalledWith(1);
+  });
+
+  it("shows a loading state while moving to the next question", async () => {
+    const user = userEvent.setup();
+    const deferred = createDeferred<void>();
+    const flushQuestion = vi.fn().mockReturnValue(deferred.promise);
+
+    useExamTakingMock.mockReturnValue({
+      answers: { "q-1": { html: "已答" } },
+      currentIndex: 0,
+      setCurrentIndex: vi.fn(),
+      showAll: false,
+      setShowAll: vi.fn(),
+      updateAnswer: vi.fn(),
+      flushAnswers: vi.fn(),
+      flushQuestion,
+      saveState: "idle",
+      saveMessage: "",
+      submitExam: vi.fn(),
+      reportSwitch: vi.fn(),
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/my-exams/exam-1/take"]}>
+        <Routes>
+          <Route path="/my-exams/:id/take" element={<ExamTaking />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /下一题/i }));
+
+    expect(screen.getByRole("button", { name: /下一题处理中/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /交卷/i })).toBeDisabled();
+
+    deferred.resolve();
+    await act(async () => {
+      await deferred.promise;
+    });
   });
 
   it("shows a submit button instead of next question on the last question", async () => {
@@ -507,5 +556,45 @@ describe("ExamTaking", () => {
     });
 
     expect(navigateMock).toHaveBeenCalledWith("/my-exams");
+  });
+
+  it("shows a loading state while submitting from the confirmation dialog", async () => {
+    const user = userEvent.setup();
+    const deferred = createDeferred<void>();
+    const submitExam = vi.fn().mockReturnValue(deferred.promise);
+
+    useExamTakingMock.mockReturnValue({
+      answers: { "q-1": { html: "已答" }, "q-2": { selected: ["A"] } },
+      currentIndex: 1,
+      setCurrentIndex: vi.fn(),
+      showAll: false,
+      setShowAll: vi.fn(),
+      updateAnswer: vi.fn(),
+      flushAnswers: vi.fn(),
+      flushQuestion: vi.fn().mockResolvedValue(undefined),
+      saveState: "idle",
+      saveMessage: "",
+      submitExam,
+      reportSwitch: vi.fn(),
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/my-exams/exam-1/take"]}>
+        <Routes>
+          <Route path="/my-exams/:id/take" element={<ExamTaking />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findAllByRole("button", { name: /交卷/i }).then((buttons) => buttons[1]));
+    await user.click(await screen.findByRole("button", { name: "确认交卷" }));
+
+    expect(screen.getAllByRole("button", { name: /正在交卷/i }).every((button) => button.hasAttribute("disabled"))).toBe(true);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+
+    deferred.resolve();
+    await act(async () => {
+      await deferred.promise;
+    });
   });
 });

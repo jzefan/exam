@@ -69,6 +69,7 @@ class GradingSnapshotRead(BaseModel):
     model_label: str | None = None
     provider_key: str | None = None
     dimension_scores: dict = Field(default_factory=dict)
+    dimension_comments: dict = Field(default_factory=dict)
     deduction_reasons: list[str] = Field(default_factory=list)
     strengths: list[str] = Field(default_factory=list)
     improvement_suggestions: list[str] = Field(default_factory=list)
@@ -211,6 +212,7 @@ class GradingInboxCandidateDetailRead(BaseModel):
     candidate_name: str
     candidate_code: str | None = None
     status: str
+    evaluation_note: str | None = None
     suggested_score: float | None = None
     max_score: int
     question_type: str

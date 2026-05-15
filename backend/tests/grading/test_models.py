@@ -438,12 +438,13 @@ async def test_seed_grading_defaults_is_idempotent(db_session: AsyncSession) -> 
 
     assert sorted(provider.key for provider in providers) == [
         "deepseek-direct",
+        "doubao-arbiter",
         "openrouter-arbiter",
         "qwen-direct",
     ]
     assert sorted(model.key for model in models) == [
-        "claude-arbiter-v1",
         "deepseek-review-v1",
+        "doubao-arbiter-v1",
         "qwen-grader-v1",
     ]
     assert [(binding.version, binding.is_active) for binding in bindings] == [(1, True)]
@@ -451,25 +452,25 @@ async def test_seed_grading_defaults_is_idempotent(db_session: AsyncSession) -> 
     provider_envs = {provider.key: provider.credential_env for provider in providers}
     assert provider_envs["qwen-direct"] == "EXAM_QWEN_API_KEY"
     assert provider_envs["deepseek-direct"] == "EXAM_DEEPSEEK_API_KEY"
-    assert provider_envs["openrouter-arbiter"] == "EXAM_OPENROUTER_API_KEY"
+    assert provider_envs["doubao-arbiter"] == "EXAM_DOUBAO_API_KEY"
 
 
 @pytest.mark.asyncio
 async def test_seed_grading_defaults_syncs_default_model_names_from_settings(db_session: AsyncSession) -> None:
     provider = ProviderConfig(
-        key="openrouter-arbiter",
-        provider_type="openrouter",
-        base_url="https://openrouter.ai/api/v1",
-        credential_env="EXAM_OPENROUTER_API_KEY",
+        key="doubao-arbiter",
+        provider_type="doubao",
+        base_url="https://ark.cn-beijing.volces.com/api/v3",
+        credential_env="EXAM_DOUBAO_API_KEY",
         is_active=True,
     )
     db_session.add(provider)
     await db_session.flush()
 
     model = ModelConfig(
-        key="claude-arbiter-v1",
-        display_name="Claude Sonnet 4.6",
-        model_name="anthropic/claude-sonnet-4.6",
+        key="doubao-arbiter-v1",
+        display_name="Doubao Seed 2.0 Lite",
+        model_name="doubao-seed-2-0-lite-260428",
         provider_id=provider.id,
         temperature=0.0,
         is_active=True,
@@ -479,13 +480,13 @@ async def test_seed_grading_defaults_syncs_default_model_names_from_settings(db_
 
     from app.grading import seed as grading_seed
 
-    original_model_name = grading_seed.settings.openrouter_model_name
-    grading_seed.settings.openrouter_model_name = "anthropic/claude-sonnet-4.6"
+    original_model_name = grading_seed.settings.doubao_model_name
+    grading_seed.settings.doubao_model_name = "doubao-seed-2-0-lite-260428"
     try:
         await seed_grading_defaults(db_session)
     finally:
-        grading_seed.settings.openrouter_model_name = original_model_name
+        grading_seed.settings.doubao_model_name = original_model_name
 
     await db_session.refresh(model)
-    assert model.model_name == "anthropic/claude-sonnet-4.6"
-    assert model.display_name == "Claude Sonnet 4.6"
+    assert model.model_name == "doubao-seed-2-0-lite-260428"
+    assert model.display_name == "Doubao Seed 2.0 Lite"

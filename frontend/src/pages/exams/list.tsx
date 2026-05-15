@@ -210,11 +210,12 @@ function ExamCard({
             </TooltipProvider>
           )}
 
-          {/* 删除 — draft, upcoming, completed, closed */}
+          {/* 删除 — draft, upcoming, completed, closed; also ongoing if no student history */}
           {(effectiveStatus === "draft" ||
             effectiveStatus === "upcoming" ||
             effectiveStatus === "completed" ||
-            effectiveStatus === "closed") && (
+            effectiveStatus === "closed" ||
+            (effectiveStatus === "ongoing" && !exam.has_student_history)) && (
             <Button
               variant="ghost"
               size="sm"

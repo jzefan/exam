@@ -109,7 +109,9 @@ export function getQuestionAnswerText(question: IQuestion): string {
     if (Array.isArray(correct)) {
       return correct.map((value, index) => `空${index + 1}: ${value}`).join("；") || "-";
     }
-    return String(correct ?? "-");
+    if (correct != null) return String(correct);
+    if (typeof answer.text === "string") return answer.text;
+    return "-";
   }
 
   if (normalizedType === "short_answer" || normalizedType === "essay") {
@@ -117,8 +119,12 @@ export function getQuestionAnswerText(question: IQuestion): string {
     if (Array.isArray(points) && points.length > 0) {
       return points.join("；");
     }
-    return String(answer.correct ?? "-");
+    if (answer.correct != null) return String(answer.correct);
+    if (typeof answer.text === "string") return answer.text;
+    return "-";
   }
 
-  return "";
+  if (typeof answer.text === "string") return answer.text;
+  if (answer.correct != null) return String(answer.correct);
+  return "-";
 }

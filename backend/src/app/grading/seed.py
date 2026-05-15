@@ -12,7 +12,7 @@ DEFAULT_BINDING = {
     "version": 1,
     "grader_model_key": "qwen-grader-v1",
     "reviewer_model_key": "deepseek-review-v1",
-    "arbiter_model_key": "claude-arbiter-v1",
+    "arbiter_model_key": "doubao-arbiter-v1",
     "is_active": True,
 }
 
@@ -40,6 +40,13 @@ def _default_providers() -> list[dict[str, object]]:
             "credential_env": "EXAM_OPENROUTER_API_KEY",
             "is_active": True,
         },
+        {
+            "key": "doubao-arbiter",
+            "provider_type": "doubao",
+            "base_url": settings.doubao_base_url,
+            "credential_env": "EXAM_DOUBAO_API_KEY",
+            "is_active": True,
+        },
     ]
 
 
@@ -62,10 +69,10 @@ def _default_models() -> list[dict[str, object]]:
             "is_active": True,
         },
         {
-            "key": "claude-arbiter-v1",
-            "display_name": "Claude Sonnet 4.6",
-            "model_name": settings.openrouter_model_name,
-            "provider_key": "openrouter-arbiter",
+            "key": "doubao-arbiter-v1",
+            "display_name": "Doubao Seed 2.0 Lite",
+            "model_name": settings.doubao_model_name,
+            "provider_key": "doubao-arbiter",
             "temperature": 0.0,
             "is_active": True,
         },

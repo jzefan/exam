@@ -9,6 +9,8 @@ from app.auth.dependencies import CurrentUser
 from app.auth.schemas import (
     ForgotPasswordRequest,
     ForgotPasswordResponse,
+    ForceChangePasswordRequest,
+    ForceChangePasswordResponse,
     LoginRequest,
     ResetPasswordRequest,
     ResetPasswordResponse,
@@ -25,6 +27,7 @@ from app.auth.service import (
     build_user_response,
     create_password_reset_token,
     create_user,
+    force_change_password_for_student,
     get_user_by_account,
     get_user_by_email,
     get_user_by_username,
@@ -32,6 +35,7 @@ from app.auth.service import (
     mask_email,
     reset_password_with_token,
 )
+from app.auth.dependencies import user_has_role
 from app.database import get_db
 
 router = APIRouter()
@@ -129,3 +133,22 @@ async def reset_password(
 @router.get("/me", response_model=UserResponse)
 async def get_me(user: CurrentUser, db: Annotated[AsyncSession, Depends(get_db)]) -> UserResponse:
     return await build_user_response(db, user)
+
+
+@router.post("/force-change-password", response_model=ForceChangePasswordResponse)
+async def force_change_password(
+    data: ForceChangePasswordRequest,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ForceChangePasswordResponse:
+    if not await user_has_role(db, user.id, "student"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅学生账号需要执行首次改密")
+    if not user.must_change_password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前账号无需首次改密")
+    if data.confirm_password is not None and data.password != data.confirm_password:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="两次输入的密码不一致")
+    updated = await force_change_password_for_student(db, user, data.password)
+    return ForceChangePasswordResponse(
+        message="密码修改成功",
+        user=await build_user_response(db, updated),
+    )

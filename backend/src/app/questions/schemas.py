@@ -101,6 +101,13 @@ class QuestionUpdate(BaseModel):
     question_bank_id: uuid.UUID | None = None
 
 
+class QuestionEditLockInfo(BaseModel):
+    in_use: bool
+    allowed_fields: list[str] = Field(default_factory=list)
+    regrade_on_fields: list[str] = Field(default_factory=list)
+    has_submitted_attempts: bool = False
+
+
 class QuestionResponse(BaseModel):
     model_config = {"from_attributes": True}
 
@@ -121,11 +128,17 @@ class QuestionResponse(BaseModel):
     question_bank_name: str | None
     tags: list[TagResponse]
     knowledge_points: list[KnowledgePointResponse]
+    edit_lock: QuestionEditLockInfo | None = None
     created_at: datetime
     updated_at: datetime
 
     @classmethod
-    def from_question(cls, question: Any) -> "QuestionResponse":
+    def from_question(
+        cls,
+        question: Any,
+        *,
+        edit_lock: QuestionEditLockInfo | None = None,
+    ) -> "QuestionResponse":
         return cls(
             id=question.id,
             type=question.type,
@@ -144,6 +157,7 @@ class QuestionResponse(BaseModel):
             question_bank_name=question.question_bank.name if question.question_bank else None,
             tags=[TagResponse.model_validate(t) for t in question.tags],
             knowledge_points=[KnowledgePointResponse.model_validate(kp) for kp in question.knowledge_points],
+            edit_lock=edit_lock,
             created_at=question.created_at,
             updated_at=question.updated_at,
         )
@@ -214,6 +228,11 @@ class QuestionImportTableInput(BaseModel):
     rows: list[list[str]] = Field(default_factory=list, max_length=100)
 
 
+class KnowledgePointSuggestion(BaseModel):
+    id: uuid.UUID
+    name: str
+
+
 class QuestionImportDraft(BaseModel):
     draft_id: str
     raw_text: str
@@ -232,6 +251,9 @@ class QuestionImportDraft(BaseModel):
     comparison_flags: list[str] = Field(default_factory=list)
     review_status: ImportReviewStatus = ImportReviewStatus.PENDING
     review_required: bool = True
+    doubt: bool = False
+    doubt_reason: str | None = None
+    suggested_knowledge_points: list[KnowledgePointSuggestion] = Field(default_factory=list)
 
 
 class QuestionImportDocumentSummary(BaseModel):
@@ -365,3 +387,27 @@ class QuestionImportMatchCreateResponse(BaseModel):
     question_id: uuid.UUID
     matched_knowledge_point_ids: list[uuid.UUID]
     matched_knowledge_point_names: list[str]
+
+
+# --- Import Enhancement ---
+
+
+class EnhanceDraftInput(BaseModel):
+    draft_id: str
+    type: QuestionType
+    content_text: str
+    options: dict[str, str] | None = None
+    answer_text: str | None = None
+
+
+class QuestionImportEnhanceDraftsRequest(BaseModel):
+    drafts: list[EnhanceDraftInput] = Field(min_length=1, max_length=500)
+    root_knowledge_point_id: uuid.UUID
+
+
+class EnhancedDraft(BaseModel):
+    draft_id: str
+    answer_text: str | None = None
+    doubt: bool = False
+    doubt_reason: str | None = None
+    suggested_knowledge_points: list[KnowledgePointSuggestion] = Field(default_factory=list)

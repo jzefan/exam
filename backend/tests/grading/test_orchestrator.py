@@ -11,8 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import app.config as config_module
 from app.grading.models import GradingAuditEvent
 from app.grading.orchestrator import should_trigger_arbitration
-from app.grading.providers.base import GradingProvider, GradingProviderResult
+from app.grading.providers.base import GradingProvider, GradingProviderError, GradingProviderResult
 from app.grading.providers.deepseek import DeepSeekProvider, parse_deepseek_response
+from app.grading.providers.doubao import DoubaoProvider, build_doubao_payload
 from app.grading.providers.openrouter import OpenRouterProvider, build_openrouter_payload
 from app.grading.providers.qwen import QwenProvider, parse_qwen_response
 from app.grading.service import create_grading_task, evaluate_arbitration
@@ -265,6 +266,95 @@ def test_malformed_provider_payload_field_types_are_rejected(payload: dict[str, 
         parse_qwen_response(payload, provider_key="qwen-direct", model_name="qwen-plus")
 
 
+def test_qwen_response_extracts_dimension_comments() -> None:
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "content": (
+                        '{"score_total": 8, "dimension_scores": {"coverage": 4, "accuracy": 4}, '
+                        '"dimension_comments": {"coverage": "覆盖了主要知识点", "accuracy": "表述准确"}, '
+                        '"deduction_reasons": [], "strengths": ["逻辑清晰"], '
+                        '"improvement_suggestions": ["补充举例"], '
+                        '"evidence_summary": {"matched_points": 2}, "risk_flags": []}'
+                    )
+                }
+            }
+        ]
+    }
+
+    result = parse_qwen_response(payload, provider_key="qwen-direct", model_name="qwen-plus")
+
+    assert result.dimension_comments == {
+        "coverage": "覆盖了主要知识点",
+        "accuracy": "表述准确",
+    }
+
+
+def test_qwen_response_rejects_non_dict_dimension_comments() -> None:
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "content": (
+                        '{"score_total": 8, "dimension_scores": {"coverage": 4}, '
+                        '"dimension_comments": "不是对象", '
+                        '"deduction_reasons": [], "strengths": [], '
+                        '"improvement_suggestions": [], '
+                        '"evidence_summary": {}, "risk_flags": []}'
+                    )
+                }
+            }
+        ]
+    }
+
+    with pytest.raises(ValueError, match="dimension_comments"):
+        parse_qwen_response(payload, provider_key="qwen-direct", model_name="qwen-plus")
+
+
+def test_qwen_response_defaults_dimension_comments_to_empty_dict() -> None:
+    """提供商没返回 dimension_comments 时应回退为 {}。"""
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "content": (
+                        '{"score_total": 8, "dimension_scores": {"coverage": 4}, '
+                        '"deduction_reasons": [], "strengths": [], '
+                        '"improvement_suggestions": [], '
+                        '"evidence_summary": {}, "risk_flags": []}'
+                    )
+                }
+            }
+        ]
+    }
+
+    result = parse_qwen_response(payload, provider_key="qwen-direct", model_name="qwen-plus")
+    assert result.dimension_comments == {}
+
+
+@pytest.mark.asyncio
+async def test_provider_score_wraps_parse_failure_with_raw_excerpt() -> None:
+    provider = QwenProvider(
+        provider_key="qwen-direct",
+        base_url="https://example.invalid",
+        model_name="qwen-plus",
+        api_key="test-key",
+    )
+
+    with patch.object(
+        provider,
+        "_request_completion",
+        new=AsyncMock(return_value={"choices": [{"message": {"content": '{"unexpected": true}'}}]}),
+    ):
+        with pytest.raises(GradingProviderError) as exc_info:
+            await provider.score("system", "user")
+
+    assert "missing required keys" in str(exc_info.value)
+    assert exc_info.value.raw_excerpt is not None
+    assert '"unexpected": true' in exc_info.value.raw_excerpt
+
+
 def test_openrouter_parse_response_parses_choice_envelope() -> None:
     provider = OpenRouterProvider(
         provider_key="openrouter-arbiter",
@@ -462,6 +552,36 @@ async def test_provider_score_requires_api_key_before_http_request() -> None:
             await provider.score("system prompt", "user prompt")
 
     mock_client_cls.assert_not_called()
+
+
+def test_build_doubao_payload_omits_response_format() -> None:
+    # doubao-seed-2-0-lite 等模型不支持 response_format=json_object,
+    # 请求会返回 400 BadRequest，因此 payload 不应包含该字段。
+    payload = build_doubao_payload(
+        model_name="doubao-seed-2-0-lite-260428",
+        system_prompt="system",
+        user_prompt="user",
+        temperature=0.0,
+    )
+
+    assert "response_format" not in payload
+    assert payload["model"] == "doubao-seed-2-0-lite-260428"
+    assert payload["messages"][0] == {"role": "system", "content": "system"}
+    assert payload["messages"][1] == {"role": "user", "content": "user"}
+
+
+def test_doubao_provider_payload_omits_response_format() -> None:
+    provider = DoubaoProvider(
+        provider_key="doubao-arbiter",
+        base_url="https://ark.cn-beijing.volces.com/api/v3",
+        model_name="doubao-seed-2-0-lite-260428",
+        api_key="secret",
+        temperature=0.0,
+    )
+
+    payload = provider.build_payload("s", "u")
+
+    assert "response_format" not in payload
 
 
 def test_should_trigger_arbitration_when_total_score_gap_exceeds_threshold() -> None:

@@ -38,6 +38,9 @@ export interface QuestionImportDraft {
   comparison_flags?: string[];
   review_status: ImportReviewStatus;
   review_required: boolean;
+  doubt?: boolean;
+  doubt_reason?: string | null;
+  suggested_knowledge_points?: Array<{ id: string; name: string }>;
 }
 
 export interface QuestionImportDocumentSummary {
@@ -88,4 +91,24 @@ export interface QuestionImportJobResponse {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+}
+
+export interface EnhanceDraftInput {
+  draft_id: string;
+  type: QuestionType;
+  content_text: string;
+  options: Record<string, string> | null;
+  answer_text: string | null;
+}
+
+export interface EnhancedDraft {
+  draft_id: string;
+  answer_text: string | null;
+  doubt: boolean;
+  doubt_reason: string | null;
+  suggested_knowledge_points: Array<{ id: string; name: string }>;
+}
+
+export interface EnhanceDraftsResponse {
+  drafts: EnhancedDraft[];
 }

@@ -1,4 +1,3 @@
-import json
 from typing import Any
 from unittest.mock import patch
 
@@ -47,6 +46,24 @@ class _FakeAsyncClient:
         return False
 
     def stream(self, *args, **kwargs) -> _FakeStreamResponse:
+        return _FakeStreamResponse(self._lines)
+
+
+class _CapturingAsyncClient:
+    def __init__(self, lines: list[str], capture: dict[str, Any], *args, **kwargs) -> None:
+        self._lines = lines
+        self._capture = capture
+
+    async def __aenter__(self) -> "_CapturingAsyncClient":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+    def stream(self, method: str, url: str, **kwargs) -> _FakeStreamResponse:
+        self._capture["method"] = method
+        self._capture["url"] = url
+        self._capture["payload"] = kwargs.get("json")
         return _FakeStreamResponse(self._lines)
 
 
@@ -166,6 +183,129 @@ async def test_generate_questions_stream_ignores_missing_usage_table(
 
 
 @pytest.mark.asyncio
+async def test_generate_questions_stream_uses_supported_qwen_vision_model_for_material_images(
+    db_session,
+    admin_token: str,
+) -> None:
+    stream_lines = [
+        'data: {"choices":[{"delta":{"content":"{\\"type\\":\\"choice\\",\\"title\\":\\"Q1\\",\\"content\\":{\\"text\\":\\"C1\\"},\\"options\\":null,\\"answer\\":{\\"text\\":\\"A1\\"},\\"analysis\\":\\"解析1\\",\\"difficulty\\":3}"}}]}',
+        "data: [DONE]",
+    ]
+    capture: dict[str, Any] = {}
+    admin = (await db_session.execute(select(User).where(User.username == "admin"))).scalar_one()
+
+    with patch("app.questions.ai_generate._get_model_config", return_value=("qwen", "test-key", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus")):
+        with patch("httpx.AsyncClient", side_effect=lambda *args, **kwargs: _CapturingAsyncClient(stream_lines, capture, *args, **kwargs)):
+            events = [
+                event
+                async for event in generate_questions_stream(
+                    db_session,
+                    AIGenerateRequest(
+                        total_count=1,
+                        difficulty=3,
+                        model="qwen",
+                        material_images=["data:image/png;base64,abc"],
+                    ),
+                    user_id=admin.id,
+                )
+            ]
+
+    assert [event["type"] for event in events] == ["question", "done"]
+    assert capture["url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+    assert capture["payload"]["model"] == "qwen3.5-plus"
+    assert capture["payload"]["messages"][1]["content"][1] == {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,abc"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_generate_questions_stream_does_not_duplicate_chat_completions_endpoint(
+    db_session,
+    admin_token: str,
+) -> None:
+    stream_lines = [
+        'data: {"choices":[{"delta":{"content":"{\\"type\\":\\"choice\\",\\"title\\":\\"Q1\\",\\"content\\":{\\"text\\":\\"C1\\"},\\"options\\":null,\\"answer\\":{\\"text\\":\\"A1\\"},\\"analysis\\":\\"解析1\\",\\"difficulty\\":3}"}}]}',
+        "data: [DONE]",
+    ]
+    capture: dict[str, Any] = {}
+    admin = (await db_session.execute(select(User).where(User.username == "admin"))).scalar_one()
+
+    with patch("app.questions.ai_generate._get_model_config", return_value=("qwen", "test-key", "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", "qwen-plus")):
+        with patch("httpx.AsyncClient", side_effect=lambda *args, **kwargs: _CapturingAsyncClient(stream_lines, capture, *args, **kwargs)):
+            events = [
+                event
+                async for event in generate_questions_stream(
+                    db_session,
+                    AIGenerateRequest(total_count=1, difficulty=3, model="qwen"),
+                    user_id=admin.id,
+                )
+            ]
+
+    assert [event["type"] for event in events] == ["question", "done"]
+    assert capture["url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+
+
+@pytest.mark.asyncio
+async def test_generate_questions_stream_maps_legacy_qwen_default_model_to_supported_model(
+    db_session,
+    admin_token: str,
+) -> None:
+    stream_lines = [
+        'data: {"choices":[{"delta":{"content":"{\\"type\\":\\"choice\\",\\"title\\":\\"Q1\\",\\"content\\":{\\"text\\":\\"C1\\"},\\"options\\":null,\\"answer\\":{\\"text\\":\\"A1\\"},\\"analysis\\":\\"解析1\\",\\"difficulty\\":3}"}}]}',
+        "data: [DONE]",
+    ]
+    capture: dict[str, Any] = {}
+    admin = (await db_session.execute(select(User).where(User.username == "admin"))).scalar_one()
+
+    with patch("app.questions.ai_generate._get_model_config", return_value=("qwen", "test-key", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-3.6")):
+        with patch("httpx.AsyncClient", side_effect=lambda *args, **kwargs: _CapturingAsyncClient(stream_lines, capture, *args, **kwargs)):
+            events = [
+                event
+                async for event in generate_questions_stream(
+                    db_session,
+                    AIGenerateRequest(total_count=1, difficulty=3, model="qwen"),
+                    user_id=admin.id,
+                )
+            ]
+
+    assert [event["type"] for event in events] == ["question", "done"]
+    assert capture["payload"]["model"] == "qwen-plus"
+
+
+@pytest.mark.asyncio
+async def test_generate_questions_stream_strips_material_source_prefixes_from_question_text(
+    db_session,
+    admin_token: str,
+) -> None:
+    stream_lines = [
+        'data: {"choices":[{"delta":{"content":"{\\"type\\":\\"choice\\",\\"title\\":\\"根据教材第9-10页【例8.6】【例8.7】，下列关于 lambda 表达式的说法正确的是？\\",\\"content\\":{\\"text\\":\\"依据教材第12页 形式参数变量和对象引用传递的说法，正确的是？\\"},\\"options\\":{\\"A\\":\\"选项A\\"},\\"answer\\":{\\"correct\\":\\"A\\"},\\"analysis\\":\\"教材第12页说明了参数传递机制。\\",\\"difficulty\\":3}"}}]}',
+        'data: {"choices":[{"delta":{"content":"{\\"type\\":\\"choice\\",\\"title\\":\\"教材第3页将 Python 函数分为四类，以下函数属于哪一类？\\",\\"content\\":{\\"text\\":\\"教材第3页将 Python 函数分为四类，以下函数属于哪一类？\\"},\\"options\\":{\\"A\\":\\"选项A\\"},\\"answer\\":{\\"correct\\":\\"A\\"},\\"analysis\\":\\"解析\\",\\"difficulty\\":3}"}}]}',
+        "data: [DONE]",
+    ]
+    admin = (await db_session.execute(select(User).where(User.username == "admin"))).scalar_one()
+
+    with patch("app.questions.ai_generate._get_model_config", return_value=("qwen", "test-key", "https://api.example.com", "test-model")):
+        with patch("httpx.AsyncClient", side_effect=lambda *args, **kwargs: _FakeAsyncClient(stream_lines, *args, **kwargs)):
+            events = [
+                event
+                async for event in generate_questions_stream(
+                    db_session,
+                    AIGenerateRequest(total_count=2, difficulty=3, model="qwen"),
+                    user_id=admin.id,
+                )
+            ]
+
+    questions = [event["data"] for event in events if event["type"] == "question"]
+
+    assert questions[0]["title"] == "下列关于 lambda 表达式的说法正确的是？"
+    assert questions[0]["content"]["text"] == "形式参数变量和对象引用传递的说法，正确的是？"
+    assert questions[0]["analysis"] == "教材第12页说明了参数传递机制。"
+    assert questions[1]["title"] == "将 Python 函数分为四类，以下函数属于哪一类？"
+    assert questions[1]["content"]["text"] == "将 Python 函数分为四类，以下函数属于哪一类？"
+
+
+@pytest.mark.asyncio
 async def test_list_user_frequent_knowledge_points_returns_empty_when_usage_table_missing(
     db_session,
     admin_token: str,
@@ -222,3 +362,18 @@ def test_build_system_prompt_includes_weighted_knowledge_context() -> None:
     assert "若存在同名或近义知识点，优先采用当前专业/方向/主知识点链路下的含义" in prompt
     assert "补充参考关键词：事务、并发控制。" in prompt
     assert "额外要求：结合教学案例命题" in prompt
+
+
+def test_build_system_prompt_forbids_material_source_prefixes() -> None:
+    prompt = build_ai_generate_system_prompt(
+        total_count=2,
+        difficulty=3,
+        type_distribution={},
+        knowledge_keywords="",
+        user_prompt="",
+        material_text="第12页：函数参数传递",
+        knowledge_contexts=[],
+    )
+
+    assert "题干和标题必须直接写题目内容" in prompt
+    assert "不要以“依据教材第X页”" in prompt

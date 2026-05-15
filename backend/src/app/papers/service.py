@@ -1,5 +1,6 @@
 """Core service functions for reusable paper assets."""
 
+import random
 from collections import Counter
 from dataclasses import dataclass
 from io import BytesIO
@@ -432,6 +433,10 @@ def question_create_from_import_draft(
     else:
         answer = {"points": [part.strip() for part in answer_text.splitlines() if part.strip()]}
 
+    knowledge_point_ids = [
+        kp.id for kp in (draft.suggested_knowledge_points or [])
+    ]
+
     return QuestionCreate(
         type=draft.type,
         title=(draft.title or draft.content_text[:120] or "未命名题目")[:500],
@@ -441,7 +446,7 @@ def question_create_from_import_draft(
         analysis=draft.analysis,
         difficulty=draft.difficulty,
         score=10,
-        knowledge_point_ids=[],
+        knowledge_point_ids=knowledge_point_ids,
         tag_ids=[],
         question_bank_id=question_bank_id,
     )
@@ -528,10 +533,13 @@ async def confirm_import_session(
     ]
     try:
         result = await bulk_create_questions_fast(db, questions, user.id)
-        if not result.created_question_ids:
+        if not result.created_question_ids and not result.existing_question_ids:
             session.error_detail = "没有可入库的题目"
             await db.flush()
             raise ValueError("没有可入库的题目")
+
+        all_question_ids = list(result.created_question_ids) + list(result.existing_question_ids)
+        all_scores = [q.score for q in result.created_questions] + [10] * len(result.existing_question_ids)
 
         paper = await create_paper(
             db,
@@ -544,9 +552,9 @@ async def confirm_import_session(
                     PaperQuestionItem(
                         question_id=question_id,
                         order=index,
-                        score_override=result.created_questions[index].score,
+                        score_override=all_scores[index],
                     )
-                    for index, question_id in enumerate(result.created_question_ids)
+                    for index, question_id in enumerate(all_question_ids)
                 ],
             ),
             user=user,
@@ -556,12 +564,14 @@ async def confirm_import_session(
         session.error_detail = None
         await db.flush()
 
-        if root_id and result.created_question_ids:
+        if root_id and all_question_ids and not body.skip_background_matching:
+            # Only match KPs for NEW questions (existing ones already have KPs)
+            new_question_ids = [str(qid) for qid in result.created_question_ids]
             job = QuestionImportJob(
                 user_id=user.id,
                 status=QuestionImportJobStatus.PENDING,
                 total_count=len(result.created_question_ids),
-                created_question_ids=[str(qid) for qid in result.created_question_ids],
+                created_question_ids=new_question_ids,
             )
             db.add(job)
             await db.flush()
@@ -591,19 +601,22 @@ async def generate_paper_from_source(
     user: User,
     is_admin: bool,
 ) -> Paper:
-    source_questions: list[dict] = []
-    for item in sorted(source.paper_questions, key=lambda question_item: question_item.order):
-        if item.question is None:
-            continue
-        source_questions.append(
-            {
-                "type": item.question.type.value if hasattr(item.question.type, "value") else str(item.question.type),
-                "difficulty": item.question.difficulty,
-                "knowledge_point_ids": [knowledge_point.id for knowledge_point in item.question.knowledge_points],
-            }
-        )
-    if not source_questions:
+    source_items: list[PaperQuestion] = [
+        item
+        for item in sorted(source.paper_questions, key=lambda question_item: question_item.order)
+        if item.question is not None
+    ]
+    if not source_items:
         raise ValueError("源试卷没有可用于生成的题目")
+
+    source_questions: list[dict] = [
+        {
+            "type": item.question.type.value if hasattr(item.question.type, "value") else str(item.question.type),
+            "difficulty": item.question.difficulty,
+            "knowledge_point_ids": [knowledge_point.id for knowledge_point in item.question.knowledge_points],
+        }
+        for item in source_items
+    ]
 
     profile = build_paper_generation_profile(
         source_questions,
@@ -611,33 +624,75 @@ async def generate_paper_from_source(
         body.difficulty_strategy,
     )
 
-    request = AIGenerateRequest(
-        total_count=profile.total_count,
-        difficulty=profile.difficulty,
-        type_distribution=profile.type_distribution,
-        knowledge_point_ids=[kp for kp in profile.knowledge_point_ids if isinstance(kp, uuid.UUID)],
-        prompt=profile.prompt,
-        model=AIModelProvider(body.model),
+    reuse_count = min(
+        len(source_items),
+        int(profile.total_count * body.source_reuse_rate / 100),
     )
+    reused_items = random.sample(source_items, reuse_count) if reuse_count > 0 else []
+
+    remaining_distribution = dict(profile.type_distribution)
+    for item in reused_items:
+        type_str = (
+            item.question.type.value
+            if hasattr(item.question.type, "value")
+            else str(item.question.type)
+        )
+        if remaining_distribution.get(type_str, 0) > 0:
+            remaining_distribution[type_str] -= 1
+    remaining_distribution = {key: value for key, value in remaining_distribution.items() if value > 0}
+
+    new_count = profile.total_count - len(reused_items)
 
     generated_questions: list[QuestionCreate] = []
-    async for event in generate_questions_stream(db, request, user.id):
-        event_type = str(event.get("type") or "")
-        if event_type == "error":
-            raise ValueError(str(event.get("message") or "AI 生成失败"))
-        if event_type != "question":
-            continue
-        payload = event.get("data")
-        if not isinstance(payload, dict):
-            continue
-        generated_questions.append(_question_create_from_ai_payload(payload, profile=profile))
+    new_question_ids: list[uuid.UUID] = []
+    if new_count > 0:
+        request = AIGenerateRequest(
+            total_count=new_count,
+            difficulty=profile.difficulty,
+            type_distribution=remaining_distribution,
+            knowledge_point_ids=[kp for kp in profile.knowledge_point_ids if isinstance(kp, uuid.UUID)],
+            prompt=profile.prompt,
+            model=AIModelProvider(body.model),
+        )
 
-    if len(generated_questions) != profile.total_count:
-        raise ValueError("AI 生成题目数量不足")
+        async for event in generate_questions_stream(db, request, user.id):
+            event_type = str(event.get("type") or "")
+            if event_type == "error":
+                raise ValueError(str(event.get("message") or "AI 生成失败"))
+            if event_type != "question":
+                continue
+            payload = event.get("data")
+            if not isinstance(payload, dict):
+                continue
+            generated_questions.append(_question_create_from_ai_payload(payload, profile=profile))
 
-    result = await bulk_create_questions_fast(db, generated_questions, user.id)
-    if len(result.created_question_ids) != profile.total_count:
-        raise ValueError("AI 生成题目入库数量不足")
+        if len(generated_questions) != new_count:
+            raise ValueError("AI 生成题目数量不足")
+
+        result = await bulk_create_questions_fast(db, generated_questions, user.id)
+        if len(result.created_question_ids) != new_count:
+            raise ValueError("AI 生成题目入库数量不足")
+        new_question_ids = list(result.created_question_ids)
+
+    sorted_reused = sorted(reused_items, key=lambda item: item.order)
+    question_items: list[PaperQuestionItem] = []
+    for index, item in enumerate(sorted_reused):
+        question_items.append(
+            PaperQuestionItem(
+                question_id=item.question_id,
+                order=index,
+                score_override=float(item.score_override) if item.score_override is not None else None,
+            )
+        )
+    base_offset = len(sorted_reused)
+    for index, question_id in enumerate(new_question_ids):
+        question_items.append(
+            PaperQuestionItem(
+                question_id=question_id,
+                order=base_offset + index,
+                score_override=generated_questions[index].score,
+            )
+        )
 
     return await create_paper(
         db,
@@ -647,14 +702,7 @@ async def generate_paper_from_source(
             source_type="ai_generated",
             source_paper_id=source.id,
             root_knowledge_point_id=source.root_knowledge_point_id,
-            question_items=[
-                PaperQuestionItem(
-                    question_id=question_id,
-                    order=index,
-                    score_override=generated_questions[index].score,
-                )
-                for index, question_id in enumerate(result.created_question_ids)
-            ],
+            question_items=question_items,
         ),
         user=user,
         is_admin=is_admin,

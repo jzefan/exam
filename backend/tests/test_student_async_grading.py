@@ -7,8 +7,10 @@ from sqlalchemy import select
 from app.auth.schemas import UserCreate
 from app.auth.security import create_access_token
 from app.auth.service import create_user
+from app.exams import student_router
 from app.exams.models import Exam, ExamQuestion, ExamStudent
-from app.grading.models import GradingResultSnapshot, GradingTask, ModelConfig, ProviderConfig, RoleBinding
+from app.grading.models import GradingAuditEvent, GradingResultSnapshot, GradingTask, ModelConfig, ProviderConfig, RoleBinding
+from app.grading.service import create_grading_task
 from app.questions.models import Question, QuestionType
 
 
@@ -66,13 +68,14 @@ async def _seed_role_binding(db_session) -> None:
 async def test_submit_exam_with_subjective_question_enters_pending_ai_and_creates_grading_task(
     client: AsyncClient, db_session, monkeypatch
 ) -> None:
-    async def fake_schedule(*_args, **_kwargs):
+    async def fake_run(*_args, **_kwargs):
         return None
 
+    # Prevent the background task that submit_exam schedules from actually
+    # invoking the LLM — we only care that the GradingTask row exists.
     monkeypatch.setattr(
-        "app.exams.student_router._schedule_subjective_grading_tasks",
-        fake_schedule,
-        raising=False,
+        "app.exams.student_router._run_subjective_grading_tasks",
+        fake_run,
     )
 
     teacher = await create_user(
@@ -181,16 +184,189 @@ async def test_submit_exam_with_subjective_question_enters_pending_ai_and_create
 
 
 @pytest.mark.asyncio
+async def test_background_subjective_grading_marks_task_failed_when_dispatch_errors(
+    db_session, monkeypatch
+) -> None:
+    class _SessionFactory:
+        async def __aenter__(self):
+            return db_session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    monkeypatch.setattr(student_router, "async_session", lambda: _SessionFactory())
+
+    teacher = await create_user(
+        db_session,
+        UserCreate(
+            username="teacher_dispatch_failure",
+            email="teacher_dispatch_failure@example.com",
+            password="teacherpass123",
+            full_name="Teacher Dispatch Failure",
+            role_name="teacher",
+        ),
+    )
+    await _seed_role_binding(db_session)
+
+    task = await create_grading_task(
+        db_session,
+        {
+            "source_type": "exam_submission",
+            "source_business_id": "11111111-1111-1111-1111-111111111111:22222222-2222-2222-2222-222222222222:33333333-3333-3333-3333-333333333333",
+            "question_type": "short_answer",
+            "question_content": "请解释事务隔离级别。",
+            "subject": "数据库",
+            "language": "zh-CN",
+            "max_score": 10,
+            "knowledge_tags": [],
+            "fatal_rule_enabled": True,
+            "student_answer_raw": "答案",
+            "student_answer_structured": {"text": "答案"},
+            "attachment_refs": [],
+            "standard_answers": [{"points": ["脏读", "不可重复读", "幻读"]}],
+            "rubric_definition": {},
+            "scoring_points": [],
+            "dimension_weights": {},
+            "deduction_rules": [],
+            "fatal_error_rules": [],
+            "role_binding_version": 1,
+            "runtime_logs": [],
+        },
+    )
+    await db_session.commit()
+
+    async def fake_run(*_args, **_kwargs):
+        raise ValueError("grader provider api key is not configured")
+
+    monkeypatch.setattr(student_router, "run_grading_task_with_role_binding", fake_run)
+
+    await student_router._run_subjective_grading_tasks([str(task.id)])
+
+    refreshed = await db_session.get(GradingTask, task.id)
+    assert refreshed is not None
+    assert refreshed.status == "failed"
+
+    events = (
+        await db_session.execute(
+            select(GradingAuditEvent)
+            .where(GradingAuditEvent.task_id == task.id)
+            .order_by(GradingAuditEvent.created_at.asc())
+        )
+    ).scalars().all()
+    assert events[-1].event_type == "grading.failed"
+    assert events[-1].event_payload["stage"] == "dispatch"
+
+
+@pytest.mark.asyncio
+async def test_background_subjective_grading_keeps_completed_score_when_apply_step_fails(
+    db_session, monkeypatch
+) -> None:
+    class _SessionFactory:
+        async def __aenter__(self):
+            return db_session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    monkeypatch.setattr(student_router, "async_session", lambda: _SessionFactory())
+
+    teacher = await create_user(
+        db_session,
+        UserCreate(
+            username="teacher_apply_failure",
+            email="teacher_apply_failure@example.com",
+            password="teacherpass123",
+            full_name="Teacher Apply Failure",
+            role_name="teacher",
+        ),
+    )
+    await _seed_role_binding(db_session)
+
+    task = await create_grading_task(
+        db_session,
+        {
+            "source_type": "exam_submission",
+            "source_business_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:cccccccc-cccc-cccc-cccc-cccccccccccc",
+            "question_type": "short_answer",
+            "question_content": "请解释索引下推。",
+            "subject": "数据库",
+            "language": "zh-CN",
+            "max_score": 10,
+            "knowledge_tags": [],
+            "fatal_rule_enabled": True,
+            "student_answer_raw": "答案",
+            "student_answer_structured": {"text": "答案"},
+            "attachment_refs": [],
+            "standard_answers": [{"points": ["减少回表"]}],
+            "rubric_definition": {},
+            "scoring_points": [],
+            "dimension_weights": {},
+            "deduction_rules": [],
+            "fatal_error_rules": [],
+            "role_binding_version": 1,
+            "runtime_logs": [],
+        },
+    )
+    await db_session.commit()
+
+    async def fake_run(db, task_id: str, *_args, **_kwargs):
+        grading_task = await db.get(GradingTask, task.id)
+        snapshot = GradingResultSnapshot(
+            task_id=grading_task.id,
+            snapshot_type="final",
+            score_total=8,
+            dimension_scores={"accuracy": 8},
+            dimension_comments={},
+            deduction_reasons=[],
+            strengths=["回答基本正确"],
+            improvement_suggestions=[],
+            evidence_summary={"summary": "已完成评分"},
+            risk_flags=[],
+            prompt_template_version=grading_task.prompt_template_version,
+            role_binding_version=grading_task.role_binding_version,
+            created_by="system",
+        )
+        db.add(snapshot)
+        await db.flush()
+        grading_task.latest_final_snapshot = snapshot
+        grading_task.status = "completed"
+        return {"status": "completed", "arbitration_required": False, "reason": None}
+
+    async def fake_apply(*_args, **_kwargs):
+        raise RuntimeError("exam submission row is missing")
+
+    monkeypatch.setattr(student_router, "run_grading_task_with_role_binding", fake_run)
+    monkeypatch.setattr(student_router, "apply_grading_task_result_to_exam_submission", fake_apply)
+
+    await student_router._run_subjective_grading_tasks([str(task.id)])
+
+    refreshed = await db_session.get(GradingTask, task.id)
+    assert refreshed is not None
+    assert refreshed.status == "completed"
+    assert refreshed.latest_final_snapshot_id is not None
+
+    events = (
+        await db_session.execute(
+            select(GradingAuditEvent)
+            .where(GradingAuditEvent.task_id == task.id)
+            .order_by(GradingAuditEvent.created_at.asc())
+        )
+    ).scalars().all()
+    assert events[-1].event_type == "grading.apply_failed"
+
+
+@pytest.mark.asyncio
 async def test_submit_exam_preserves_subjective_answer_attachments_in_grading_task(
     client: AsyncClient, db_session, monkeypatch
 ) -> None:
-    async def fake_schedule(*_args, **_kwargs):
+    async def fake_run(*_args, **_kwargs):
         return None
 
+    # Prevent the background task that submit_exam schedules from actually
+    # invoking the LLM — we only care that the GradingTask row exists.
     monkeypatch.setattr(
-        "app.exams.student_router._schedule_subjective_grading_tasks",
-        fake_schedule,
-        raising=False,
+        "app.exams.student_router._run_subjective_grading_tasks",
+        fake_run,
     )
 
     teacher = await create_user(

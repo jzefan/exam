@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useList } from "@refinedev/core";
 import { useNavigate } from "react-router-dom";
-import { Archive, Copy, Eye, FilePlus2, RefreshCcw, Search, Sparkles, Trash2 } from "lucide-react";
+import { Copy, Eye, FilePlus2, RefreshCcw, Search, Sparkles, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -84,12 +84,6 @@ export function PaperListPage() {
         }),
       });
       toast({ title: "复制成功", description: `已创建试卷：${created.title}` });
-    });
-
-  const handleArchive = async (paper: IPaper) =>
-    withBusyGuard(paper.id, async () => {
-      await paperApiRequest(`/papers/${paper.id}/archive`, { method: "POST" });
-      toast({ title: "已归档", description: paper.title });
     });
 
   const handleDelete = async (paper: IPaper) =>
@@ -204,9 +198,6 @@ export function PaperListPage() {
                         title="AI生成新试卷"
                       >
                         <Sparkles className="h-4 w-4" />
-                      </Button>
-                      <Button variant="ghost" size="icon" onClick={() => handleArchive(paper)} disabled={isBusy} title="归档">
-                        <Archive className="h-4 w-4" />
                       </Button>
                       <Button variant="ghost" size="icon" onClick={() => handleDelete(paper)} disabled={isBusy} title="删除">
                         <Trash2 className="h-4 w-4 text-destructive" />

@@ -6,8 +6,9 @@ import "katex/dist/katex.min.css";
  * Renders text with inline ($...$) and block ($$...$$) LaTeX formulas.
  * Non-LaTeX text is rendered as plain text (HTML-escaped).
  */
-export function LatexText({ children, className }: { children: string; className?: string }) {
-  const html = useMemo(() => renderLatex(children), [children]);
+export function LatexText({ children, className }: { children: string | number | null | undefined; className?: string }) {
+  const safe = typeof children === "string" ? children : children == null ? "" : String(children);
+  const html = useMemo(() => renderLatex(safe), [safe]);
   return <span className={className} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
@@ -20,6 +21,7 @@ function escapeHtml(text: string): string {
 
 /** Render LaTeX in plain text — escapes non-LaTeX portions. */
 export function renderLatex(text: string): string {
+  if (typeof text !== "string") return "";
   return text.replace(LATEX_RE, (match) => {
     const isBlock = match.startsWith("$$");
     const formula = isBlock ? match.slice(2, -2).trim() : match.slice(1, -1).trim();

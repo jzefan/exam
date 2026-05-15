@@ -75,6 +75,7 @@ export interface GradingCandidateDetailResponse {
   candidate_name: string;
   candidate_code: string | null;
   status: string;
+  evaluation_note?: string | null;
   suggested_score: number | null;
   max_score: number;
   question_type: "short_answer" | "code";

@@ -41,7 +41,7 @@ function toExamForm(exam: ExamDetail): ExamFormValues {
     position_id: exam.position_id || null,
     max_switch_count: exam.max_switch_count ?? 0,
     allow_retake: exam.allow_retake ?? false,
-    show_result: exam.show_result ?? false,
+    show_result: exam.show_result ?? true,
     notes_template: exam.notes_template || "",
     question_mode: exam.question_mode ?? null,
     question_ids: exam.questions.map((q) => q.question_id),

@@ -1098,10 +1098,17 @@ export function QuestionList() {
                   }`}
                 >
                   <div className={`flex-1 min-w-0 ${bank.description ? "" : "flex items-center"}`}>
-                    <div className="flex items-center gap-1.5">
-                      <p className={`text-sm truncate ${isActive ? "text-primary font-medium" : "text-foreground"}`}>
-                        {bank.name}
-                      </p>
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className={`min-w-0 truncate text-sm ${isActive ? "text-primary font-medium" : "text-foreground"}`}>
+                            {bank.name}
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="right" align="start" className="max-w-xs">
+                          <p>{bank.name}</p>
+                        </TooltipContent>
+                      </Tooltip>
                       <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4 shrink-0">
                         {bank.question_count}
                       </Badge>
@@ -1411,7 +1418,7 @@ export function QuestionList() {
       {/* Two-column layout: sidebar left, list right */}
       <div className="flex gap-6">
         {/* Left: sidebar filters (desktop only) */}
-        <aside className="hidden w-64 shrink-0 self-start lg:sticky lg:top-6 lg:block">
+        <aside className="hidden w-80 shrink-0 self-start lg:sticky lg:top-6 lg:block">
           <Card>
             <CardContent className="max-h-[calc(100vh-8rem)] overflow-y-hidden p-4 hover:overflow-y-auto">
               <TooltipProvider>
@@ -2054,9 +2061,8 @@ export function QuestionList() {
           score: q.score,
         }))}
         defaultTitle={defaultCreateTitle}
-        onPublished={(_examId, category) => {
-          const target = category === "exam" ? "/exams" : "/exams/practice";
-          navigate(target);
+        onPublished={() => {
+          navigate("/exams");
         }}
       />
     </div>

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, Response, UploadFile, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +39,7 @@ from app.questions.schemas import (
     QuestionImportDraft,
     QuestionImportBulkCreateJobRequest,
     QuestionImportBulkCreateJobResponse,
+    QuestionImportEnhanceDraftsRequest,
     QuestionImportJobResponse,
     QuestionImportRecognizeRequest,
     QuestionImportRecognizeResponse,
@@ -52,8 +54,10 @@ from app.questions.schemas import (
 )
 from app.questions.docx_render import recognize_docx_visual
 from app.questions.service import (
+    IN_USE_QUESTION_EDIT_ERROR,
     bulk_create_questions,
     bulk_create_questions_fast,
+    build_question_edit_lock_info,
     clear_question_bank_questions,
     match_and_create_import_question,
     create_knowledge_point,
@@ -76,17 +80,28 @@ from app.questions.service import (
     get_question_import_job_by_id,
     process_question_import_job,
     list_tags,
+    enhance_import_drafts,
+    enhance_import_drafts_stream,
     save_generated_questions_to_default_course_bank,
     soft_delete_question,
     soft_delete_question_bank,
+    diff_question_update,
+    question_is_in_use,
+    regrade_submitted_attempts_for_question_update,
     update_question,
     update_tag,
+    validate_in_use_question_update,
 )
 
 questions_router = APIRouter()
 tags_router = APIRouter()
 knowledge_points_router = APIRouter()
 question_banks_router = APIRouter()
+
+
+async def _build_question_response(db: AsyncSession, question: Question) -> QuestionResponse:
+    edit_lock = await build_question_edit_lock_info(db, question.id)
+    return QuestionResponse.from_question(question, edit_lock=edit_lock)
 
 
 async def _is_question_admin(db: AsyncSession, user: User) -> bool:
@@ -282,7 +297,7 @@ async def list_questions(
 
     result = await db.execute(full_query)
     questions = result.unique().scalars().all()
-    return [QuestionResponse.from_question(q) for q in questions]
+    return [await _build_question_response(db, question) for question in questions]
 
 
 @questions_router.get("/{question_id}", response_model=QuestionResponse)
@@ -295,28 +310,29 @@ async def get_question(
     question = await get_question_by_id(db, question_id, user=user, is_platform_admin=is_admin)
     if question is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found")
-    return QuestionResponse.from_question(question)
+    return await _build_question_response(db, question)
 
 
 @questions_router.post("", response_model=QuestionResponse, status_code=status.HTTP_201_CREATED)
 async def create_question_endpoint(
     data: QuestionCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
 ) -> QuestionResponse:
     is_admin = await _is_question_admin(db, user)
     await _ensure_can_write_question_bank(db, data.question_bank_id, user, is_admin)
     await _ensure_can_read_knowledge_points(db, data.knowledge_point_ids, user, is_admin)
     question = await create_question(db, data, user.id)
-    return QuestionResponse.from_question(question)
+    return await _build_question_response(db, question)
 
 
 @questions_router.put("/{question_id}", response_model=QuestionResponse)
 async def update_question_endpoint(
     question_id: uuid.UUID,
     data: QuestionUpdate,
+    background_tasks: BackgroundTasks,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
 ) -> QuestionResponse:
     is_admin = await _is_question_admin(db, user)
     question = await get_question_by_id(db, question_id, user=user, is_platform_admin=is_admin)
@@ -333,15 +349,29 @@ async def update_question_endpoint(
         await _ensure_can_write_question_bank(db, data.question_bank_id, user, is_admin)
     if "knowledge_point_ids" in update_data and data.knowledge_point_ids is not None:
         await _ensure_can_read_knowledge_points(db, data.knowledge_point_ids, user, is_admin)
+    diff = None
+    if await question_is_in_use(db, question.id):
+        diff = diff_question_update(question, data)
+        try:
+            validate_in_use_question_update(question, diff)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=IN_USE_QUESTION_EDIT_ERROR) from exc
     updated = await update_question(db, question, data)
-    return QuestionResponse.from_question(updated)
+    await db.commit()
+    if diff is not None and diff.regrade_fields:
+        background_tasks.add_task(
+            regrade_submitted_attempts_for_question_update,
+            updated.id,
+            set(diff.regrade_fields),
+        )
+    return await _build_question_response(db, updated)
 
 
 @questions_router.post("/bulk-delete", response_model=QuestionBulkDeleteResponse)
 async def bulk_delete_questions_endpoint(
     data: QuestionBulkDeleteRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
 ) -> QuestionBulkDeleteResponse:
     is_admin = await _is_question_admin(db, user)
     question_ids = list(dict.fromkeys(data.question_ids))
@@ -368,7 +398,7 @@ async def bulk_delete_questions_endpoint(
 async def bulk_move_questions_endpoint(
     data: QuestionBulkMoveRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
 ) -> QuestionBulkMoveResponse:
     is_admin = await _is_question_admin(db, user)
     await _ensure_can_write_question_bank(db, data.question_bank_id, user, is_admin)
@@ -398,7 +428,7 @@ async def bulk_move_questions_endpoint(
 async def delete_question_endpoint(
     question_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
 ) -> None:
     is_admin = await _is_question_admin(db, user)
     question = await get_question_by_id(db, question_id, user=user, is_platform_admin=is_admin)
@@ -416,7 +446,7 @@ async def delete_question_endpoint(
 @questions_router.post("/import/analyze", response_model=QuestionImportAnalyzeResponse)
 async def analyze_imported_question_endpoint(
     data: QuestionImportAnalyzeRequest,
-    _user: Annotated[User, require_roles("admin", "teacher")],
+    _user: Annotated[User, require_roles("admin", "teacher", "evaluator")],
 ) -> QuestionImportAnalyzeResponse:
     try:
         return await analyze_imported_question(data.question)
@@ -429,7 +459,7 @@ async def analyze_imported_question_endpoint(
 @questions_router.post("/import/recognize", response_model=QuestionImportRecognizeResponse)
 async def recognize_imported_question_endpoint(
     data: QuestionImportRecognizeRequest,
-    _user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
+    _user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
 ) -> QuestionImportRecognizeResponse:
     try:
         return await recognize_imported_question(data.raw_text)
@@ -442,7 +472,7 @@ async def recognize_imported_question_endpoint(
 @questions_router.post("/import/document-recognize", response_model=QuestionImportDocumentRecognizeResponse)
 async def document_recognize_import_endpoint(
     data: QuestionImportDocumentRecognizeRequest,
-    _user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
+    _user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
 ) -> QuestionImportDocumentRecognizeResponse:
     try:
         return await recognize_question_document(data)
@@ -455,7 +485,7 @@ async def document_recognize_import_endpoint(
 @questions_router.post("/import/document-recognize-visual", response_model=QuestionImportDocumentRecognizeResponse)
 async def document_recognize_visual_endpoint(
     file: Annotated[UploadFile, File(...)],
-    _user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
+    _user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
 ) -> QuestionImportDocumentRecognizeResponse:
     try:
         file_bytes = await file.read()
@@ -475,7 +505,7 @@ async def document_recognize_visual_endpoint(
 @questions_router.post("/import/re-recognize", response_model=QuestionImportDraft)
 async def re_recognize_import_draft_endpoint(
     data: QuestionImportRecognizeRequest,
-    _user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
+    _user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
 ) -> QuestionImportDraft:
     draft = build_import_draft_from_segment(data.raw_text, boundary_confidence="low")
     return await complete_import_draft_with_ai(draft)
@@ -485,7 +515,7 @@ async def re_recognize_import_draft_endpoint(
 async def bulk_create_questions_endpoint(
     data: QuestionBulkCreateRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
 ) -> QuestionBulkCreateResponse:
     is_admin = await _is_question_admin(db, user)
     bank_ids = {question.question_bank_id for question in data.questions if question.question_bank_id is not None}
@@ -544,7 +574,7 @@ async def import_bulk_create_job_endpoint(
     data: QuestionImportBulkCreateJobRequest,
     background_tasks: BackgroundTasks,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
 ) -> QuestionImportBulkCreateJobResponse:
     is_admin = await _is_question_admin(db, user)
     bank_ids = {question.question_bank_id for question in data.questions if question.question_bank_id is not None}
@@ -608,7 +638,7 @@ async def get_question_import_job_endpoint(
 async def import_match_create_endpoint(
     data: QuestionImportMatchCreateRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
 ) -> QuestionImportMatchCreateResponse:
     is_admin = await _is_question_admin(db, user)
     await _ensure_can_write_question_bank(db, data.question.question_bank_id, user, is_admin)
@@ -620,6 +650,78 @@ async def import_match_create_endpoint(
         question_id=question.id,
         matched_knowledge_point_ids=[kp.id for kp in matched],
         matched_knowledge_point_names=[kp.name for kp in matched],
+    )
+
+
+@questions_router.post("/import/enhance-drafts")
+async def enhance_import_drafts_endpoint(
+    data: QuestionImportEnhanceDraftsRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
+):
+    """Batch-enhance import drafts: AI answer completion/check + knowledge point matching."""
+    result = await enhance_import_drafts(db, data.drafts, data.root_knowledge_point_id)
+    return {"drafts": [d.model_dump() for d in result]}
+
+
+@questions_router.post("/import/enhance-drafts-stream")
+async def enhance_import_drafts_stream_endpoint(
+    data: QuestionImportEnhanceDraftsRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
+):
+    """Stream-enhanced version: SSE per-draft results with real-time progress."""
+    total = len(data.drafts)
+
+    async def event_stream():
+        answers_completed = 0
+        doubts_flagged = 0
+        kps_matched = 0
+
+        async for index, result in enhance_import_drafts_stream(
+            db, data.drafts, data.root_knowledge_point_id
+        ):
+            if result.answer_text:
+                answers_completed += 1
+            if result.doubt:
+                doubts_flagged += 1
+            if result.suggested_knowledge_points:
+                kps_matched += 1
+
+            payload = json.dumps({
+                "type": "progress",
+                "index": index,
+                "total": total,
+                "draft_id": result.draft_id,
+                "answer_text": result.answer_text,
+                "doubt": result.doubt,
+                "doubt_reason": result.doubt_reason,
+                "suggested_knowledge_points": [
+                    {"id": str(kp.id), "name": kp.name}
+                    for kp in result.suggested_knowledge_points
+                ],
+                "answers_completed": answers_completed,
+                "doubts_flagged": doubts_flagged,
+                "kps_matched": kps_matched,
+            }, ensure_ascii=False)
+            yield f"data: {payload}\n\n"
+
+        done = json.dumps({
+            "type": "done",
+            "answers_completed": answers_completed,
+            "doubts_flagged": doubts_flagged,
+            "kps_matched": kps_matched,
+        }, ensure_ascii=False)
+        yield f"data: {done}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -687,7 +789,7 @@ async def create_tag_endpoint(
     from app.questions.models import TagType
     if data.type != TagType.CUSTOM:
         # Standard tags require admin or teacher role via RBAC
-        if not await user_has_role(db, user.id, "platform_admin", "school_admin", "teacher"):
+        if not await user_has_role(db, user.id, "platform_admin", "school_admin", "teacher", "evaluator"):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
     tag = await create_tag(db, data)
     return TagResponse.model_validate(tag)
@@ -705,7 +807,7 @@ async def update_tag_endpoint(
     if existing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
     if existing.type != TagType.CUSTOM:
-        if not await user_has_role(db, user.id, "platform_admin", "school_admin", "teacher"):
+        if not await user_has_role(db, user.id, "platform_admin", "school_admin", "teacher", "evaluator"):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
     tag = await update_tag(db, tag_id, data)
     if tag is None:
@@ -724,7 +826,7 @@ async def delete_tag_endpoint(
     if existing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
     if existing.type != TagType.CUSTOM:
-        if not await user_has_role(db, user.id, "platform_admin", "school_admin", "teacher"):
+        if not await user_has_role(db, user.id, "platform_admin", "school_admin", "teacher", "evaluator"):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
     await delete_tag(db, tag_id)
 
@@ -745,7 +847,7 @@ async def list_knowledge_points_endpoint(
 async def create_knowledge_point_endpoint(
     data: KnowledgePointCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
 ) -> KnowledgePointResponse:
     is_admin = await _is_question_admin(db, user)
     await _ensure_can_write_knowledge_point(db, data.parent_id, user, is_admin)
@@ -776,7 +878,7 @@ async def list_question_banks_endpoint(
 async def create_question_bank_endpoint(
     data: QuestionBankCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
 ) -> QuestionBankResponse:
     bank = await create_question_bank(db, data, user.id)
     return QuestionBankResponse.model_validate(bank)
@@ -800,7 +902,7 @@ async def ensure_course_question_bank_endpoint(
 async def clear_question_bank_questions_endpoint(
     bank_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
 ) -> QuestionBankClearResponse:
     is_admin = await _is_question_admin(db, user)
     bank = await get_question_bank_by_id(db, bank_id)
@@ -828,7 +930,7 @@ async def clear_question_bank_questions_endpoint(
 async def delete_question_bank_endpoint(
     bank_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher")],
+    user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
 ) -> None:
     is_admin = await _is_question_admin(db, user)
     bank = await get_question_bank_by_id(db, bank_id)

@@ -39,7 +39,7 @@ function formatDateTime(iso: string | null) {
 function toSettingsValues(exam: ExamViewDetail): ViewSettingsValues {
   return {
     max_switch_count: exam.max_switch_count ?? 0,
-    show_result: exam.show_result ?? false,
+    show_result: exam.show_result ?? true,
     allow_retake: exam.allow_retake ?? false,
   };
 }
@@ -269,6 +269,7 @@ export function ExamPaperViewPage() {
         resource: "exams",
         id,
         values: {
+          total_score: totalScore,
           question_items: questionItems,
         },
       },

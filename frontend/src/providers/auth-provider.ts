@@ -33,6 +33,12 @@ export const authProvider: AuthProvider = {
       });
       localStorage.setItem("access_token", data.access_token);
       localStorage.setItem("user", JSON.stringify(data.user));
+      const isStudent = data.user.organizations.some(
+        (o) => o.role_name === "student" || o.role_name === "assessee",
+      );
+      if (data.user.must_change_password && isStudent) {
+        return { success: true, redirectTo: "/student/force-change-password" };
+      }
       return { success: true, redirectTo: "/" };
     } catch (error) {
       return { success: false, error: { name: "登录失败", message: getLoginErrorMessage(error) } };
@@ -67,6 +73,7 @@ export const authProvider: AuthProvider = {
     return {
       id: user.id,
       name: user.full_name,
+      must_change_password: user.must_change_password,
       persona: user.persona,
       primary_org: user.primary_org,
       organizations: user.organizations,

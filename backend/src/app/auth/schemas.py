@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 UserPersona = Literal["teacher", "assessor"]
 
@@ -51,6 +51,7 @@ class UserResponse(BaseModel):
     email: str
     full_name: str
     is_active: bool
+    must_change_password: bool = False
     persona: UserPersona
     primary_org: UserOrgInfo | None = None
     organizations: list[UserOrgInfo] = []
@@ -92,3 +93,13 @@ class ResetPasswordRequest(BaseModel):
 
 class ResetPasswordResponse(BaseModel):
     message: str
+
+
+class ForceChangePasswordRequest(BaseModel):
+    password: str = Field(min_length=6)
+    confirm_password: str | None = None
+
+
+class ForceChangePasswordResponse(BaseModel):
+    message: str
+    user: "UserResponse"

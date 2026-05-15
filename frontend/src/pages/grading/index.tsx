@@ -26,6 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
+import { LatexText } from "@/components/ui/latex-text";
 import { cn } from "@/lib/utils";
 import type { IQuestion } from "@/types";
 import {
@@ -256,6 +257,7 @@ export function GradingCenterPage() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [candidateDetail, setCandidateDetail] = useState<GradingCandidateDetailResponse | null>(null);
   const [manualScore, setManualScore] = useState("");
+  const [autoScoreReason, setAutoScoreReason] = useState<string | null>(null);
   const [promptDraft, setPromptDraft] = useState("");
   const [showFollowUpWorkspace, setShowFollowUpWorkspace] = useState(false);
   const [followUpConversation, setFollowUpConversation] = useState<
@@ -324,7 +326,19 @@ export function GradingCenterPage() {
         `/grading/inbox/tasks/${taskId}`,
       );
       setCandidateDetail(payload);
-      setManualScore(payload.suggested_score == null ? "" : String(payload.suggested_score));
+      const hasAnswer =
+        Boolean(payload.student_answer_raw?.trim()) ||
+        (payload.attachment_refs?.length ?? 0) > 0;
+      if (!hasAnswer) {
+        setManualScore("0");
+        setAutoScoreReason("该考生未提交答案，评分自动设为0分");
+      } else if (payload.suggested_score == null) {
+        setManualScore("0");
+        setAutoScoreReason(payload.evaluation_note ?? "AI尚未评估，评分自动设为0分");
+      } else {
+        setManualScore(String(payload.suggested_score));
+        setAutoScoreReason(null);
+      }
       setReportError(null);
       return payload;
     } catch (error) {
@@ -528,7 +542,7 @@ export function GradingCenterPage() {
           method: "POST",
           body: JSON.stringify({
             score_total: scoreValue,
-            reason: "教师人工确认",
+            reason: autoScoreReason ?? "教师人工确认",
           }),
         });
       }
@@ -862,7 +876,7 @@ export function GradingCenterPage() {
                                                 </span>
                                               </div>
                                               <p className="truncate text-xs text-muted-foreground">
-                                                {question.question_content}
+                                                <LatexText>{question.question_content}</LatexText>
                                               </p>
                                             </div>
                                             <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
@@ -935,7 +949,9 @@ export function GradingCenterPage() {
                       </span>
                     ))}
                   </div>
-                  <p className="text-sm leading-6 text-muted-foreground">题目：{questionSummary}</p>
+                  <p className="text-sm leading-6 text-muted-foreground">
+                    题目：<LatexText>{questionSummary}</LatexText>
+                  </p>
                 </div>
                 <TooltipProvider delayDuration={150}>
                   <Tooltip>
@@ -1114,13 +1130,23 @@ export function GradingCenterPage() {
                         <label className="text-sm text-muted-foreground" htmlFor="manual-score-inline">
                           分数
                         </label>
-                        <Input
-                          id="manual-score-inline"
-                          type="number"
-                          value={manualScore}
-                          onChange={(event) => setManualScore(event.target.value)}
-                          className="h-8 w-24 rounded-lg"
-                        />
+                        <div className="flex flex-col items-start gap-1">
+                          <Input
+                            id="manual-score-inline"
+                            type="number"
+                            value={manualScore}
+                            onChange={(event) => {
+                              setManualScore(event.target.value);
+                              setAutoScoreReason(null);
+                            }}
+                            className="h-8 w-24 rounded-lg"
+                          />
+                          {autoScoreReason ? (
+                            <span className="pl-1 text-[11px] leading-4 text-amber-600">
+                              {autoScoreReason}
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
                       <Button
                         size="sm"
@@ -1174,7 +1200,9 @@ export function GradingCenterPage() {
                                 <CodeBlock code={candidateDetail.student_answer_raw} language="python" />
                               ) : (
                                 <p className="text-sm leading-relaxed text-foreground/90">
-                                  {candidateDetail?.student_answer_raw ?? (loadingCandidate ? "正在加载答案..." : "-")}
+                                  <LatexText>
+                                    {candidateDetail?.student_answer_raw ?? (loadingCandidate ? "正在加载答案..." : "-")}
+                                  </LatexText>
                                 </p>
                               )
                             ) : null}
@@ -1296,13 +1324,15 @@ export function GradingCenterPage() {
                               {expandedStages[stage] ? (
                                 <div className="space-y-5 px-4 pt-1 pb-5 pl-16">
                                   <div className="space-y-4">
-                                    <p className="text-sm leading-relaxed text-foreground/80 italic">"{model.summary}"</p>
+                                    <p className="text-sm leading-relaxed text-foreground/80 italic">
+                                      <LatexText>{`"${model.summary}"`}</LatexText>
+                                    </p>
                                     {model.process.length > 0 ? (
                                       <ul className="space-y-2.5 text-xs text-muted-foreground">
                                         {model.process.map((item) => (
                                           <li key={item} className="flex gap-2">
                                             <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-50" />
-                                            <span>{item}</span>
+                                            <LatexText>{item}</LatexText>
                                           </li>
                                         ))}
                                       </ul>
@@ -1320,14 +1350,18 @@ export function GradingCenterPage() {
                                             追加复评指令
                                           </p>
                                         </div>
-                                        <p className="text-sm font-medium text-foreground/90">"{fu.prompt}"</p>
+                                        <p className="text-sm font-medium text-foreground/90">
+                                          <LatexText>{`"${fu.prompt}"`}</LatexText>
+                                        </p>
                                         <div className="space-y-3 border-t border-primary/10 pt-3">
-                                          <p className="text-sm leading-relaxed text-foreground/80">{fuModel.summary}</p>
+                                          <p className="text-sm leading-relaxed text-foreground/80">
+                                            <LatexText>{fuModel.summary}</LatexText>
+                                          </p>
                                           <ul className="space-y-2 text-xs text-muted-foreground">
                                             {fuModel.process.map((item) => (
                                               <li key={item} className="flex gap-2">
                                                 <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-40" />
-                                                <span>{item}</span>
+                                                <LatexText>{item}</LatexText>
                                               </li>
                                             ))}
                                           </ul>
@@ -1363,7 +1397,9 @@ export function GradingCenterPage() {
                   {candidateDetail?.candidate_code ? ` ｜ ${candidateDetail.candidate_code}` : ""}
                 </p>
                 <p className="truncate text-xs text-muted-foreground">
-                  {questionSummary || questionDetail?.question_label || "当前题目"}
+                  <LatexText>
+                    {questionSummary || questionDetail?.question_label || "当前题目"}
+                  </LatexText>
                 </p>
               </div>
               <Button variant="ghost" size="icon" onClick={() => setShowFollowUpWorkspace(false)} aria-label="退出 Prompt 复评">

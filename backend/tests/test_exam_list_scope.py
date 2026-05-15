@@ -6,7 +6,8 @@ from httpx import AsyncClient
 from app.auth.schemas import UserCreate
 from app.auth.security import create_access_token
 from app.auth.service import create_user
-from app.exams.models import Exam, ExamStudent
+from app.exams.models import Exam, ExamQuestion, ExamStudent
+from app.questions.models import Question, QuestionType
 from app.rbac.models import Organization, Role
 
 
@@ -531,3 +532,89 @@ async def test_updating_exam_does_not_remove_submitted_student_record_even_if_st
     assert payload[0]["title"] == "被修改后仍应保留提交记录的考试（更新）"
     assert payload[0]["submitted_at"] is not None
     assert payload[0]["score"] == 86
+
+
+@pytest.mark.asyncio
+async def test_updating_exam_question_scores_updates_list_total_score(
+    client: AsyncClient, db_session
+) -> None:
+    org = await _create_org_with_roles(db_session)
+
+    teacher = await create_user(
+        db_session,
+        UserCreate(
+            username="teacher-score-sync",
+            email="teacher-score-sync@example.com",
+            password="teacherpass123",
+            full_name="Teacher Score Sync",
+            role_name="teacher",
+            org_id=org.id,
+        ),
+    )
+    question_a = Question(
+        type=QuestionType.CHOICE,
+        title="原始 200 分题",
+        content={"text": "A"},
+        options={"A": "A", "B": "B"},
+        answer={"correct": "A"},
+        difficulty=1,
+        score=200,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    question_b = Question(
+        type=QuestionType.SHORT_ANSWER,
+        title="原始 210 分题",
+        content={"text": "B"},
+        options=None,
+        answer={"text": "B"},
+        difficulty=1,
+        score=210,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    exam = Exam(
+        title="分数同步考试",
+        description=None,
+        start_time=datetime.now(timezone.utc) - timedelta(hours=1),
+        end_time=datetime.now(timezone.utc) + timedelta(hours=1),
+        duration_minutes=60,
+        total_score=410,
+        status="ongoing",
+        max_switch_count=0,
+        show_result=True,
+        notes_template=None,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    db_session.add_all([question_a, question_b, exam])
+    await db_session.flush()
+    db_session.add_all(
+        [
+            ExamQuestion(exam_id=exam.id, question_id=question_a.id, order=0, score_override=200),
+            ExamQuestion(exam_id=exam.id, question_id=question_b.id, order=1, score_override=210),
+        ]
+    )
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    patch_response = await client.patch(
+        f"/api/exams/{exam.id}",
+        json={
+            "question_items": [
+                {"question_id": str(question_a.id), "order": 0, "score_override": 40},
+                {"question_id": str(question_b.id), "order": 1, "score_override": 60},
+            ],
+        },
+    )
+
+    assert patch_response.status_code == 200
+    assert patch_response.json()["total_score"] == 100
+
+    list_response = await client.get("/api/exams")
+
+    assert list_response.status_code == 200
+    payload = list_response.json()
+    assert payload[0]["title"] == "分数同步考试"
+    assert payload[0]["total_questions"] == 2
+    assert payload[0]["total_score"] == 100

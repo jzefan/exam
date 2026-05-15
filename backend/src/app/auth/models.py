@@ -23,6 +23,7 @@ class User(BaseModel):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     full_name: Mapped[str] = mapped_column(String(100), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     user_type: Mapped[str] = mapped_column(String(20), nullable=False, default="internal")
     persona: Mapped[str] = mapped_column(String(20), nullable=False, default="teacher")
     primary_org_id: Mapped[uuid.UUID | None] = mapped_column(

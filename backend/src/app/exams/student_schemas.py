@@ -72,6 +72,9 @@ class StudentExamResultQuestionResponse(BaseModel):
     appeal_status: str | None = None
     appeal_reason: str | None = None
     appeal_reply: str | None = None
+    grading_pending: bool = False
+    grading_failed: bool = False
+    needs_human_review: bool = False
 
 
 class StudentExamResultResponse(BaseModel):
@@ -80,6 +83,8 @@ class StudentExamResultResponse(BaseModel):
     submitted_at: datetime | None = None
     total_score: float
     score: float | None = None
+    objective_score: float | None = None
+    subjective_score: float | None = None
     grading_status: str | None = None
     can_view: bool
     blocked_reason: str | None = None

@@ -23,6 +23,12 @@ server {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+
+    # Paper/document import may call external AI services (DeepSeek/Qwen)
+    # which can take 60-120 seconds for large files with many questions.
+    proxy_read_timeout 180s;
+    proxy_send_timeout 60s;
+    client_max_body_size 30m;
   }
 
   location / {

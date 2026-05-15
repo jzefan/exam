@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import uuid
 from datetime import datetime, timezone
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, AsyncIterator
 
 from sqlalchemy import func, or_, select
@@ -29,6 +32,8 @@ from app.grading.models import GradingAuditEvent, GradingResultSnapshot, Grading
 from app.questions.models import Question, QuestionType
 from app.grading.providers import (
     DeepSeekProvider,
+    DoubaoProvider,
+    GradingProviderError,
     GradingProvider,
     GradingProviderResult,
     OpenRouterProvider,
@@ -44,6 +49,10 @@ SNAPSHOT_TYPE_ORDER = {
     "final": 3,
     "manual": 4,
 }
+
+PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -70,6 +79,8 @@ def _task_display_status(task: GradingTask) -> str:
         return "待评分"
     if task.status == "running":
         return "评分中"
+    if task.status == "failed":
+        return "评估失败"
     if task.status == "arbitration_required":
         return "待仲裁"
     return "已完成"
@@ -375,6 +386,82 @@ def _resolve_prompt_locale(task_language: str | None, override_locale: str | Non
     )
 
 
+@lru_cache(maxsize=None)
+def _load_prompt_markdown(filename: str) -> str:
+    path = PROMPTS_DIR / filename
+    return path.read_text(encoding="utf-8").strip()
+
+
+_SQL_ACTION_MARKERS = (
+    "select ",
+    "insert ",
+    "update ",
+    "delete ",
+    "create table",
+    "alter table",
+    "drop table",
+    "with ",
+)
+_SQL_CLAUSE_MARKERS = (
+    " from ",
+    " join ",
+    " where ",
+    " group by ",
+    " order by ",
+    " having ",
+    " set ",
+    " values ",
+    " on ",
+)
+
+
+def _looks_like_sql_task(task: GradingTask) -> bool:
+    """Detect SQL-style tasks for prompt specialization.
+
+    Decision policy:
+    1. Trust explicit language metadata (programming_language or
+       student_answer_structured.language) as the authoritative signal.
+    2. Otherwise require the student answer to contain BOTH a SQL action verb
+       (SELECT/INSERT/...) AND a SQL clause keyword (FROM/JOIN/...). Matching
+       only the question text or knowledge tags is unsafe because conceptual
+       short-answer questions ("解释 SQL 注入") frequently mention "SQL" without
+       requiring SQL grading.
+    """
+
+    if (task.programming_language or "").strip().lower() == "sql":
+        return True
+
+    if isinstance(task.student_answer_structured, dict):
+        language = task.student_answer_structured.get("language")
+        if isinstance(language, str) and language.strip().lower() == "sql":
+            return True
+
+    answer_raw = task.student_answer_raw if isinstance(task.student_answer_raw, str) else ""
+    if not answer_raw:
+        return False
+    padded = f" {answer_raw.lower()} "
+    has_action = any(marker in padded for marker in _SQL_ACTION_MARKERS)
+    has_clause = any(marker in padded for marker in _SQL_CLAUSE_MARKERS)
+    return has_action and has_clause
+
+
+def _prompt_specialization_filename(task: GradingTask) -> str | None:
+    if _looks_like_sql_task(task):
+        return "sql.md"
+    if task.question_type == "code":
+        return "code.md"
+    if task.question_type in {"short_answer", "essay"}:
+        return "short-answer.md"
+    # 客观题（choice/true_false/fill_in）通常不走 LLM 评分，但若进入到这里
+    # 说明上游路由把客观题塞进了主观评分流程 — 记录告警便于排查。
+    logger.warning(
+        "grading prompt: no specialization for question_type=%s task_id=%s; falling back to common rules only",
+        task.question_type,
+        task.id,
+    )
+    return None
+
+
 def evaluate_arbitration(primary_result: dict[str, Any], review_result: dict[str, Any]) -> tuple[bool, str | None]:
     """Evaluate whether two grading results need arbitration."""
 
@@ -396,6 +483,7 @@ def _build_provider_for_model(model: ModelConfig) -> GradingProvider:
     credential_attr_map = {
         "EXAM_QWEN_API_KEY": "qwen_api_key",
         "EXAM_DEEPSEEK_API_KEY": "deepseek_api_key",
+        "EXAM_DOUBAO_API_KEY": "doubao_api_key",
         "EXAM_OPENROUTER_API_KEY": "openrouter_api_key",
     }
     api_key = os.getenv(provider.credential_env)
@@ -415,10 +503,52 @@ def _build_provider_for_model(model: ModelConfig) -> GradingProvider:
         return QwenProvider(**common_kwargs)
     if provider.provider_type == "deepseek":
         return DeepSeekProvider(**common_kwargs)
+    if provider.provider_type == "doubao":
+        return DoubaoProvider(**common_kwargs)
     if provider.provider_type == "openrouter":
         return OpenRouterProvider(**common_kwargs)
 
     raise ValueError(f"unsupported grading provider type: {provider.provider_type}")
+
+
+def _build_optional_provider_for_model(model: ModelConfig | None) -> GradingProvider | None:
+    if model is None:
+        return None
+    try:
+        return _build_provider_for_model(model)
+    except ValueError:
+        return None
+
+
+def _humanize_grading_failure_message(message: str | None) -> str:
+    if not message:
+        return "AI 评估失败，请稍后重试。"
+
+    normalized = message.lower()
+    if "provider api key is not configured" in normalized or "api key" in normalized:
+        if "openrouter" in normalized or "claude" in normalized:
+            return "Claude 模型未正确配置，当前未完成 AI 评估。"
+        if "deepseek" in normalized:
+            return "DeepSeek 模型未正确配置，当前未完成 AI 评估。"
+        if "qwen" in normalized:
+            return "Qwen 模型未正确配置，当前未完成 AI 评估。"
+        return "评分模型未正确配置，当前未完成 AI 评估。"
+    if "timed out" in normalized or "timeout" in normalized:
+        return "AI 评估超时，请稍后重试。"
+    if "json object" in normalized or "missing required keys" in normalized:
+        return "AI 返回结果格式异常，请稍后重试。"
+    if "connect" in normalized or "connection" in normalized or "network" in normalized:
+        return "AI 评估服务连接失败，请稍后重试。"
+    return "AI 评估失败，请稍后重试。"
+
+
+def _trim_failure_detail(value: str | None, max_length: int = 240) -> str | None:
+    if not value:
+        return None
+    compact = re.sub(r"\s+", " ", value).strip()
+    if len(compact) <= max_length:
+        return compact
+    return f"{compact[:max_length].rstrip()}..."
 
 
 async def _load_role_binding(db: AsyncSession, version: int) -> RoleBinding:
@@ -455,13 +585,10 @@ async def run_grading_task_with_role_binding(
         is_platform_admin=is_platform_admin,
     )
 
-    try:
-        binding = await _load_role_binding(db, task.role_binding_version)
-    except ValueError:
-        binding = None
+    binding = await _load_role_binding(db, task.role_binding_version)
     primary_provider = _build_provider_for_model(binding.grader_model)
     review_provider = _build_provider_for_model(binding.reviewer_model)
-    arbiter_provider = _build_provider_for_model(binding.arbiter_model)
+    arbiter_provider = _build_optional_provider_for_model(binding.arbiter_model)
     return await run_grading_task(db, task_id, primary_provider, review_provider, arbiter_provider, locale)
 
 
@@ -671,17 +798,21 @@ async def get_grading_candidate_detail(
     current_user_id: uuid.UUID | None = None,
     is_platform_admin: bool = True,
 ) -> dict[str, Any]:
-    result = await db.execute(
-        select(GradingTask)
-        .options(
-            selectinload(GradingTask.snapshots).selectinload(GradingResultSnapshot.model_config),
-            selectinload(GradingTask.latest_final_snapshot),
-            selectinload(GradingTask.latest_manual_snapshot),
-            selectinload(GradingTask.latest_arbitration_snapshot),
+    async def _load_task() -> GradingTask | None:
+        result = await db.execute(
+            select(GradingTask)
+            .options(
+                selectinload(GradingTask.snapshots).selectinload(GradingResultSnapshot.model_config),
+                selectinload(GradingTask.latest_final_snapshot),
+                selectinload(GradingTask.latest_manual_snapshot),
+                selectinload(GradingTask.latest_arbitration_snapshot),
+                selectinload(GradingTask.audit_events),
+            )
+            .where(GradingTask.id == uuid.UUID(task_id))
         )
-        .where(GradingTask.id == uuid.UUID(task_id))
-    )
-    task = result.scalar_one_or_none()
+        return result.scalar_one_or_none()
+
+    task = await _load_task()
     if task is None:
         raise ValueError("grading task not found")
     await _ensure_task_access(
@@ -690,6 +821,62 @@ async def get_grading_candidate_detail(
         current_user_id=current_user_id,
         is_platform_admin=is_platform_admin,
     )
+
+    has_answer = bool(task.student_answer_raw and task.student_answer_raw.strip()) or bool(task.attachment_refs)
+    if task.status == "pending" and task.latest_final_snapshot_id is None and has_answer:
+        try:
+            result = await run_grading_task_with_role_binding(
+                db,
+                task_id,
+                current_user_id=current_user_id,
+                is_platform_admin=is_platform_admin,
+            )
+            await db.commit()
+            if result.get("status") == "completed" and task.source_type == "exam_submission":
+                try:
+                    await apply_grading_task_result_to_exam_submission(db, task_id)
+                    await db.commit()
+                except Exception as exc:
+                    await db.rollback()
+                    task = await db.get(GradingTask, uuid.UUID(task_id))
+                    if task is not None:
+                        db.add(
+                            GradingAuditEvent(
+                                task_id=task.id,
+                                event_type="grading.apply_failed",
+                                event_payload={
+                                    "message": str(exc),
+                                    "detail": _trim_failure_detail(str(exc)),
+                                },
+                                operator_type="system",
+                                operator_id="system",
+                            )
+                        )
+                        await db.commit()
+        except Exception as exc:
+            await db.rollback()
+            task = await db.get(GradingTask, uuid.UUID(task_id))
+            if task is not None:
+                task.status = "failed"
+                db.add(
+                    GradingAuditEvent(
+                        task_id=task.id,
+                        event_type="grading.failed",
+                        event_payload={
+                            "message": str(exc),
+                            "detail": _trim_failure_detail(str(exc)),
+                            "stage": "detail_retry",
+                        },
+                        operator_type="system",
+                        operator_id="system",
+                    )
+                )
+                await db.commit()
+
+        db.expire_all()
+        task = await _load_task()
+        if task is None:
+            raise ValueError("grading task not found")
 
     locator = (await _hydrate_task_locators(db, [task]))[task.id]
     feedback = await _load_candidate_feedback(
@@ -788,11 +975,35 @@ async def get_grading_candidate_detail(
             }
         )
 
+    latest_failure_event = next(
+        (
+            event
+            for event in sorted(
+                task.audit_events,
+                key=lambda item: item.created_at or datetime.min.replace(tzinfo=timezone.utc),
+                reverse=True,
+            )
+            if event.event_type == "grading.failed"
+        ),
+        None,
+    )
+    evaluation_note = None
+    if task.status == "failed":
+        failure_message = (
+            latest_failure_event.event_payload.get("message")
+            if latest_failure_event and isinstance(latest_failure_event.event_payload, dict)
+            else None
+        )
+        evaluation_note = _humanize_grading_failure_message(failure_message)
+    elif task.latest_final_snapshot is None and task.status in {"pending", "running"}:
+        evaluation_note = "AI 正在评估中，请稍后刷新。"
+
     return {
         "task_id": str(task.id),
         "candidate_name": locator["candidate_name"],
         "candidate_code": locator["candidate_code"],
         "status": _task_display_status(task),
+        "evaluation_note": evaluation_note,
         "suggested_score": task.latest_final_snapshot.score_total if task.latest_final_snapshot else None,
         "max_score": task.max_score,
         "question_type": task.question_type,
@@ -859,6 +1070,7 @@ async def run_grading_prompt_follow_up(
             previous_result = {
                 "score_total": previous_snapshot.score_total,
                 "dimension_scores": previous_snapshot.dimension_scores,
+                "dimension_comments": previous_snapshot.dimension_comments,
                 "deduction_reasons": previous_snapshot.deduction_reasons,
                 "strengths": previous_snapshot.strengths,
                 "improvement_suggestions": previous_snapshot.improvement_suggestions,
@@ -884,6 +1096,7 @@ async def run_grading_prompt_follow_up(
             snapshot_type="follow_up",
             score_total=result.score_total,
             dimension_scores=result.dimension_scores,
+            dimension_comments=result.dimension_comments,
             deduction_reasons=result.deduction_reasons,
             strengths=result.strengths,
             improvement_suggestions=result.improvement_suggestions,
@@ -897,7 +1110,7 @@ async def run_grading_prompt_follow_up(
             created_by="teacher",
         )
         db.add(snapshot)
-        
+
         models.append(
             _result_to_comment_payload(
                 result,
@@ -973,6 +1186,7 @@ async def stream_grading_prompt_follow_up(
             previous_result = {
                 "score_total": previous_snapshot.score_total,
                 "dimension_scores": previous_snapshot.dimension_scores,
+                "dimension_comments": previous_snapshot.dimension_comments,
                 "deduction_reasons": previous_snapshot.deduction_reasons,
                 "strengths": previous_snapshot.strengths,
                 "improvement_suggestions": previous_snapshot.improvement_suggestions,
@@ -1002,6 +1216,7 @@ async def stream_grading_prompt_follow_up(
             snapshot_type="follow_up",
             score_total=provider_result.score_total,
             dimension_scores=provider_result.dimension_scores,
+            dimension_comments=provider_result.dimension_comments,
             deduction_reasons=provider_result.deduction_reasons,
             strengths=provider_result.strengths,
             improvement_suggestions=provider_result.improvement_suggestions,
@@ -1046,7 +1261,10 @@ async def create_manual_score_override(
 ) -> GradingResultSnapshot:
     """Create a manual override snapshot and audit event."""
 
-    task = await db.get(GradingTask, uuid.UUID(task_id))
+    task = await db.get(
+        GradingTask, uuid.UUID(task_id),
+        options=[selectinload(GradingTask.latest_final_snapshot)],
+    )
     if task is None:
         raise ValueError("grading task not found")
     await _ensure_task_access(
@@ -1056,16 +1274,19 @@ async def create_manual_score_override(
         is_platform_admin=is_platform_admin,
     )
 
+    # Inherit AI feedback details so the student still sees the scoring breakdown.
+    prev = task.latest_final_snapshot
     snapshot = GradingResultSnapshot(
         task_id=task.id,
         snapshot_type="manual",
         score_total=score_total,
-        dimension_scores={},
-        deduction_reasons=[reason],
-        strengths=[],
-        improvement_suggestions=[],
-        evidence_summary={},
-        risk_flags=[],
+        dimension_scores=prev.dimension_scores if prev and prev.dimension_scores else {},
+        dimension_comments=prev.dimension_comments if prev and prev.dimension_comments else {},
+        deduction_reasons=[reason] if reason else (prev.deduction_reasons if prev else []),
+        strengths=prev.strengths if prev else [],
+        improvement_suggestions=prev.improvement_suggestions if prev else [],
+        evidence_summary=prev.evidence_summary if prev else {},
+        risk_flags=prev.risk_flags if prev else [],
         role_binding_version=task.role_binding_version,
         created_by="manual",
     )
@@ -1106,17 +1327,31 @@ def _parse_exam_submission_locator(
     return exam_id, question_id, student_id, submission_id
 
 
+def _flatten_evidence_strings(value: Any) -> list[str]:
+    """Extract leaf string values from a nested evidence_summary dict/list."""
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, list):
+        return [line for item in value for line in _flatten_evidence_strings(item)]
+    if isinstance(value, dict):
+        return [line for v in value.values() for line in _flatten_evidence_strings(v)]
+    return []
+
+
 def _build_exam_submission_feedback(snapshot: GradingResultSnapshot) -> dict[str, Any]:
     dimension_scores = snapshot.dimension_scores or {}
+    dimension_comments = snapshot.dimension_comments or {}
     dimensions = [
         {
             "name": str(name),
             "score": float(value),
             "max_score": None,
-            "comment": "",
+            "comment": str(dimension_comments.get(name, "")),
         }
         for name, value in dimension_scores.items()
     ]
+    evidence_lines = list(dict.fromkeys(_flatten_evidence_strings(snapshot.evidence_summary)))
     return {
         "dimensions": dimensions,
         "strengths": snapshot.strengths,
@@ -1124,6 +1359,7 @@ def _build_exam_submission_feedback(snapshot: GradingResultSnapshot) -> dict[str
         "suggestions": snapshot.improvement_suggestions,
         "risk_flags": snapshot.risk_flags,
         "evidence_summary": snapshot.evidence_summary,
+        "evidence_lines": evidence_lines,
     }
 
 
@@ -1249,6 +1485,13 @@ async def _recompute_historical_submission_scores(
     return round(objective_score, 2), round(subjective_score, 2)
 
 
+# Only tasks that are actively being processed should keep an exam submission in
+# PENDING_AI. Terminal-but-not-completed states (failed, arbitration_required)
+# must not strand the entire submission — those questions get surfaced
+# separately via per-question grading_failed flags.
+_ACTIVE_TASK_STATUSES: frozenset[str] = frozenset({"pending", "running"})
+
+
 async def _has_pending_exam_submission_tasks(
     db: AsyncSession,
     *,
@@ -1256,10 +1499,23 @@ async def _has_pending_exam_submission_tasks(
     student_id: uuid.UUID,
     submission_id: uuid.UUID | None = None,
 ) -> bool:
+    """Check whether any exam-submission task for this student is still actively
+    being processed.
+
+    Filters down at the SQL layer to tasks for this exam in an active status,
+    then narrows by student/submission in Python. Without the SQL prefix scan
+    this used to load every exam_submission task in the system into memory.
+    """
+    exam_prefix = f"{exam_id}:"
     tasks = (
-        await db.execute(select(GradingTask).where(GradingTask.source_type == "exam_submission"))
+        await db.execute(
+            select(GradingTask).where(
+                GradingTask.source_type == "exam_submission",
+                GradingTask.status.in_(_ACTIVE_TASK_STATUSES),
+                GradingTask.source_business_id.like(f"{exam_prefix}%"),
+            )
+        )
     ).scalars().all()
-    exam_id_str = str(exam_id)
     student_id_str = str(student_id)
     for task in tasks:
         try:
@@ -1268,7 +1524,7 @@ async def _has_pending_exam_submission_tasks(
             continue
         if submission_id is not None and task_submission_id != submission_id:
             continue
-        if str(task_exam_id) == exam_id_str and str(task_student_id) == student_id_str and task.status != "completed":
+        if str(task_exam_id) == str(exam_id) and str(task_student_id) == student_id_str:
             return True
     return False
 
@@ -1349,6 +1605,120 @@ async def apply_grading_task_result_to_exam_submission(db: AsyncSession, task_id
     }
 
 
+def _build_grading_failure_feedback(reason: str, *, needs_human_review: bool) -> dict[str, Any]:
+    if needs_human_review:
+        message = "本题已完成 AI 评分但存在分歧，正在等待教师人工复核。"
+        suggestion = "请耐心等待教师复核结果。"
+    else:
+        message = f"AI 评分未能完成：{reason}"
+        suggestion = "请联系老师重新评分。"
+    return {
+        "dimensions": [],
+        "strengths": [],
+        "deductions": [message],
+        "suggestions": [suggestion],
+        "evidence_lines": [],
+        "grading_failed": True,
+        "needs_human_review": needs_human_review,
+        "grading_failure_reason": reason,
+    }
+
+
+async def apply_grading_task_failure_to_exam_submission(
+    db: AsyncSession,
+    task_id: str,
+    *,
+    reason: str,
+    needs_human_review: bool = False,
+) -> dict[str, Any]:
+    """Reconcile an exam submission when a grading task ends without a final snapshot.
+
+    Called for terminal-but-not-completed task states (``failed``,
+    ``arbitration_required``) so the exam_student can leave ``PENDING_AI``
+    once no other tasks are still actively running. Writes a marker into the
+    affected ``StudentExamAnswer.feedback`` so the result page can show
+    "评分失败" / "等待人工复核" rather than the silent "评估中" stuck state.
+    """
+
+    try:
+        task, exam_student, answer, submission, submission_answer = await _load_exam_submission_context(db, task_id)
+    except ValueError:
+        # Orphaned task (no matching exam_student / answer). Nothing to reconcile.
+        return {"status": "missing"}
+    if answer is None:
+        return {"status": task.status, "grading_status": exam_student.grading_status}
+
+    exam_id, _question_id, student_id, submission_id = _parse_exam_submission_locator(task.source_business_id)
+    failure_feedback = _build_grading_failure_feedback(reason, needs_human_review=needs_human_review)
+
+    if submission_answer is not None and not (submission_answer.feedback or {}).get("dimensions"):
+        submission_answer.feedback = failure_feedback
+
+    now = _utcnow()
+    if submission_id is None or exam_student.latest_submission_id == submission_id:
+        if not (answer.feedback or {}).get("dimensions"):
+            answer.feedback = failure_feedback
+
+        if await _has_pending_exam_submission_tasks(
+            db,
+            exam_id=exam_id,
+            student_id=student_id,
+            submission_id=submission_id,
+        ):
+            exam_student.grading_status = GradingStatus.PENDING_AI.value
+        else:
+            exam_student.grading_status = GradingStatus.AI_SCORED.value
+            exam_student.ai_scored_at = now
+        exam_student.graded_at = now
+    elif submission is not None:
+        if await _has_pending_exam_submission_tasks(
+            db,
+            exam_id=exam_id,
+            student_id=student_id,
+            submission_id=submission.id,
+        ):
+            submission.grading_status = GradingStatus.PENDING_AI.value
+        else:
+            submission.grading_status = GradingStatus.AI_SCORED.value
+
+    await db.flush()
+    return {
+        "status": task.status,
+        "grading_status": (
+            exam_student.grading_status
+            if submission_id is None or exam_student.latest_submission_id == submission_id
+            else submission.grading_status if submission else exam_student.grading_status
+        ),
+    }
+
+
+async def recover_pending_exam_submission_tasks(db: AsyncSession) -> list[str]:
+    """Find exam-submission grading tasks left mid-flight by a previous process.
+
+    A worker that crashes or is restarted while ``_run_subjective_grading_tasks``
+    is still iterating will leave its current task in ``running`` and any not-yet-
+    visited tasks in ``pending``. Without this recovery hook those tasks live
+    forever and the matching ``exam_student.grading_status`` stays in
+    ``PENDING_AI``. We reset ``running`` to ``pending`` (so the dispatcher will
+    treat them as fresh work) and return all task ids that should be re-run.
+    """
+    result = await db.execute(
+        select(GradingTask).where(
+            GradingTask.source_type == "exam_submission",
+            GradingTask.status.in_(("pending", "running")),
+        )
+    )
+    tasks = result.scalars().all()
+    task_ids: list[str] = []
+    for task in tasks:
+        if task.status == "running":
+            task.status = "pending"
+        task_ids.append(str(task.id))
+    if tasks:
+        await db.flush()
+    return task_ids
+
+
 async def confirm_grading_task_for_exam_submission(
     db: AsyncSession,
     task_id: str,
@@ -1399,11 +1769,24 @@ async def confirm_grading_task_for_exam_submission(
 
     exam_id, _question_id, student_id, submission_id = _parse_exam_submission_locator(task.source_business_id)
     now = _utcnow()
+
+    # Apply latest (possibly manual) snapshot to student answer before confirming.
+    try:
+        await apply_grading_task_result_to_exam_submission(db, task_id)
+    except (ValueError, KeyError):
+        pass
+
+    # Re-fetch exam_student to pick up score/grading_status changes from apply above.
+    task, exam_student, _answer, submission, _submission_answer = await _load_exam_submission_context(db, task_id)
+
     if submission_id is not None and submission is not None:
         if submission.grading_status != GradingStatus.REVIEWED.value:
             submission.grading_status = GradingStatus.REVIEWED.value
         if exam_student.latest_submission_id == submission_id:
-            if exam_student.grading_status != GradingStatus.REVIEWED.value:
+            still_pending = await _has_pending_exam_submission_tasks(
+                db, exam_id=exam_id, student_id=student_id, submission_id=submission_id,
+            )
+            if not still_pending and exam_student.grading_status != GradingStatus.REVIEWED.value:
                 exam_student.grading_status = GradingStatus.REVIEWED.value
             exam_student.reviewed_at = now
             if exam_student.ai_scored_at is None:
@@ -1417,7 +1800,11 @@ async def confirm_grading_task_for_exam_submission(
         if exam_student.grading_status == GradingStatus.REVIEWED.value:
             return {"status": task.status, "grading_status": exam_student.grading_status}
 
-        exam_student.grading_status = GradingStatus.REVIEWED.value
+        still_pending = await _has_pending_exam_submission_tasks(
+            db, exam_id=exam_id, student_id=student_id, submission_id=None,
+        )
+        if not still_pending:
+            exam_student.grading_status = GradingStatus.REVIEWED.value
         exam_student.reviewed_at = now
         if exam_student.ai_scored_at is None:
             exam_student.ai_scored_at = now
@@ -1592,6 +1979,7 @@ async def get_final_report(
                 "model_label": snapshot_model_labels.get(snapshot.snapshot_type),
                 "provider_key": snapshot.provider_config.key if snapshot.provider_config else None,
                 "dimension_scores": snapshot.dimension_scores,
+                "dimension_comments": snapshot.dimension_comments,
                 "deduction_reasons": snapshot.deduction_reasons,
                 "strengths": snapshot.strengths,
                 "improvement_suggestions": snapshot.improvement_suggestions,
@@ -1630,7 +2018,7 @@ def _build_grading_context(task: GradingTask) -> dict[str, Any]:
     }
     if task.question_type == "code":
         return build_code_rubric_context(task_payload)
-    if task.question_type == "short_answer":
+    if task.question_type in {"short_answer", "essay"}:
         return build_short_answer_rubric_context(task_payload)
     raise ValueError(f"unsupported grading question type: {task.question_type}")
 
@@ -1642,13 +2030,11 @@ def _build_prompt_pair(
     locale: str | None = None,
 ) -> tuple[str, str]:
     preferred_locale, language_instruction = _resolve_prompt_locale(task.language, locale)
-    system_prompt = (
-        f"You are the {role_name} for a grading engine. "
-        f"Score the answer on the exact 0 to max_score scale, where max_score is {task.max_score}. "
-        "Do not use a 0-1 scale unless max_score is 1. "
-        f"{language_instruction} "
-        "Return only structured JSON with score_total, dimension_scores, deduction_reasons, "
-        "strengths, improvement_suggestions, evidence_summary, and risk_flags."
+    system_prompt = _build_grading_system_prompt(
+        task=task,
+        role_name=role_name,
+        language_instruction=language_instruction,
+        mode="grading",
     )
     user_prompt = (
         f"Task ID: {task.id}\n"
@@ -1671,14 +2057,11 @@ def _build_arbiter_prompt_pair(
     locale: str | None = None,
 ) -> tuple[str, str]:
     preferred_locale, language_instruction = _resolve_prompt_locale(task.language, locale)
-    system_prompt = (
-        "You are the final arbiter for a grading engine. "
-        "Review the shared grading context plus the conflicting primary and review results. "
-        f"Score the answer on the exact 0 to max_score scale, where max_score is {task.max_score}. "
-        "Do not use a 0-1 scale unless max_score is 1. "
-        f"{language_instruction} "
-        "Return only structured JSON with score_total, dimension_scores, deduction_reasons, "
-        "strengths, improvement_suggestions, evidence_summary, and risk_flags."
+    system_prompt = _build_grading_system_prompt(
+        task=task,
+        role_name="仲裁模型",
+        language_instruction=language_instruction,
+        mode="arbiter",
     )
     user_prompt = (
         f"Task ID: {task.id}\n"
@@ -1706,13 +2089,11 @@ def _build_follow_up_prompt_pair(
     locale: str | None = None,
 ) -> tuple[str, str]:
     preferred_locale, language_instruction = _resolve_prompt_locale(task.language, locale)
-    system_prompt = (
-        f"You are the {role_name} for a grading engine follow-up review. "
-        f"Score the answer on the exact 0 to max_score scale, where max_score is {task.max_score}. "
-        "Do not use a 0-1 scale unless max_score is 1. "
-        f"{language_instruction} "
-        "Return only structured JSON with score_total, dimension_scores, deduction_reasons, "
-        "strengths, improvement_suggestions, evidence_summary, and risk_flags."
+    system_prompt = _build_grading_system_prompt(
+        task=task,
+        role_name=role_name,
+        language_instruction=language_instruction,
+        mode="follow_up",
     )
     lines = [
         f"Task ID: {task.id}",
@@ -1729,6 +2110,57 @@ def _build_follow_up_prompt_pair(
             f"Previous result: {json.dumps(previous_result, ensure_ascii=False, sort_keys=True)}"
         )
     return system_prompt, "\n".join(lines)
+
+
+def _build_grading_system_prompt(
+    *,
+    task: GradingTask,
+    role_name: str,
+    language_instruction: str,
+    mode: str,
+) -> str:
+    role_label = {
+        "primary grader": "评分模型",
+        "review grader": "复核模型",
+        "arbiter": "仲裁模型",
+        "仲裁模型": "仲裁模型",
+    }.get(role_name, role_name)
+    mode_instruction = {
+        "grading": "你需要严格依据给定 Rubric、评分维度、分值权重和题目上下文，对当前学生答案进行逐项评分。",
+        "arbiter": "你需要审阅主评与复核的已有结果，在保持评分标准一致的前提下完成仲裁裁决。",
+        "follow_up": "你需要结合教师追加的追问，对当前学生答案进行补充复评，但仍然必须严格依据原始 Rubric 和题目要求评分。",
+    }[mode]
+    if mode == "grading" and role_name == "review grader":
+        mode_instruction = (
+            f"{mode_instruction} "
+            "作为复核模型，请独立完成评分，并重点关注主评模型可能遗漏的错误、被低估的知识点、"
+            "证据使用不充分或逻辑漏洞；若发现主评可能高估或低估，应在 deduction_reasons 或 risk_flags 中明确指出。"
+        )
+    preamble = (
+        f"你是高职高校课程评分专家，同时担任本次评阅流程中的{role_label}。"
+        "你拥有 10 年以上高职院校教学经验，熟悉高职学生的认知特点、学习难点、课程评估、题库建设、SQL 与编程作业评分。"
+        "你的评分风格必须严谨、客观、公正、可解释，并具备教学指导性。"
+        f" {language_instruction} "
+        f"{mode_instruction} "
+        f"本题 max_score 为 {task.max_score}。"
+    )
+
+    sections: list[str] = [
+        preamble,
+        "以下是必须遵守的通用评分规范，请严格执行：",
+        _load_prompt_markdown("common-base.md"),
+    ]
+
+    specialization_filename = _prompt_specialization_filename(task)
+    if specialization_filename is not None:
+        sections.extend(
+            [
+                "以下是本题型的专项评分规范，请在通用规范基础上优先结合本题型要求执行：",
+                _load_prompt_markdown(specialization_filename),
+            ]
+        )
+
+    return "\n\n".join(sections)
 
 
 def _result_to_comment_payload(
@@ -1761,6 +2193,7 @@ def _result_to_snapshot(
         snapshot_type=snapshot_type,
         score_total=result.score_total,
         dimension_scores=result.dimension_scores,
+        dimension_comments=result.dimension_comments,
         deduction_reasons=result.deduction_reasons,
         strengths=result.strengths,
         improvement_suggestions=result.improvement_suggestions,
@@ -1789,6 +2222,15 @@ def _build_final_snapshot(
         )
         for key in dimension_keys
     }
+    merged_dimension_comments: dict[str, str] = {}
+    for key in dimension_keys:
+        parts = [
+            (primary_result.dimension_comments or {}).get(key, "").strip(),
+            (review_result.dimension_comments or {}).get(key, "").strip(),
+        ]
+        merged = " ".join(part for part in dict.fromkeys(parts) if part)
+        if merged:
+            merged_dimension_comments[key] = merged
     merged_risk_flags = list(dict.fromkeys(primary_result.risk_flags + review_result.risk_flags))
 
     return GradingResultSnapshot(
@@ -1796,6 +2238,7 @@ def _build_final_snapshot(
         snapshot_type="final",
         score_total=round((primary_result.score_total + review_result.score_total) / 2, 2),
         dimension_scores=averaged_dimensions,
+        dimension_comments=merged_dimension_comments,
         deduction_reasons=list(dict.fromkeys(primary_result.deduction_reasons + review_result.deduction_reasons)),
         strengths=list(dict.fromkeys(primary_result.strengths + review_result.strengths)),
         improvement_suggestions=list(
@@ -1812,20 +2255,21 @@ def _build_final_snapshot(
     )
 
 
-def _build_final_snapshot_from_arbiter(
+def _build_final_snapshot_from_result(
     task: GradingTask,
-    arbiter_result: GradingProviderResult,
+    result: GradingProviderResult,
 ) -> GradingResultSnapshot:
     return GradingResultSnapshot(
         task_id=task.id,
         snapshot_type="final",
-        score_total=arbiter_result.score_total,
-        dimension_scores=arbiter_result.dimension_scores,
-        deduction_reasons=arbiter_result.deduction_reasons,
-        strengths=arbiter_result.strengths,
-        improvement_suggestions=arbiter_result.improvement_suggestions,
-        evidence_summary=arbiter_result.evidence_summary,
-        risk_flags=arbiter_result.risk_flags,
+        score_total=result.score_total,
+        dimension_scores=result.dimension_scores,
+        dimension_comments=result.dimension_comments,
+        deduction_reasons=result.deduction_reasons,
+        strengths=result.strengths,
+        improvement_suggestions=result.improvement_suggestions,
+        evidence_summary=result.evidence_summary,
+        risk_flags=result.risk_flags,
         prompt_template_version=task.prompt_template_version,
         role_binding_version=task.role_binding_version,
         created_by="system",
@@ -1846,39 +2290,85 @@ async def run_grading_task(
     if task is None:
         raise ValueError("grading task not found")
 
+    task.status = "running"
+    await db.flush()
     context = _build_grading_context(task)
 
-    primary_system_prompt, primary_user_prompt = _build_prompt_pair(task, context, "primary grader", locale)
-    primary_result = await primary_provider.score(primary_system_prompt, primary_user_prompt)
-    primary_snapshot = _result_to_snapshot(task, primary_result, "primary")
-    db.add(primary_snapshot)
-    await db.flush()
-    task.latest_primary_snapshot = primary_snapshot
-    db.add(
-        GradingAuditEvent(
-            task_id=task.id,
-            event_type="grading.primary_completed",
-            event_payload={"snapshot_id": str(primary_snapshot.id)},
-            operator_type="system",
-            operator_id="system",
+    try:
+        primary_system_prompt, primary_user_prompt = _build_prompt_pair(task, context, "primary grader", locale)
+        primary_result = await primary_provider.score(primary_system_prompt, primary_user_prompt)
+        primary_snapshot = _result_to_snapshot(task, primary_result, "primary")
+        db.add(primary_snapshot)
+        await db.flush()
+        task.latest_primary_snapshot = primary_snapshot
+        db.add(
+            GradingAuditEvent(
+                task_id=task.id,
+                event_type="grading.primary_completed",
+                event_payload={"snapshot_id": str(primary_snapshot.id)},
+                operator_type="system",
+                operator_id="system",
+            )
         )
-    )
 
-    review_system_prompt, review_user_prompt = _build_prompt_pair(task, context, "review grader", locale)
-    review_result = await review_provider.score(review_system_prompt, review_user_prompt)
-    review_snapshot = _result_to_snapshot(task, review_result, "review")
-    db.add(review_snapshot)
-    await db.flush()
-    task.latest_review_snapshot = review_snapshot
-    db.add(
-        GradingAuditEvent(
-            task_id=task.id,
-            event_type="grading.review_completed",
-            event_payload={"snapshot_id": str(review_snapshot.id)},
-            operator_type="system",
-            operator_id="system",
+        review_system_prompt, review_user_prompt = _build_prompt_pair(task, context, "review grader", locale)
+        review_result = await review_provider.score(review_system_prompt, review_user_prompt)
+        review_snapshot = _result_to_snapshot(task, review_result, "review")
+        db.add(review_snapshot)
+        await db.flush()
+        task.latest_review_snapshot = review_snapshot
+        db.add(
+            GradingAuditEvent(
+                task_id=task.id,
+                event_type="grading.review_completed",
+                event_payload={"snapshot_id": str(review_snapshot.id)},
+                operator_type="system",
+                operator_id="system",
+            )
         )
-    )
+    except Exception as exc:
+        task.status = "failed"
+        db.add(
+            GradingAuditEvent(
+                task_id=task.id,
+                event_type="grading.failed",
+                event_payload={
+                    "message": str(exc),
+                    "detail": _trim_failure_detail(str(exc)),
+                    "stage": (
+                        "review"
+                        if "review_result" not in locals()
+                        and "primary_result" in locals()
+                        else "primary"
+                    ),
+                    "provider": (
+                        getattr(exc, "provider_name", None)
+                        or (
+                            getattr(review_provider, "provider_name", None)
+                            if "review_result" not in locals() and "primary_result" in locals()
+                            else getattr(primary_provider, "provider_name", None)
+                        )
+                    ),
+                    "model_name": (
+                        getattr(exc, "model_name", None)
+                        or (
+                            getattr(review_provider, "model_name", None)
+                            if "review_result" not in locals() and "primary_result" in locals()
+                            else getattr(primary_provider, "model_name", None)
+                        )
+                    ),
+                    "raw_excerpt": (
+                        exc.raw_excerpt
+                        if isinstance(exc, GradingProviderError)
+                        else None
+                    ),
+                },
+                operator_type="system",
+                operator_id="system",
+            )
+        )
+        await db.flush()
+        raise
 
     triggered, reason = evaluate_arbitration(
         {
@@ -1903,35 +2393,65 @@ async def run_grading_task(
                 operator_id="system",
             )
         )
-        if arbiter_provider is None:
-            task.status = "arbitration_required"
-            await db.flush()
-            return {"status": task.status, "arbitration_required": True, "reason": reason}
 
-        arbiter_system_prompt, arbiter_user_prompt = _build_arbiter_prompt_pair(
-            task,
-            context,
-            primary_result,
-            review_result,
-            reason,
-            locale,
-        )
-        arbiter_result = await arbiter_provider.score(arbiter_system_prompt, arbiter_user_prompt)
-        arbiter_snapshot = _result_to_snapshot(task, arbiter_result, "arbiter")
-        db.add(arbiter_snapshot)
-        await db.flush()
-        task.latest_arbitration_snapshot = arbiter_snapshot
-        db.add(
-            GradingAuditEvent(
-                task_id=task.id,
-                event_type="grading.arbiter_completed",
-                event_payload={"snapshot_id": str(arbiter_snapshot.id), "reason": reason},
-                operator_type="system",
-                operator_id="system",
+        arbiter_result: GradingProviderResult | None = None
+        if arbiter_provider is not None:
+            arbiter_system_prompt, arbiter_user_prompt = _build_arbiter_prompt_pair(
+                task,
+                context,
+                primary_result,
+                review_result,
+                reason,
+                locale,
             )
-        )
+            try:
+                arbiter_result = await arbiter_provider.score(
+                    arbiter_system_prompt, arbiter_user_prompt
+                )
+            except Exception as exc:
+                # 仲裁失败：不阻塞流程，回退使用复核模型分数作为最终分。
+                db.add(
+                    GradingAuditEvent(
+                        task_id=task.id,
+                        event_type="grading.arbiter_failed",
+                        event_payload={
+                            "message": str(exc),
+                            "detail": _trim_failure_detail(str(exc)),
+                            "reason": reason,
+                            "required": True,
+                            "fallback": "review",
+                            "provider": getattr(exc, "provider_name", None)
+                            or getattr(arbiter_provider, "provider_name", None),
+                            "model_name": getattr(exc, "model_name", None)
+                            or getattr(arbiter_provider, "model_name", None),
+                            "raw_excerpt": exc.raw_excerpt if isinstance(exc, GradingProviderError) else None,
+                        },
+                        operator_type="system",
+                        operator_id="system",
+                    )
+                )
 
-        final_snapshot = _build_final_snapshot_from_arbiter(task, arbiter_result)
+        if arbiter_result is not None:
+            arbiter_snapshot = _result_to_snapshot(task, arbiter_result, "arbiter")
+            db.add(arbiter_snapshot)
+            await db.flush()
+            task.latest_arbitration_snapshot = arbiter_snapshot
+            db.add(
+                GradingAuditEvent(
+                    task_id=task.id,
+                    event_type="grading.arbiter_completed",
+                    event_payload={"snapshot_id": str(arbiter_snapshot.id), "reason": reason},
+                    operator_type="system",
+                    operator_id="system",
+                )
+            )
+            final_snapshot = _build_final_snapshot_from_result(task, arbiter_result)
+            final_source = "arbiter"
+        else:
+            # 仲裁模型未配置或调用失败：以复核模型分数为该考生该题最终分。
+            final_snapshot = _build_final_snapshot_from_result(task, review_result)
+            final_source = "review_fallback"
+
         db.add(final_snapshot)
         await db.flush()
         task.latest_final_snapshot = final_snapshot
@@ -1940,13 +2460,22 @@ async def run_grading_task(
             GradingAuditEvent(
                 task_id=task.id,
                 event_type="grading.finalized",
-                event_payload={"snapshot_id": str(final_snapshot.id), "source": "arbiter"},
+                event_payload={
+                    "snapshot_id": str(final_snapshot.id),
+                    "source": final_source,
+                    "reason": reason,
+                },
                 operator_type="system",
                 operator_id="system",
             )
         )
         await db.flush()
-        return {"status": task.status, "arbitration_required": False, "reason": reason}
+        return {
+            "status": task.status,
+            "arbitration_required": False,
+            "reason": reason,
+            "arbiter_fallback": final_source == "review_fallback",
+        }
 
     if arbiter_provider is not None:
         arbiter_system_prompt, arbiter_user_prompt = _build_arbiter_prompt_pair(
@@ -1957,24 +2486,46 @@ async def run_grading_task(
             "no_conflict_model_output",
             locale,
         )
-        arbiter_result = await arbiter_provider.score(arbiter_system_prompt, arbiter_user_prompt)
-        arbiter_snapshot = _result_to_snapshot(task, arbiter_result, "arbiter")
-        db.add(arbiter_snapshot)
-        await db.flush()
-        task.latest_arbitration_snapshot = arbiter_snapshot
-        db.add(
-            GradingAuditEvent(
-                task_id=task.id,
-                event_type="grading.arbiter_completed",
-                event_payload={
-                    "snapshot_id": str(arbiter_snapshot.id),
-                    "reason": "no_conflict_model_output",
-                    "required": False,
-                },
-                operator_type="system",
-                operator_id="system",
+        try:
+            arbiter_result = await arbiter_provider.score(arbiter_system_prompt, arbiter_user_prompt)
+        except Exception as exc:
+            db.add(
+                GradingAuditEvent(
+                    task_id=task.id,
+                    event_type="grading.arbiter_failed",
+                    event_payload={
+                        "message": str(exc),
+                        "detail": _trim_failure_detail(str(exc)),
+                        "reason": "no_conflict_model_output",
+                        "required": False,
+                        "provider": getattr(exc, "provider_name", None)
+                        or getattr(arbiter_provider, "provider_name", None),
+                        "model_name": getattr(exc, "model_name", None)
+                        or getattr(arbiter_provider, "model_name", None),
+                        "raw_excerpt": exc.raw_excerpt if isinstance(exc, GradingProviderError) else None,
+                    },
+                    operator_type="system",
+                    operator_id="system",
+                )
             )
-        )
+        else:
+            arbiter_snapshot = _result_to_snapshot(task, arbiter_result, "arbiter")
+            db.add(arbiter_snapshot)
+            await db.flush()
+            task.latest_arbitration_snapshot = arbiter_snapshot
+            db.add(
+                GradingAuditEvent(
+                    task_id=task.id,
+                    event_type="grading.arbiter_completed",
+                    event_payload={
+                        "snapshot_id": str(arbiter_snapshot.id),
+                        "reason": "no_conflict_model_output",
+                        "required": False,
+                    },
+                    operator_type="system",
+                    operator_id="system",
+                )
+            )
 
     final_snapshot = _build_final_snapshot(task, primary_result, review_result)
     db.add(final_snapshot)

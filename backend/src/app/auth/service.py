@@ -5,6 +5,7 @@ from enum import StrEnum
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
+from fastapi import HTTPException, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +21,10 @@ OPTIONAL_EMAIL_DOMAIN = "optional.local"
 class LoginFailureReason(StrEnum):
     USER_NOT_FOUND = "user_not_found"
     WRONG_PASSWORD = "wrong_password"
+
+
+def _should_force_student_change_password(role_names: list[str]) -> bool:
+    return "student" in role_names
 
 
 def _build_optional_email(username: str) -> str:
@@ -100,6 +105,7 @@ async def reset_password_with_token(db: AsyncSession, token: str, password: str)
 async def create_user(db: AsyncSession, data: UserCreate) -> User:
     from app.rbac.models import Organization, Role
 
+    role_names = data.role_names if data.role_names else [data.role_name]
     user = User(
         username=data.username,
         email=data.email or _build_optional_email(data.username),
@@ -107,13 +113,11 @@ async def create_user(db: AsyncSession, data: UserCreate) -> User:
         full_name=data.full_name,
         persona=data.persona,
         owner_teacher_id=data.owner_teacher_id,
+        must_change_password=_should_force_student_change_password(role_names),
     )
     db.add(user)
     await db.flush()
     await db.refresh(user)
-
-    # Determine which roles to assign
-    role_names = data.role_names if data.role_names else [data.role_name]
 
     # Determine org: use provided or default
     org_id = data.org_id
@@ -139,6 +143,17 @@ async def create_user(db: AsyncSession, data: UserCreate) -> User:
                 ))
         await db.flush()
 
+    return user
+
+
+async def force_change_password_for_student(db: AsyncSession, user: User, password: str) -> User:
+    if len(password) < 6:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="密码至少需要6位")
+
+    user.password_hash = hash_password(password)
+    user.must_change_password = False
+    await db.flush()
+    await db.refresh(user)
     return user
 
 
@@ -283,6 +298,7 @@ async def build_user_response(
         email=_display_email(user.email),
         full_name=user.full_name,
         is_active=user.is_active,
+        must_change_password=user.must_change_password,
         persona=user.persona,
         primary_org=primary_org,
         organizations=org_infos,

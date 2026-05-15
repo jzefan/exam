@@ -117,6 +117,16 @@ module.exports = {
         destructive: "hsl(var(--destructive))",
         border: "hsl(var(--border))",
       },
+      keyframes: {
+        "progress-bar": {
+          "0%": { transform: "translateX(-100%)" },
+          "50%": { transform: "translateX(60%)" },
+          "100%": { transform: "translateX(200%)" },
+        },
+      },
+      animation: {
+        "progress-bar": "progress-bar 2s ease-in-out infinite",
+      },
     },
   },
   plugins: [animate, typography],

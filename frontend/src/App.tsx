@@ -48,6 +48,10 @@ function BrowserTitle() {
 const LoginPage = lazyNamed(() => import("./pages/auth/login"), "LoginPage");
 const RegisterPage = lazyNamed(() => import("./pages/auth/register"), "RegisterPage");
 const ResetPasswordPage = lazyNamed(() => import("./pages/auth/reset-password"), "ResetPasswordPage");
+const StudentForceChangePasswordPage = lazyNamed(
+  () => import("./pages/auth/student-force-change-password"),
+  "StudentForceChangePasswordPage",
+);
 const UserList = lazyNamed(() => import("./pages/admin/users/list"), "UserList");
 const UserCreate = lazyNamed(() => import("./pages/admin/users/create"), "UserCreate");
 const UserEdit = lazyNamed(() => import("./pages/admin/users/edit"), "UserEdit");
@@ -72,6 +76,7 @@ const ExamCreate = lazyNamed(() => import("./pages/exams/create"), "ExamCreate")
 const ExamEdit = lazyNamed(() => import("./pages/exams/edit"), "ExamEdit");
 const PracticeCreate = lazyNamed(() => import("./pages/exams/practice-create"), "PracticeCreate");
 const ExamStudentsPage = lazyNamed(() => import("./pages/exams/students"), "ExamStudentsPage");
+const StudentAnswerPage = lazyNamed(() => import("./pages/exams/student-answer"), "StudentAnswerPage");
 const ExamAnalysisPage = lazyNamed(() => import("./pages/exams/analysis"), "ExamAnalysisPage");
 const ExamPaperViewPage = lazyNamed(() => import("./pages/exams/view"), "ExamPaperViewPage");
 const PaperListPage = lazyNamed(() => import("./pages/papers/list"), "PaperListPage");
@@ -122,6 +127,14 @@ function LoginSuccessRedirect() {
   if (isLoading) return null;
   const role = identity ? getUserRole(identity) : "";
   return <Navigate to={getHomeRoute(role)} replace />;
+}
+
+/** Blocks student routes when must_change_password is true */
+function StudentForcePasswordGuard() {
+  const userStr = localStorage.getItem("user");
+  const user = userStr ? (JSON.parse(userStr) as { must_change_password?: boolean }) : null;
+  if (user?.must_change_password) return <Navigate to="/student/force-change-password" replace />;
+  return <Outlet />;
 }
 
 function App() {
@@ -198,6 +211,16 @@ function App() {
                 <Route path="/exam-invite/done" element={<CandidateDonePage />} />
                 <Route path="/reset-password" element={<ResetPasswordPage />} />
 
+                {/* Student first-login force-change-password — authenticated, no sidebar */}
+                <Route
+                  path="/student/force-change-password"
+                  element={
+                    <Authenticated key="student-force-pwd" fallback={<CatchAllNavigate to="/login" />}>
+                      <StudentForceChangePasswordPage />
+                    </Authenticated>
+                  }
+                />
+
                 {/* Student routes — sidebar layout, students only */}
                 <Route
                   element={
@@ -206,12 +229,14 @@ function App() {
                     </Authenticated>
                   }
                 >
-                  <Route element={<StudentLayout />}>
-                    <Route path="/student" element={<StudentDashboard />} />
-                    <Route path="/my-exams" element={<MyExams />} />
-                    <Route path="/my-exams/:id/result" element={<ExamResultPage />} />
-                    <Route path="/wrong-answers" element={<WrongAnswers />} />
-                    <Route path="/wrong-answers/:id" element={<WrongAnswerDetailPage />} />
+                  <Route element={<StudentForcePasswordGuard />}>
+                    <Route element={<StudentLayout />}>
+                      <Route path="/student" element={<StudentDashboard />} />
+                      <Route path="/my-exams" element={<MyExams />} />
+                      <Route path="/my-exams/:id/result" element={<ExamResultPage />} />
+                      <Route path="/wrong-answers" element={<WrongAnswers />} />
+                      <Route path="/wrong-answers/:id" element={<WrongAnswerDetailPage />} />
+                    </Route>
                   </Route>
                 </Route>
 
@@ -247,6 +272,7 @@ function App() {
                       <Route path=":id/analysis" element={<ExamAnalysisPage />} />
                       <Route path="edit/:id" element={<ExamEdit />} />
                       <Route path="students" element={<ExamStudentsPage />} />
+                      <Route path=":examId/students/:studentId/result" element={<StudentAnswerPage />} />
                     </Route>
                     <Route path="/papers">
                       <Route index element={<PaperListPage />} />
@@ -296,13 +322,14 @@ function App() {
 
                 {/* Exam taking — full-screen, no Layout wrapper */}
                 <Route
-                  path="/my-exams/:id/take"
                   element={
                     <Authenticated key="exam-taking" fallback={<CatchAllNavigate to="/login" />}>
-                      <ExamTaking />
+                      <StudentForcePasswordGuard />
                     </Authenticated>
                   }
-                />
+                >
+                  <Route path="/my-exams/:id/take" element={<ExamTaking />} />
+                </Route>
 
                 <Route
                   element={

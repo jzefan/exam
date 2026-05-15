@@ -7,6 +7,7 @@ import {
   ChevronRight,
   LayoutGrid,
   List,
+  Loader2,
   Send,
   Map,
 } from "lucide-react";
@@ -21,7 +22,7 @@ import {
   AlertDialogTitle,
   AlertDialogDescription,
 } from "@/components/ui/alert-dialog";
-import type { IExamTaking, ISubmitExamResponse } from "@/types";
+import type { IExamTaking } from "@/types";
 import { apiClient } from "@/lib/api";
 import { CountdownTimer } from "./components/countdown-timer";
 import { SwitchCounter } from "./components/switch-counter";
@@ -86,6 +87,9 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
   const [submitted, setSubmitted] = useState(false);
   const [submitStatusMessage, setSubmitStatusMessage] = useState("");
   const [timeUpCountdown, setTimeUpCountdown] = useState<number | null>(null);
+  const [isNavigatingQuestion, setIsNavigatingQuestion] = useState(false);
+  const [pendingNavigationIndex, setPendingNavigationIndex] = useState<number | null>(null);
+  const [isSubmittingAction, setIsSubmittingAction] = useState(false);
   const handleSubmitRef = useRef<((reason?: "time-up" | "switch-limit") => Promise<void>) | null>(null);
   const submitInFlightRef = useRef(false);
 
@@ -184,7 +188,7 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
     if (submitInFlightRef.current || submitted) return;
 
     submitInFlightRef.current = true;
-    setShowSubmitDialog(false);
+    setIsSubmittingAction(true);
 
     if (reason === "time-up") {
       setSwitchWarning(tStudent("time_up_submitting", undefined, locale));
@@ -193,19 +197,16 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
     }
 
     try {
-      const submitResult = (await submitExam()) as ISubmitExamResponse | undefined;
+      await submitExam();
+      setShowSubmitDialog(false);
       setSubmitted(true);
       setSwitchWarning(null);
-      const gradingStatus = submitResult?.grading_status;
       if (onSubmitted) {
         setSubmitStatusMessage("考试已提交，正在跳转...");
         setTimeout(onSubmitted, 1000);
         return;
       }
-      if (gradingStatus === "pending_ai") {
-        setSubmitStatusMessage("主观题已提交，正在等待 AI 评分...");
-        setTimeout(() => navigate("/my-exams"), 1500);
-      } else if (gradingStatus === "reviewed" && examData) {
+      if (examData) {
         setSubmitStatusMessage("考试已提交，正在打开考试结果...");
         setTimeout(() => navigate(`/my-exams/${examData.exam_id}/result`), 1200);
       } else {
@@ -214,6 +215,7 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
       }
     } catch (error) {
       submitInFlightRef.current = false;
+      setIsSubmittingAction(false);
       const detail = axios.isAxiosError(error)
         ? error.response?.data?.detail
         : null;
@@ -225,7 +227,7 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
             : tStudent("submit_failed", undefined, locale),
       );
     }
-  }, [examData?.exam_id, locale, navigate, onSubmitted, submitExam, submitted]);
+  }, [locale, navigate, onSubmitted, submitExam, submitted]);
 
   useEffect(() => {
     handleSubmitRef.current = handleSubmit;
@@ -265,17 +267,26 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
 
   const navigateToQuestion = useCallback(
     async (nextIndex: number) => {
-      if (!questions[nextIndex] || !currentQuestion) return;
-      await flushQuestion(currentQuestion.question_id);
-      setCurrentIndex(nextIndex);
+      if (!questions[nextIndex] || !currentQuestion || isNavigatingQuestion || isSubmittingAction) return;
+      setIsNavigatingQuestion(true);
+      setPendingNavigationIndex(nextIndex);
+      try {
+        await flushQuestion(currentQuestion.question_id);
+        setCurrentIndex(nextIndex);
+      } catch {
+        // Saving feedback is already surfaced by the exam-taking hook.
+      } finally {
+        setIsNavigatingQuestion(false);
+        setPendingNavigationIndex(null);
+      }
     },
-    [currentQuestion, flushQuestion, questions, setCurrentIndex],
+    [currentQuestion, flushQuestion, isNavigatingQuestion, isSubmittingAction, questions, setCurrentIndex],
   );
 
   /* ---- Keyboard navigation ---- */
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (showAll || !examData) return;
+      if (showAll || !examData || isNavigatingQuestion || isSubmittingAction) return;
       if (e.key === "ArrowLeft" && currentIndex > 0) {
         void navigateToQuestion(currentIndex - 1);
       } else if (
@@ -287,7 +298,7 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [showAll, examData, currentIndex, navigateToQuestion]);
+  }, [showAll, examData, currentIndex, isNavigatingQuestion, isSubmittingAction, navigateToQuestion]);
 
   /* ---------------------------------------------------------------- */
   /*  Render states                                                    */
@@ -314,6 +325,18 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
           <Button variant="outline" size="sm" onClick={() => navigate("/my-exams")}>
             返回考试列表
           </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (isSubmittingAction && !submitted) {
+    return (
+      <div className="fixed inset-0 flex items-center justify-center bg-background">
+        <div className="text-center">
+          <Loader2 className="w-12 h-12 animate-spin text-primary mx-auto mb-4" />
+          <p className="text-lg font-semibold text-foreground">正在提交考试...</p>
+          <p className="text-sm text-muted-foreground mt-1">请稍候，请勿关闭页面</p>
         </div>
       </div>
     );
@@ -387,6 +410,7 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
             variant="ghost"
             size="icon"
             onClick={() => setNavOpen(true)}
+            disabled={isNavigatingQuestion || isSubmittingAction}
             className="size-8 shrink-0 text-muted-foreground"
             title="答题卡"
             aria-label="打开答题卡"
@@ -405,7 +429,7 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
               type="button"
               variant="ghost"
               size="sm"
-              disabled={currentIndex === 0}
+              disabled={currentIndex === 0 || isNavigatingQuestion || isSubmittingAction}
               onClick={() => {
                 void navigateToQuestion(currentIndex - 1);
               }}
@@ -425,14 +449,23 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
               type="button"
               variant="ghost"
               size="sm"
-              disabled={currentIndex === questions.length - 1}
+              disabled={currentIndex === questions.length - 1 || isNavigatingQuestion || isSubmittingAction}
               onClick={() => {
                 void navigateToQuestion(currentIndex + 1);
               }}
               className="h-8 rounded-full px-3 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
             >
-              下一题
-              <ChevronRight data-icon="inline-end" />
+              {pendingNavigationIndex === currentIndex + 1 ? (
+                <>
+                  <Loader2 className="size-3 animate-spin" />
+                  下一题处理中...
+                </>
+              ) : (
+                <>
+                  下一题
+                  <ChevronRight data-icon="inline-end" />
+                </>
+              )}
             </Button>
           </div>
         ) : !showAll && (
@@ -468,11 +501,21 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
           />
           <Button
             size="sm"
+            disabled={isNavigatingQuestion || isSubmittingAction}
             onClick={() => setShowSubmitDialog(true)}
             className="h-8 px-3 text-xs gap-1.5"
           >
-            <Send size={12} />
-            <span className="hidden sm:inline">交卷</span>
+            {isSubmittingAction ? (
+              <>
+                <Loader2 className="size-3 animate-spin" />
+                <span className="hidden sm:inline">正在交卷...</span>
+              </>
+            ) : (
+              <>
+                <Send size={12} />
+                <span className="hidden sm:inline">交卷</span>
+              </>
+            )}
           </Button>
         </div>
       </header>
@@ -524,6 +567,7 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
                   variant="link"
                   size="sm"
                   className="h-auto shrink-0 px-0 py-0 text-xs font-medium text-muted-foreground hover:text-foreground"
+                  disabled={isNavigatingQuestion || isSubmittingAction}
                   onClick={() => setNavOpen(true)}
                 >
                   打开答题卡
@@ -605,7 +649,7 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
                     type="button"
                     variant="ghost"
                     size="sm"
-                    disabled={currentIndex === 0}
+                    disabled={currentIndex === 0 || isNavigatingQuestion || isSubmittingAction}
                     onClick={() => {
                       void navigateToQuestion(currentIndex - 1);
                     }}
@@ -625,6 +669,7 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
                       return (
                         <button
                           key={q.question_id}
+                          disabled={isNavigatingQuestion || isSubmittingAction}
                           onClick={() => {
                             void navigateToQuestion(realIdx);
                           }}
@@ -644,25 +689,45 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
                     <Button
                       type="button"
                       onClick={() => setShowSubmitDialog(true)}
+                      disabled={isNavigatingQuestion || isSubmittingAction}
                       variant="ghost"
                       size="sm"
                       className="h-9 rounded-lg px-3 text-sm font-medium text-primary hover:bg-primary/10 hover:text-primary"
                     >
-                      <Send data-icon="inline-start" />
-                      交卷
+                      {isSubmittingAction ? (
+                        <>
+                          <Loader2 className="size-4 animate-spin" />
+                          正在交卷...
+                        </>
+                      ) : (
+                        <>
+                          <Send data-icon="inline-start" />
+                          交卷
+                        </>
+                      )}
                     </Button>
                   ) : (
                     <Button
                       type="button"
                       variant="ghost"
                       size="sm"
+                      disabled={isNavigatingQuestion || isSubmittingAction}
                       onClick={() => {
                         void navigateToQuestion(currentIndex + 1);
                       }}
                       className="h-9 rounded-lg px-3 text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
                     >
-                      下一题
-                      <ChevronRight data-icon="inline-end" />
+                      {pendingNavigationIndex === currentIndex + 1 ? (
+                        <>
+                          <Loader2 className="size-4 animate-spin" />
+                          下一题处理中...
+                        </>
+                      ) : (
+                        <>
+                          下一题
+                          <ChevronRight data-icon="inline-end" />
+                        </>
+                      )}
                     </Button>
                   )}
                 </div>
@@ -700,9 +765,16 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>继续答题</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void handleSubmit()}>
-              确认交卷
+            <AlertDialogCancel disabled={isSubmittingAction}>继续答题</AlertDialogCancel>
+            <AlertDialogAction disabled={isSubmittingAction} onClick={() => void handleSubmit()}>
+              {isSubmittingAction ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  正在交卷...
+                </>
+              ) : (
+                "确认交卷"
+              )}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

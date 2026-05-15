@@ -31,10 +31,22 @@ class GradingProviderResult:
     improvement_suggestions: list[str]
     evidence_summary: dict[str, Any]
     risk_flags: list[str]
+    dimension_comments: dict[str, str] = field(default_factory=dict)
     provider_key: str | None = None
     provider_name: str | None = None
     model_name: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class GradingProviderError(RuntimeError):
+    message: str
+    provider_name: str | None = None
+    model_name: str | None = None
+    raw_excerpt: str | None = None
+
+    def __str__(self) -> str:
+        return self.message
 
 
 @runtime_checkable
@@ -125,6 +137,14 @@ def _normalize_evidence_summary(value: Any) -> dict[str, Any]:
     raise ValueError("normalized provider payload field 'evidence_summary' must be a dict")
 
 
+def _normalize_dimension_comments(value: Any) -> dict[str, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("normalized provider payload field 'dimension_comments' must be a dict")
+    return {str(key): str(val) for key, val in value.items() if val is not None and str(val).strip()}
+
+
 def _validate_result_types(normalized_payload: dict[str, Any]) -> None:
     _require_type(normalized_payload["score_total"], (int, float), "score_total")
     if isinstance(normalized_payload["score_total"], bool):
@@ -137,6 +157,9 @@ def _validate_result_types(normalized_payload: dict[str, Any]) -> None:
     _require_list_of_strings(normalized_payload["improvement_suggestions"], "improvement_suggestions")
     normalized_payload["evidence_summary"] = _normalize_evidence_summary(normalized_payload["evidence_summary"])
     _require_list_of_strings(normalized_payload["risk_flags"], "risk_flags")
+    normalized_payload["dimension_comments"] = _normalize_dimension_comments(
+        normalized_payload.get("dimension_comments")
+    )
 
 
 def extract_normalized_score_payload(payload: Any) -> dict[str, Any]:
@@ -214,6 +237,7 @@ def build_grading_result(
         raw_content=raw_content,
         score_total=normalized_payload["score_total"],
         dimension_scores=normalized_payload["dimension_scores"],
+        dimension_comments=normalized_payload.get("dimension_comments", {}),
         deduction_reasons=normalized_payload["deduction_reasons"],
         strengths=normalized_payload["strengths"],
         improvement_suggestions=normalized_payload["improvement_suggestions"],
@@ -230,6 +254,48 @@ def build_grading_result(
             extra=metadata,
         ),
     )
+
+
+def build_response_excerpt(payload: Any, max_length: int = 400) -> str | None:
+    candidate: Any = payload
+    if isinstance(payload, dict):
+        choices = payload.get("choices")
+        if isinstance(choices, list) and choices:
+            first_choice = choices[0]
+            if isinstance(first_choice, dict):
+                message = first_choice.get("message")
+                if isinstance(message, dict):
+                    content = message.get("content")
+                    if isinstance(content, list):
+                        text_content = "\n".join(
+                            str(item.get("text", ""))
+                            for item in content
+                            if isinstance(item, dict) and item.get("type") in {None, "text"}
+                        ).strip()
+                        if text_content:
+                            candidate = text_content
+                    elif isinstance(content, (dict, str)):
+                        candidate = content
+                else:
+                    content = first_choice.get("content")
+                    if isinstance(content, (dict, str)):
+                        candidate = content
+        elif isinstance(payload.get("content"), (dict, str)):
+            candidate = payload.get("content")
+
+    if isinstance(candidate, str):
+        serialized = candidate
+    else:
+        try:
+            serialized = json.dumps(candidate, ensure_ascii=False)
+        except Exception:
+            serialized = str(candidate)
+    compact = " ".join(serialized.split())
+    if not compact:
+        return None
+    if len(compact) <= max_length:
+        return compact
+    return f"{compact[:max_length].rstrip()}..."
 
 
 class BaseGradingProvider(ABC):
@@ -291,7 +357,15 @@ class BaseGradingProvider(ABC):
     async def score(self, system_prompt: str, user_prompt: str) -> GradingProviderResult:
         payload = self.build_payload(system_prompt, user_prompt)
         response_payload = await self._request_completion(payload)
-        return self.parse_response(response_payload)
+        try:
+            return self.parse_response(response_payload)
+        except Exception as exc:
+            raise GradingProviderError(
+                message=str(exc),
+                provider_name=self.provider_name,
+                model_name=self.model_name,
+                raw_excerpt=build_response_excerpt(response_payload),
+            ) from exc
 
     async def stream_text(self, system_prompt: str, user_prompt: str) -> AsyncIterator[str]:
         if not self.api_key:

@@ -27,7 +27,7 @@ async def _is_teacher_user(db: AsyncSession, user_id: uuid.UUID) -> bool:
         .join(UserOrganization, UserOrganization.role_id == Role.id)
         .where(UserOrganization.user_id == user_id)
     )
-    return "teacher" in {row[0] for row in result.all()}
+    return bool({"teacher", "evaluator"} & {row[0] for row in result.all()})
 
 
 async def _validate_teacher_ids(db: AsyncSession, teacher_ids: list[uuid.UUID]) -> list[uuid.UUID]:
@@ -169,9 +169,18 @@ async def update_user_endpoint(
                         is_primary_role=(i == 0),
                     ))
 
-    effective_role_names = data.role_names if data.role_names is not None else [
-        row.role_name for row in (await build_user_response(db, user)).organizations if row.is_primary
-    ]
+    if data.role_names is not None:
+        effective_role_names = data.role_names
+    else:
+        from app.rbac.models import Role as _Role, UserOrganization as _UO
+        role_rows = await db.execute(
+            select(_Role.name)
+            .join(_UO, _UO.role_id == _Role.id)
+            .where(_UO.user_id == user.id, _UO.is_primary.is_(True))
+        )
+        effective_role_names = [r[0] for r in role_rows.all()]
+    if data.password is not None and data.password and "student" in effective_role_names:
+        user.must_change_password = True
     teacher_ids = data.teacher_ids if data.teacher_ids is not None else (
         [data.owner_teacher_id] if data.owner_teacher_id else []
     )

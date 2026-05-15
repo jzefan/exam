@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -6,7 +8,7 @@ from app.auth.security import create_access_token
 from app.auth.service import create_user
 from app.auth.models import User
 from app.exams.models import Exam, StudentExamAppeal
-from app.grading.models import GradingTask, ModelConfig, ProviderConfig, RoleBinding
+from app.grading.models import GradingResultSnapshot, GradingTask, ModelConfig, ProviderConfig, RoleBinding
 from app.questions.models import Question, QuestionType
 
 
@@ -223,6 +225,63 @@ async def test_get_grading_report_returns_manual_final_score(admin_client) -> No
     assert payload["snapshots"][0]["snapshot_type"] == "manual"
     assert payload["snapshots"][0]["deduction_reasons"] == ["教师确认语义已覆盖"]
     assert payload["audit_events"][-1]["event_type"] == "manual.score_override"
+
+
+@pytest.mark.asyncio
+async def test_pending_grading_candidate_detail_triggers_on_demand_grading(
+    admin_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    create_response = await admin_client.post(
+        "/api/grading/tasks",
+        json={
+            "source_type": "single_debug",
+            "question_type": "short_answer",
+            "question_content": "什么是幂等性",
+            "max_score": 10,
+            "student_answer_raw": "重复执行结果一致",
+            "standard_answers": [{"summary": "同一请求多次执行结果一致"}],
+            "rubric_definition": {"dimensions": [{"key": "coverage", "weight": 0.5}]},
+            "role_binding_version": 1,
+        },
+    )
+    task_id = create_response.json()["id"]
+
+    async def fake_run(db, current_task_id: str, *args, **kwargs):
+        task = await db.get(GradingTask, uuid.UUID(current_task_id))
+        snapshot = GradingResultSnapshot(
+            task_id=task.id,
+            snapshot_type="final",
+            score_total=8,
+            dimension_scores={"coverage": 8},
+            dimension_comments={},
+            deduction_reasons=[],
+            strengths=["自动补跑后生成建议分"],
+            improvement_suggestions=[],
+            evidence_summary={"summary": "已完成评分"},
+            risk_flags=[],
+            prompt_template_version=task.prompt_template_version,
+            role_binding_version=task.role_binding_version,
+            created_by="system",
+        )
+        db.add(snapshot)
+        await db.flush()
+        task.latest_final_snapshot = snapshot
+        task.status = "completed"
+        return {"status": "completed", "arbitration_required": False, "reason": None}
+
+    async def fake_apply(*_args, **_kwargs):
+        return {"status": "completed"}
+
+    monkeypatch.setattr("app.grading.service.run_grading_task_with_role_binding", fake_run)
+    monkeypatch.setattr("app.grading.service.apply_grading_task_result_to_exam_submission", fake_apply)
+
+    detail_response = await admin_client.get(f"/api/grading/inbox/tasks/{task_id}")
+
+    assert detail_response.status_code == 200
+    payload = detail_response.json()
+    assert payload["suggested_score"] == 8
+    assert payload["evaluation_note"] is None
 
 
 @pytest.mark.asyncio
@@ -1034,6 +1093,8 @@ async def test_grading_prompt_follow_up_endpoint_returns_model_comments(
     assert payload["models"][2]["model_label"] == "Claude Sonnet 4.6 / anthropic/claude-sonnet-4.6"
     assert payload["models"][2]["risk_flags"] == ["follow_up"]
     assert "Teacher follow-up prompt: 请重点检查是否明确体现了副作用不会重复发生" in captured_prompts["qwen"]
+    assert "高职高校课程评分专家" in captured_system_prompts["qwen"]
+    assert "严格依据 Rubric" in captured_system_prompts["qwen"]
     assert "Respond in English." in captured_system_prompts["qwen"]
     assert "Preferred locale: en-US" in captured_prompts["qwen"]
     assert "Max score: 10" in captured_prompts["qwen"]

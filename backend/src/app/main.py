@@ -32,9 +32,14 @@ from app.papers.router import router as papers_router
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Seed RBAC and AI pipeline data on startup."""
+    import asyncio
+    import logging
+
     from app.ai_pipeline.models import seed_prompt_templates
     from app.database import async_session, engine
+    from app.exams.student_router import _run_subjective_grading_tasks
     from app.grading.seed import seed_grading_defaults
+    from app.grading.service import recover_pending_exam_submission_tasks
     from app.notifications.models import Notification  # noqa: F401
     from app.rbac.service import assign_unowned_students_to_single_teacher
     from app.rbac.seed import seed_permissions, seed_roles
@@ -54,6 +59,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await seed_prompt_templates(db)
         await assign_unowned_students_to_single_teacher(db)
         await db.commit()
+
+    # Recover grading tasks that were interrupted by a previous restart.
+    # Pending tasks left over from before we crashed will sit forever unless
+    # something kicks them — so we re-enqueue them on startup. The fire-and-
+    # forget asyncio.create_task() runs them in the background without blocking
+    # the rest of lifespan or request serving.
+    async with async_session() as db:
+        stuck_task_ids = await recover_pending_exam_submission_tasks(db)
+        await db.commit()
+    if stuck_task_ids:
+        logging.getLogger(__name__).info(
+            "recovering %d interrupted grading task(s) on startup", len(stuck_task_ids)
+        )
+        asyncio.create_task(_run_subjective_grading_tasks(stuck_task_ids))
 
     yield
 

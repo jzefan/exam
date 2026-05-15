@@ -99,11 +99,16 @@ type StudentMessageKey =
   | "result_question_number"
   | "result_correct"
   | "result_incorrect"
+  | "result_grading_pending"
   | "result_score"
+  | "result_objective_score"
+  | "result_subjective_pending"
   | "result_your_answer"
   | "result_standard_answer"
   | "result_feedback"
   | "result_suggestions"
+  | "result_strengths"
+  | "result_ai_summary"
   | "result_analysis"
   | "result_question_nav"
   | "result_question_count"
@@ -249,11 +254,16 @@ const STUDENT_DICTIONARY: Record<StudentLocale, Record<StudentMessageKey, string
     result_question_number: "第 {number} 题",
     result_correct: "答对",
     result_incorrect: "答错",
+    result_grading_pending: "评估中",
     result_score: "得分",
+    result_objective_score: "客观题得分",
+    result_subjective_pending: "主观题正在AI评估中",
     result_your_answer: "你的答案",
     result_standard_answer: "标准答案",
     result_feedback: "评分详情",
     result_suggestions: "改进建议：{text}",
+    result_strengths: "亮点",
+    result_ai_summary: "AI 总评",
     result_analysis: "题目解析：{text}",
     result_question_nav: "题目导航",
     result_question_count: "共 {count} 题",
@@ -398,11 +408,16 @@ const STUDENT_DICTIONARY: Record<StudentLocale, Record<StudentMessageKey, string
     result_question_number: "Question {number}",
     result_correct: "Correct",
     result_incorrect: "Incorrect",
+    result_grading_pending: "Grading",
     result_score: "Score",
+    result_objective_score: "Objective score",
+    result_subjective_pending: "Subjective questions are being graded by AI",
     result_your_answer: "Your Answer",
     result_standard_answer: "Standard Answer",
     result_feedback: "Scoring Details",
     result_suggestions: "Suggestions: {text}",
+    result_strengths: "Strengths",
+    result_ai_summary: "AI Summary",
     result_analysis: "Analysis: {text}",
     result_question_nav: "Question Navigation",
     result_question_count: "{count} questions",

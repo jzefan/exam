@@ -84,7 +84,7 @@ class ExamCreate(BaseModel):
     position_id: uuid.UUID | None = None
     max_switch_count: int = Field(default=0, ge=0)
     allow_retake: bool = False
-    show_result: bool = False
+    show_result: bool = True
     notes_template: str | None = None
     question_mode: ExamQuestionMode | None = None
     question_ids: list[uuid.UUID] = Field(default_factory=list)
@@ -134,6 +134,7 @@ class ExamResponse(BaseModel):
     total_questions: int = 0
     total_students: int = 0
     submitted_count: int = 0
+    has_student_history: bool = False
     knowledge_points: list[KnowledgePointResponse] = Field(default_factory=list)
     participated: bool | None = None
     started_at: datetime | None = None

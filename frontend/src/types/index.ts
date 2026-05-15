@@ -16,6 +16,7 @@ export interface IUser {
   email: string;
   full_name: string;
   is_active: boolean;
+  must_change_password: boolean;
   persona: "teacher" | "assessor";
   primary_org: IUserOrgInfo | null;
   organizations: IUserOrgInfo[];
@@ -108,6 +109,7 @@ export interface IExam {
   total_questions: number;
   total_students: number;
   submitted_count: number;
+  has_student_history: boolean;
   knowledge_points: IKnowledgePoint[];
   participated?: boolean | null;
   started_at?: string | null;
@@ -329,8 +331,10 @@ export interface IExamResultQuestionFeedbackDimension {
 
 export interface IExamResultQuestionFeedback {
   dimensions?: IExamResultQuestionFeedbackDimension[];
+  strengths?: string[];
   deductions?: string[];
   suggestions?: string[];
+  evidence_lines?: string[];
 }
 
 export interface IExamResultQuestion {
@@ -350,6 +354,9 @@ export interface IExamResultQuestion {
   appeal_status: string | null;
   appeal_reason: string | null;
   appeal_reply: string | null;
+  grading_pending?: boolean;
+  grading_failed?: boolean;
+  needs_human_review?: boolean;
 }
 
 export interface IExamResult {
@@ -358,6 +365,8 @@ export interface IExamResult {
   submitted_at: string | null;
   total_score: number;
   score: number | null;
+  objective_score: number | null;
+  subjective_score: number | null;
   grading_status: ExamGradingStatus | null;
   can_view: boolean;
   blocked_reason: string | null;

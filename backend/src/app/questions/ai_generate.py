@@ -3,6 +3,7 @@
 import enum
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from collections.abc import AsyncIterator
@@ -30,6 +31,22 @@ from app.questions.ai_generate_prompt import (
 logger = logging.getLogger(__name__)
 
 ai_generate_router = APIRouter()
+
+_LEGACY_QWEN_DEFAULT_MODELS = {"qwen-3.6"}
+_MATERIAL_SOURCE_PREFIX_RE = re.compile(
+    r"^\s*"
+    r"(?:"
+    r"(?:依据|根据|结合|参考)?\s*(?:教材|资料|学习资料|课件|讲义|文档)\s*"
+    r"(?:第\s*)?"
+    r"(?:[0-9０-９]+|[一二三四五六七八九十百千万]+)"
+    r"(?:\s*[-－—~～至到]\s*(?:[0-9０-９]+|[一二三四五六七八九十百千万]+))?"
+    r"\s*(?:页|章|节|部分)?"
+    r"(?:\s*(?:【[^】]{1,40}】|\[[^\]]{1,40}\]|（[^）]{1,40}）|\([^)）]{1,40}\)))*"
+    r"|"
+    r"(?:依据|根据|结合|参考)\s*(?:教材|资料|学习资料|课件|讲义|文档)"
+    r")"
+    r"\s*(?:[，,、:：。.\-－—]\s*)?"
+)
 
 
 class AIModelProvider(str, enum.Enum):
@@ -198,6 +215,54 @@ async def _get_model_config(
     return model.value, api_key, base_url, model_name
 
 
+def _chat_completions_url(base_url: str) -> str:
+    """Normalize either a provider base URL or a full chat-completions endpoint."""
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/chat/completions"):
+        return normalized
+    return f"{normalized}/chat/completions"
+
+
+def _ai_service_error_message(provider_name: str, model_name: str, status_code: int) -> str:
+    if status_code == 404:
+        provider_label = "千问" if provider_name == AIModelProvider.QWEN.value else provider_name
+        return f"{provider_label} 模型或接口地址不存在（当前模型：{model_name}），请检查模型配置后重试"
+    return f"AI 服务请求失败（状态码：{status_code}）"
+
+
+def _request_model_name(provider_name: str, model_name: str, *, use_vision: bool) -> str:
+    if provider_name == AIModelProvider.QWEN.value:
+        if use_vision:
+            return settings.qwen_vl_model_name
+        if model_name in _LEGACY_QWEN_DEFAULT_MODELS:
+            return settings.qwen_model_name
+    return model_name
+
+
+def _strip_material_source_prefix(text: str) -> str:
+    cleaned = text
+    for _ in range(2):
+        next_cleaned = _MATERIAL_SOURCE_PREFIX_RE.sub("", cleaned, count=1).lstrip()
+        if next_cleaned == cleaned:
+            break
+        cleaned = next_cleaned
+    return cleaned or text
+
+
+def _sanitize_generated_question(question: dict[str, Any]) -> dict[str, Any]:
+    title = question.get("title")
+    if isinstance(title, str):
+        question["title"] = _strip_material_source_prefix(title)
+
+    content = question.get("content")
+    if isinstance(content, dict):
+        content_text = content.get("text")
+        if isinstance(content_text, str):
+            content["text"] = _strip_material_source_prefix(content_text)
+
+    return question
+
+
 async def generate_questions_stream(
     db: AsyncSession,
     request: AIGenerateRequest,
@@ -235,7 +300,6 @@ async def generate_questions_stream(
     # 多模态分支：仅在有图片且 provider 为 Qwen 时启用，强制切到 qwen-vl 模型。
     use_vision = bool(request.material_images) and request.model == AIModelProvider.QWEN
     if use_vision:
-        model_name = settings.qwen_vl_model_name
         user_content: Any = [
             {"type": "text", "text": "请开始生成题目。以下为学习资料的整页/嵌入图片，请结合图中信息出题。"},
         ]
@@ -251,6 +315,7 @@ async def generate_questions_stream(
     else:
         user_content = "请开始生成题目。"
 
+    model_name = _request_model_name(provider_name, model_name, use_vision=use_vision)
     payload = {
         "model": model_name,
         "messages": [
@@ -275,7 +340,7 @@ async def generate_questions_stream(
         async with httpx.AsyncClient(timeout=120.0) as client:
             async with client.stream(
                 "POST",
-                f"{base_url}/chat/completions",
+                _chat_completions_url(base_url),
                 json=payload,
                 headers=headers,
             ) as response:
@@ -332,6 +397,8 @@ async def generate_questions_stream(
                                 # Complete JSON object
                                 try:
                                     parsed_question = json.loads(accumulated)
+                                    if isinstance(parsed_question, dict):
+                                        parsed_question = _sanitize_generated_question(parsed_question)
                                     if question_count >= request.total_count:
                                         accumulated = ""
                                         in_string = False
@@ -361,8 +428,16 @@ async def generate_questions_stream(
 
         yield {"type": "done", "total": question_count}
     except httpx.HTTPStatusError as e:
-        logger.error("DeepSeek API HTTP error: %s", e)
-        yield {"type": "error", "message": f"AI service error: {e.response.status_code}"}
+        logger.error(
+            "AI provider HTTP error: provider=%s model=%s status=%s",
+            provider_name,
+            model_name,
+            e.response.status_code,
+        )
+        yield {
+            "type": "error",
+            "message": _ai_service_error_message(provider_name, model_name, e.response.status_code),
+        }
     except Exception as e:
         logger.error("AI question generation error: %s", e)
         yield {"type": "error", "message": str(e)}

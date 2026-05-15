@@ -24,7 +24,7 @@ function createInitialForm(): ExamFormValues {
     position_id: null,
     max_switch_count: 0,
     allow_retake: false,
-    show_result: false,
+    show_result: true,
     notes_template: "",
     question_mode: "manual",
     question_ids: [],

@@ -118,6 +118,8 @@ async def test_student_exam_flow(client: AsyncClient, db_session) -> None:
     assert start_response.status_code == 200
     start_data = start_response.json()
     assert len(start_data["questions"]) == 2
+    fill_in_payload = next(question for question in start_data["questions"] if question["type"] == "fill_in")
+    assert fill_in_payload["content"]["blank_count"] == 3
 
     save_response = await client.post(
         f"/api/student/exams/{exam.id}/answers",

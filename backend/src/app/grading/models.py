@@ -240,6 +240,7 @@ class GradingResultSnapshot(BaseModel):
     snapshot_type: Mapped[str] = mapped_column(String(50), nullable=False)
     score_total: Mapped[float] = mapped_column(Float, nullable=False)
     dimension_scores: Mapped[dict] = mapped_column(json_field, default=dict, nullable=False)
+    dimension_comments: Mapped[dict] = mapped_column(json_field, default=dict, nullable=False)
     deduction_reasons: Mapped[list] = mapped_column(json_field, default=list, nullable=False)
     strengths: Mapped[list] = mapped_column(json_field, default=list, nullable=False)
     improvement_suggestions: Mapped[list] = mapped_column(json_field, default=list, nullable=False)

@@ -82,4 +82,25 @@ describe("QuestionRenderer", () => {
 
     expect(screen.getByTestId("short-answer-value")).toHaveTextContent("");
   });
+
+  it("renders one input for each fill-in blank placeholder", () => {
+    render(
+      <QuestionRenderer
+        question={{
+          question_id: "fill-1",
+          order: 0,
+          score: 10,
+          type: "fill_in",
+          title: "Pandas 行选择",
+          content: { text: "在Pandas中，用于选择DataFrame的某一行的方法是____（入参为索引）或____（入参为标签）。" },
+          options: null,
+        }}
+        answer={{}}
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByPlaceholderText("填写第 1 空")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("填写第 2 空")).toBeInTheDocument();
+  });
 });

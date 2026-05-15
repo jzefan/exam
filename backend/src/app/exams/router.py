@@ -20,7 +20,7 @@ from app.common.pagination import (
     parse_pagination,
 )
 from app.database import get_db
-from app.exams.models import Exam, ExamQuestion, ExamStudent, StudentExamAnswer, StudentExamSubmission
+from app.exams.models import Exam, ExamQuestion, ExamStudent, GradingStatus, StudentExamAnswer, StudentExamAppeal, StudentExamSubmission
 from app.exams.schemas import (
     AnalysisOverall,
     ExamAnalysisResponse,
@@ -36,6 +36,8 @@ from app.exams.schemas import (
     ScoreBucket,
     StudentResultRow,
 )
+from app.exams.student_schemas import StudentExamResultQuestionResponse, StudentExamResultResponse
+from app.exams.student_router import _build_student_question_content
 from app.exams.time_utils import (
     coerce_exam_input_datetime_to_utc,
     coerce_persisted_exam_datetime_to_utc,
@@ -133,6 +135,10 @@ async def _get_writable_exam_or_404(
 
 def _build_exam_response(exam: Exam, student_id: uuid.UUID | None = None) -> ExamResponse:
     submitted = sum(1 for s in exam.exam_students if s.submitted_at is not None)
+    has_student_history = any(
+        s.started_at is not None or s.submitted_at is not None
+        for s in exam.exam_students
+    )
     knowledge_points_by_id: dict[uuid.UUID, object] = {}
     for exam_question in exam.exam_questions:
         question = exam_question.question
@@ -165,6 +171,7 @@ def _build_exam_response(exam: Exam, student_id: uuid.UUID | None = None) -> Exa
         total_questions=len(exam.exam_questions),
         total_students=len(exam.exam_students),
         submitted_count=submitted,
+        has_student_history=has_student_history,
         knowledge_points=list(knowledge_points_by_id.values()),
         participated=(
             exam_student.started_at is not None or exam_student.submitted_at is not None
@@ -366,6 +373,7 @@ async def update_exam(
     exam = await _get_writable_exam_or_404(db, exam_id, user)
 
     data = body.model_dump(exclude_unset=True)
+    has_explicit_total_score = "total_score" in data
     question_ids = data.pop("question_ids", None)
     question_items = data.pop("question_items", None)
     student_ids = data.pop("student_ids", None)
@@ -376,10 +384,18 @@ async def update_exam(
         setattr(exam, field, value)
 
     if question_items is not None:
+        normalized_question_items = [
+            ExamQuestionItem(**item) if isinstance(item, dict) else item
+            for item in question_items
+        ]
+        if not has_explicit_total_score:
+            computed_total_score = sum(float(item.score_override or 0) for item in normalized_question_items)
+            if computed_total_score > 0:
+                exam.total_score = computed_total_score
         await _sync_questions(
             db,
             exam.id,
-            [ExamQuestionItem(**item) if isinstance(item, dict) else item for item in question_items],
+            normalized_question_items,
         )
     elif question_ids is not None:
         await _sync_questions(
@@ -527,10 +543,120 @@ async def list_exam_students(
             username=es.student.username if es.student else None,
             phone=es.student.phone if es.student else None,
             user_type=es.student.user_type if es.student else None,
+            started_at=es.started_at,
             submitted_at=es.submitted_at,
+            grading_status=es.grading_status,
         )
         for es in exam.exam_students
     ]
+
+
+@router.get("/{exam_id}/students/{student_id}/result", response_model=StudentExamResultResponse)
+async def get_student_result_for_teacher(
+    exam_id: uuid.UUID,
+    student_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+) -> StudentExamResultResponse:
+    exam = await _get_visible_exam_or_404(db, exam_id, user)
+
+    exam_student_result = await db.execute(
+        select(ExamStudent).where(
+            ExamStudent.exam_id == exam_id,
+            ExamStudent.student_id == student_id,
+        )
+    )
+    exam_student = exam_student_result.scalar_one_or_none()
+    if exam_student is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found in this exam")
+
+    if exam_student.submitted_at is None:
+        return StudentExamResultResponse(
+            exam_id=exam.id,
+            title=exam.title,
+            submitted_at=None,
+            total_score=exam.total_score,
+            score=exam_student.score,
+            objective_score=exam_student.objective_score,
+            subjective_score=exam_student.subjective_score,
+            grading_status=exam_student.grading_status,
+            can_view=False,
+            blocked_reason="该考生尚未提交考试",
+        )
+
+    is_pending_ai = exam_student.grading_status == GradingStatus.PENDING_AI.value
+
+    answers_result = await db.execute(
+        select(StudentExamAnswer).where(
+            StudentExamAnswer.exam_id == exam_id,
+            StudentExamAnswer.student_id == student_id,
+        )
+    )
+    answers = {item.question_id: item for item in answers_result.scalars().all()}
+
+    appeals_result = await db.execute(
+        select(StudentExamAppeal).where(
+            StudentExamAppeal.exam_id == exam_id,
+            StudentExamAppeal.student_id == student_id,
+        )
+    )
+    appeals = {item.question_id: item for item in appeals_result.scalars().all()}
+
+    _SUBJECTIVE_TYPES = {"short_answer", "essay", "code"}
+    question_items: list[StudentExamResultQuestionResponse] = []
+    for exam_question in sorted(exam.exam_questions, key=lambda item: item.order):
+        question = exam_question.question
+        answer = answers.get(question.id)
+        appeal = appeals.get(question.id)
+        answer_feedback = (answer.feedback or {}) if answer else {}
+        grading_failed = bool(answer_feedback.get("grading_failed"))
+        needs_human_review = bool(answer_feedback.get("needs_human_review"))
+        grading_pending = (
+            is_pending_ai
+            and question.type.value in _SUBJECTIVE_TYPES
+            and not grading_failed
+        )
+        question_items.append(
+            StudentExamResultQuestionResponse(
+                question_id=question.id,
+                order=exam_question.order,
+                type=question.type.value,
+                title=question.title,
+                content=_build_student_question_content(question),
+                options=question.options,
+                total_score=exam_question.score_override if exam_question.score_override is not None else question.score,
+                score_awarded=answer.score_awarded if answer else 0.0,
+                is_correct=answer.is_correct if answer else False,
+                answer_content=answer.answer_content if answer else {},
+                standard_answer=question.answer or {},
+                analysis=question.analysis,
+                feedback=answer.feedback if answer else {},
+                appeal_status=appeal.status if appeal else None,
+                appeal_reason=appeal.reason if appeal else None,
+                appeal_reply=appeal.teacher_reply if appeal else None,
+                grading_pending=grading_pending,
+                grading_failed=grading_failed,
+                needs_human_review=needs_human_review,
+            )
+        )
+
+    return StudentExamResultResponse(
+        exam_id=exam.id,
+        title=exam.title,
+        submitted_at=exam_student.submitted_at,
+        total_score=exam.total_score,
+        score=exam_student.score,
+        objective_score=exam_student.objective_score,
+        subjective_score=exam_student.subjective_score,
+        grading_status=exam_student.grading_status,
+        can_view=True,
+        blocked_reason=(
+            "主观题正在进行 AI 评分，主观题分数将在评估完成后更新。客观题分数已可见。"
+            if is_pending_ai
+            else None
+        ),
+        questions=question_items,
+    )
 
 
 @router.post("/{exam_id}/students", status_code=status.HTTP_201_CREATED)

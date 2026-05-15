@@ -44,6 +44,7 @@ export function ExamResultPage() {
   const [appealQuestionId, setAppealQuestionId] = useState<string | null>(null);
   const [appealReason, setAppealReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [regradingQuestionId, setRegradingQuestionId] = useState<string | null>(null);
   const [activeQuestionIndex, setActiveQuestionIndex] = useState(0);
   const [viewMode, setViewMode] = useState<"nav" | "all">("nav");
   const [navMode, setNavMode] = useState<"type" | "order">("type");
@@ -117,6 +118,20 @@ export function ExamResultPage() {
     viewMode === "all" && questions.length > 0 && questions.every((question) => expandedQuestionDetails[question.question_id]);
   const correctCount = questions.filter((question) => question.is_correct).length;
   const incorrectCount = questions.length - correctCount;
+
+  const requestRegrade = async (questionId: string) => {
+    if (!id) return;
+    setRegradingQuestionId(questionId);
+    try {
+      await api.post(`/api/student/exams/${id}/questions/${questionId}/regrade`);
+      await loadResult();
+    } catch {
+      // surface failure by re-loading so the banner stays
+      await loadResult();
+    } finally {
+      setRegradingQuestionId(null);
+    }
+  };
 
   const submitAppeal = async () => {
     if (!id || !appealQuestionId || !appealReason.trim()) return;
@@ -237,9 +252,26 @@ export function ExamResultPage() {
             ) : null}
             <div className="text-right">
               <p className="text-[12px] text-muted-foreground">{tStudent("result_score", undefined, locale)}</p>
-              <p className="text-[16px] font-semibold text-primary">
-                {question.score_awarded} / {question.total_score}
-              </p>
+              {question.grading_pending ? (
+                <p className="text-[13px] font-medium text-amber-600">
+                  <Brain className="inline h-3.5 w-3.5 mr-1" />
+                  {tStudent("result_grading_pending", undefined, locale) || "评估中"}
+                </p>
+              ) : question.needs_human_review ? (
+                <p className="text-[13px] font-medium text-amber-600">
+                  <CircleAlert className="inline h-3.5 w-3.5 mr-1" />
+                  等待人工复核
+                </p>
+              ) : question.grading_failed ? (
+                <p className="text-[13px] font-medium text-destructive">
+                  <CircleAlert className="inline h-3.5 w-3.5 mr-1" />
+                  评分失败
+                </p>
+              ) : (
+                <p className="text-[16px] font-semibold text-primary">
+                  {question.score_awarded} / {question.total_score}
+                </p>
+              )}
             </div>
           </div>
 
@@ -298,6 +330,39 @@ export function ExamResultPage() {
             })()}
           </div>
 
+          {question.grading_failed ? (
+            <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4">
+              <div className="flex items-start gap-2 text-[14px] text-destructive">
+                <CircleAlert className="mt-0.5 shrink-0" />
+                <div className="flex-1">
+                  <p className="font-medium">本题 AI 评分未完成</p>
+                  <p className="mt-1 text-[13px] text-destructive/85">
+                    系统在评分过程中遇到错误。你可以重新触发评分，或联系老师人工评分。
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10"
+                  disabled={regradingQuestionId === question.question_id}
+                  onClick={() => requestRegrade(question.question_id)}
+                >
+                  {regradingQuestionId === question.question_id ? "正在重新评分..." : "重新评分"}
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+          {question.needs_human_review ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 dark:bg-amber-950/40 p-4 text-[14px] text-amber-800 dark:text-amber-200">
+              <div className="flex items-start gap-2">
+                <CircleAlert className="mt-0.5 shrink-0" />
+                <p>本题 AI 评分结果存在分歧，正在等待教师人工复核。</p>
+              </div>
+            </div>
+          ) : null}
+
           <div className="flex flex-col gap-3">
             {detailsExpanded && !isObjectiveQuestion ? (
               <>
@@ -319,6 +384,18 @@ export function ExamResultPage() {
                     </div>
                   ))}
                 </div>
+                {question.feedback.strengths?.length ? (
+                  <div className="mt-4 rounded-xl bg-background p-4">
+                    <p className="text-[13px] font-medium text-foreground">
+                      {tStudent("result_strengths", undefined, locale)}
+                    </p>
+                    <ul className="mt-2 list-disc pl-5 text-[14px] leading-6 text-muted-foreground">
+                      {question.feedback.strengths.map((line) => (
+                        <li key={line}><LatexText>{line}</LatexText></li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
                 {question.feedback.deductions?.length ? (
                   <div className="mt-4 flex flex-col gap-2">
                     {question.feedback.deductions.map((line) => (
@@ -332,6 +409,18 @@ export function ExamResultPage() {
                 {question.feedback.suggestions?.length ? (
                   <div className="mt-4 rounded-xl bg-background p-4 text-[14px] leading-6 text-muted-foreground">
                     {tStudent("result_suggestions", { text: question.feedback.suggestions.join("；") }, locale)}
+                  </div>
+                ) : null}
+                {question.feedback.evidence_lines?.length ? (
+                  <div className="mt-4 rounded-xl bg-background p-4">
+                    <p className="text-[13px] font-medium text-foreground">
+                      {tStudent("result_ai_summary", undefined, locale)}
+                    </p>
+                    <ul className="mt-2 list-disc pl-5 text-[14px] leading-6 text-muted-foreground">
+                      {question.feedback.evidence_lines.map((line) => (
+                        <li key={line}><LatexText>{line}</LatexText></li>
+                      ))}
+                    </ul>
                   </div>
                 ) : null}
                 </div>
@@ -387,9 +476,16 @@ export function ExamResultPage() {
 
   const renderNavQuestionButton = (question: IExamResult["questions"][number], index: number) => {
     const isActive = index === safeQuestionIndex;
-    const statusLabel = question.is_correct
-      ? tStudent("result_correct", undefined, locale)
-      : tStudent("result_incorrect", undefined, locale);
+    const statusLabel = question.grading_pending
+      ? (tStudent("result_grading_pending", undefined, locale) || "评估中")
+      : question.needs_human_review
+        ? "待人工复核"
+        : question.grading_failed
+          ? "评分失败"
+          : question.is_correct
+            ? tStudent("result_correct", undefined, locale)
+            : tStudent("result_incorrect", undefined, locale);
+    const showAttentionState = question.grading_pending || question.needs_human_review || question.grading_failed;
 
     return (
       <button
@@ -402,18 +498,28 @@ export function ExamResultPage() {
           "group flex min-h-14 flex-col items-center justify-center gap-1 rounded-xl border text-center transition-all",
           isActive
             ? "border-primary/50 bg-primary/10 text-primary shadow-sm ring-2 ring-primary/15"
-            : "border-border/60 bg-background text-foreground hover:border-primary/25 hover:bg-muted/40",
+            : question.grading_failed
+              ? "border-destructive/30 bg-destructive/5"
+              : showAttentionState
+                ? "border-amber-200 bg-amber-50/50"
+                : "border-border/60 bg-background text-foreground hover:border-primary/25 hover:bg-muted/40",
         )}
       >
         <span className="text-sm font-semibold tabular-nums leading-none">{question.order + 1}</span>
-        <span
-          className={cn(
-            "h-1.5 w-6 rounded-full",
-            question.is_correct ? "bg-emerald-500/75" : "bg-destructive/75",
-          )}
-        />
+        {question.grading_pending || question.needs_human_review ? (
+          <span className="h-1.5 w-6 rounded-full bg-amber-400/75" />
+        ) : question.grading_failed ? (
+          <span className="h-1.5 w-6 rounded-full bg-destructive/75" />
+        ) : (
+          <span
+            className={cn(
+              "h-1.5 w-6 rounded-full",
+              question.is_correct ? "bg-emerald-500/75" : "bg-destructive/75",
+            )}
+          />
+        )}
         <span className="text-[10px] font-medium tabular-nums text-muted-foreground">
-          {question.score_awarded}/{question.total_score}
+          {question.grading_pending ? "—" : `${question.score_awarded}/${question.total_score}`}
         </span>
       </button>
     );
@@ -443,14 +549,37 @@ export function ExamResultPage() {
             <h1 className="text-[16px] font-semibold text-foreground">{result.title}</h1>
             <p className="mt-2 text-[14px] text-muted-foreground">{tStudent("result_intro", undefined, locale)}</p>
           </div>
-          <div className="rounded-2xl bg-muted px-5 py-4 text-right">
-            <p className="text-[12px] text-muted-foreground">{tStudent("result_total_score", undefined, locale)}</p>
-            <p className="mt-1 text-[16px] font-semibold text-primary">
-              {result.score ?? 0} / {result.total_score}
-            </p>
+          <div className="flex flex-col items-end gap-2">
+            {result.grading_status === "pending_ai" && result.objective_score != null ? (
+              <>
+                <div className="rounded-2xl bg-muted px-5 py-3 text-right">
+                  <p className="text-[12px] text-muted-foreground">{tStudent("result_objective_score", undefined, locale) || "客观题得分"}</p>
+                  <p className="text-[16px] font-semibold text-emerald-600">
+                    {result.objective_score} / {result.total_score}
+                  </p>
+                </div>
+                <p className="text-[12px] text-amber-600 font-medium">
+                  <Brain className="inline h-3.5 w-3.5 mr-1" />
+                  {tStudent("result_subjective_pending", undefined, locale) || "主观题正在AI评估中"}
+                </p>
+              </>
+            ) : (
+              <div className="rounded-2xl bg-muted px-5 py-4 text-right">
+                <p className="text-[12px] text-muted-foreground">{tStudent("result_total_score", undefined, locale)}</p>
+                <p className="mt-1 text-[16px] font-semibold text-primary">
+                  {result.score ?? 0} / {result.total_score}
+                </p>
+              </div>
+            )}
           </div>
         </div>
       </section>
+
+      {result.blocked_reason ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          {result.blocked_reason}
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-col gap-1">

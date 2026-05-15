@@ -281,8 +281,16 @@ export function htmlToImportText(html: string, images: QuestionImportImageInput[
   const document = new DOMParser().parseFromString(html, "text/html");
   const parts: string[] = [];
   const imageIndex = new Map(images.map((image) => [image.image_id, image]));
+  let tableCount = 0;
 
   const visitNode = (node: ChildNode) => {
+    if (node instanceof HTMLTableElement) {
+      tableCount += 1;
+      parts.push(`[TABLE:${tableCount}]`);
+      parts.push("");
+      return;
+    }
+
     if (node instanceof HTMLParagraphElement || /^H[1-6]$/.test(node.nodeName)) {
       appendMergedInlineText(parts, collectInlineParts(node, imageIndex));
       parts.push("");
@@ -307,7 +315,7 @@ export function htmlToImportText(html: string, images: QuestionImportImageInput[
 
     if (node instanceof HTMLElement) {
       Array.from(node.childNodes).forEach(visitNode);
-      if (node instanceof HTMLDivElement || node instanceof HTMLTableElement) {
+      if (node instanceof HTMLDivElement) {
         parts.push("");
       }
       return;
@@ -380,7 +388,7 @@ export function buildImportableQuestions(drafts: QuestionImportDraft[], question
         difficulty: clampedDifficulty,
         score: 10,
         tag_ids: [],
-        knowledge_point_ids: [],
+        knowledge_point_ids: draft.suggested_knowledge_points?.map((kp) => kp.id) ?? [],
         question_bank_id: questionBankId,
       };
     });
@@ -391,18 +399,66 @@ export function generateImportQuestionTitle(contentText: string): string {
   return normalized.slice(0, 120) || "未命名题目";
 }
 
+const TABLE_LINE_REGEX = /^\|.*\|$/;
+
+function isTableSeparatorRow(cells: string[]): boolean {
+  return cells.length > 0 && cells.every((cell) => /^:?-{2,}:?$/.test(cell.trim()));
+}
+
+function parseMarkdownTableRow(line: string): string[] {
+  return line
+    .slice(1, -1)
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+function renderMarkdownTable(rowLines: string[]): string {
+  const rows = rowLines.map(parseMarkdownTableRow);
+  const separatorIndex = rows.findIndex(isTableSeparatorRow);
+
+  const headerRows = separatorIndex > 0 ? rows.slice(0, separatorIndex) : [];
+  const bodyRows = separatorIndex >= 0 ? rows.slice(separatorIndex + 1) : rows;
+
+  const renderRow = (cells: string[], tag: "th" | "td") =>
+    `<tr>${cells.map((cell) => `<${tag}>${escapeHtml(cell)}</${tag}>`).join("")}</tr>`;
+
+  const thead = headerRows.length
+    ? `<thead>${headerRows.map((cells) => renderRow(cells, "th")).join("")}</thead>`
+    : "";
+  const tbody = bodyRows.length
+    ? `<tbody>${bodyRows.map((cells) => renderRow(cells, "td")).join("")}</tbody>`
+    : "";
+
+  return `<table>${thead}${tbody}</table>`;
+}
+
 export function importTextToHtml(contentText: string): string {
-  return contentText
+  const lines = contentText
     .split(/\n+/)
     .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      if (/^<img\s/i.test(line)) {
-        return line;
+    .filter(Boolean);
+
+  const parts: string[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    if (TABLE_LINE_REGEX.test(line)) {
+      const tableLines: string[] = [];
+      while (index < lines.length && TABLE_LINE_REGEX.test(lines[index])) {
+        tableLines.push(lines[index]);
+        index += 1;
       }
-      return `<p>${escapeHtml(line)}</p>`;
-    })
-    .join("");
+      parts.push(renderMarkdownTable(tableLines));
+      continue;
+    }
+    if (/^<img\s/i.test(line)) {
+      parts.push(line);
+    } else {
+      parts.push(`<p>${escapeHtml(line)}</p>`);
+    }
+    index += 1;
+  }
+  return parts.join("");
 }
 
 function stripHtmlForTitle(value: string): string {

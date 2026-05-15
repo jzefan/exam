@@ -86,6 +86,8 @@ class PaperAIGenerateRequest(BaseModel):
     difficulty_strategy: Literal["similar", "easier", "harder"] = "similar"
     question_type_strategy: Literal["inherit"] = "inherit"
     prefer_root_knowledge_point: bool = True
+    # 复用源试卷题目的最大占比（百分比）。0 表示完全不复用，全部由 AI 新生成；上限 60%。
+    source_reuse_rate: int = Field(default=0, ge=0, le=60)
     model: Literal["qwen", "deepseek", "claude"] = "deepseek"
 
 
@@ -136,3 +138,4 @@ class PaperImportConfirmRequest(BaseModel):
     description: str | None = None
     root_knowledge_point_id: uuid.UUID | None = None
     drafts: list[QuestionImportDraft] = Field(min_length=1, max_length=500)
+    skip_background_matching: bool = False

@@ -1,5 +1,6 @@
 """CRUD service functions for Question, Tag, and KnowledgePoint."""
 
+import asyncio
 import json
 import re
 import uuid
@@ -17,11 +18,14 @@ from app.common.data_visibility import VisibilityScope
 from app.common.resource_access import teacher_owned_resource_filter, teacher_visible_resource_filter
 from app.database import async_session
 from app.config import settings
-from app.exams.models import Exam, ExamQuestion, StudentExamAnswer, StudentExamSubmissionAnswer, StudentQuestionProgress
-from app.questions.models import KnowledgePoint, Question, QuestionBank, QuestionImportJob, QuestionImportJobStatus, Tag, question_tags
+from app.exams.models import Exam, ExamQuestion, ExamStatus, ExamStudent, StudentExamAnswer, StudentExamSubmission, StudentExamSubmissionAnswer, StudentQuestionProgress
+from app.questions.models import KnowledgePoint, Question, QuestionBank, QuestionImportJob, QuestionImportJobStatus, QuestionType, Tag, question_tags
 from app.questions.schemas import (
+    EnhanceDraftInput,
+    EnhancedDraft,
     ImportConfidence,
     ImportRecognitionMode,
+    KnowledgePointSuggestion,
     QuestionImportAnalysisMode,
     ImportReviewStatus,
     ImportedQuestionDraft,
@@ -35,6 +39,7 @@ from app.questions.schemas import (
     QuestionImportTableInput,
     QuestionImportRecognizeResponse,
     QuestionCreate,
+    QuestionEditLockInfo,
     QuestionImportAnalyzeResponse,
     QuestionUpdate,
     TagCreate,
@@ -47,11 +52,53 @@ class BulkCreateQuestionsResult:
     created_question_ids: list[uuid.UUID]
     created_questions: list[QuestionCreate]
     existing: int = 0
+    existing_question_ids: list[uuid.UUID] = None  # type: ignore[assignment]
     failed: int = 0
+
+    def __post_init__(self) -> None:
+        if self.existing_question_ids is None:
+            self.existing_question_ids = []
 
     @property
     def created(self) -> int:
         return len(self.created_question_ids)
+
+
+@dataclass(frozen=True)
+class AffectedSubmittedAttempt:
+    exam_id: uuid.UUID
+    student_id: uuid.UUID
+    question_id: uuid.UUID
+    submission_id: uuid.UUID
+
+
+IN_USE_QUESTION_EDIT_ERROR = "这道题正在考试或练习中使用，不能修改题干、选项、题型或分值。"
+IN_USE_ALLOWED_FIELDS = ["answer", "analysis", "difficulty", "knowledge_point_ids", "code_test_cases"]
+IN_USE_REGRADE_FIELDS = ["answer", "code_test_cases"]
+ALLOWED_CODE_CONTENT_KEYS = {"sample_tests", "test_cases", "judge_cases"}
+IN_USE_MUTABLE_FIELDS = {"answer", "analysis", "difficulty", "knowledge_point_ids", "code_test_cases"}
+
+
+@dataclass
+class QuestionUpdateDiff:
+    changed_fields: set[str]
+    forbidden_fields: set[str]
+    allowed_content_change_keys: set[str]
+    regrade_fields: set[str]
+
+
+def _normalize_uuid_list(values: list[Any]) -> list[str]:
+    return sorted({str(value) for value in values})
+
+
+def _question_knowledge_point_ids(question: Question) -> list[str]:
+    knowledge_points = getattr(question, "knowledge_points", []) or []
+    return _normalize_uuid_list([knowledge_point.id for knowledge_point in knowledge_points])
+
+
+def _question_tag_ids(question: Question) -> list[str]:
+    tags = getattr(question, "tags", []) or []
+    return _normalize_uuid_list([tag.id for tag in tags])
 
 
 # --- Tag ---
@@ -320,6 +367,226 @@ async def create_question(db: AsyncSession, data: QuestionCreate, user_id: uuid.
     return created.unique().scalar_one()  # type: ignore[return-value]
 
 
+_IN_USE_FORBIDDEN_TOP_LEVEL_FIELDS = {"type", "content", "options", "score"}
+_IN_USE_REGRADING_TOP_LEVEL_FIELDS = {"answer"}
+_IN_USE_ALLOWED_TOP_LEVEL_FIELDS = {
+    "answer", "analysis", "difficulty", "knowledge_point_ids",
+    "code_test_cases", "title", "tag_ids", "question_bank_id",
+}
+_IN_USE_ALLOWED_CODE_CONTENT_KEYS = {"sample_tests", "test_cases", "judge_cases"}
+
+
+def _normalize_content_text(content: Any) -> str:
+    """Extract plain text from content dict for semantic comparison.
+
+    Compares the text representation rather than exact dict equality,
+    so that roundtrips through the rich-text editor (which may add/remove
+    html keys or normalize tag structure) don't appear as content changes.
+    """
+    if not isinstance(content, dict):
+        return str(content or "").strip()
+    return (content.get("text") or content.get("html") or "").strip()
+
+
+def _content_text_changed(old_content: Any, new_content: Any) -> bool:
+    """True when the semantic text of the content has actually changed."""
+    return _normalize_content_text(old_content) != _normalize_content_text(new_content)
+
+
+def _normalize_question_type(question_type: QuestionType | str | None) -> str:
+    if isinstance(question_type, QuestionType):
+        return question_type.value
+    return str(question_type or "")
+
+
+def _extract_question_attr(question: Question | Any, field: str) -> Any:
+    if field == "knowledge_point_ids":
+        return _question_knowledge_point_ids(question)
+    if field == "tag_ids":
+        return _question_tag_ids(question)
+    return getattr(question, field)
+
+
+def _extract_editable_code_content(content: Any) -> dict[str, Any]:
+    if not isinstance(content, dict):
+        return {}
+    return {key: content.get(key) for key in _IN_USE_ALLOWED_CODE_CONTENT_KEYS if key in content}
+
+
+def _extract_locked_code_content(content: Any) -> dict[str, Any]:
+    if not isinstance(content, dict):
+        return {}
+    return {key: value for key, value in content.items() if key not in _IN_USE_ALLOWED_CODE_CONTENT_KEYS}
+
+
+async def question_is_in_use(db: AsyncSession, question_id: uuid.UUID) -> bool:
+    """Return True only when the question is in an ongoing exam.
+
+    Completed or draft exams do not lock editing — per product decision D2.
+    """
+    exam_ref = await db.scalar(
+        select(ExamQuestion.question_id)
+        .join(Exam, Exam.id == ExamQuestion.exam_id)
+        .where(
+            ExamQuestion.question_id == question_id,
+            Exam.deleted_at.is_(None),
+            Exam.status == ExamStatus.ONGOING.value,
+        )
+        .limit(1)
+    )
+    return exam_ref is not None
+
+
+async def question_has_submitted_attempts(db: AsyncSession, question_id: uuid.UUID) -> bool:
+    submitted = await db.scalar(
+        select(StudentExamAnswer.question_id)
+        .join(Exam, Exam.id == StudentExamAnswer.exam_id)
+        .join(
+            ExamStudent,
+            and_(
+                ExamStudent.exam_id == StudentExamAnswer.exam_id,
+                ExamStudent.student_id == StudentExamAnswer.student_id,
+            ),
+        )
+        .where(
+            StudentExamAnswer.question_id == question_id,
+            Exam.deleted_at.is_(None),
+            ExamStudent.submitted_at.is_not(None),
+        )
+        .limit(1)
+    )
+    return submitted is not None
+
+
+async def list_submitted_attempts_for_question_regrade(
+    db: AsyncSession,
+    question_id: uuid.UUID,
+) -> list[AffectedSubmittedAttempt]:
+    rows = (
+        await db.execute(
+            select(
+                StudentExamSubmissionAnswer.exam_id,
+                StudentExamSubmissionAnswer.student_id,
+                StudentExamSubmissionAnswer.question_id,
+                StudentExamSubmissionAnswer.submission_id,
+            )
+            .join(Exam, Exam.id == StudentExamSubmissionAnswer.exam_id)
+            .where(
+                StudentExamSubmissionAnswer.question_id == question_id,
+                Exam.deleted_at.is_(None),
+            )
+            .order_by(StudentExamSubmissionAnswer.exam_id, StudentExamSubmissionAnswer.student_id)
+        )
+    ).all()
+    return [
+        AffectedSubmittedAttempt(
+            exam_id=exam_id,
+            student_id=student_id,
+            question_id=attempt_question_id,
+            submission_id=submission_id,
+        )
+        for exam_id, student_id, attempt_question_id, submission_id in rows
+    ]
+
+
+def diff_question_update(question: Question | Any, incoming: dict[str, Any]) -> QuestionUpdateDiff:
+    update = incoming if isinstance(incoming, QuestionUpdate) else QuestionUpdate.model_validate(incoming)
+    changed_fields: set[str] = set()
+    forbidden_fields: set[str] = set()
+    allowed_content_change_keys: set[str] = set()
+    regrade_fields: set[str] = set()
+    question_type = _normalize_question_type(getattr(question, "type", None))
+
+    for field, new_value in update.model_dump(exclude_unset=True).items():
+        if field == "knowledge_point_ids":
+            old_value = _extract_question_attr(question, field)
+            normalized_new = _normalize_uuid_list(new_value or [])
+            if old_value != normalized_new:
+                changed_fields.add(field)
+            continue
+
+        if field == "tag_ids":
+            old_value = _extract_question_attr(question, field)
+            normalized_new = _normalize_uuid_list(new_value or [])
+            if old_value != normalized_new:
+                changed_fields.add(field)
+            continue
+
+        if field == "content":
+            old_content = getattr(question, "content", None)
+            if old_content == new_value:
+                continue
+            if question_type != QuestionType.CODE.value:
+                # Compare semantic text, not exact dict — the rich-text editor
+                # may add/remove html keys or normalize tags on roundtrip.
+                if not _content_text_changed(old_content, new_value):
+                    continue
+                forbidden_fields.add("content")
+                changed_fields.add(field)
+                continue
+            changed_fields.add(field)
+
+            old_locked = _extract_locked_code_content(old_content)
+            new_locked = _extract_locked_code_content(new_value)
+            if old_locked != new_locked:
+                forbidden_fields.add("content")
+                continue
+
+            old_editable = _extract_editable_code_content(old_content)
+            new_editable = _extract_editable_code_content(new_value)
+            for key in _IN_USE_ALLOWED_CODE_CONTENT_KEYS:
+                if old_editable.get(key) != new_editable.get(key):
+                    allowed_content_change_keys.add(key)
+            if allowed_content_change_keys:
+                changed_fields.add("code_test_cases")
+                regrade_fields.add("code_test_cases")
+            continue
+
+        old_value = getattr(question, field, None)
+        if old_value != new_value:
+            changed_fields.add(field)
+            if field in _IN_USE_REGRADING_TOP_LEVEL_FIELDS:
+                regrade_fields.add(field)
+            if field in _IN_USE_FORBIDDEN_TOP_LEVEL_FIELDS:
+                forbidden_fields.add(field)
+
+    return QuestionUpdateDiff(
+        changed_fields=changed_fields,
+        forbidden_fields=forbidden_fields,
+        allowed_content_change_keys=allowed_content_change_keys,
+        regrade_fields=regrade_fields,
+    )
+
+
+def validate_in_use_question_update(question: Question | Any, diff: QuestionUpdateDiff) -> None:
+    del question
+    if diff.forbidden_fields:
+        raise ValueError(IN_USE_QUESTION_EDIT_ERROR)
+
+    disallowed_fields = diff.changed_fields - _IN_USE_ALLOWED_TOP_LEVEL_FIELDS - {"content"}
+    if disallowed_fields:
+        raise ValueError(IN_USE_QUESTION_EDIT_ERROR)
+
+    if "content" in diff.changed_fields and not diff.allowed_content_change_keys:
+        raise ValueError(IN_USE_QUESTION_EDIT_ERROR)
+
+
+def question_update_requires_regrade(question: Question | Any, diff: QuestionUpdateDiff) -> bool:
+    del question
+    return bool(diff.regrade_fields)
+
+
+async def build_question_edit_lock_info(db: AsyncSession, question_id: uuid.UUID) -> QuestionEditLockInfo:
+    in_use = await question_is_in_use(db, question_id)
+    has_submitted_attempts = await question_has_submitted_attempts(db, question_id)
+    return QuestionEditLockInfo(
+        in_use=in_use,
+        allowed_fields=IN_USE_ALLOWED_FIELDS if in_use else [],
+        regrade_on_fields=IN_USE_REGRADE_FIELDS if in_use else [],
+        has_submitted_attempts=has_submitted_attempts,
+    )
+
+
 async def update_question(db: AsyncSession, question: Question, data: QuestionUpdate) -> Question:
     update_data = data.model_dump(exclude_unset=True, exclude={"tag_ids", "knowledge_point_ids"})
     for field, value in update_data.items():
@@ -341,6 +608,154 @@ async def update_question(db: AsyncSession, question: Question, data: QuestionUp
         ).where(Question.id == question.id)
     )
     return refreshed.unique().scalar_one()  # type: ignore[return-value]
+
+
+async def regrade_submitted_attempts_for_question_update(
+    question_id: uuid.UUID,
+    regrade_fields: set[str] | list[str],
+) -> None:
+    from app.exams.student_router import (
+        _build_grading_task_payload,
+        _get_active_role_binding_version,
+        _grade_question_with_ai,
+        _is_subjective_question_type,
+        _run_subjective_grading_tasks,
+    )
+    from app.exams.models import GradingStatus
+    from app.grading.service import (
+        _recompute_historical_submission_scores,
+        _recompute_submission_scores,
+        create_grading_task,
+    )
+
+    normalized_fields = set(regrade_fields)
+    if not normalized_fields:
+        return
+
+    async with async_session() as db:
+        question = await db.get(Question, question_id)
+        if question is None:
+            return
+
+        attempts = await list_submitted_attempts_for_question_regrade(db, question_id)
+        if not attempts:
+            return
+
+        task_ids: list[str] = []
+        role_binding_version: int | None = None
+
+        for attempt in attempts:
+            exam = await db.get(Exam, attempt.exam_id)
+            if exam is None or exam.deleted_at is not None:
+                continue
+
+            exam_question = (
+                await db.execute(
+                    select(ExamQuestion).where(
+                        ExamQuestion.exam_id == attempt.exam_id,
+                        ExamQuestion.question_id == question_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if exam_question is None:
+                continue
+
+            exam_student = (
+                await db.execute(
+                    select(ExamStudent).where(
+                        ExamStudent.exam_id == attempt.exam_id,
+                        ExamStudent.student_id == attempt.student_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if exam_student is None:
+                continue
+
+            submission = await db.get(StudentExamSubmission, attempt.submission_id)
+            if submission is None:
+                continue
+
+            submission_answer = (
+                await db.execute(
+                    select(StudentExamSubmissionAnswer).where(
+                        StudentExamSubmissionAnswer.submission_id == attempt.submission_id,
+                        StudentExamSubmissionAnswer.question_id == question_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if submission_answer is None:
+                continue
+
+            live_answer = (
+                await db.execute(
+                    select(StudentExamAnswer).where(
+                        StudentExamAnswer.exam_id == attempt.exam_id,
+                        StudentExamAnswer.student_id == attempt.student_id,
+                        StudentExamAnswer.question_id == question_id,
+                    )
+                )
+            ).scalar_one_or_none()
+
+            question_type = question.type.value if isinstance(question.type, QuestionType) else str(question.type)
+            question_score = exam_question.score_override if exam_question.score_override is not None else question.score
+
+            if _is_subjective_question_type(question_type):
+                if role_binding_version is None:
+                    role_binding_version = await _get_active_role_binding_version(db)
+                task = await create_grading_task(
+                    db,
+                    _build_grading_task_payload(
+                        exam=exam,
+                        question=question,
+                        question_score=question_score,
+                        answer_content=dict(submission_answer.answer_content or {}),
+                        role_binding_version=role_binding_version,
+                        source_business_id=f"{attempt.exam_id}:{question_id}:{attempt.student_id}:{attempt.submission_id}",
+                    ),
+                )
+                task_ids.append(str(task.id))
+                submission.grading_status = GradingStatus.PENDING_AI.value
+                if exam_student.latest_submission_id == attempt.submission_id:
+                    exam_student.grading_status = GradingStatus.PENDING_AI.value
+                    exam_student.ai_scored_at = None
+                    exam_student.reviewed_at = None
+                    exam_student.graded_at = None
+                continue
+
+            score_awarded, is_correct, feedback = await _grade_question_with_ai(
+                question,
+                dict(submission_answer.answer_content or {}),
+                float(question_score),
+            )
+            submission_answer.score_awarded = score_awarded
+            submission_answer.is_correct = is_correct
+            submission_answer.feedback = feedback
+
+            submission_objective_score, submission_subjective_score = await _recompute_historical_submission_scores(
+                db,
+                submission_id=attempt.submission_id,
+            )
+            submission.objective_score = submission_objective_score
+            submission.subjective_score = submission_subjective_score
+            submission.score = round(submission_objective_score + submission_subjective_score, 2)
+
+            if exam_student.latest_submission_id == attempt.submission_id and live_answer is not None:
+                live_answer.score_awarded = score_awarded
+                live_answer.is_correct = is_correct
+                live_answer.feedback = feedback
+                objective_score, subjective_score = await _recompute_submission_scores(
+                    db,
+                    exam_id=attempt.exam_id,
+                    student_id=attempt.student_id,
+                )
+                exam_student.objective_score = objective_score
+                exam_student.subjective_score = subjective_score
+                exam_student.score = round(objective_score + subjective_score, 2)
+
+        await db.commit()
+
+        if task_ids:
+            await _run_subjective_grading_tasks(task_ids)
 
 
 async def soft_delete_question(db: AsyncSession, question: Question) -> None:
@@ -955,6 +1370,18 @@ def _extract_options(
     if options:
         return options, consumed_indexes
 
+    # Detect inline options on a single line: "题干 A. opt1 B. opt2 C. opt3 D. opt4"
+    _INLINE_OPTIONS_RE = re.compile(r"(?:^|\s)([A-H])[\.．、\)]\s*(.+?)(?=\s+[A-H][\.．、\)]|$)")
+    if len(lines) == 1:
+        matches = list(_INLINE_OPTIONS_RE.finditer(lines[0]))
+        if len(matches) >= 2:
+            for match in matches:
+                key = match.group(1).upper()
+                value = match.group(2).strip()
+                if key not in options:
+                    options[key] = value
+            return options, {0}
+
     tagged_lines: list[tuple[int, TaggedListLine]] = []
     for index, line in enumerate(lines):
         tagged = _parse_tagged_list_line(line)
@@ -1244,9 +1671,18 @@ def _is_paper_import_context(payload: QuestionImportDocumentRecognizeRequest) ->
 
 
 def _table_to_import_text(table: QuestionImportTableInput) -> str:
-    lines = [f"[TABLE:{table.order}]"]
-    lines.extend(" | ".join(cell.strip() for cell in row) for row in table.rows if any(cell.strip() for cell in row))
-    return "\n".join(lines)
+    rendered_rows = [
+        "| " + " | ".join(cell.strip() for cell in row) + " |"
+        for row in table.rows
+        if any(cell.strip() for cell in row)
+    ]
+    if not rendered_rows:
+        return f"[TABLE:{table.order}]"
+    if len(rendered_rows) > 1:
+        column_count = max(row.count("|") - 1 for row in rendered_rows)
+        separator = "| " + " | ".join(["---"] * max(column_count, 1)) + " |"
+        rendered_rows.insert(1, separator)
+    return "\n".join([f"[TABLE:{table.order}]", *rendered_rows])
 
 
 def _looks_like_paper_header_or_answer_sheet(line: str) -> bool:
@@ -1285,10 +1721,11 @@ def _looks_like_answer_sheet_number_row(line: str) -> bool:
 
 
 def _looks_like_paper_section_heading(line: str) -> bool:
+    line = line.strip()
     return bool(
         re.match(
-            rf"^[一二三四五六七八九十]+[、.．\s]\s*({_QUESTION_TYPE_KEYWORD_PATTERN})",
-            line.strip(),
+            rf"^(?:[一二三四五六七八九十]+[、.．\s]\s*)?({_QUESTION_TYPE_KEYWORD_PATTERN})",
+            line,
         )
     )
 
@@ -1324,14 +1761,32 @@ def preprocess_paper_import_text(
             continue
         kept.append(line)
 
-    table_texts = [
-        _table_to_import_text(table)
+    eligible_tables = {
+        table.order: table
         for table in tables
         if table.rows and not any("得分统计表" in "".join(row) or "选择题答案" in "".join(row) for row in table.rows)
-    ]
+    }
     body = "\n".join(kept).strip()
-    if table_texts:
-        body = "\n\n".join(part for part in [body, *table_texts] if part)
+
+    referenced_orders: set[int] = set()
+
+    def replace_marker(match: re.Match[str]) -> str:
+        order = int(match.group(1))
+        referenced_orders.add(order)
+        table = eligible_tables.get(order)
+        if table is None:
+            return ""
+        return _table_to_import_text(table)
+
+    body = re.sub(r"\[TABLE:(\d+)\]", replace_marker, body)
+
+    leftover_table_texts = [
+        _table_to_import_text(table)
+        for order, table in eligible_tables.items()
+        if order not in referenced_orders
+    ]
+    if leftover_table_texts:
+        body = "\n\n".join(part for part in [body, *leftover_table_texts] if part)
     return body or raw_text
 
 
@@ -1411,6 +1866,9 @@ def _build_document_ai_prompt(
 - 答题卡/答案填写表不是题目，例如只包含 1. 2. 3...25. 的编号表格不要生成空题；它只能作为题量线索。
 - 不要因为答题卡编号臆造空题。只输出实际看到完整题干的题目。
 - 填空题（fill_in）的 content_text 必须用 "_____"（至少 4 个连续下划线）替代原文中需要学生填写的内容。例如原文"大数据的4V特征是海量（Volume）、高速（Velocity）"，应输出 content_text 为"大数据的4V特征是_____（_____）、_____（_____）"或类似形式。重点：用 "_____" 替换掉答案文字本身，不要保留答案在题干中，也不要只在末尾追加空位。
+- 选择题可能把选项写在题干同一行内（如"题目内容 A. 选项1 B. 选项2 C. 选项3 D. 选项4"），需要提取到 options 字段中并把选项文本从 content_text 移除。
+- 若同一段落中出现了两道题（格式异常），尝试拆分为两条独立题目。
+- 文本中可能出现表格块，格式为：第一行 [TABLE:N] 标记，紧跟若干行 Markdown 风格的表格行（"| 单元格1 | 单元格2 | ... |"），其中可能含一行 "| --- | --- | --- |" 分隔行。表格属于其紧邻上文（同一道题题干）的一部分，必须把整张表完整保留在该题的 content_text 中（保留 Markdown 表格语法即可，去掉 [TABLE:N] 标记本身）。绝不可丢弃表格、不可把表格行单独成题、不可把表格当作多个题目；即使表格行以数字（如 "128.96.39.0"）开头也不是新题的起点。
 """
     custom_rules = ""
     if recognition_prompt and recognition_prompt.strip():
@@ -1730,39 +2188,46 @@ def _question_duplicate_signature(data: QuestionCreate | Question) -> str:
     )
 
 
-async def _existing_question_signatures(db: AsyncSession, user_id: uuid.UUID) -> set[str]:
+async def _existing_question_signatures(db: AsyncSession, user_id: uuid.UUID) -> dict[str, uuid.UUID]:
     rows = await db.execute(
         select(Question).where(
             Question.owner_id == user_id,
             Question.deleted_at.is_(None),
         )
     )
-    return {_question_duplicate_signature(question) for question in rows.scalars().all()}
+    return {
+        _question_duplicate_signature(question): question.id
+        for question in rows.scalars().all()
+    }
 
 
 async def bulk_create_questions(
     db: AsyncSession, questions: list[QuestionCreate], user_id: uuid.UUID
 ) -> BulkCreateQuestionsResult:
     """Create questions while skipping items already present in the user's database."""
-    existing_signatures = await _existing_question_signatures(db, user_id)
+    existing_map = await _existing_question_signatures(db, user_id)
     created_question_ids: list[uuid.UUID] = []
     created_questions: list[QuestionCreate] = []
+    existing_question_ids: list[uuid.UUID] = []
     existing = 0
 
     for data in questions:
         signature = _question_duplicate_signature(data)
-        if signature in existing_signatures:
+        existing_id = existing_map.get(signature)
+        if existing_id is not None:
             existing += 1
+            existing_question_ids.append(existing_id)
             continue
         question = await create_question(db, data, user_id)
         created_question_ids.append(question.id)
         created_questions.append(data)
-        existing_signatures.add(signature)
+        existing_map[signature] = question.id
 
     return BulkCreateQuestionsResult(
         created_question_ids=created_question_ids,
         created_questions=created_questions,
         existing=existing,
+        existing_question_ids=existing_question_ids,
     )
 
 
@@ -1789,10 +2254,13 @@ async def bulk_create_questions_fast(
     created_questions: list[Question] = []
     created_question_inputs: list[QuestionCreate] = []
     existing = 0
+    existing_question_ids: list[uuid.UUID] = []
     for data in questions:
         signature = _question_duplicate_signature(data)
-        if signature in existing_signatures:
+        existing_id = existing_signatures.get(signature)
+        if existing_id is not None:
             existing += 1
+            existing_question_ids.append(existing_id)
             continue
         question = Question(
             type=data.type,
@@ -1817,7 +2285,7 @@ async def bulk_create_questions_fast(
             ]
         created_questions.append(question)
         created_question_inputs.append(data)
-        existing_signatures.add(signature)
+        existing_signatures[signature] = question.id
 
     db.add_all(created_questions)
     await db.flush()
@@ -1825,6 +2293,7 @@ async def bulk_create_questions_fast(
         created_question_ids=[question.id for question in created_questions],
         created_questions=created_question_inputs,
         existing=existing,
+        existing_question_ids=existing_question_ids,
     )
 
 
@@ -2190,3 +2659,153 @@ async def save_generated_questions_to_default_course_bank(
         for question in questions
     ]
     return await bulk_create_questions(db, scoped_questions, user_id)
+
+
+# --- Import Enhancement ---
+
+
+def _build_enhance_kp_candidates(
+    all_candidates: list[KnowledgePoint],
+    keywords: set[str],
+) -> list[dict]:
+    """Pre-filter and format KP candidates for the enhance AI prompt."""
+    MAX_CANDIDATES = 25
+    if len(all_candidates) > MAX_CANDIDATES and keywords:
+        scored = [
+            (
+                _keyword_score(kp.name, keywords) + _keyword_score(kp.description or "", keywords),
+                kp,
+            )
+            for kp in all_candidates
+        ]
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        filtered = [kp for _, kp in scored[:MAX_CANDIDATES]]
+    else:
+        filtered = list(all_candidates)
+
+    return [
+        {
+            "id": str(kp.id),
+            "name": kp.name,
+            "description": (kp.description or "").strip()[:200],
+        }
+        for kp in filtered
+    ]
+
+
+async def _enhance_single_draft(
+    draft: EnhanceDraftInput,
+    candidates_json: list[dict],
+    candidates_map: dict[uuid.UUID, str],
+) -> EnhancedDraft:
+    """Run combined answer check + KP matching for one draft via AI."""
+    options_str = ""
+    if draft.options:
+        options_str = json.dumps(draft.options, ensure_ascii=False)
+
+    prompt = f"""你是教研助手。给你一道题目和候选知识点，请同时完成两项任务：
+
+任务1 — 答案处理：
+- 如果题目没有提供答案，请为这道题生成标准答案。
+- 如果题目已有答案，请检查答案是否正确。如果答案有疑问（如明显错误、不完整、或与题目内容矛盾），标记 doubt=true 并说明原因。
+- answer_text 只返回答案本身，不要包含解析或说明。
+
+任务2 — 知识点匹配：
+- 从候选知识点列表中选择与题目内容最相关的 0-3 个知识点。
+- 只能使用候选 id，不要编造。
+- 若没有明显相关的，返回空数组。
+
+题目类型：{draft.type}
+题目内容：{draft.content_text[:2000]}
+选项：{options_str or "（无）"}
+当前答案：{draft.answer_text or "（无）"}
+候选知识点（JSON 列表）：
+{json.dumps(candidates_json, ensure_ascii=False)}
+
+只返回合法 JSON：
+{{"answer_text":"...", "doubt":true/false, "doubt_reason":"..."|null, "matched_kp_ids":["uuid1","uuid2"]}}""".strip()
+
+    try:
+        data = await _request_deepseek_json(prompt)
+    except Exception:
+        return EnhancedDraft(draft_id=draft.draft_id)
+
+    answer_text = str(data.get("answer_text", "")).strip() or None
+    doubt = bool(data.get("doubt", False))
+    doubt_reason = str(data.get("doubt_reason", "")).strip() or None
+
+    matched_kp_ids = data.get("matched_kp_ids") if isinstance(data, dict) else None
+    suggested: list[KnowledgePointSuggestion] = []
+    if isinstance(matched_kp_ids, list):
+        for raw in matched_kp_ids:
+            try:
+                kp_id = uuid.UUID(str(raw))
+            except (TypeError, ValueError):
+                continue
+            name = candidates_map.get(kp_id)
+            if name:
+                suggested.append(KnowledgePointSuggestion(id=kp_id, name=name))
+
+    return EnhancedDraft(
+        draft_id=draft.draft_id,
+        answer_text=answer_text,
+        doubt=doubt,
+        doubt_reason=doubt_reason,
+        suggested_knowledge_points=suggested,
+    )
+
+
+async def enhance_import_drafts(
+    db: AsyncSession,
+    drafts: list[EnhanceDraftInput],
+    root_knowledge_point_id: uuid.UUID,
+) -> list[EnhancedDraft]:
+    """Batch-enhance import drafts: answer completion/check + KP matching."""
+    candidates = await _load_root_descendant_knowledge_points(db, root_knowledge_point_id)
+    candidates_map = {kp.id: kp.name for kp in candidates}
+
+    semaphore = asyncio.Semaphore(5)
+
+    async def process_one(draft: EnhanceDraftInput) -> EnhancedDraft:
+        async with semaphore:
+            keywords = _extract_keywords_from_text(
+                f"{draft.content_text} {' '.join(draft.options.values()) if draft.options else ''}"
+            )
+            kp_candidates = _build_enhance_kp_candidates(candidates, keywords)
+            return await _enhance_single_draft(draft, kp_candidates, candidates_map)
+
+    return await asyncio.gather(*(process_one(d) for d in drafts))
+
+
+async def enhance_import_drafts_stream(
+    db: AsyncSession,
+    drafts: list[EnhanceDraftInput],
+    root_knowledge_point_id: uuid.UUID,
+):
+    """Stream-enhanced version: yields (index, EnhancedDraft) as each draft completes."""
+    candidates = await _load_root_descendant_knowledge_points(db, root_knowledge_point_id)
+    candidates_map = {kp.id: kp.name for kp in candidates}
+
+    semaphore = asyncio.Semaphore(5)
+
+    async def process_one(index: int, draft: EnhanceDraftInput) -> tuple[int, EnhancedDraft]:
+        async with semaphore:
+            keywords = _extract_keywords_from_text(
+                f"{draft.content_text} {' '.join(draft.options.values()) if draft.options else ''}"
+            )
+            kp_candidates = _build_enhance_kp_candidates(candidates, keywords)
+            result = await _enhance_single_draft(draft, kp_candidates, candidates_map)
+            return index, result
+
+    tasks = [process_one(i, d) for i, d in enumerate(drafts)]
+    for coro in asyncio.as_completed(tasks):
+        index, result = await coro
+        yield index, result
+
+
+def _extract_keywords_from_text(source: str) -> set[str]:
+    """Extract meaningful keyword tokens for KP pre-filtering from raw text."""
+    tokens: set[str] = set()
+    for match in re.finditer(r"[一-鿿]{2,}|[a-zA-Z0-9]{3,}", source):
+        tokens.add(match.group(0).lower())
+    return tokens

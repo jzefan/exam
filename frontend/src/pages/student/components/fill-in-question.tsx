@@ -7,12 +7,23 @@ interface Props {
   onChange: (answer: Record<string, unknown>) => void;
 }
 
+const BLANK_PLACEHOLDER_RE = /_{3,}|（\s*）|\(\s*\)|【\s*】/g;
+
+function inferBlankCount(content: { text?: string; blank_count?: number }, fallbackText: string) {
+  if (typeof content.blank_count === "number" && content.blank_count > 0) {
+    return content.blank_count;
+  }
+  const text = content.text ?? fallbackText;
+  const matches = text.match(BLANK_PLACEHOLDER_RE);
+  return Math.max(matches?.length ?? 0, 1);
+}
+
 export function FillInQuestion({ question, answer, onChange }: Props) {
   const content = question.content as {
     text?: string;
     blank_count?: number;
   };
-  const blankCount = content.blank_count ?? 1;
+  const blankCount = inferBlankCount(content, question.title);
   const blanks = (answer?.blanks as string[]) ?? Array(blankCount).fill("");
 
   const updateBlank = (index: number, value: string) => {

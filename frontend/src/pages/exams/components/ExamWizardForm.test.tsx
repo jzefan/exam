@@ -143,7 +143,7 @@ function createInitialValues(): ExamFormValues {
     position_id: null,
     max_switch_count: 2,
     allow_retake: false,
-    show_result: false,
+    show_result: true,
     notes_template: DEFAULT_NOTES,
     question_mode: "manual",
     question_ids: ["question-1"],

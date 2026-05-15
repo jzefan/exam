@@ -4,7 +4,10 @@ from app.auth.schemas import UserCreate
 from app.auth.security import create_access_token
 from app.auth.service import create_user
 from app.rbac.models import Organization, Role, UserOrganization
-from app.questions.schemas import QuestionImportDocumentRecognizeResponse
+from app.questions.schemas import (
+    QuestionImportDocumentRecognizeResponse,
+    QuestionImportTableInput,
+)
 from app.questions.service import (
     build_import_draft_from_segment,
     detect_import_template_mode,
@@ -356,6 +359,39 @@ def test_build_import_draft_does_not_treat_simple_stem_as_question_type_keyword(
 
     assert draft.type == "short_answer"
     assert draft.content_text == "简单说明数据库事务的概念。"
+
+
+def test_paper_preprocess_splices_table_into_marker_position_and_does_not_split_question() -> None:
+    raw_text = """
+一、单项选择题
+3. 设某路由器建立了如下转发表
+
+[TABLE:1]
+
+现共收到 5 个分组，试分别计算其下一跳。
+"""
+    table = QuestionImportTableInput(
+        order=1,
+        rows=[
+            ["目的网络", "子网掩码", "下一跳"],
+            ["128.96.39.0", "255.255.255.128", "接口 m0"],
+            ["192.4.153.0", "255.255.255.192", "R3"],
+        ],
+    )
+
+    preprocessed = preprocess_paper_import_text(raw_text, [table])
+
+    assert "[TABLE:1]" in preprocessed
+    assert "| 目的网络 | 子网掩码 | 下一跳 |" in preprocessed
+    assert "| 128.96.39.0 | 255.255.255.128 | 接口 m0 |" in preprocessed
+    assert preprocessed.index("设某路由器") < preprocessed.index("128.96.39.0")
+    assert preprocessed.index("128.96.39.0") < preprocessed.index("现共收到")
+
+    segments = segment_question_document(preprocessed)
+    # All table rows + the question stem + the trailing sentence must remain one question.
+    assert len(segments) == 1
+    assert "128.96.39.0" in segments[0].raw_text
+    assert "现共收到" in segments[0].raw_text
 
 
 def test_paper_preprocess_drops_cover_before_first_chinese_type_heading() -> None:

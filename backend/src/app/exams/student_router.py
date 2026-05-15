@@ -1,4 +1,7 @@
 import asyncio
+import json
+import logging
+import os
 import re
 import uuid
 from copy import deepcopy
@@ -6,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, WebSocket, WebSocketException, status
+import httpx
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,11 +52,18 @@ from app.exams.student_schemas import (
     WrongAnswerDetailResponse,
     WrongAnswerListItem,
 )
-from app.grading.models import RoleBinding
-from app.grading.service import apply_grading_task_result_to_exam_submission, create_grading_task, run_grading_task_with_role_binding
+from app.grading.models import GradingAuditEvent, GradingTask, RoleBinding
+from app.grading.service import (
+    apply_grading_task_failure_to_exam_submission,
+    apply_grading_task_result_to_exam_submission,
+    create_grading_task,
+    run_grading_task_with_role_binding,
+)
 from app.lsp_runner.client import proxy_lsp_websocket
 from app.lsp_runner.schemas import LspGatewaySession, LspLanguage, SUPPORTED_LSP_LANGUAGES
 from app.questions.models import Question, QuestionType
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 wrong_answers_router = APIRouter()
@@ -76,6 +87,143 @@ def _strip_html(value: str | None) -> str:
         return ""
     without_tags = re.sub(r"<[^>]+>", " ", value)
     return re.sub(r"\s+", " ", without_tags).strip()
+
+
+_FILL_IN_BLANK_PLACEHOLDER_RE = re.compile(r"_{3,}|（\s*）|\(\s*\)|【\s*】")
+_FILL_IN_EDGE_PUNCT_RE = re.compile(r"^[\s,，、.。．;；:：]+|[\s,，、.。．;；:：]+$")
+_FILL_IN_GRADING_MODEL = "deepseek-v4-flash"
+
+
+def _get_fill_in_expected_answers(answer: dict[str, Any]) -> list[str]:
+    raw = answer.get("blanks")
+    if raw is None:
+        raw = answer.get("correct")
+    if isinstance(raw, list):
+        return [str(item) for item in raw]
+    if raw is None:
+        return []
+    return [str(raw)]
+
+
+def _count_fill_in_placeholders(content: dict[str, Any]) -> int:
+    text = content.get("text") or content.get("html") or ""
+    if not isinstance(text, str):
+        return 0
+    return len(_FILL_IN_BLANK_PLACEHOLDER_RE.findall(text))
+
+
+def _normalize_fill_in_text(value: str) -> str:
+    return _FILL_IN_EDGE_PUNCT_RE.sub("", _normalize_text(value))
+
+
+def _is_fill_in_exact_match(actual: str, expected: str) -> bool:
+    return _normalize_fill_in_text(actual) == _normalize_fill_in_text(expected)
+
+
+
+
+def _parse_json_response_payload(content: str) -> Any:
+    payload = content.strip()
+    if payload.startswith("```"):
+        payload = re.sub(r"^```[a-zA-Z]*\s*", "", payload)
+        payload = re.sub(r"\s*```\s*$", "", payload)
+    return json.loads(payload)
+
+
+def _trim_grading_background_error(value: str | None, max_length: int = 240) -> str | None:
+    if not value:
+        return None
+    compact = re.sub(r"\s+", " ", value).strip()
+    if len(compact) <= max_length:
+        return compact
+    return f"{compact[: max_length - 1].rstrip()}…"
+
+
+def _get_question_plain_text(question: Question) -> str:
+    content = question.content if isinstance(question.content, dict) else {}
+    text = content.get("text") or content.get("html") or question.title
+    return _strip_html(str(text))
+
+
+async def _request_fill_in_equivalence_with_deepseek(
+    *,
+    question_text: str,
+    expected_answers: list[str],
+    student_answers: list[str],
+) -> list[dict[str, Any]]:
+    if not settings.deepseek_api_key:
+        raise RuntimeError("未配置 DeepSeek API Key")
+
+    prompt = f"""
+你是考试填空题自动批改助手。请判断学生每个填空答案是否可接受。
+
+判定原则：
+1. 不要求字符串完全相同，允许大小写、末尾标点、轻微格式差异、常见中英文术语写法差异。
+2. 只有语义或术语确实等价时才判为正确，不能因为主题相关就判正确。
+3. 每个空独立判定，不要跨空合并给分。
+4. 技术类等价写法应视为正确，包括但不限于：
+   - 模块/包路径：学生只写末尾组件也算正确，例如标准答案为 numpy.random，学生答 random，应给分；matplotlib.pyplot → pyplot 同理。
+   - 函数/方法引用：省略类名或模块前缀但指向同一目标时，视为正确。
+   - 数据类型别名：如 int64 与 numpy.int64、str 与 String 在特定语境下等价。
+   - 命令/路径：允许省略可推断的前缀或后缀（如文件扩展名、绝对路径中的公共前缀）。
+5. 若学生写的是标准答案的合理缩写、别名或惯用简写（如 pd 代表 pandas、np 代表 numpy），且在题干语境下无歧义，应视为正确。
+
+题干：{question_text}
+标准答案：{json.dumps(expected_answers, ensure_ascii=False)}
+学生答案：{json.dumps(student_answers, ensure_ascii=False)}
+
+只输出 JSON：
+{{
+  "matches": [
+    {{"is_correct": true, "reason": "简短理由"}}
+  ]
+}}
+matches 的长度必须等于标准答案长度，顺序与标准答案一致。
+"""
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{settings.deepseek_base_url.rstrip('/')}/chat/completions",
+            headers={"Authorization": f"Bearer {settings.deepseek_api_key}"},
+            json={
+                "model": _FILL_IN_GRADING_MODEL,
+                "messages": [
+                    {"role": "system", "content": "你只输出合法 JSON，不要输出 Markdown。"},
+                    {"role": "user", "content": prompt.strip()},
+                ],
+                "temperature": 0,
+                "max_tokens": 2000,
+            },
+        )
+
+    if response.status_code >= 400:
+        raise RuntimeError(response.text.strip() or "DeepSeek 填空题判分失败")
+
+    content = response.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError("DeepSeek 没有返回填空题判分结果")
+
+    payload = _parse_json_response_payload(content)
+    matches = payload.get("matches") if isinstance(payload, dict) else payload
+    if not isinstance(matches, list):
+        raise RuntimeError("DeepSeek 填空题判分结果格式无效")
+    return [item for item in matches if isinstance(item, dict)]
+
+
+def _build_student_question_content(question: Question) -> dict[str, Any]:
+    content = deepcopy(question.content) if isinstance(question.content, dict) else {}
+    question_type = question.type.value if isinstance(question.type, QuestionType) else str(question.type)
+    if question_type != QuestionType.FILL_IN.value:
+        return content
+
+    explicit_count = content.get("blank_count")
+    counts = [
+        explicit_count if isinstance(explicit_count, int) and explicit_count > 0 else 0,
+        len(_get_fill_in_expected_answers(question.answer or {})),
+        _count_fill_in_placeholders(content),
+    ]
+    content["blank_count"] = max(counts) or 1
+    return content
 
 
 def _extract_answer_text(answer_content: dict[str, Any]) -> str:
@@ -224,20 +372,118 @@ def _build_grading_task_payload(
     }
 
 
+# Cap concurrent LLM grading calls. Providers rate-limit aggressively, and we
+# share this budget across all in-flight submissions on the worker. Set via env
+# if more parallelism is safe for your account.
+_GRADING_CONCURRENCY = int(os.environ.get("EXAM_GRADING_CONCURRENCY", "3") or 3)
+
+
 async def _run_subjective_grading_tasks(task_ids: list[str]) -> None:
+    """Drive a batch of grading tasks with bounded concurrency.
+
+    Each task owns its own DB session so a failure in one cannot poison the
+    others' transaction state. Concurrency is bounded by ``_GRADING_CONCURRENCY``
+    to avoid stampeding the upstream LLM provider.
+    """
+    if not task_ids:
+        return
+    semaphore = asyncio.Semaphore(_GRADING_CONCURRENCY)
+
+    async def _run(task_id: str) -> None:
+        async with semaphore:
+            await _run_single_subjective_grading_task(task_id)
+
+    await asyncio.gather(*[_run(task_id) for task_id in task_ids], return_exceptions=True)
+
+
+async def _run_single_subjective_grading_task(task_id: str) -> None:
     async with async_session() as db:
-        for task_id in task_ids:
-            try:
-                await run_grading_task_with_role_binding(db, task_id)
-                await apply_grading_task_result_to_exam_submission(db, task_id)
+        try:
+            result = await run_grading_task_with_role_binding(db, task_id)
+            await db.commit()
+        except Exception as exc:
+            await db.rollback()
+            task = await db.get(GradingTask, uuid.UUID(task_id))
+            if task is not None:
+                task.status = "failed"
+                db.add(
+                    GradingAuditEvent(
+                        task_id=task.id,
+                        event_type="grading.failed",
+                        event_payload={
+                            "message": str(exc),
+                            "detail": _trim_grading_background_error(str(exc)),
+                            "stage": "dispatch",
+                        },
+                        operator_type="system",
+                        operator_id="system",
+                    )
+                )
                 await db.commit()
-            except Exception:
-                await db.rollback()
+            await _reconcile_failed_grading_task(db, task_id, reason=str(exc))
+            logger.exception("subjective grading task %s failed", task_id)
+            return
+
+        task_status = result.get("status")
+        if task_status == "arbitration_required":
+            await _reconcile_failed_grading_task(
+                db,
+                task_id,
+                reason=result.get("reason") or "arbitration_required",
+                needs_human_review=True,
+            )
+            return
+        if task_status != "completed":
+            # Unknown non-terminal state — leave alone so retry/recovery can pick it up.
+            return
+
+        try:
+            await apply_grading_task_result_to_exam_submission(db, task_id)
+            await db.commit()
+        except Exception as exc:
+            await db.rollback()
+            task = await db.get(GradingTask, uuid.UUID(task_id))
+            if task is not None:
+                db.add(
+                    GradingAuditEvent(
+                        task_id=task.id,
+                        event_type="grading.apply_failed",
+                        event_payload={
+                            "message": str(exc),
+                            "detail": _trim_grading_background_error(str(exc)),
+                        },
+                        operator_type="system",
+                        operator_id="system",
+                    )
+                )
+                await db.commit()
+            await _reconcile_failed_grading_task(db, task_id, reason=f"apply_failed: {exc}")
+            logger.exception("subjective grading task %s failed while applying result", task_id)
 
 
-async def _schedule_subjective_grading_tasks(background_tasks: BackgroundTasks, task_ids: list[str]) -> None:
-    if task_ids:
-        background_tasks.add_task(_run_subjective_grading_tasks, task_ids)
+async def _reconcile_failed_grading_task(
+    db: AsyncSession,
+    task_id: str,
+    *,
+    reason: str,
+    needs_human_review: bool = False,
+) -> None:
+    """Write a failure marker into the affected question's feedback and
+    re-evaluate the parent exam_student.grading_status so the submission can
+    leave PENDING_AI even when this individual task did not produce a final
+    snapshot.
+    """
+    try:
+        await apply_grading_task_failure_to_exam_submission(
+            db,
+            task_id,
+            reason=reason,
+            needs_human_review=needs_human_review,
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception("failed to reconcile exam submission for task %s", task_id)
 
 
 async def _post_submit_housekeeping(
@@ -292,7 +538,10 @@ async def _post_submit_housekeeping(
                 await db.rollback()
 
     if task_ids:
-        await _run_subjective_grading_tasks(task_ids)
+        try:
+            await _run_subjective_grading_tasks(task_ids)
+        except Exception:
+            logger.exception("post submit grading housekeeping failed")
 
 
 def _build_objective_feedback(
@@ -401,6 +650,83 @@ def _build_code_feedback(
     }
 
 
+async def _grade_fill_in_question_with_ai(
+    question: Question,
+    answer_content: dict[str, Any],
+    score: float,
+) -> tuple[float, bool, dict[str, Any]]:
+    expected_list = _get_fill_in_expected_answers(question.answer or {})
+    provided = answer_content.get("blanks", [])
+    provided_list = [str(item) for item in provided] if isinstance(provided, list) else [str(provided)]
+    total = max(len(expected_list), 1)
+
+    match_flags = [False] * len(expected_list)
+    ai_reasons: dict[int, str] = {}
+    for index, expected_item in enumerate(expected_list):
+        actual = provided_list[index] if index < len(provided_list) else ""
+        match_flags[index] = _is_fill_in_exact_match(actual, expected_item)
+
+    if expected_list and not all(match_flags):
+        try:
+            ai_matches = await _request_fill_in_equivalence_with_deepseek(
+                question_text=_get_question_plain_text(question),
+                expected_answers=expected_list,
+                student_answers=[provided_list[index] if index < len(provided_list) else "" for index in range(len(expected_list))],
+            )
+            for index, item in enumerate(ai_matches[: len(expected_list)]):
+                if match_flags[index]:
+                    continue
+                if item.get("is_correct") is True:
+                    match_flags[index] = True
+                    reason = item.get("reason")
+                    if isinstance(reason, str) and reason.strip():
+                        ai_reasons[index] = reason.strip()
+        except Exception as exc:  # noqa: BLE001 - AI grading must not block exam submission.
+            logger.warning("DeepSeek fill-in grading unavailable: %s", exc)
+
+    matched = sum(1 for item in match_flags if item)
+    missing_points = [
+        f"第 {index + 1} 空应为 {expected_item}"
+        for index, expected_item in enumerate(expected_list)
+        if not match_flags[index]
+    ]
+    actual_score = round(score * matched / total, 2)
+    correct = matched == total
+    ai_strengths = [
+        f"DeepSeek 判定第 {index + 1} 空等价：{reason}"
+        for index, reason in sorted(ai_reasons.items())
+    ]
+
+    return (
+        actual_score,
+        correct,
+        {
+            "dimensions": [
+                {
+                    "name": "填空准确率",
+                    "score": actual_score,
+                    "max_score": score,
+                    "comment": f"共命中 {matched}/{total} 个空。",
+                }
+            ],
+            "strengths": ([f"命中 {matched} 个空。"] if matched else []) + ai_strengths,
+            "deductions": missing_points,
+            "suggestions": ["复查拼写、术语与顺序。"] if not correct else [],
+        },
+    )
+
+
+async def _grade_question_with_ai(
+    question: Question,
+    answer_content: dict[str, Any],
+    score: float,
+) -> tuple[float, bool, dict[str, Any]]:
+    question_type = question.type.value if isinstance(question.type, QuestionType) else str(question.type)
+    if question_type == QuestionType.FILL_IN.value:
+        return await _grade_fill_in_question_with_ai(question, answer_content, score)
+    return _grade_question(question, answer_content, score)
+
+
 def _grade_question(question: Question, answer_content: dict[str, Any], score: float) -> tuple[float, bool, dict[str, Any]]:
     question_type = question.type.value if isinstance(question.type, QuestionType) else str(question.type)
     standard_answer = question.answer or {}
@@ -442,8 +768,7 @@ def _grade_question(question: Question, answer_content: dict[str, Any], score: f
         )
 
     if question_type == QuestionType.FILL_IN.value:
-        expected = standard_answer.get("blanks", [])
-        expected_list = [str(item) for item in expected] if isinstance(expected, list) else [str(expected)]
+        expected_list = _get_fill_in_expected_answers(standard_answer)
         provided = answer_content.get("blanks", [])
         provided_list = [str(item) for item in provided] if isinstance(provided, list) else [str(provided)]
         total = max(len(expected_list), 1)
@@ -451,7 +776,7 @@ def _grade_question(question: Question, answer_content: dict[str, Any], score: f
         missing_points: list[str] = []
         for index, expected_item in enumerate(expected_list):
             actual = provided_list[index] if index < len(provided_list) else ""
-            if _normalize_text(actual) == _normalize_text(expected_item):
+            if _is_fill_in_exact_match(actual, expected_item):
                 matched += 1
             else:
                 missing_points.append(f"第 {index + 1} 空应为 {expected_item}")
@@ -699,7 +1024,7 @@ async def start_exam(
             score=eq.score_override if eq.score_override is not None else eq.question.score,
             type=eq.question.type.value,
             title=eq.question.title,
-            content=eq.question.content,
+            content=_build_student_question_content(eq.question),
             options=eq.question.options,
         )
         for eq in sorted(exam.exam_questions, key=lambda item: item.order)
@@ -892,7 +1217,7 @@ async def submit_exam(
                 )
             )
         else:
-            score_awarded, is_correct, feedback = _grade_question(question, answer_content, question_score)
+            score_awarded, is_correct, feedback = await _grade_question_with_ai(question, answer_content, question_score)
             objective_score += score_awarded
 
         answer_rows.append(
@@ -982,24 +1307,18 @@ async def get_exam_result(
     exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)
     if exam_student.submitted_at is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exam not submitted")
-    if exam_student.grading_status == GradingStatus.PENDING_AI.value:
+
+    is_pending_ai = exam_student.grading_status == GradingStatus.PENDING_AI.value
+
+    if not exam.show_result and not is_pending_ai and exam.category != "practice":
         return StudentExamResultResponse(
             exam_id=exam.id,
             title=exam.title,
             submitted_at=exam_student.submitted_at,
             total_score=exam.total_score,
             score=exam_student.score,
-            grading_status=exam_student.grading_status,
-            can_view=False,
-            blocked_reason="主观题正在进行 AI 评分，结果稍后可查看。",
-        )
-    if not exam.show_result:
-        return StudentExamResultResponse(
-            exam_id=exam.id,
-            title=exam.title,
-            submitted_at=exam_student.submitted_at,
-            total_score=exam.total_score,
-            score=exam_student.score,
+            objective_score=exam_student.objective_score,
+            subjective_score=exam_student.subjective_score,
             grading_status=exam_student.grading_status,
             can_view=False,
             blocked_reason="教师暂未开放查看结果权限",
@@ -1024,29 +1343,42 @@ async def get_exam_result(
         item.question_id: item for item in appeals_result.scalars().all()
     }
 
+    _SUBJECTIVE_TYPES = {"short_answer", "essay", "code"}
+
     question_items: list[StudentExamResultQuestionResponse] = []
     for exam_question in sorted(exam.exam_questions, key=lambda item: item.order):
         question = exam_question.question
         answer = answers.get(question.id)
         appeal = appeals.get(question.id)
+        answer_feedback = (answer.feedback or {}) if answer else {}
+        grading_failed = bool(answer_feedback.get("grading_failed"))
+        needs_human_review = bool(answer_feedback.get("needs_human_review"))
+        grading_pending = (
+            is_pending_ai
+            and question.type.value in _SUBJECTIVE_TYPES
+            and not grading_failed
+        )
         question_items.append(
             StudentExamResultQuestionResponse(
                 question_id=question.id,
                 order=exam_question.order,
                 type=question.type.value,
                 title=question.title,
-                content=question.content,
+                content=_build_student_question_content(question),
                 options=question.options,
                 total_score=exam_question.score_override if exam_question.score_override is not None else question.score,
                 score_awarded=answer.score_awarded if answer else 0.0,
                 is_correct=answer.is_correct if answer else False,
                 answer_content=answer.answer_content if answer else {},
                 standard_answer=question.answer or {},
-                analysis=question.analysis,
-                feedback=answer.feedback if answer else {},
+                analysis=question.analysis if (exam.show_result or exam.category == "practice") else None,
+                feedback=answer.feedback if answer and (exam.show_result or exam.category == "practice") else {},
                 appeal_status=appeal.status if appeal else None,
                 appeal_reason=appeal.reason if appeal else None,
                 appeal_reply=appeal.teacher_reply if appeal else None,
+                grading_pending=grading_pending,
+                grading_failed=grading_failed,
+                needs_human_review=needs_human_review,
             )
         )
 
@@ -1056,10 +1388,80 @@ async def get_exam_result(
         submitted_at=exam_student.submitted_at,
         total_score=exam.total_score,
         score=exam_student.score,
+        objective_score=exam_student.objective_score,
+        subjective_score=exam_student.subjective_score,
         grading_status=exam_student.grading_status,
         can_view=True,
+        blocked_reason=(
+            "主观题正在进行 AI 评分，主观题分数将在评估完成后更新。客观题分数已可见。"
+            if is_pending_ai
+            else None
+        ),
         questions=question_items,
     )
+
+
+@router.post(
+    "/exams/{exam_id}/questions/{question_id}/regrade",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def regrade_subjective_question(
+    exam_id: uuid.UUID,
+    question_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+) -> dict[str, str]:
+    """Re-run AI grading for a single subjective question whose latest task ended
+    in ``failed`` or ``arbitration_required``.
+
+    Used by the student result page's "重新评分" button so students aren't
+    stranded when an LLM call failed once. Limited to the student's own
+    submitted exam.
+    """
+    exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)
+    if exam_student.submitted_at is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exam not submitted")
+
+    submission_id = exam_student.latest_submission_id
+    if submission_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found")
+
+    locator_prefix = f"{exam_id}:{question_id}:{user.id}:{submission_id}"
+    task_row = await db.execute(
+        select(GradingTask)
+        .where(
+            GradingTask.source_type == "exam_submission",
+            GradingTask.source_business_id == locator_prefix,
+        )
+        .order_by(GradingTask.created_at.desc())
+        .limit(1)
+    )
+    task = task_row.scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grading task not found")
+
+    if task.status not in {"failed", "arbitration_required"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="该题目当前评分状态不允许重新评分",
+        )
+
+    task.status = "pending"
+    db.add(
+        GradingAuditEvent(
+            task_id=task.id,
+            event_type="grading.regrade_requested",
+            event_payload={"requested_by": "student"},
+            operator_type="student",
+            operator_id=str(user.id),
+        )
+    )
+    exam_student.grading_status = GradingStatus.PENDING_AI.value
+    await db.commit()
+
+    background_tasks.add_task(_run_subjective_grading_tasks, [str(task.id)])
+    return {"task_id": str(task.id), "status": "pending"}
 
 
 @router.get("/notifications/unread", response_model=list[StudentNotificationResponse])

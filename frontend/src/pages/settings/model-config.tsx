@@ -53,7 +53,7 @@ const PROVIDERS = [
     value: "qwen",
     title: "阿里百炼",
     providerLabel: "阿里百炼",
-    defaultModel: "qwen-3.6",
+    defaultModel: "qwen-plus",
     capabilityTags: ["工具调用", "推理模式"],
   },
   {

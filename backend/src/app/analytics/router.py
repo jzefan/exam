@@ -164,7 +164,7 @@ async def get_dashboard_stats(
                 User.deleted_at.is_(None),
             )
         )
-        if role_name == "teacher":
+        if role_name in {"teacher", "evaluator"}:
             student_count_query = (
                 student_count_query
                 .join(TeacherStudent, TeacherStudent.student_id == User.id)

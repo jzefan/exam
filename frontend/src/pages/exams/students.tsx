@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useGetIdentity, useList } from "@refinedev/core";
 import { CalendarClock, CheckCircle2, Clock3, Loader2, Search, UserCheck, Users } from "lucide-react";
 
@@ -22,6 +23,7 @@ function getPrimaryStudentTime(student: IExamStudent) {
 }
 
 export function ExamStudentsPage() {
+  const navigate = useNavigate();
   const [selectedExamId, setSelectedExamId] = useState<string | null>(null);
   const [students, setStudents] = useState<IExamStudent[]>([]);
   const [studentsLoading, setStudentsLoading] = useState(false);
@@ -189,9 +191,11 @@ export function ExamStudentsPage() {
                   {filteredStudents.map((student) => {
                     const submitted = Boolean(student.submitted_at);
                     return (
-                      <div
+                      <button
                         key={student.student_id}
-                        className="grid gap-4 rounded-2xl border border-border/50 bg-background px-4 py-4 md:grid-cols-[minmax(0,1fr)_180px_180px]"
+                        type="button"
+                        onClick={() => navigate(`/exams/${selectedExam!.id}/students/${student.student_id}/result`)}
+                        className="grid gap-4 rounded-2xl border border-border/50 bg-background px-4 py-4 md:grid-cols-[minmax(0,1fr)_180px_180px] w-full text-left transition-colors hover:border-primary/30 hover:bg-muted/10 cursor-pointer"
                       >
                         <div className="min-w-0 space-y-1">
                           <div className="flex items-center gap-2">
@@ -239,7 +243,7 @@ export function ExamStudentsPage() {
                             {submitted ? formatDateTime(student.submitted_at) : "尚未提交"}
                           </div>
                         </div>
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -256,6 +260,7 @@ export function ExamStudentsPage() {
           </Tabs>
         </CardContent>
       </Card>
+
     </div>
   );
 }

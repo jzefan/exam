@@ -11,17 +11,15 @@ export async function paperApiRequest<T>(path: string, init?: RequestInit): Prom
   });
 
   if (!response.ok) {
-    let message = `请求失败: ${response.status}`;
+    const text = await response.text();
+    let message = text || `请求失败: ${response.status}`;
     try {
-      const payload = (await response.json()) as { detail?: string };
+      const payload = JSON.parse(text) as { detail?: string };
       if (payload?.detail) {
         message = payload.detail;
       }
     } catch {
-      const text = await response.text();
-      if (text) {
-        message = text;
-      }
+      // body is plain text or empty; use text as-is
     }
     throw new Error(message);
   }
@@ -43,11 +41,15 @@ export function getDifficultyStrategyLabel(strategy: PaperDifficultyStrategy): s
   }[strategy];
 }
 
+export const PAPER_SOURCE_REUSE_RATE_OPTIONS = [0, 20, 40, 60] as const;
+export type PaperSourceReuseRate = (typeof PAPER_SOURCE_REUSE_RATE_OPTIONS)[number];
+
 export type GeneratePaperFromSourcePayload = {
   count: 1;
   difficulty_strategy: PaperDifficultyStrategy;
   question_type_strategy: "inherit";
   prefer_root_knowledge_point: boolean;
+  source_reuse_rate: PaperSourceReuseRate;
 };
 
 export type GeneratePaperFromSourceResult = {

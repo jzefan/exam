@@ -123,6 +123,9 @@ export function renderStandardAnswer(answer: Record<string, unknown>): string {
   if (Array.isArray(answer.points) && answer.points.length > 0) {
     return answer.points.map((item) => String(item)).join("；");
   }
+  if (Array.isArray(answer.key_points) && answer.key_points.length > 0) {
+    return answer.key_points.map((item) => String(item)).join("；");
+  }
   if (Array.isArray(answer.required_patterns) && answer.required_patterns.length > 0) {
     return answer.required_patterns.map((item) => String(item)).join("；");
   }
@@ -139,6 +142,12 @@ export function renderStandardAnswer(answer: Record<string, unknown>): string {
   }
   if (Array.isArray(answer.blanks)) {
     return answer.blanks.map((item) => String(item)).join("；");
+  }
+  if (typeof answer.text === "string" && answer.text.trim()) {
+    return answer.text.trim();
+  }
+  if (typeof answer.code === "string" && answer.code.trim()) {
+    return answer.code.trim();
   }
   return tStudent("common_none", undefined, locale);
 }
