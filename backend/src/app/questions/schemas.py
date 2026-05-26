@@ -66,6 +66,8 @@ class QuestionBankResponse(BaseModel):
     name: str
     description: str | None
     owner_id: uuid.UUID
+    owner_username: str | None = None
+    owner_full_name: str | None = None
     visibility: VisibilityScope
     question_count: int = 0
     created_at: datetime
@@ -272,12 +274,12 @@ class QuestionImportDocumentSummary(BaseModel):
 
 class QuestionImportDocumentRecognizeRequest(BaseModel):
     file_name: str = Field(min_length=1, max_length=255)
-    raw_text: str = Field(min_length=1, max_length=200000)
-    source_format: str = Field(pattern="^(pdf|docx|md)$")
+    raw_text: str = Field(min_length=1, max_length=1000000)
+    source_format: str = Field(pattern="^(pdf|docx|md|json|zip)$")
     prefer_template: bool = False
     analysis_mode: QuestionImportAnalysisMode = QuestionImportAnalysisMode.FAST
-    images: list[QuestionImportImageInput] = Field(default_factory=list, max_length=200)
-    tables: list[QuestionImportTableInput] = Field(default_factory=list, max_length=200)
+    images: list[QuestionImportImageInput] = Field(default_factory=list)
+    tables: list[QuestionImportTableInput] = Field(default_factory=list)
     import_context: str | None = Field(default=None, max_length=50)
     recognition_prompt: str | None = Field(default=None, max_length=2000)
 
@@ -289,11 +291,11 @@ class QuestionImportDocumentRecognizeResponse(BaseModel):
 
 
 class QuestionBulkCreateRequest(BaseModel):
-    questions: list[QuestionCreate] = Field(min_length=1, max_length=2000)
+    questions: list[QuestionCreate] = Field(min_length=1, max_length=5000)
 
 
 class SaveGeneratedToCourseBankRequest(BaseModel):
-    questions: list[QuestionCreate] = Field(min_length=1, max_length=2000)
+    questions: list[QuestionCreate] = Field(min_length=1, max_length=5000)
 
 
 class QuestionBulkCreateResponse(BaseModel):
@@ -307,7 +309,7 @@ class SaveGeneratedToCourseBankResponse(QuestionBulkCreateResponse):
 
 
 class QuestionImportBulkCreateJobRequest(BaseModel):
-    questions: list[QuestionCreate] = Field(min_length=1, max_length=2000)
+    questions: list[QuestionCreate] = Field(min_length=1, max_length=5000)
     root_knowledge_point_id: uuid.UUID | None = None
     course_id: uuid.UUID | None = Field(default=None, deprecated=True)
 

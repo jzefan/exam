@@ -1,4 +1,4 @@
-import { useCreate, useList } from "@refinedev/core";
+import { useCreate, useGetIdentity, useList } from "@refinedev/core";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { Plus, X, ChevronsUpDown, Check } from "lucide-react";
@@ -21,6 +21,8 @@ import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, Command
 import { PageIntroHeader } from "@/components/ui/page-intro-header";
 import { RichTextEditor, htmlToPlainText } from "@/components/ui/rich-text-editor";
 import { TagSelector } from "@/components/ui/tag-selector";
+import { formatQuestionBankLabel } from "@/lib/question-banks";
+import { getUserRole } from "@/types/rbac";
 import { cn } from "@/lib/utils";
 import {
   buildCodeQuestionContent,
@@ -62,6 +64,8 @@ export function QuestionCreate() {
   const navigate = useNavigate();
   const { mutate, mutation } = useCreate();
   const isPending = mutation.isPending;
+  const { data: identity } = useGetIdentity<{ primary_org?: { role_name?: string } | null }>();
+  const showBankOwner = identity ? getUserRole(identity) === "platform_admin" : false;
 
   const { query: banksQuery } = useList<IQuestionBank>({
     resource: "question-banks",
@@ -257,7 +261,12 @@ export function QuestionCreate() {
                     >
                       <span className="truncate">
                         {questionBankId
-                          ? banks.find((b) => b.id === questionBankId)?.name ?? "选择题库"
+                          ? (() => {
+                              const selectedBank = banks.find((b) => b.id === questionBankId);
+                              return selectedBank
+                                ? formatQuestionBankLabel(selectedBank, { showOwner: showBankOwner })
+                                : "选择题库";
+                            })()
                           : "选择题库"}
                       </span>
                       <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
@@ -279,11 +288,11 @@ export function QuestionCreate() {
                           {banks.map((b) => (
                             <CommandItem
                               key={b.id}
-                              value={b.name}
+                              value={formatQuestionBankLabel(b, { showOwner: showBankOwner })}
                               onSelect={() => { setQuestionBankId(b.id); setBankOpen(false); }}
                             >
                               <Check className={cn("mr-2 h-4 w-4", questionBankId === b.id ? "opacity-100" : "opacity-0")} />
-                              {b.name}
+                              {formatQuestionBankLabel(b, { showOwner: showBankOwner })}
                             </CommandItem>
                           ))}
                         </CommandGroup>

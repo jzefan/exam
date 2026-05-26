@@ -26,6 +26,11 @@ class User(BaseModel):
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     user_type: Mapped[str] = mapped_column(String(20), nullable=False, default="internal")
     persona: Mapped[str] = mapped_column(String(20), nullable=False, default="teacher")
+    # OIDC SSO fields. provider="internal" means a local account; provider="arkloop"
+    # means the user was auto-provisioned via SSO from the ArkLoop IdP and
+    # oidc_subject holds the `sub` claim that identifies them across logins.
+    oidc_subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="internal")
     primary_org_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True
     )

@@ -27,6 +27,13 @@ export interface IDirection {
   created_at: string;
 }
 
+export interface IRootKnowledgePointOption extends IKnowledgePointDetail {
+  direction_id: string;
+  direction_name: string;
+  major_id: string;
+  major_name: string;
+}
+
 export interface IFlowData {
   nodes: Array<{ id: string; type: string; position: { x: number; y: number }; data: IKnowledgePointDetail }>;
   edges: Array<{ id: string; source: string; target: string; type: string }>;

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useList } from "@refinedev/core";
+import { useGetIdentity, useList } from "@refinedev/core";
 import { Search, Check, FileText, Maximize2, Minimize2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -16,8 +16,10 @@ import { QuestionPreviewCard } from "@/components/questions/question-preview-car
 import { getQuestionContentHtml, getQuestionTitle } from "@/components/questions/question-preview-utils";
 import { LatexText } from "@/components/ui/latex-text";
 import { RichContent } from "@/components/ui/rich-content";
+import { formatQuestionBankLabel } from "@/lib/question-banks";
 import { cn } from "@/lib/utils";
 import type { IQuestion, IQuestionBank, QuestionType } from "@/types";
+import { getUserRole } from "@/types/rbac";
 import type { SelectedKnowledgePoint } from "@/components/questions/knowledge-point-selector";
 
 const ALL_BANKS = "__all_banks__";
@@ -49,6 +51,8 @@ export function QuestionSelector({
   isFullscreen?: boolean;
   onFullscreenChange?: (next: boolean) => void;
 }) {
+  const { data: identity } = useGetIdentity<{ primary_org?: { role_name?: string } | null }>();
+  const showBankOwner = identity ? getUserRole(identity) === "platform_admin" : false;
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [bankFilter, setBankFilter] = useState<string | null>(null);
@@ -232,7 +236,7 @@ export function QuestionSelector({
           <SelectItem value={ALL_BANKS}>全部题库</SelectItem>
           {banks.map((b) => (
             <SelectItem key={b.id} value={b.id}>
-              {b.name}
+              {formatQuestionBankLabel(b, { showOwner: showBankOwner })}
             </SelectItem>
           ))}
         </SelectContent>

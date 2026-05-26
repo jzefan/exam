@@ -1,1 +1,1 @@
-/Users/jzefan/work/nlsw-saas/CLAUDE.md
+/Users/jzefan/claude.md

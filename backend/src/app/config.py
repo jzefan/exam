@@ -43,5 +43,16 @@ class Settings(BaseSettings):
     smtp_from_email: str | None = None
     smtp_use_tls: bool = True
 
+    # ─── OIDC SSO via ArkLoop IdP ────────────────────────────────────────
+    # If oidc_issuer is empty, OIDC SSO is disabled and only local login works.
+    oidc_issuer: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret: str = ""
+    oidc_redirect_uri: str = "http://localhost:8000/api/auth/oidc/callback"
+    # Scopes requested from the IdP. exam:admin is intentionally excluded by default;
+    # only explicitly granted via prompt=consent flow if ever needed.
+    oidc_scopes: str = "openid profile email offline_access exam:read exam:write"
+    oidc_jwks_cache_ttl_seconds: int = 3600
+
 
 settings = Settings()

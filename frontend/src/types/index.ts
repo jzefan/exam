@@ -80,6 +80,8 @@ export interface IQuestionBank {
   name: string;
   description: string | null;
   owner_id: string;
+  owner_username?: string | null;
+  owner_full_name?: string | null;
   visibility: "private" | "platform";
   question_count: number;
   created_at: string;
@@ -335,6 +337,16 @@ export interface IExamResultQuestionFeedback {
   deductions?: string[];
   suggestions?: string[];
   evidence_lines?: string[];
+  model_evaluation?: {
+    model?: string;
+    matches?: Array<{
+      index?: number;
+      expected?: string;
+      score?: number;
+      is_correct?: boolean;
+      reason?: string;
+    }>;
+  };
 }
 
 export interface IExamResultQuestion {

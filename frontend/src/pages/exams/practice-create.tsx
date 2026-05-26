@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useCreate, useList, useOne, useUpdate } from "@refinedev/core";
+import { useCreate, useGetIdentity, useList, useOne, useUpdate } from "@refinedev/core";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowRight,
@@ -35,6 +35,7 @@ import {
 } from "@/hooks/use-unsaved-generated-questions-guard";
 import { cn } from "@/lib/utils";
 import { apiRequest } from "@/pages/grading/api";
+import { getUserRole } from "@/types/rbac";
 import { AIGenerateLoadingOverlay } from "@/pages/questions/components/ai-generate-loading-overlay";
 import { validateTypeAllocation } from "@/pages/questions/ai-generate-utils";
 import type { IExamQuestion, IExamStudent, IQuestion, QuestionType } from "@/types";
@@ -70,6 +71,7 @@ type PracticeDetail = {
   total_score: number;
   status: string;
   show_result: boolean;
+  allow_retake: boolean;
   question_mode?: QuestionMode | null;
   questions: IExamQuestion[];
   students: IExamStudent[];
@@ -191,6 +193,10 @@ export function PracticeCreate() {
   const isEditMode = Boolean(id);
   const seedPaperId = searchParams.get("paper_id");
   const seedKey = searchParams.get("seed_key");
+  const { data: identity } = useGetIdentity<{ primary_org?: { role_name: string } | null }>();
+  const role = identity ? getUserRole(identity) : "";
+  const mainKPLabel = role === "evaluator" ? "主技能点（可选）" : "课程（可选）";
+  const mainKPTrigger = role === "evaluator" ? "选择主技能点" : "选择课程";
 
   const { result: practice, query: practiceQuery } = useOne<PracticeDetail>({
     resource: "exams",
@@ -199,10 +205,11 @@ export function PracticeCreate() {
   });
 
   const [currentStep, setCurrentStep] = useState(0);
-  const [maxVisitedStep, setMaxVisitedStep] = useState(0);
+  const [maxVisitedStep, setMaxVisitedStep] = useState(() => isEditMode ? stepItems.length - 1 : 0);
   const [title, setTitle] = useState(() => (isEditMode ? "" : getDefaultPracticeTitle()));
   const [isTitleManuallyEdited, setIsTitleManuallyEdited] = useState(false);
   const [description, setDescription] = useState("");
+  const [mainKnowledgePoint, setMainKnowledgePoint] = useState<SelectedKnowledgePoint | null>(null);
   const [selectedKnowledgePoints, setSelectedKnowledgePoints] = useState<SelectedKnowledgePoint[]>([]);
   const [questionMode, setQuestionMode] = useState<QuestionMode>("manual");
   const [questionIds, setQuestionIds] = useState<string[]>([]);
@@ -215,6 +222,7 @@ export function PracticeCreate() {
   const [scheduledStartTime, setScheduledStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
   const [showResult, setShowResult] = useState(true);
+  const [allowRetake, setAllowRetake] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [seedLoading, setSeedLoading] = useState(false);
 
@@ -304,6 +312,7 @@ export function PracticeCreate() {
     setScheduledStartTime(practice.start_time ? toLocalDateTimeValue(new Date(practice.start_time)) : "");
     setEndTime(practice.end_time ? toLocalDateTimeValue(new Date(practice.end_time)) : "");
     setShowResult(practice.show_result ?? true);
+    setAllowRetake(practice.allow_retake ?? false);
     setStartImmediately(false);
     setSubmitError(null);
   }, [practice]);
@@ -381,7 +390,7 @@ export function PracticeCreate() {
     hydratedPaperSeedRef.current = null;
 
     setCurrentStep(0);
-    setMaxVisitedStep(0);
+    setMaxVisitedStep(isEditMode ? stepItems.length - 1 : 0);
     setIsManualQuestionFullscreen(false);
     setSubmitError(null);
     setAIQuestions([]);
@@ -396,6 +405,7 @@ export function PracticeCreate() {
     setTitle(getDefaultPracticeTitle());
     setIsTitleManuallyEdited(false);
     setDescription("");
+    setMainKnowledgePoint(null);
     setSelectedKnowledgePoints([]);
     setQuestionMode("manual");
     setQuestionIds([]);
@@ -849,6 +859,7 @@ export function PracticeCreate() {
       position_id: null,
       max_switch_count: 0,
       show_result: showResult,
+      allow_retake: allowRetake,
       notes_template: null,
       question_mode: questionMode,
       question_ids: [],
@@ -1045,19 +1056,34 @@ export function PracticeCreate() {
                 <CardTitle>步骤 1：选择知识点</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Label className="text-sm font-medium text-foreground">知识点</Label>
-                  <span className="inline-flex items-center rounded-full bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-700 dark:text-amber-300">
-                    可跳过，手动选题可不选；AI 出题需先选择知识点
-                  </span>
-                </div>
+                <KnowledgePointSelector
+                  fetcher={apiRequest}
+                  selectedKnowledgePoints={mainKnowledgePoint ? [mainKnowledgePoint] : []}
+                  onSelectedKnowledgePointsChange={(points) => {
+                    const next = points[points.length - 1] ?? null;
+                    setMainKnowledgePoint(next);
+                    if (next?.id !== mainKnowledgePoint?.id) {
+                      setSelectedKnowledgePoints([]);
+                    }
+                  }}
+                  storageKey="practice-main-knowledge-point"
+                  label={mainKPLabel}
+                  triggerLabel={mainKPTrigger}
+                  selectionTarget="root"
+                  selectionMode="single"
+                  showUsageShortcuts={false}
+                  popoverSide="bottom"
+                />
+
                 <KnowledgePointSelector
                   fetcher={apiRequest}
                   selectedKnowledgePoints={selectedKnowledgePoints}
                   onSelectedKnowledgePointsChange={setSelectedKnowledgePoints}
                   storageKey="practice-publish-recent-keywords"
-                  triggerLabel="选择练习知识点"
+                  label="知识点（可选）"
+                  triggerLabel="选择知识点"
                   popoverSide="bottom"
+                  filterRootNodeId={mainKnowledgePoint?.id}
                 />
                 <div className="space-y-1.5">
                   <Label htmlFor="practice-title">练习名称</Label>
@@ -1165,6 +1191,7 @@ export function PracticeCreate() {
                       onModelChange={setAIModel}
                       selectedKnowledgePoints={selectedKnowledgePoints}
                       onSelectedKnowledgePointsChange={setSelectedKnowledgePoints}
+                      filterRootNodeId={mainKnowledgePoint?.id}
                       customPrompt={aiPrompt}
                       onCustomPromptChange={setAIPrompt}
                       allocationError={aiAllocationError}
@@ -1315,6 +1342,14 @@ export function PracticeCreate() {
                     <p className="mt-1 text-xs text-muted-foreground">开启后，学生提交后可以直接看到练习结果。</p>
                   </div>
                   <Switch checked={showResult} onCheckedChange={setShowResult} />
+                </div>
+
+                <div className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-background px-4 py-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-foreground">允许学生重做</p>
+                    <p className="mt-1 text-xs text-muted-foreground">开启后，学生提交后可以再次开始作答。</p>
+                  </div>
+                  <Switch checked={allowRetake} onCheckedChange={setAllowRetake} />
                 </div>
               </CardContent>
             </Card>

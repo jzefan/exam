@@ -1,4 +1,4 @@
-import { useOne, useUpdate, useList } from "@refinedev/core";
+import { useGetIdentity, useOne, useUpdate, useList } from "@refinedev/core";
 import { useNavigate, useParams } from "react-router-dom";
 import { useState } from "react";
 import { ArrowLeft, Plus, X, ChevronsUpDown, Check, AlertTriangle } from "lucide-react";
@@ -22,6 +22,8 @@ import { RichTextEditor, htmlToPlainText } from "@/components/ui/rich-text-edito
 import { TagSelector } from "@/components/ui/tag-selector";
 import { KnowledgePointSelector, type SelectedKnowledgePoint } from "@/components/questions/knowledge-point-selector";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { formatQuestionBankLabel } from "@/lib/question-banks";
+import { getUserRole } from "@/types/rbac";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
@@ -49,6 +51,17 @@ function extractFillBlanks(question: IQuestion): string[] {
   const correct = question.answer?.correct;
   if (Array.isArray(correct)) return correct.length > 0 ? correct.map(String) : [""];
   if (typeof correct === "string" && correct) return [correct];
+  // Legacy format: answer stored as {text: "val1, val2, ..."} instead of {correct: [...]}
+  const text = question.answer?.text;
+  if (typeof text === "string" && text) {
+    const contentText = typeof question.content === "object" && question.content !== null
+      ? String((question.content as Record<string, unknown>).text ?? "")
+      : "";
+    const blankCount = (contentText.match(/_{4,}/g) ?? []).length;
+    const parts = text.split(/,\s*/);
+    if (blankCount > 1 && parts.length === blankCount) return parts;
+    return [text];
+  }
   return [""];
 }
 
@@ -157,6 +170,8 @@ export function QuestionEditFormContent({
   showQuestionBankAndTags = true,
   variant = "page",
 }: QuestionEditFormContentProps) {
+  const { data: identity } = useGetIdentity<{ primary_org?: { role_name?: string } | null }>();
+  const showBankOwner = identity ? getUserRole(identity) === "platform_admin" : false;
   const isChoice = question.type === "choice";
   const isMultiChoice = Array.isArray(question.answer?.correct);
 
@@ -295,14 +310,18 @@ export function QuestionEditFormContent({
           <form onSubmit={handleSubmit} className="space-y-5">
             {isInUse ? (
               <Alert className="border-amber-200 bg-amber-50/80 text-amber-950">
-                <AlertTriangle className="h-4 w-4" />
-                <AlertTitle>题目内容已锁定</AlertTitle>
-                <AlertDescription className="space-y-1">
-                  <p>这道题正在某些考试或练习中使用，题目内容已锁定。你仍可修改答案、解析、难度、知识点标签和编程题测试用例。</p>
-                  {editLock?.has_submitted_attempts ? (
-                    <p>修改答案或编程题测试用例后，系统会自动重新评分受影响的已提交答卷。</p>
-                  ) : null}
-                </AlertDescription>
+                <div className="flex gap-3">
+                  <AlertTriangle className="h-4 w-4 mt-0.5" />
+                  <div className="min-w-0">
+                    <AlertTitle>题目内容已锁定</AlertTitle>
+                    <AlertDescription className="space-y-1">
+                      <p>这道题正在某些考试或练习中使用，题目内容已锁定。你仍可修改答案、解析、难度、知识点标签和编程题测试用例。</p>
+                      {editLock?.has_submitted_attempts ? (
+                        <p>修改答案或编程题测试用例后，系统会自动重新评分受影响的已提交答卷。</p>
+                      ) : null}
+                    </AlertDescription>
+                  </div>
+                </div>
               </Alert>
             ) : null}
 
@@ -349,7 +368,12 @@ export function QuestionEditFormContent({
                     >
                       <span className="truncate">
                         {questionBankId
-                          ? banks.find((b) => b.id === questionBankId)?.name ?? "选择题库"
+                          ? (() => {
+                              const selectedBank = banks.find((b) => b.id === questionBankId);
+                              return selectedBank
+                                ? formatQuestionBankLabel(selectedBank, { showOwner: showBankOwner })
+                                : "选择题库";
+                            })()
                           : "选择题库"}
                       </span>
                       <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
@@ -371,11 +395,11 @@ export function QuestionEditFormContent({
                           {banks.map((b) => (
                             <CommandItem
                               key={b.id}
-                              value={b.name}
+                              value={formatQuestionBankLabel(b, { showOwner: showBankOwner })}
                               onSelect={() => { setQuestionBankId(b.id); setBankOpen(false); }}
                             >
                               <Check className={cn("mr-2 h-4 w-4", questionBankId === b.id ? "opacity-100" : "opacity-0")} />
-                              {b.name}
+                              {formatQuestionBankLabel(b, { showOwner: showBankOwner })}
                             </CommandItem>
                           ))}
                         </CommandGroup>
@@ -852,6 +876,7 @@ export function QuestionEditFormContent({
                       }
                       selectedKnowledgePoints={selectedKnowledgePoints}
                       onSelectedKnowledgePointsChange={setSelectedKnowledgePoints}
+                      label=""
                       triggerLabel={knowledgePoints.length > 0 ? "选择知识点" : "暂无可选知识点"}
                       showUsageShortcuts={false}
                     />

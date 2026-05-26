@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.activity_logs.service import CATEGORY_QUESTION, log_event
 from app.auth.dependencies import CurrentUser, require_roles, user_has_role
 from app.auth.models import User
 from app.common.pagination import PaginationParams, apply_filters, apply_pagination, get_total_count, parse_filters, parse_pagination
@@ -97,6 +98,20 @@ questions_router = APIRouter()
 tags_router = APIRouter()
 knowledge_points_router = APIRouter()
 question_banks_router = APIRouter()
+
+
+def _build_question_bank_response(
+    bank: object,
+    *,
+    question_count: int = 0,
+    owner_username: str | None = None,
+    owner_full_name: str | None = None,
+) -> QuestionBankResponse:
+    payload = QuestionBankResponse.model_validate(bank).model_dump()
+    payload["question_count"] = question_count
+    payload["owner_username"] = owner_username
+    payload["owner_full_name"] = owner_full_name
+    return QuestionBankResponse(**payload)
 
 
 async def _build_question_response(db: AsyncSession, question: Question) -> QuestionResponse:
@@ -318,11 +333,27 @@ async def create_question_endpoint(
     data: QuestionCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
+    request: Request,
 ) -> QuestionResponse:
     is_admin = await _is_question_admin(db, user)
     await _ensure_can_write_question_bank(db, data.question_bank_id, user, is_admin)
     await _ensure_can_read_knowledge_points(db, data.knowledge_point_ids, user, is_admin)
     question = await create_question(db, data, user.id)
+    await log_event(
+        db,
+        event_category=CATEGORY_QUESTION,
+        event_type="question_create",
+        user=user,
+        target_type="question",
+        target_id=question.id,
+        metadata={
+            "question_type": question.type.value if hasattr(question.type, "value") else str(question.type),
+            "title": question.title,
+            "question_bank_id": str(data.question_bank_id) if data.question_bank_id else None,
+        },
+        request=request,
+    )
+    await db.commit()
     return await _build_question_response(db, question)
 
 
@@ -482,6 +513,40 @@ async def document_recognize_import_endpoint(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
+@questions_router.post("/import/pdf-recognize", response_model=QuestionImportDocumentRecognizeResponse)
+async def pdf_recognize_endpoint(
+    file: Annotated[UploadFile, File(...)],
+    _user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
+) -> QuestionImportDocumentRecognizeResponse:
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="仅支持 PDF 文件")
+    try:
+        file_bytes = await file.read()
+        from app.questions.service import recognize_pdf_with_ai
+        return await recognize_pdf_with_ai(file_bytes, file.filename or "upload.pdf")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@questions_router.post("/import/docx-recognize", response_model=QuestionImportDocumentRecognizeResponse)
+async def docx_recognize_endpoint(
+    file: Annotated[UploadFile, File(...)],
+    _user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
+) -> QuestionImportDocumentRecognizeResponse:
+    if not file.filename or not file.filename.lower().endswith(".docx"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="仅支持 DOCX 文件")
+    try:
+        file_bytes = await file.read()
+        from app.questions.service import recognize_docx_with_ai
+        return await recognize_docx_with_ai(file_bytes, file.filename or "upload.docx")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
 @questions_router.post("/import/document-recognize-visual", response_model=QuestionImportDocumentRecognizeResponse)
 async def document_recognize_visual_endpoint(
     file: Annotated[UploadFile, File(...)],
@@ -516,6 +581,7 @@ async def bulk_create_questions_endpoint(
     data: QuestionBulkCreateRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
+    request: Request,
 ) -> QuestionBulkCreateResponse:
     is_admin = await _is_question_admin(db, user)
     bank_ids = {question.question_bank_id for question in data.questions if question.question_bank_id is not None}
@@ -528,6 +594,20 @@ async def bulk_create_questions_endpoint(
     }
     await _ensure_can_read_knowledge_points(db, list(knowledge_point_ids), user, is_admin)
     result = await bulk_create_questions(db, data.questions, user.id)
+    await log_event(
+        db,
+        event_category=CATEGORY_QUESTION,
+        event_type="question_import",
+        user=user,
+        metadata={
+            "submitted": len(data.questions),
+            "created": result.created,
+            "existing": result.existing,
+            "failed": result.failed,
+        },
+        request=request,
+    )
+    await db.commit()
     return QuestionBulkCreateResponse(created=result.created, existing=result.existing, failed=result.failed)
 
 
@@ -867,8 +947,11 @@ async def list_question_banks_endpoint(
     rows, no_bank_count = await list_question_banks(db, user=user, is_platform_admin=is_admin)
     response.headers["X-No-Bank-Count"] = str(no_bank_count)
     return [
-        QuestionBankResponse(
-            **{**QuestionBankResponse.model_validate(row["bank"]).model_dump(), "question_count": row["question_count"]}
+        _build_question_bank_response(
+            row["bank"],
+            question_count=row["question_count"],
+            owner_username=row["owner_username"],
+            owner_full_name=row["owner_full_name"],
         )
         for row in rows
     ]
@@ -881,7 +964,11 @@ async def create_question_bank_endpoint(
     user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
 ) -> QuestionBankResponse:
     bank = await create_question_bank(db, data, user.id)
-    return QuestionBankResponse.model_validate(bank)
+    return _build_question_bank_response(
+        bank,
+        owner_username=user.username,
+        owner_full_name=user.full_name,
+    )
 
 
 @question_banks_router.post("/ensure-course-bank", response_model=QuestionBankResponse)
@@ -895,7 +982,11 @@ async def ensure_course_question_bank_endpoint(
         name="课程题库",
         description="课程学习资料关联的智能出题结果",
     )
-    return QuestionBankResponse.model_validate(bank)
+    return _build_question_bank_response(
+        bank,
+        owner_username=user.username,
+        owner_full_name=user.full_name,
+    )
 
 
 @question_banks_router.post("/{bank_id}/clear", response_model=QuestionBankClearResponse)

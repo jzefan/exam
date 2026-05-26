@@ -2150,14 +2150,24 @@ async def get_final_report(
 
 
 def _build_grading_context(task: GradingTask) -> dict[str, Any]:
+    analysis = ""
+    for item in task.standard_answers or []:
+        if isinstance(item, dict) and isinstance(item.get("analysis"), str):
+            analysis = item["analysis"]
+            break
+
     task_payload = {
         "question_content": task.question_content,
         "max_score": task.max_score,
         "knowledge_tags": task.knowledge_tags,
         "student_answer_raw": task.student_answer_raw,
+        "standard_answers": task.standard_answers,
+        "analysis": analysis,
         "rubric_definition": task.rubric_definition,
         "scoring_points": task.scoring_points,
         "dimension_weights": task.dimension_weights,
+        "deduction_rules": task.deduction_rules,
+        "fatal_error_rules": task.fatal_error_rules,
         "test_summary": task.test_summary,
         "compile_result": task.compile_result,
         "runtime_result": task.runtime_result,

@@ -1,7 +1,6 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useLogout, useGetIdentity } from "@refinedev/core";
 import { Link, NavLink, Outlet } from "react-router-dom";
-import axios from "axios";
 import { Home, ClipboardList, NotebookPen, LogOut } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -22,14 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { ThemeCustomizer } from "./theme-customizer";
 import { cn } from "@/lib/utils";
-import type { IStudentNotification } from "@/types";
-
-const api = axios.create();
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("access_token");
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  return config;
-});
+import { useStudentNotifications } from "@/hooks/use-student-notifications";
 
 const navItems = [
   { to: "/student", label: "工作台", icon: Home, end: true },
@@ -44,43 +36,20 @@ export function StudentLayout() {
     username?: string;
     primary_org?: { role_name: string } | null;
   }>();
-  const [notifications, setNotifications] = useState<IStudentNotification[]>([]);
-  const [activeNotification, setActiveNotification] = useState<IStudentNotification | null>(null);
+  const { notifications, markAsRead } = useStudentNotifications();
+  const [activeNotification, setActiveNotification] = useState<typeof notifications[number] | null>(null);
   const name = identity?.name ?? "考生";
   const account = identity?.username ?? name;
   const initials = name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
 
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .get<IStudentNotification[]>("/api/student/notifications/unread")
-      .then((response) => {
-        if (cancelled) return;
-        setNotifications(response.data);
-        setActiveNotification(response.data[0] ?? null);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setNotifications([]);
-          setActiveNotification(null);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // Show first unread notification as a dialog
+  const activeDialog = activeNotification ?? notifications[0] ?? null;
 
   const handleCloseNotification = async () => {
-    if (!activeNotification) return;
-    const currentId = activeNotification.id;
-    const nextNotifications = notifications.filter((item) => item.id !== currentId);
-    setNotifications(nextNotifications);
-    setActiveNotification(nextNotifications[0] ?? null);
-    try {
-      await api.post(`/api/student/notifications/${currentId}/read`);
-    } catch {
-      // Keep dismissal local even if marking read fails.
-    }
+    if (!activeDialog) return;
+    const currentId = activeDialog.id;
+    setActiveNotification(null);
+    await markAsRead(currentId);
   };
 
   return (
@@ -152,20 +121,20 @@ export function StudentLayout() {
         </div>
       </main>
 
-      <Dialog open={!!activeNotification} onOpenChange={(open) => {
+      <Dialog open={!!activeDialog} onOpenChange={(open) => {
         if (!open) void handleCloseNotification();
       }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>{activeNotification?.title ?? "站内提醒"}</DialogTitle>
+            <DialogTitle>{activeDialog?.title ?? "站内提醒"}</DialogTitle>
             <DialogDescription className="leading-6">
-              {activeNotification?.content}
+              {activeDialog?.content}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            {activeNotification?.related_exam_id ? (
+            {activeDialog?.related_exam_id ? (
               <Button asChild variant="outline">
-                <Link to={`/my-exams/${activeNotification.related_exam_id}/result`} onClick={() => void handleCloseNotification()}>
+                <Link to={`/my-exams/${activeDialog.related_exam_id}/result`} onClick={() => void handleCloseNotification()}>
                   查看结果
                 </Link>
               </Button>

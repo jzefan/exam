@@ -40,6 +40,6 @@ export interface IUserOrgInfo {
   is_primary: boolean;
 }
 
-export function getUserRole(user: { primary_org?: { role_name: string } | null }): string {
+export function getUserRole(user: { primary_org?: { role_name?: string } | null }): string {
   return user.primary_org?.role_name ?? "student";
 }

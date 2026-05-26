@@ -4,6 +4,7 @@ import type { IQuestion, IQuestionBank, ITag, QuestionType } from "../../types";
 import { Search, BookOpen, Pencil, Trash2, Plus, ChevronDown, ChevronUp, Library, Check, PackageOpen, GraduationCap, SlidersHorizontal, ChevronsDownUp, ChevronsUpDown, Link2, Save, ChevronRight, Lock, Upload, Sparkles, Loader2, Eraser, AlertTriangle, FolderInput, FilePlus2 } from "lucide-react";
 import { useState, useCallback, useRef, useEffect, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { getUserRole } from "@/types/rbac";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -63,6 +64,7 @@ import {
 } from "./components/create-from-selection-dialog";
 import type { QuestionImportJobResponse } from "./import-types";
 import { getQuestionDeleteDescription } from "@/lib/deletion-copy";
+import { getQuestionBankOwnerLabel } from "@/lib/question-banks";
 
 const difficultyConfig: Record<
   number,
@@ -248,6 +250,7 @@ export function QuestionList() {
 
   // 卡片展开/收缩（hover 延时更长一些，避免内容闪现）
   const [hoveredCard, setHoveredCard] = useState<string | null>(null);
+  const [manuallyExpandedCards, setManuallyExpandedCards] = useState<Set<string>>(new Set());
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [allExpanded, setAllExpanded] = useState(false);
   // 移动端筛选面板
@@ -467,7 +470,8 @@ export function QuestionList() {
   const selectedQuestionCount = selectedQuestionIds.length;
   const total = hasEmptyFilter ? 0 : (data?.total ?? 0);
   const banks = banksQuery.data?.data ?? [];
-  const roleName = identity?.primary_org?.role_name;
+  const roleName = identity ? getUserRole(identity) : "";
+  const showBankOwner = roleName === "platform_admin";
   const canManageSharedResources = roleName === "admin" || roleName === "platform_admin" || roleName === "school_admin";
   const writableBanks = banks.filter(
     (bank) => bank.visibility !== "platform" || bank.owner_id === identity?.id || canManageSharedResources,
@@ -532,7 +536,19 @@ export function QuestionList() {
     [hasDirectionMatch, knowledgeDirections, knowledgeMajors, matchKnowledgeText],
   );
 
-  const isCardExpanded = (id: string) => allExpanded || hoveredCard === id;
+  const isCardExpanded = (id: string) => allExpanded || hoveredCard === id || manuallyExpandedCards.has(id);
+
+  const toggleCardExpanded = (id: string) => {
+    setManuallyExpandedCards((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
 
   const handleSearch = (value: string) => {
     setSearch(value);
@@ -1084,6 +1100,7 @@ export function QuestionList() {
                 bank.owner_id !== identity?.id &&
                 !canManageSharedResources;
               const canClearBank = !isReadOnlyShared && bank.question_count > 0;
+              const ownerLabel = showBankOwner ? getQuestionBankOwnerLabel(bank) : null;
               return (
                 <div
                   key={bank.id}
@@ -1107,6 +1124,7 @@ export function QuestionList() {
                         </TooltipTrigger>
                         <TooltipContent side="right" align="start" className="max-w-xs">
                           <p>{bank.name}</p>
+                          {ownerLabel ? <p className="text-xs text-muted-foreground">所有者：{ownerLabel}</p> : null}
                         </TooltipContent>
                       </Tooltip>
                       <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4 shrink-0">
@@ -1124,6 +1142,11 @@ export function QuestionList() {
                         {bank.description}
                       </p>
                     )}
+                    {ownerLabel ? (
+                      <p className="text-xs text-muted-foreground truncate mt-0.5">
+                        所有者：{ownerLabel}
+                      </p>
+                    ) : null}
                   </div>
                   <div className="ml-2 flex shrink-0 items-center gap-1 opacity-0 transition-all group-hover:opacity-100">
                     <Tooltip>
@@ -1517,9 +1540,16 @@ export function QuestionList() {
                     key={question.id}
                     question={question}
                     index={globalIndex}
-                    className="transition-all hover:border-primary hover:shadow-md"
+                    className="cursor-pointer transition-all hover:border-primary hover:shadow-md"
                     expanded={isCardExpanded(question.id)}
                     highlightKeyword={search}
+                    onClick={(event) => {
+                      const target = event.target as HTMLElement | null;
+                      if (target?.closest("button, input, textarea, a, [role='dialog']")) {
+                        return;
+                      }
+                      toggleCardExpanded(question.id);
+                    }}
                     trailing={
                       <Checkbox
                         checked={selected.has(question.id)}

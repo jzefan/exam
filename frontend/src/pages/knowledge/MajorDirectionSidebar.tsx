@@ -1,5 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Pencil, Plus, Trash2 } from "lucide-react";
+import { useMemo, useState } from "react";
+import {
+  ArrowLeftRight,
+  ChevronDown,
+  ChevronRight,
+  FolderTree,
+  MoreHorizontal,
+  Plus,
+  Search,
+  X,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -9,8 +18,16 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import type { IDirection, IKnowledgePointDetail, IMajor } from "./types";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
+import type { IDirection, IKnowledgePointDetail, IMajor, IRootKnowledgePointOption } from "./types";
 
 interface Props {
   majors: IMajor[];
@@ -19,16 +36,31 @@ interface Props {
   onSelect: (directionId: string) => void;
   onSelectRootKnowledge: (directionId: string, knowledgeId: string) => void;
   getDirections: (majorId: string) => IDirection[];
+  getMajorRootKnowledgePoints: (majorId: string) => IRootKnowledgePointOption[];
   getRootKnowledgePoints: (directionId: string) => IKnowledgePointDetail[];
   onCreateMajor: () => void;
   onEditMajor: (major: IMajor) => void;
   onDeleteMajor: (major: IMajor) => void;
   onCreateDirection: (major: IMajor) => void;
+  onCreateRootKnowledgeInMajor: (major: IMajor) => void;
   onCreateRootKnowledge: (direction: IDirection) => void;
   onEditDirection: (direction: IDirection) => void;
   onDeleteDirection: (direction: IDirection) => void;
-  onEditRootKnowledge: (knowledge: IKnowledgePointDetail) => void;
-  onDeleteRootKnowledge: (knowledge: IKnowledgePointDetail) => void;
+  onEditRootKnowledge: (knowledge: IKnowledgePointDetail | IRootKnowledgePointOption) => void;
+  onDeleteRootKnowledge: (knowledge: IKnowledgePointDetail | IRootKnowledgePointOption) => void;
+}
+
+const DEFAULT_DIRECTION_NAMES = new Set(["通用", "默认方向"]);
+
+const ROW_BASE =
+  "group/row relative flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/40";
+const ROW_HOVER = "hover:bg-accent/60";
+const ROW_SELECTED = "bg-primary/10 text-primary hover:bg-primary/15";
+type SidebarViewMode = "major" | "direction";
+
+function matchesQuery(text: string | null | undefined, query: string): boolean {
+  if (!query) return true;
+  return Boolean(text && text.toLowerCase().includes(query));
 }
 
 export function MajorDirectionSidebar({
@@ -38,315 +70,461 @@ export function MajorDirectionSidebar({
   onSelect,
   onSelectRootKnowledge,
   getDirections,
+  getMajorRootKnowledgePoints,
   getRootKnowledgePoints,
   onCreateMajor,
   onEditMajor,
   onDeleteMajor,
   onCreateDirection,
+  onCreateRootKnowledgeInMajor,
   onCreateRootKnowledge,
   onEditDirection,
   onDeleteDirection,
   onEditRootKnowledge,
   onDeleteRootKnowledge,
 }: Props) {
-  const [expandedMajorId, setExpandedMajorId] = useState<string | null>(majors[0]?.id ?? null);
-  const previousSelectedMajorIdRef = useRef<string | null>(null);
-  const addActionClassName =
-    "flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-stone-500 transition-colors hover:bg-amber-50/80 hover:text-amber-800 dark:text-stone-400 dark:hover:bg-amber-950/30 dark:hover:text-amber-200";
+  const [expandedMajorIds, setExpandedMajorIds] = useState<Set<string>>(
+    () => new Set(majors[0]?.id ? [majors[0].id] : []),
+  );
+  const [viewMode, setViewMode] = useState<SidebarViewMode>("major");
+  const [query, setQuery] = useState("");
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const isDirectionMode = viewMode === "direction";
+  const switchLabel = isDirectionMode ? "切换为专业/主知识" : "切换为专业/方向/主知识";
 
   const selectedMajorId = useMemo(() => {
-    if (!selectedDirectionId) {
-      return null;
-    }
+    if (!selectedDirectionId && !selectedRootKnowledgeId) return null;
     for (const major of majors) {
-      if (getDirections(major.id).some((direction) => direction.id === selectedDirectionId)) {
+      if (getMajorRootKnowledgePoints(major.id).some((k) => k.id === selectedRootKnowledgeId)) {
+        return major.id;
+      }
+      if (getDirections(major.id).some((d) => d.id === selectedDirectionId)) {
         return major.id;
       }
     }
     return null;
-  }, [getDirections, majors, selectedDirectionId]);
+  }, [getDirections, getMajorRootKnowledgePoints, majors, selectedDirectionId, selectedRootKnowledgeId]);
 
-  useEffect(() => {
-    if (selectedMajorId && previousSelectedMajorIdRef.current !== selectedMajorId) {
-      setExpandedMajorId(selectedMajorId);
-      previousSelectedMajorIdRef.current = selectedMajorId;
-      return;
-    }
+  const visibleMajors = useMemo(() => {
+    if (!normalizedQuery) return majors;
+    return majors.filter((major) => {
+      if (matchesQuery(major.name, normalizedQuery)) return true;
+      if (getMajorRootKnowledgePoints(major.id).some((k) => matchesQuery(k.name, normalizedQuery))) return true;
+      if (getDirections(major.id).some((d) => matchesQuery(d.name, normalizedQuery))) return true;
+      return false;
+    });
+  }, [majors, normalizedQuery, getDirections, getMajorRootKnowledgePoints]);
 
-    if (!selectedMajorId) {
-      previousSelectedMajorIdRef.current = null;
-    }
-
-    if (!expandedMajorId || !majors.some((major) => major.id === expandedMajorId)) {
-      setExpandedMajorId(majors[0]?.id ?? null);
-    }
-  }, [expandedMajorId, majors, selectedMajorId]);
+  const isMajorExpanded = (id: string) =>
+    expandedMajorIds.has(id) || (Boolean(normalizedQuery) && visibleMajors.some((m) => m.id === id)) || id === selectedMajorId;
 
   const toggleMajor = (id: string) => {
-    setExpandedMajorId(id);
+    setExpandedMajorIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   };
 
   return (
-    <TooltipProvider delayDuration={120}>
-      <aside className="w-[260px] flex-shrink-0 overflow-y-auto border-r border-stone-200/80 bg-[linear-gradient(180deg,rgba(245,245,244,0.8),rgba(245,245,244,0.55))] px-2 py-2 dark:border-stone-800 dark:bg-[linear-gradient(180deg,rgba(28,25,23,0.72),rgba(17,24,39,0.42))]">
-      <div className="mb-2 flex items-center justify-between gap-2 px-2">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-stone-500 dark:text-stone-400">
-          专业 / 方向 / 主知识
+    <aside className="flex w-[260px] flex-shrink-0 flex-col overflow-hidden border-r border-border bg-background">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2.5">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+          {isDirectionMode ? "专业 / 方向 / 主知识" : "专业 / 主知识"}
         </p>
-        <Button
-          className="h-7 rounded-full px-2.5 text-[11px]"
-          onClick={onCreateMajor}
-          size="sm"
-          type="button"
-        >
-          添加专业
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            aria-label={switchLabel}
+            className="h-6 w-6 rounded-md p-0"
+            onClick={() => setViewMode(isDirectionMode ? "major" : "direction")}
+            size="icon"
+            title={switchLabel}
+            type="button"
+            variant="ghost"
+          >
+            <ArrowLeftRight className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            aria-label="添加专业"
+            className="h-6 w-6 rounded-md p-0"
+            onClick={onCreateMajor}
+            size="icon"
+            type="button"
+            variant="ghost"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </Button>
+        </div>
       </div>
-      <div className="space-y-2">
-        {majors.map((major) => {
-          const expanded = expandedMajorId === major.id;
-          const directions = getDirections(major.id);
-          return (
-            <ContextMenu key={major.id}>
-              <ContextMenuTrigger asChild>
-                <div className="relative rounded-xl border border-stone-200/80 bg-white/75 p-1.5 shadow-[0_8px_20px_rgba(120,113,108,0.08)] dark:border-stone-800 dark:bg-stone-950/40">
-                  <div className="group/major relative">
-                    <div className="flex items-center gap-1 rounded-lg px-1 py-0.5 hover:bg-stone-200/60 dark:hover:bg-stone-900/70">
-                      <Button
-                        className="h-10 flex min-w-0 flex-1 justify-start gap-2 rounded-md px-2 text-left text-[13px] font-medium text-stone-800 dark:text-stone-200"
+
+      {/* Search */}
+      <div className="border-b border-border px-3 py-2">
+        <div className="relative">
+          <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            aria-label="搜索专业、方向或知识点"
+            className="h-8 pl-7 pr-7 text-xs"
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索专业、方向或知识点"
+            value={query}
+          />
+          {query && (
+            <button
+              aria-label="清除搜索"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+              onClick={() => setQuery("")}
+              type="button"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Tree */}
+      <div className="flex-1 overflow-y-auto px-2 py-2">
+        <div className="space-y-0.5">
+          {visibleMajors.map((major) => {
+            const expanded = isMajorExpanded(major.id);
+            const directions = getDirections(major.id);
+            const majorRoots = getMajorRootKnowledgePoints(major.id);
+
+            const filteredRoots = normalizedQuery
+              ? majorRoots.filter(
+                  (k) => matchesQuery(k.name, normalizedQuery) || matchesQuery(major.name, normalizedQuery),
+                )
+              : majorRoots;
+
+            const filteredDirections = normalizedQuery
+              ? directions.filter(
+                  (d) =>
+                    matchesQuery(d.name, normalizedQuery) ||
+                    matchesQuery(major.name, normalizedQuery) ||
+                    getRootKnowledgePoints(d.id).some((k) => matchesQuery(k.name, normalizedQuery)),
+                )
+              : directions;
+
+            return (
+              <div key={major.id}>
+                <ContextMenu>
+                  <ContextMenuTrigger asChild>
+                    <div className={cn(ROW_BASE, ROW_HOVER)}>
+                      <button
+                        aria-expanded={expanded}
+                        className="-mx-2 flex min-w-0 flex-1 items-center gap-1.5 truncate px-2 py-0.5 text-left focus:outline-none"
                         onClick={() => toggleMajor(major.id)}
                         type="button"
-                        variant="ghost"
                       >
                         {expanded ? (
-                          <ChevronDown className="h-3.5 w-3.5 text-stone-500 dark:text-stone-400" />
+                          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                         ) : (
-                          <ChevronRight className="h-3.5 w-3.5 text-stone-500 dark:text-stone-400" />
+                          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                         )}
-                        <span className="truncate">{major.name}</span>
-                      </Button>
-                      <div className="absolute right-2 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5 rounded-md border border-stone-200/80 bg-white/92 px-0.5 py-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-hover/major:opacity-100 focus-within:opacity-100 dark:border-stone-700 dark:bg-stone-950/85">
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              className="h-6 w-6 rounded-sm p-0 text-stone-500 hover:text-stone-900 dark:text-stone-400 dark:hover:text-stone-100"
-                              size="icon"
-                              variant="ghost"
-                              onClick={() => onCreateDirection(major)}
-                              type="button"
-                            >
-                              <Plus className="h-3.5 w-3.5" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>新增方向</TooltipContent>
-                        </Tooltip>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              className="h-6 w-6 rounded-sm p-0 text-stone-500 hover:text-stone-900 dark:text-stone-400 dark:hover:text-stone-100"
-                              size="icon"
-                              variant="ghost"
-                              onClick={() => onEditMajor(major)}
-                              type="button"
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>修改专业</TooltipContent>
-                        </Tooltip>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              className="h-6 w-6 rounded-sm p-0 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40"
-                              size="icon"
-                              variant="ghost"
-                              onClick={() => onDeleteMajor(major)}
-                              type="button"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>删除专业</TooltipContent>
-                        </Tooltip>
-                      </div>
+                        <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+                          {major.name}
+                        </span>
+                      </button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            aria-label="更多操作"
+                            className="h-6 w-6 shrink-0 p-0 opacity-0 transition-opacity group-hover/row:opacity-100 focus:opacity-100 data-[state=open]:opacity-100"
+                            onClick={(event) => event.stopPropagation()}
+                            size="icon"
+                            type="button"
+                            variant="ghost"
+                          >
+                            <MoreHorizontal className="h-3.5 w-3.5" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-48">
+                          <DropdownMenuItem onSelect={() => onCreateRootKnowledgeInMajor(major)}>
+                            <Plus className="mr-2 h-3.5 w-3.5" />
+                            新增主知识/技能
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onSelect={() => onEditMajor(major)}>编辑专业</DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onSelect={() => onDeleteMajor(major)}
+                          >
+                            删除专业
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
-                  </div>
-                  {expanded && (
-                    <div className="mt-0.5 space-y-0.5 pl-7">
-                      {directions.map((direction) => {
-                        const rootKnowledgePoints = getRootKnowledgePoints(direction.id);
-                        const isSelectedDirection = selectedDirectionId === direction.id;
+                  </ContextMenuTrigger>
+                  <ContextMenuContent className="w-48">
+                    <ContextMenuItem onSelect={() => onCreateRootKnowledgeInMajor(major)}>
+                      新增主知识/技能
+                    </ContextMenuItem>
+                    <ContextMenuItem onSelect={() => onEditMajor(major)}>编辑专业</ContextMenuItem>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem
+                      className="text-destructive focus:text-destructive"
+                      onSelect={() => onDeleteMajor(major)}
+                    >
+                      删除专业
+                    </ContextMenuItem>
+                  </ContextMenuContent>
+                </ContextMenu>
 
-                        return (
-                        <ContextMenu key={direction.id}>
+                {expanded && (
+                  <div className="mt-0.5 ml-2 border-l border-border/70 pl-2">
+                    {!isDirectionMode && filteredRoots.map((knowledge) => {
+                      const isSelected = selectedRootKnowledgeId === knowledge.id;
+                      const showDirectionName =
+                        knowledge.direction_name && !DEFAULT_DIRECTION_NAMES.has(knowledge.direction_name);
+
+                      return (
+                        <ContextMenu key={knowledge.id}>
                           <ContextMenuTrigger asChild>
-                            <div className="space-y-0.5">
-                              <div className="group/direction relative flex items-center gap-1 rounded-lg px-1 py-0.5 hover:bg-stone-200/50 dark:hover:bg-stone-900/60">
-                                <Button
-                                  className={`h-9 min-w-0 flex-1 justify-start gap-2 rounded-md px-2 pr-8 text-left text-[12px] ${
-                                    isSelectedDirection && !selectedRootKnowledgeId
-                                      ? "bg-amber-100/80 text-amber-900 dark:bg-amber-900/35 dark:text-amber-200"
-                                      : "text-stone-600 dark:text-stone-400"
-                                  }`}
-                                  onClick={() => onSelect(direction.id)}
-                                  type="button"
-                                  variant="ghost"
-                                >
-                                  <span className="truncate">{direction.name}</span>
-                                </Button>
-                                <div className="absolute right-1 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5 rounded-md border border-stone-200/80 bg-white/92 px-0.5 py-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-hover/direction:opacity-100 focus-within:opacity-100 dark:border-stone-700 dark:bg-stone-950/85">
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <Button
-                                        className="h-6 w-6 rounded-sm p-0 text-stone-500 hover:text-stone-900 dark:text-stone-400 dark:hover:text-stone-100"
-                                        size="icon"
-                                        variant="ghost"
-                                        onClick={() => onCreateRootKnowledge(direction)}
-                                        type="button"
-                                      >
-                                        <Plus className="h-3.5 w-3.5" />
-                                      </Button>
-                                    </TooltipTrigger>
-                                    <TooltipContent>新增主知识/技能</TooltipContent>
-                                  </Tooltip>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <Button
-                                        className="h-6 w-6 rounded-sm p-0 text-stone-500 hover:text-stone-900 dark:text-stone-400 dark:hover:text-stone-100"
-                                        size="icon"
-                                        variant="ghost"
-                                        onClick={() => onEditDirection(direction)}
-                                        type="button"
-                                      >
-                                        <Pencil className="h-3.5 w-3.5" />
-                                      </Button>
-                                    </TooltipTrigger>
-                                    <TooltipContent>修改方向</TooltipContent>
-                                  </Tooltip>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <Button
-                                        className="h-6 w-6 rounded-sm p-0 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40"
-                                        size="icon"
-                                        variant="ghost"
-                                        onClick={() => onDeleteDirection(direction)}
-                                        type="button"
-                                      >
-                                        <Trash2 className="h-3.5 w-3.5" />
-                                      </Button>
-                                    </TooltipTrigger>
-                                    <TooltipContent>删除方向</TooltipContent>
-                                  </Tooltip>
-                                </div>
-                              </div>
-                              {isSelectedDirection && (
-                                <div className="ml-3 space-y-0.5 border-l border-stone-200 pl-2 dark:border-stone-800">
-                                  {rootKnowledgePoints.map((knowledge) => (
-                                    <ContextMenu key={knowledge.id}>
-                                      <ContextMenuTrigger asChild>
-                                        <Button
-                                          className={`h-8 w-full justify-start rounded-md border px-2 text-left text-[11px] shadow-sm transition-colors ${
-                                            selectedRootKnowledgeId === knowledge.id
-                                              ? "border-amber-200 bg-amber-50/90 text-amber-900 shadow-[0_6px_16px_rgba(217,119,6,0.12)] hover:bg-amber-100/90 dark:border-amber-800/70 dark:bg-amber-950/35 dark:text-amber-100 dark:hover:bg-amber-900/40"
-                                              : "border-transparent bg-white/45 text-stone-500 hover:border-stone-200 hover:bg-white/75 hover:text-stone-800 dark:bg-stone-950/20 dark:text-stone-400 dark:hover:border-stone-800 dark:hover:bg-stone-900/60 dark:hover:text-stone-200"
-                                          }`}
-                                          onClick={() => onSelectRootKnowledge(direction.id, knowledge.id)}
-                                          type="button"
-                                          variant="ghost"
-                                        >
-                                          <span className="truncate">{knowledge.name}</span>
-                                        </Button>
-                                      </ContextMenuTrigger>
-                                      <ContextMenuContent className="w-auto min-w-0">
-                                        <ContextMenuItem inset onSelect={() => onEditRootKnowledge(knowledge)}>
-                                          编辑主知识/技能
-                                        </ContextMenuItem>
-                                        <ContextMenuSeparator />
-                                        <ContextMenuItem
-                                          className="text-destructive focus:text-destructive"
-                                          inset
-                                          onSelect={() => onDeleteRootKnowledge(knowledge)}
-                                        >
-                                          删除主知识/技能
-                                        </ContextMenuItem>
-                                      </ContextMenuContent>
-                                    </ContextMenu>
-                                  ))}
-                                  <button
-                                    className={addActionClassName}
-                                    onClick={() => onCreateRootKnowledge(direction)}
-                                    type="button"
-                                  >
-                                    <Plus className="h-3 w-3" />
-                                    添加主知识/技能
-                                  </button>
-                                </div>
+                            <button
+                              className={cn(
+                                ROW_BASE,
+                                isSelected ? ROW_SELECTED : cn(ROW_HOVER, "text-foreground/80"),
                               )}
-                            </div>
+                              onClick={() => onSelectRootKnowledge(knowledge.direction_id, knowledge.id)}
+                              type="button"
+                            >
+                              <span
+                                className={cn(
+                                  "ml-1 h-1 w-1 shrink-0 rounded-full",
+                                  isSelected ? "bg-primary" : "bg-muted-foreground/40",
+                                )}
+                              />
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-xs leading-tight">{knowledge.name}</span>
+                                {showDirectionName && (
+                                  <span className="block truncate text-[10px] leading-tight text-muted-foreground">
+                                    {knowledge.direction_name}
+                                  </span>
+                                )}
+                              </span>
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <span
+                                    aria-label="更多操作"
+                                    className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm opacity-0 transition-opacity hover:bg-accent group-hover/row:opacity-100 focus:opacity-100 data-[state=open]:opacity-100"
+                                    onClick={(event) => event.stopPropagation()}
+                                    role="button"
+                                  >
+                                    <MoreHorizontal className="h-3 w-3" />
+                                  </span>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-44">
+                                  <DropdownMenuItem onSelect={() => onEditRootKnowledge(knowledge)}>
+                                    编辑
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    className="text-destructive focus:text-destructive"
+                                    onSelect={() => onDeleteRootKnowledge(knowledge)}
+                                  >
+                                    删除
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </button>
                           </ContextMenuTrigger>
-                          <ContextMenuContent className="w-auto min-w-0">
-                            <ContextMenuItem inset onSelect={() => onCreateRootKnowledge(direction)}>
-                              新增主知识/技能
-                            </ContextMenuItem>
-                            <ContextMenuItem inset onSelect={() => onEditDirection(direction)}>
-                              编辑方向
-                            </ContextMenuItem>
+                          <ContextMenuContent className="w-44">
+                            <ContextMenuItem onSelect={() => onEditRootKnowledge(knowledge)}>编辑</ContextMenuItem>
                             <ContextMenuSeparator />
                             <ContextMenuItem
                               className="text-destructive focus:text-destructive"
-                              inset
-                              onSelect={() => onDeleteDirection(direction)}
+                              onSelect={() => onDeleteRootKnowledge(knowledge)}
                             >
-                              删除方向
+                              删除
                             </ContextMenuItem>
                           </ContextMenuContent>
                         </ContextMenu>
+                      );
+                    })}
+
+                    {!isDirectionMode && filteredRoots.length === 0 && !normalizedQuery && (
+                      <p className="px-2 py-1.5 text-[11px] text-muted-foreground/70">暂无主知识/技能</p>
+                    )}
+
+                    {!isDirectionMode && (
+                      <button
+                        className="mt-0.5 flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+                        onClick={() => onCreateRootKnowledgeInMajor(major)}
+                        type="button"
+                      >
+                        <Plus className="h-3 w-3" />
+                        添加主知识/技能
+                      </button>
+                    )}
+
+                    {isDirectionMode &&
+                      filteredDirections.map((direction) => {
+                        const isSelectedDirection = selectedDirectionId === direction.id && !selectedRootKnowledgeId;
+                        const directionKnowledge = getRootKnowledgePoints(direction.id);
+
+                        return (
+                          <ContextMenu key={direction.id}>
+                            <ContextMenuTrigger asChild>
+                              <div>
+                                <button
+                                  className={cn(
+                                    ROW_BASE,
+                                    "mt-0.5",
+                                    isSelectedDirection ? ROW_SELECTED : cn(ROW_HOVER, "text-foreground/70"),
+                                  )}
+                                  onClick={() => onSelect(direction.id)}
+                                  type="button"
+                                >
+                                  <FolderTree
+                                    className={cn(
+                                      "h-3.5 w-3.5 shrink-0",
+                                      isSelectedDirection ? "text-primary" : "text-muted-foreground/70",
+                                    )}
+                                  />
+                                  <span className="min-w-0 flex-1 truncate text-xs">{direction.name}</span>
+                                  <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                      <span
+                                        aria-label="更多操作"
+                                        className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm opacity-0 transition-opacity hover:bg-accent group-hover/row:opacity-100 focus:opacity-100 data-[state=open]:opacity-100"
+                                        onClick={(event) => event.stopPropagation()}
+                                        role="button"
+                                      >
+                                        <MoreHorizontal className="h-3 w-3" />
+                                      </span>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end" className="w-44">
+                                      <DropdownMenuItem onSelect={() => onCreateRootKnowledge(direction)}>
+                                        <Plus className="mr-2 h-3.5 w-3.5" />
+                                        新增主知识/技能
+                                      </DropdownMenuItem>
+                                      <DropdownMenuSeparator />
+                                      <DropdownMenuItem onSelect={() => onEditDirection(direction)}>
+                                        编辑方向
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem
+                                        className="text-destructive focus:text-destructive"
+                                        onSelect={() => onDeleteDirection(direction)}
+                                      >
+                                        删除方向
+                                      </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                  </DropdownMenu>
+                                </button>
+
+                                {isSelectedDirection && (
+                                  <div className="ml-2 mt-0.5 border-l border-border/70 pl-2">
+                                    {directionKnowledge.map((knowledge) => {
+                                      const isKSelected = selectedRootKnowledgeId === knowledge.id;
+                                      return (
+                                        <ContextMenu key={knowledge.id}>
+                                          <ContextMenuTrigger asChild>
+                                            <button
+                                              className={cn(
+                                                ROW_BASE,
+                                                isKSelected
+                                                  ? ROW_SELECTED
+                                                  : cn(ROW_HOVER, "text-foreground/75"),
+                                              )}
+                                              onClick={() =>
+                                                onSelectRootKnowledge(direction.id, knowledge.id)
+                                              }
+                                              type="button"
+                                            >
+                                              <span
+                                                className={cn(
+                                                  "ml-1 h-1 w-1 shrink-0 rounded-full",
+                                                  isKSelected ? "bg-primary" : "bg-muted-foreground/40",
+                                                )}
+                                              />
+                                              <span className="min-w-0 flex-1 truncate text-xs">
+                                                {knowledge.name}
+                                              </span>
+                                            </button>
+                                          </ContextMenuTrigger>
+                                          <ContextMenuContent className="w-44">
+                                            <ContextMenuItem onSelect={() => onEditRootKnowledge(knowledge)}>
+                                              编辑
+                                            </ContextMenuItem>
+                                            <ContextMenuSeparator />
+                                            <ContextMenuItem
+                                              className="text-destructive focus:text-destructive"
+                                              onSelect={() => onDeleteRootKnowledge(knowledge)}
+                                            >
+                                              删除
+                                            </ContextMenuItem>
+                                          </ContextMenuContent>
+                                        </ContextMenu>
+                                      );
+                                    })}
+                                    <button
+                                      className="mt-0.5 flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+                                      onClick={() => onCreateRootKnowledge(direction)}
+                                      type="button"
+                                    >
+                                      <Plus className="h-3 w-3" />
+                                      添加主知识/技能
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            </ContextMenuTrigger>
+                            <ContextMenuContent className="w-44">
+                              <ContextMenuItem onSelect={() => onCreateRootKnowledge(direction)}>
+                                新增主知识/技能
+                              </ContextMenuItem>
+                              <ContextMenuItem onSelect={() => onEditDirection(direction)}>编辑方向</ContextMenuItem>
+                              <ContextMenuSeparator />
+                              <ContextMenuItem
+                                className="text-destructive focus:text-destructive"
+                                onSelect={() => onDeleteDirection(direction)}
+                              >
+                                删除方向
+                              </ContextMenuItem>
+                            </ContextMenuContent>
+                          </ContextMenu>
                         );
                       })}
-                      {directions.length === 0 && (
-                        <p className="px-2 py-2 text-[11px] text-stone-400 dark:text-stone-500">暂无方向</p>
-                      )}
-                      <div className="py-0.5">
-                        <button
-                          className={addActionClassName}
-                          onClick={() => onCreateDirection(major)}
-                          type="button"
-                        >
-                          <Plus className="h-3 w-3" />
-                          添加方向
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </ContextMenuTrigger>
-              <ContextMenuContent className="w-auto min-w-0">
-                <ContextMenuItem inset onSelect={() => toggleMajor(major.id)}>
-                  {expanded ? "收起专业" : "展开专业"}
-                </ContextMenuItem>
-                <ContextMenuItem inset onSelect={() => onCreateDirection(major)}>
-                  新增方向
-                </ContextMenuItem>
-                <ContextMenuItem inset onSelect={() => onEditMajor(major)}>
-                  编辑专业
-                </ContextMenuItem>
-                <ContextMenuSeparator />
-                <ContextMenuItem
-                  className="text-destructive focus:text-destructive"
-                  inset
-                  onSelect={() => onDeleteMajor(major)}
-                >
-                  删除专业
-                </ContextMenuItem>
-              </ContextMenuContent>
-            </ContextMenu>
-          );
-        })}
-        {majors.length === 0 && (
-          <p className="px-2 py-6 text-center text-xs text-stone-400 dark:text-stone-500">暂无专业，先创建一个专业</p>
-        )}
+
+                    {isDirectionMode && filteredDirections.length === 0 && !normalizedQuery && (
+                      <p className="px-2 py-1.5 text-[11px] text-muted-foreground/70">暂无方向</p>
+                    )}
+
+                    {isDirectionMode && (
+                      <button
+                        className="mt-0.5 flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+                        onClick={() => onCreateDirection(major)}
+                        type="button"
+                      >
+                        <Plus className="h-3 w-3" />
+                        添加方向
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {visibleMajors.length === 0 && (
+            <div className="px-3 py-8 text-center">
+              {normalizedQuery ? (
+                <p className="text-xs text-muted-foreground">未找到匹配的内容</p>
+              ) : (
+                <>
+                  <p className="mb-3 text-xs text-muted-foreground">暂无专业</p>
+                  <Button onClick={onCreateMajor} size="sm" type="button" variant="outline">
+                    <Plus className="mr-1 h-3.5 w-3.5" />
+                    创建第一个专业
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </div>
-      </aside>
-    </TooltipProvider>
+    </aside>
   );
 }

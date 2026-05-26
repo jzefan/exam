@@ -15,6 +15,7 @@ import {
   LayoutDashboard,
   Network,
   FileText,
+  Wrench,
 } from "lucide-react";
 import {
   NavigationMenu,
@@ -122,6 +123,7 @@ export function Layout() {
     location.pathname.startsWith("/exams/practice/edit/") ||
     /^\/exams\/[^/]+\/view$/.test(location.pathname);
   const isFullScreenPage = isKnowledgePage || isGradingPage || isQuestionImportPage || isPaperImportPage;
+  const isAnalysisPage = /^\/exams\/[^/]+\/analysis/.test(location.pathname);
   const [examMenuOpen, setExamMenuOpen] = useState(false);
   const [questionMenuOpen, setQuestionMenuOpen] = useState(false);
 
@@ -275,6 +277,25 @@ export function Layout() {
                   </NavigationMenuItem>
                 )}
 
+                {/* ---- 运营管理 (平台管理员) ---- */}
+                {isAdmin && (
+                  <NavigationMenuItem>
+                    <NavigationMenuLink
+                      className={cn(
+                        navigationMenuTriggerStyle(),
+                        isActive("/operations") ? "bg-accent/50 text-accent-foreground" : "",
+                      )}
+                      onClick={(e: React.MouseEvent) => {
+                        e.preventDefault();
+                        navigate("/operations");
+                      }}
+                    >
+                      <Wrench size={16} className="mr-1.5" />
+                      运营管理
+                    </NavigationMenuLink>
+                  </NavigationMenuItem>
+                )}
+
                 {/* ---- 题库管理 (教师、管理员) ---- */}
                 {(isTeacher || isAdmin) && (
                   <NavigationMenuItem className="relative">
@@ -352,11 +373,13 @@ export function Layout() {
         </div>
       </header>
 
-      <main className={cn("flex-1", isFullScreenPage ? "min-h-0 overflow-hidden" : "overflow-y-auto")}>
+      <main className={cn("flex-1", isFullScreenPage ? "min-h-0 overflow-hidden" : "overflow-y-auto overflow-x-hidden")}>
         <div
           className={cn(
             isFullScreenPage
               ? "h-full min-h-0 w-full px-0 py-0"
+              : isAnalysisPage
+                ? "w-full px-0 py-0"
               : isExamWorkflowPage
                 ? "w-full px-4 py-6 sm:px-6"
               : "mx-auto w-full max-w-screen-xl px-4 py-6 sm:px-6",

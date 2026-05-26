@@ -8,6 +8,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    Enum as SAEnum,
     Float,
     ForeignKey,
     Integer,
@@ -30,6 +31,14 @@ class ExamStatus(str, enum.Enum):
     ONGOING = "ongoing"
     COMPLETED = "completed"
     CLOSED = "closed"
+
+
+class ExamAttemptState(str, enum.Enum):
+    CREATED = "created"
+    IN_PROGRESS = "in_progress"
+    SUBMITTED = "submitted"
+    GRADED = "graded"
+    EXPIRED = "expired"
 
 
 class AppealStatus(str, enum.Enum):
@@ -86,6 +95,9 @@ class ExamStudent(Base, TimestampMixin):
     student_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
     )
+    attempt_state: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=ExamAttemptState.CREATED.value, server_default="created"
+    )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     saved_answers: Mapped[dict[str, dict] | None] = mapped_column(JSON, nullable=True, default=dict)
     switch_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -104,6 +116,10 @@ class ExamStudent(Base, TimestampMixin):
 
     student: Mapped["app.auth.models.User"] = relationship(  # type: ignore[name-defined]
         "User", foreign_keys=[student_id], lazy="joined"
+    )
+
+    __table_args__ = (
+        Index("ix_exam_students_student_attempt_state", "student_id", "attempt_state"),
     )
 
 

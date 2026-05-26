@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useGetIdentity, useList } from "@refinedev/core";
+import { getUserRole } from "@/types/rbac";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import {
   getGeneratedQuestionPersistKey,
   useUnsavedGeneratedQuestionsGuard,
 } from "@/hooks/use-unsaved-generated-questions-guard";
+import { formatQuestionBankLabel } from "@/lib/question-banks";
 import { cn } from "@/lib/utils";
 import {
   ArrowRight,
@@ -76,7 +78,7 @@ import {
   AI_MODEL_OPTIONS,
   type AIModelProvider,
 } from "@/components/questions/ai-question-config-constants";
-import type { SelectedKnowledgePoint } from "@/components/questions/knowledge-point-selector";
+import { KnowledgePointSelector, type SelectedKnowledgePoint } from "@/components/questions/knowledge-point-selector";
 import { AIGenerateLoadingOverlay } from "@/pages/questions/components/ai-generate-loading-overlay";
 import {
   DEFAULT_NOTES,
@@ -269,6 +271,7 @@ export function ExamWizardForm({
     code: 0,
   });
   const [aiModel, setAIModel] = useState<AIModelProvider>("deepseek");
+  const [mainKnowledgePoint, setMainKnowledgePoint] = useState<SelectedKnowledgePoint | null>(null);
   const [aiSelectedKnowledgePoints, setAISelectedKnowledgePoints] = useState<SelectedKnowledgePoint[]>([]);
   const [aiPrompt, setAIPrompt] = useState("");
   const [aiQuestions, setAIQuestions] = useState<GeneratedQuestion[]>([]);
@@ -336,7 +339,9 @@ export function ExamWizardForm({
   const isDirty = JSON.stringify(form) !== JSON.stringify(initialValues);
 
   // Per-user title uniqueness check (create mode only).
-  const { data: identity } = useGetIdentity<{ id?: string }>();
+  const { data: identity } = useGetIdentity<{ id?: string; primary_org?: { role_name: string } | null }>();
+  const role = identity ? getUserRole(identity) : "";
+  const mainKPTrigger = role === "evaluator" ? "选择主技能点" : "选择课程";
   const [debouncedTitle, setDebouncedTitle] = useState(form.title.trim());
   useEffect(() => {
     const t = window.setTimeout(() => setDebouncedTitle(form.title.trim()), 300);
@@ -1551,7 +1556,7 @@ export function ExamWizardForm({
                       <SelectItem value={ALL_BANKS}>全部题库</SelectItem>
                       {questionBanks.map((bank) => (
                         <SelectItem key={bank.id} value={bank.id}>
-                          {bank.name}
+                          {formatQuestionBankLabel(bank, { showOwner: role === "platform_admin" })}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -1725,6 +1730,7 @@ export function ExamWizardForm({
             onModelChange={setAIModel}
             selectedKnowledgePoints={aiSelectedKnowledgePoints}
             onSelectedKnowledgePointsChange={setAISelectedKnowledgePoints}
+            filterRootNodeId={mainKnowledgePoint?.id}
             customPrompt={aiPrompt}
             onCustomPromptChange={setAIPrompt}
             allocationError={
@@ -1941,6 +1947,25 @@ export function ExamWizardForm({
                     />
                   </FieldHint>
                 </div>
+
+                <KnowledgePointSelector
+                  fetcher={apiRequest}
+                  selectedKnowledgePoints={mainKnowledgePoint ? [mainKnowledgePoint] : []}
+                  onSelectedKnowledgePointsChange={(points) => {
+                    const next = points[points.length - 1] ?? null;
+                    setMainKnowledgePoint(next);
+                    if (next?.id !== mainKnowledgePoint?.id) {
+                      setAISelectedKnowledgePoints([]);
+                    }
+                  }}
+                  storageKey="exam-main-knowledge-point"
+                  label=""
+                  triggerLabel={mainKPTrigger}
+                  selectionTarget="root"
+                  selectionMode="single"
+                  showUsageShortcuts={false}
+                  popoverSide="bottom"
+                />
 
                 <div className="space-y-1.5">
                   <FieldHint label="岗位" enabled={Boolean(form.position_id)}>

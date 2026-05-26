@@ -49,6 +49,70 @@ async def test_create_direction_and_get_tree(admin_client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_root_knowledge_point_names_are_unique_within_major(admin_client: AsyncClient):
+    major = (await admin_client.post("/api/knowledge/majors", json={"name": "Knowledge Major"})).json()
+    direction_a = (
+        await admin_client.post(
+            "/api/knowledge/directions",
+            json={"major_id": major["id"], "name": "方向A"},
+        )
+    ).json()
+    direction_b = (
+        await admin_client.post(
+            "/api/knowledge/directions",
+            json={"major_id": major["id"], "name": "方向B"},
+        )
+    ).json()
+
+    first = await admin_client.post(
+        "/api/knowledge/knowledge-points",
+        json={"direction_id": direction_a["id"], "name": "计算机网络"},
+    )
+    assert first.status_code == 201
+
+    duplicate = await admin_client.post(
+        "/api/knowledge/knowledge-points",
+        json={"direction_id": direction_b["id"], "name": "计算机网络"},
+    )
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"] == "该专业下已存在同名主知识点"
+
+
+@pytest.mark.asyncio
+async def test_root_knowledge_point_options_include_major_aggregated_details(admin_client: AsyncClient):
+    major = (await admin_client.post("/api/knowledge/majors", json={"name": "Aggregated Major"})).json()
+    direction_a = (
+        await admin_client.post(
+            "/api/knowledge/directions",
+            json={"major_id": major["id"], "name": "方向A"},
+        )
+    ).json()
+    direction_b = (
+        await admin_client.post(
+            "/api/knowledge/directions",
+            json={"major_id": major["id"], "name": "方向B"},
+        )
+    ).json()
+    await admin_client.post(
+        "/api/knowledge/knowledge-points",
+        json={"direction_id": direction_a["id"], "name": "操作系统", "difficulty": "中级"},
+    )
+    await admin_client.post(
+        "/api/knowledge/knowledge-points",
+        json={"direction_id": direction_b["id"], "name": "计算机网络", "difficulty": "初级"},
+    )
+
+    response = await admin_client.get("/api/knowledge/root-knowledge-points")
+
+    assert response.status_code == 200
+    items = [item for item in response.json() if item["major_id"] == major["id"]]
+    assert [item["name"] for item in items] == ["操作系统", "计算机网络"]
+    assert {item["direction_name"] for item in items} == {"方向A", "方向B"}
+    assert all(item["parent_id"] is None for item in items)
+    assert all("question_count" in item for item in items)
+
+
+@pytest.mark.asyncio
 async def test_admin_lists_new_direction_before_knowledge_points_exist(admin_client: AsyncClient):
     major = (await admin_client.post("/api/knowledge/majors", json={"name": "Physics"})).json()
 

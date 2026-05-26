@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.auth.router import router as auth_router
+from app.auth.oidc_router import oidc_router
 from app.auth.user_settings import router as user_settings_router
 from app.auth.users_router import router as users_router
 from app.config import settings
@@ -26,7 +27,10 @@ from app.analytics.router import router as analytics_router
 from app.ai_pipeline.router import router as ai_pipeline_router
 from app.uploads.router import router as uploads_router
 from app.notifications.router import router as notifications_router
+from app.operations.router import router as operations_router
 from app.papers.router import router as papers_router
+from app.activity_logs.middleware import ActivityContextMiddleware
+from app.activity_logs.router import router as activity_logs_router
 
 
 @asynccontextmanager
@@ -41,6 +45,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.grading.seed import seed_grading_defaults
     from app.grading.service import recover_pending_exam_submission_tasks
     from app.notifications.models import Notification  # noqa: F401
+    from app.activity_logs.models import ActivityLog  # noqa: F401
     from app.rbac.service import assign_unowned_students_to_single_teacher
     from app.rbac.seed import seed_permissions, seed_roles
 
@@ -92,8 +97,10 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["X-Total-Count", "X-No-Bank-Count", "X-Response-Time-Ms"],
 )
+app.add_middleware(ActivityContextMiddleware)
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+app.include_router(oidc_router, prefix="/api/auth", tags=["auth-oidc"])
 app.include_router(user_settings_router, prefix="/api/auth", tags=["user-settings"])
 app.include_router(users_router, prefix="/api/users", tags=["users"])
 app.include_router(questions_router, prefix="/api/questions", tags=["questions"])
@@ -120,6 +127,8 @@ app.include_router(ai_pipeline_router, prefix="/api/ai-pipeline", tags=["ai-pipe
 app.include_router(ai_generate_router, prefix="/api/questions/ai-generate", tags=["ai-generate"])
 app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"])
 app.include_router(papers_router, prefix="/api/papers", tags=["papers"])
+app.include_router(operations_router, prefix="/api/operations", tags=["operations"])
+app.include_router(activity_logs_router, prefix="/api/operations/activity-logs", tags=["activity-logs"])
 
 
 @app.get("/api/health")

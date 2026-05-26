@@ -37,6 +37,7 @@ from app.questions.schemas import (
     QuestionImportDocumentRecognizeRequest,
     QuestionImportDocumentRecognizeResponse,
     QuestionImportDraft,
+    QuestionImportImageInput,
 )
 from app.questions.service import (
     bulk_create_questions_fast,
@@ -437,10 +438,12 @@ def question_create_from_import_draft(
         kp.id for kp in (draft.suggested_knowledge_points or [])
     ]
 
+    content_html = _build_import_content_html(draft.content_text, draft.images)
+
     return QuestionCreate(
         type=draft.type,
         title=(draft.title or draft.content_text[:120] or "未命名题目")[:500],
-        content={"text": draft.content_text},
+        content={"text": draft.content_text, "html": content_html},
         options=draft.options if draft.type.value == "choice" else None,
         answer=answer,
         analysis=draft.analysis,
@@ -450,6 +453,37 @@ def question_create_from_import_draft(
         tag_ids=[],
         question_bank_id=question_bank_id,
     )
+
+
+def _escape_import_html(value: str) -> str:
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#039;")
+    )
+
+
+def _build_import_content_html(
+    content_text: str,
+    images: list[QuestionImportImageInput] | None = None,
+) -> str:
+    lines = [line.strip() for line in content_text.splitlines() if line.strip()]
+    parts: list[str] = []
+    for line in lines:
+        if line.startswith("<img "):
+            parts.append(line)
+        else:
+            parts.append(f"<p>{_escape_import_html(line)}</p>")
+
+    for image in images or []:
+        alt = _escape_import_html((image.alt or "").strip() or "题目图片")
+        src = _escape_import_html(image.url)
+        image_id = _escape_import_html(image.image_id)
+        parts.append(f'<img src="{src}" alt="{alt}" data-image-id="{image_id}" />')
+
+    return "".join(parts)
 
 
 async def create_import_session_from_recognition(

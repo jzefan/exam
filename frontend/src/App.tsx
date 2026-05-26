@@ -94,6 +94,11 @@ const StandardLibraryPage = lazyNamed(
 const JobModelUploadAI = lazyNamed(() => import("./pages/job-models/upload-ai"), "JobModelUploadAI");
 const ModelConfigPage = lazyNamed(() => import("./pages/settings/model-config"), "ModelConfigPage");
 const GradingCenterPage = lazyNamed(() => import("./pages/grading"), "GradingCenterPage");
+const OperationsRegradingPage = lazyNamed(() => import("./pages/operations/regrading"), "OperationsRegradingPage");
+const OperationsActivityLogsPage = lazyNamed(
+  () => import("./pages/operations/activity-logs"),
+  "OperationsActivityLogsPage",
+);
 const GwmxLanding = lazyNamed(() => import("./pages/gwmx/landing"), "GwmxLanding");
 const GwmxWorkbench = lazyNamed(() => import("./pages/gwmx/workbench"), "GwmxWorkbench");
 const CandidateLanding = lazyNamed(() => import("./pages/exam-invite/landing"), "CandidateLanding");
@@ -196,6 +201,11 @@ function App() {
                 list: "/grading",
                 meta: { label: "阅卷中心" },
               },
+              {
+                name: "operations",
+                list: "/operations",
+                meta: { label: "运营管理" },
+              },
             ]}
             options={{
               syncWithLocation: true,
@@ -282,6 +292,11 @@ function App() {
                     <Route path="/tags" element={<TagList />} />
                     <Route path="/knowledge" element={<KnowledgeManagementPage />} />
                     <Route path="/grading" element={<GradingCenterPage />} />
+                    <Route element={<RoleGuard allow={["platform_admin"]} />}>
+                      <Route path="/operations" element={<Navigate to="/operations/regrading" replace />} />
+                      <Route path="/operations/regrading" element={<OperationsRegradingPage />} />
+                      <Route path="/operations/activity-logs" element={<OperationsActivityLogsPage />} />
+                    </Route>
                     <Route path="/students" element={<StudentManagementPage />} />
                     <Route path="/settings/model" element={<ModelConfigPage />} />
                   </Route>

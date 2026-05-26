@@ -10,8 +10,10 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
+
+from app.activity_logs.service import CATEGORY_QUESTION, log_event
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -263,6 +265,62 @@ def _sanitize_generated_question(question: dict[str, Any]) -> dict[str, Any]:
     return question
 
 
+def _extract_generated_questions(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, dict):
+        questions = payload.get("questions")
+        if isinstance(questions, list):
+            return [
+                _sanitize_generated_question(question)
+                for question in questions
+                if isinstance(question, dict)
+            ]
+        return [_sanitize_generated_question(payload)]
+
+    if isinstance(payload, list):
+        return [
+            _sanitize_generated_question(question)
+            for question in payload
+            if isinstance(question, dict)
+        ]
+
+    return []
+
+
+def _build_generation_user_content(
+    *,
+    use_vision: bool,
+    material_images: list[str],
+    skipped_images: bool,
+    attempt_index: int,
+    generated_count: int,
+    remaining_count: int,
+    generated_titles: list[str],
+) -> Any:
+    if attempt_index == 0:
+        text = "请开始生成题目。"
+    else:
+        recent_titles = "、".join(generated_titles[-12:])
+        duplicate_instruction = f"已生成题目标题：{recent_titles}。" if recent_titles else ""
+        text = (
+            f"前面已成功收到 {generated_count} 道题，还差 {remaining_count} 道。"
+            f"请继续生成剩余 {remaining_count} 道，只输出新增题目的 JSON，不要重复已生成题目。"
+            f"{duplicate_instruction}"
+        )
+
+    if use_vision:
+        content: list[dict[str, Any]] = [
+            {"type": "text", "text": f"{text} 以下为学习资料的整页/嵌入图片，请结合图中信息出题。"},
+        ]
+        for image_url in material_images:
+            content.append({"type": "image_url", "image_url": {"url": image_url}})
+        return content
+
+    if skipped_images:
+        return f"{text} 注意：当前模型不支持图片理解，本次仅依据可用文本资料生成题目。"
+
+    return text
+
+
 async def generate_questions_stream(
     db: AsyncSession,
     request: AIGenerateRequest,
@@ -299,125 +357,139 @@ async def generate_questions_stream(
 
     # 多模态分支：仅在有图片且 provider 为 Qwen 时启用，强制切到 qwen-vl 模型。
     use_vision = bool(request.material_images) and request.model == AIModelProvider.QWEN
-    if use_vision:
-        user_content: Any = [
-            {"type": "text", "text": "请开始生成题目。以下为学习资料的整页/嵌入图片，请结合图中信息出题。"},
-        ]
-        for image_url in request.material_images:
-            user_content.append({"type": "image_url", "image_url": {"url": image_url}})
-    elif request.material_images and request.model != AIModelProvider.QWEN:
+    skipped_images = bool(request.material_images) and request.model != AIModelProvider.QWEN
+    if skipped_images:
         logger.info(
             "Skipping %d material images: provider %s does not support vision in this build",
             len(request.material_images),
             request.model.value,
         )
-        user_content = "请开始生成题目。"
-    else:
-        user_content = "请开始生成题目。"
 
     model_name = _request_model_name(provider_name, model_name, use_vision=use_vision)
-    payload = {
-        "model": model_name,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ],
-        "temperature": 0.8,
-        "stream": True,
-    }
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
 
     question_count = 0
-    accumulated = ""
-    brace_depth = 0
-    in_string = False
-    escape_next = False
+    generated_titles: list[str] = []
 
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
-            async with client.stream(
-                "POST",
-                _chat_completions_url(base_url),
-                json=payload,
-                headers=headers,
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    data = line.removeprefix("data:").strip()
-                    if not data or data == "[DONE]":
-                        continue
-                    try:
-                        parsed = json.loads(data)
-                    except json.JSONDecodeError:
-                        continue
-                    choices = parsed.get("choices")
-                    if not isinstance(choices, list) or not choices:
-                        continue
-                    delta = choices[0].get("delta") if isinstance(choices[0], dict) else None
-                    content = delta.get("content") if isinstance(delta, dict) else None
-                    if not isinstance(content, str) or not content:
-                        continue
+            max_attempts = max(1, request.total_count)
+            for attempt_index in range(max_attempts):
+                if question_count >= request.total_count:
+                    break
 
-                    # Accumulate and track JSON object boundaries
-                    for ch in content:
-                        if escape_next:
-                            escape_next = False
-                            if brace_depth > 0:
+                attempt_start_count = question_count
+                remaining_count = request.total_count - question_count
+                user_content = _build_generation_user_content(
+                    use_vision=use_vision,
+                    material_images=request.material_images,
+                    skipped_images=skipped_images,
+                    attempt_index=attempt_index,
+                    generated_count=question_count,
+                    remaining_count=remaining_count,
+                    generated_titles=generated_titles,
+                )
+                payload = {
+                    "model": model_name,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content},
+                    ],
+                    "temperature": 0.8,
+                    "stream": True,
+                }
+
+                accumulated = ""
+                brace_depth = 0
+                in_string = False
+                escape_next = False
+
+                async with client.stream(
+                    "POST",
+                    _chat_completions_url(base_url),
+                    json=payload,
+                    headers=headers,
+                ) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data = line.removeprefix("data:").strip()
+                        if not data or data == "[DONE]":
+                            continue
+                        try:
+                            parsed = json.loads(data)
+                        except json.JSONDecodeError:
+                            continue
+                        choices = parsed.get("choices")
+                        if not isinstance(choices, list) or not choices:
+                            continue
+                        delta = choices[0].get("delta") if isinstance(choices[0], dict) else None
+                        content = delta.get("content") if isinstance(delta, dict) else None
+                        if not isinstance(content, str) or not content:
+                            continue
+
+                        # Accumulate and track JSON object boundaries
+                        for ch in content:
+                            if escape_next:
+                                escape_next = False
+                                if brace_depth > 0:
+                                    accumulated += ch
+                                continue
+
+                            if ch == "\\" and in_string:
+                                escape_next = True
+                                if brace_depth > 0:
+                                    accumulated += ch
+                                continue
+
+                            if ch == '"' and brace_depth > 0:
+                                in_string = not in_string
                                 accumulated += ch
-                            continue
+                                continue
 
-                        if ch == "\\" and in_string:
-                            escape_next = True
-                            if brace_depth > 0:
+                            if in_string:
+                                if brace_depth > 0:
+                                    accumulated += ch
+                                continue
+
+                            if ch == "{":
+                                brace_depth += 1
                                 accumulated += ch
-                            continue
-
-                        if ch == '"' and brace_depth > 0:
-                            in_string = not in_string
-                            accumulated += ch
-                            continue
-
-                        if in_string:
-                            if brace_depth > 0:
+                            elif ch == "}" and brace_depth > 0:
                                 accumulated += ch
-                            continue
+                                brace_depth -= 1
+                                if brace_depth == 0:
+                                    # Complete JSON object or an envelope that contains multiple questions.
+                                    try:
+                                        parsed_payload = json.loads(accumulated)
+                                        for parsed_question in _extract_generated_questions(parsed_payload):
+                                            if question_count >= request.total_count:
+                                                break
+                                            question_count += 1
+                                            title = parsed_question.get("title")
+                                            if isinstance(title, str) and title.strip():
+                                                generated_titles.append(title.strip())
+                                            yield {
+                                                "type": "question",
+                                                "index": question_count,
+                                                "data": parsed_question,
+                                            }
+                                    except json.JSONDecodeError:
+                                        logger.warning(
+                                            "Failed to parse question JSON: %s",
+                                            accumulated[:200],
+                                        )
+                                    accumulated = ""
+                                    in_string = False
+                            elif brace_depth > 0:
+                                accumulated += ch
 
-                        if ch == "{":
-                            brace_depth += 1
-                            accumulated += ch
-                        elif ch == "}" and brace_depth > 0:
-                            accumulated += ch
-                            brace_depth -= 1
-                            if brace_depth == 0:
-                                # Complete JSON object
-                                try:
-                                    parsed_question = json.loads(accumulated)
-                                    if isinstance(parsed_question, dict):
-                                        parsed_question = _sanitize_generated_question(parsed_question)
-                                    if question_count >= request.total_count:
-                                        accumulated = ""
-                                        in_string = False
-                                        continue
-                                    question_count += 1
-                                    yield {
-                                        "type": "question",
-                                        "index": question_count,
-                                        "data": parsed_question,
-                                    }
-                                except json.JSONDecodeError:
-                                    logger.warning(
-                                        "Failed to parse question JSON: %s",
-                                        accumulated[:200],
-                                    )
-                                accumulated = ""
-                                in_string = False
-                        elif brace_depth > 0:
-                            accumulated += ch
+                if question_count == attempt_start_count:
+                    break
 
         if question_count != request.total_count:
             yield {
@@ -455,10 +527,28 @@ async def frequent_knowledge_points_endpoint(
 async def ai_generate_stream_endpoint(
     request: AIGenerateRequest,
     user: CurrentUser,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
     """Stream AI-generated questions via SSE."""
     _validate_generate_request(request)
+
+    await log_event(
+        db,
+        event_category=CATEGORY_QUESTION,
+        event_type="question_ai_generate",
+        user=user,
+        metadata={
+            "model": request.model.value if hasattr(request.model, "value") else str(request.model),
+            "total_count": request.total_count,
+            "difficulty": request.difficulty,
+            "type_distribution": request.type_distribution,
+            "knowledge_point_ids": [str(k) for k in request.knowledge_point_ids],
+            "has_material": bool(request.material_text or request.material_images),
+        },
+        request=http_request,
+    )
+    await db.commit()
 
     async def event_stream() -> AsyncIterator[str]:
         async for event in generate_questions_stream(db, request, user.id):

@@ -1,9 +1,11 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { IExamTaking, ISubmitExamResponse } from "@/types";
 import { apiClient } from "@/lib/api";
+import { setDraft, clearDraft } from "@/lib/exam-draft";
 
 interface UseExamTakingOptions {
   examData: IExamTaking | null;
+  principalId?: string;
 }
 
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -29,7 +31,8 @@ function buildAnswerBatch(
     .filter((item) => hasAnswerContent(item.answer_content));
 }
 
-export function useExamTaking({ examData }: UseExamTakingOptions) {
+export function useExamTaking({ examData, principalId }: UseExamTakingOptions) {
+  const attemptId = examData?.exam_id ?? "";
   const [answers, setAnswers] = useState<Record<string, Record<string, unknown>>>({});
   const [currentIndex, setCurrentIndex] = useState(0);
   const [showAll, setShowAll] = useState(false);
@@ -95,6 +98,9 @@ export function useExamTaking({ examData }: UseExamTakingOptions) {
       setAnswers((prev) => {
         const next = { ...prev, [questionId]: content };
         answersRef.current = next;
+        if (principalId && attemptId) {
+          setDraft(principalId, attemptId, next);
+        }
         return next;
       });
       dirtyRef.current.add(questionId);
@@ -104,7 +110,7 @@ export function useExamTaking({ examData }: UseExamTakingOptions) {
         void flushQuestions();
       }, 30_000);
     },
-    [flushQuestions],
+    [flushQuestions, principalId, attemptId],
   );
 
   const flushAnswers = useCallback(() => {
@@ -128,8 +134,11 @@ export function useExamTaking({ examData }: UseExamTakingOptions) {
     const response = await apiClient.post<ISubmitExamResponse>(`/api/student/exams/${examData.exam_id}/submit`, {
       answers: finalAnswers,
     });
+    if (principalId && attemptId) {
+      clearDraft(principalId, attemptId);
+    }
     return response.data;
-  }, [examData]);
+  }, [examData, principalId, attemptId]);
 
   const reportSwitch = useCallback(
     (count: number) => {

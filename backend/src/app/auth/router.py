@@ -2,9 +2,10 @@ from typing import Annotated
 import logging
 from time import perf_counter
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.activity_logs.service import CATEGORY_AUTH, log_event
 from app.auth.dependencies import CurrentUser
 from app.auth.schemas import (
     ForgotPasswordRequest,
@@ -48,30 +49,88 @@ LOGIN_FAILURE_MESSAGES = {
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-async def register(data: UserCreate, db: Annotated[AsyncSession, Depends(get_db)]) -> UserResponse:
+async def register(
+    data: UserCreate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
+) -> UserResponse:
     if await get_user_by_username(db, data.username):
+        await log_event(
+            db,
+            event_category=CATEGORY_AUTH,
+            event_type="register",
+            username=data.username,
+            success=False,
+            metadata={"reason": "username_exists"},
+            request=request,
+        )
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already exists")
     if data.email and await get_user_by_email(db, data.email):
+        await log_event(
+            db,
+            event_category=CATEGORY_AUTH,
+            event_type="register",
+            username=data.username,
+            success=False,
+            metadata={"reason": "email_exists"},
+            request=request,
+        )
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already exists")
     user = await create_user(db, data)
+    await log_event(
+        db,
+        event_category=CATEGORY_AUTH,
+        event_type="register",
+        user=user,
+        request=request,
+    )
     return await build_user_response(db, user)
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(data: LoginRequest, db: Annotated[AsyncSession, Depends(get_db)]) -> TokenResponse:
+async def login(
+    data: LoginRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
+) -> TokenResponse:
     started_at = perf_counter()
     user, failure_reason = await authenticate_user_with_reason(db, data.username, data.password)
     authenticated_at = perf_counter()
     if user is None:
+        await log_event(
+            db,
+            event_category=CATEGORY_AUTH,
+            event_type="login",
+            username=data.username,
+            success=False,
+            metadata={"reason": failure_reason.value if failure_reason else "unknown"},
+            request=request,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=LOGIN_FAILURE_MESSAGES.get(failure_reason, "登录失败，请检查账号和密码"),
         )
     if user.user_type == "external_guest":
+        await log_event(
+            db,
+            event_category=CATEGORY_AUTH,
+            event_type="login",
+            user=user,
+            success=False,
+            metadata={"reason": "external_guest_rejected"},
+            request=request,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="External guests must use invitation links to access exams",
         )
+    await log_event(
+        db,
+        event_category=CATEGORY_AUTH,
+        event_type="login",
+        user=user,
+        request=request,
+    )
     token = create_access_token(user.id, "")
     token_created_at = perf_counter()
     user_response = await build_user_response(db, user, include_relationship_metadata=False)

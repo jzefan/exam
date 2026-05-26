@@ -11,6 +11,7 @@ import type { IPaper, IPaperDetail, PaperSourceType } from "@/types";
 
 import { paperApiRequest } from "./api";
 import { PaperAIGenerateDialog } from "./ai-generate-dialog";
+import { PageIntroHeader } from "@/components/ui/page-intro-header";
 
 const SOURCE_LABELS: Record<PaperSourceType, string> = {
   manual: "手工",
@@ -96,20 +97,22 @@ export function PaperListPage() {
     });
 
   return (
-    <div className="mx-auto max-w-[1200px] space-y-8">
-      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
-        <div className="space-y-1">
-          <h1 className="text-xl font-bold tracking-tight text-foreground">试卷列表</h1>
-          <p className="text-sm text-muted-foreground">统一管理手工与导入试卷，并支持复用出新卷</p>
-        </div>
-        <div className="flex flex-wrap gap-2 self-start sm:self-auto">
-          <Button variant="outline" className="h-9 w-fit shrink-0 px-4 font-medium" onClick={() => navigate("/exams/create")}>
-            <FilePlus2 className="mr-1.5 h-4 w-4" />
-            新建试卷
-          </Button>
-          <Button className="h-9 w-fit shrink-0 px-4 font-medium" onClick={() => navigate("/papers/import")}>导入试卷</Button>
-        </div>
-      </div>
+    <div className="space-y-6">
+      <PageIntroHeader
+        title="试卷列表"
+        description="统一管理手工与导入试卷，并支持复用出新卷"
+        actions={
+          <>
+            <Button variant="outline" className="h-9 w-fit shrink-0 px-4 font-medium" onClick={() => navigate("/exams/create")}>
+              <FilePlus2 className="mr-1.5 h-4 w-4" />
+              新建试卷
+            </Button>
+            <Button className="h-9 w-fit shrink-0 px-4 font-medium" onClick={() => navigate("/papers/import")}>导入试卷</Button>
+          </>
+        }
+      />
+
+      <div className="mx-auto max-w-[1200px] space-y-8">
 
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border/40 bg-muted/5 p-4">
         <div className="inline-flex items-center rounded-lg border border-border/60 bg-background p-1">
@@ -224,6 +227,7 @@ export function PaperListPage() {
           rootKnowledgePointName={aiDialogPaper.root_knowledge_point?.name}
         />
       ) : null}
+      </div>
     </div>
   );
 }

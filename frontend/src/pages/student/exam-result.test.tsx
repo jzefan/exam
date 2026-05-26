@@ -130,6 +130,10 @@ describe("ExamResultPage", () => {
     await user.click(screen.getByRole("button", { name: /跳转到第 2 题/ }));
 
     expect(screen.getByText("请实现一个支持 get / put 的 LRU Cache。")).toBeInTheDocument();
+    const codeBlocks = screen.getAllByTestId("code-block");
+    expect(codeBlocks.length).toBeGreaterThan(0);
+    expect(codeBlocks[0]).toHaveAttribute("data-language", "cpp");
+    expect(screen.getByText("int main() { return 0; }")).toBeInTheDocument();
     expect(screen.getByText("反馈内容：我的淘汰逻辑已经覆盖边界情况。")).toBeInTheDocument();
     expect(screen.getByText("教师回复：已收到，稍后复核。")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "已提交反馈" })).toBeDisabled();
@@ -218,7 +222,8 @@ describe("ExamResultPage", () => {
 
     await user.click(screen.getByRole("button", { name: "展开题目解析和反馈" }));
     expect(screen.queryByText("答案正确性")).not.toBeInTheDocument();
-    expect(screen.getByText("题目解析：使用队列按层推进。")).toBeInTheDocument();
+    expect(screen.getByText("题目解析")).toBeInTheDocument();
+    expect(screen.getByText("使用队列按层推进。")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "收起详细信息" }));
     expect(screen.queryByText("题目解析：使用队列按层推进。")).not.toBeInTheDocument();
@@ -235,7 +240,7 @@ describe("ExamResultPage", () => {
 
     await user.click(screen.getAllByRole("button", { name: "展开评分详情、题目解析和反馈" })[1]);
     expect(screen.getByText("要点完整度")).toBeInTheDocument();
-    expect(screen.getByText("题目解析：还可以补充分区后的递归终止条件。")).toBeInTheDocument();
+    expect(screen.getByText("还可以补充分区后的递归终止条件。")).toBeInTheDocument();
     expect(screen.getByText("反馈内容：我在答案最后提到了边界情况。")).toBeInTheDocument();
     expect(screen.getByText("教师回复：教师会结合原答案复核。")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "收起详细信息" }).length).toBeGreaterThan(0);
@@ -282,9 +287,118 @@ describe("ExamResultPage", () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findAllByTestId("code-block")).toHaveLength(2);
-    expect(screen.getAllByText("SQL")).toHaveLength(2);
+    const codeBlocks = await screen.findAllByTestId("code-block");
+    expect(codeBlocks).toHaveLength(2);
+    expect(codeBlocks[0]).toHaveAttribute("data-language", "sql");
+    expect(codeBlocks[1]).toHaveAttribute("data-language", "sql");
     expect(screen.getByText("SELECT * FROM scores WHERE score > 90;")).toBeInTheDocument();
     expect(screen.getByText("SELECT name FROM scores WHERE score > 90;")).toBeInTheDocument();
+  });
+
+  it("shows model evaluation output for fill-in questions when available", async () => {
+    getMock.mockResolvedValue({
+      data: {
+        exam_id: "exam-fill-in",
+        title: "Pandas 考试",
+        submitted_at: "2026-04-10T10:00:00.000Z",
+        total_score: 2,
+        score: 1.33,
+        can_view: true,
+        blocked_reason: null,
+        questions: [
+          {
+            question_id: "q-fill",
+            order: 32,
+            type: "fill_in",
+            title: "Pandas 聚合函数",
+            content: { text: "<p>Pandas中聚合数据的三个函数分别是____、____、____。</p>" },
+            options: null,
+            total_score: 2,
+            score_awarded: 1.33,
+            is_correct: false,
+            answer_content: { blanks: ["agg()", "apply()", "transform()"] },
+            standard_answer: { correct: ["groupby", "agg", "transform"] },
+            analysis: null,
+            feedback: {
+              dimensions: [{ name: "填空准确率", score: 1.33, max_score: 2, comment: "共命中 2/3 个空。" }],
+              strengths: ["命中 2 个空。"],
+              deductions: ["第 1 空应为 groupby"],
+              suggestions: ["复查拼写、术语与顺序。"],
+              model_evaluation: {
+                model: "deepseek-v4-flash",
+                matches: [
+                  { is_correct: false, reason: "apply 不是 groupby。" },
+                  { is_correct: true, reason: "agg() 与 agg 等价。" },
+                  { is_correct: true, reason: "transform() 与 transform 等价。" },
+                ],
+              },
+            },
+            appeal_status: null,
+            appeal_reason: null,
+            appeal_reply: null,
+          },
+        ],
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/my-exams/exam-fill-in/result"]}>
+        <Routes>
+          <Route path="/my-exams/:id/result" element={<ExamResultPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect((await screen.findAllByText("1.33 / 2")).length).toBeGreaterThan(0);
+    expect(screen.getByText("模型评估输出")).toBeInTheDocument();
+    expect(screen.getByText("deepseek-v4-flash")).toBeInTheDocument();
+    expect(screen.getByText("agg() 与 agg 等价。")).toBeInTheDocument();
+    expect(screen.getByText("transform() 与 transform 等价。")).toBeInTheDocument();
+  });
+
+  it("renders question analysis as rich html so embedded images remain viewable", async () => {
+    getMock.mockResolvedValue({
+      data: {
+        exam_id: "exam-analysis-html",
+        title: "图文解析考试",
+        submitted_at: "2026-04-10T10:00:00.000Z",
+        total_score: 10,
+        score: 10,
+        can_view: true,
+        blocked_reason: null,
+        questions: [
+          {
+            question_id: "q-analysis-html",
+            order: 0,
+            type: "choice",
+            title: "识别流程图节点",
+            content: { text: "<p>请选择正确节点。</p>" },
+            options: { A: "开始", B: "结束" },
+            total_score: 10,
+            score_awarded: 10,
+            is_correct: true,
+            answer_content: { value: "A" },
+            standard_answer: { value: "A" },
+            analysis:
+              '<p>先看箭头方向。</p><p><img src="https://example.com/analysis.png" alt="流程图解析" /></p>',
+            feedback: { dimensions: [], deductions: [], suggestions: [] },
+            appeal_status: null,
+            appeal_reason: null,
+            appeal_reply: null,
+          },
+        ],
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/my-exams/exam-analysis-html/result"]}>
+        <Routes>
+          <Route path="/my-exams/:id/result" element={<ExamResultPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("先看箭头方向。")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "流程图解析" })).toBeInTheDocument();
   });
 });

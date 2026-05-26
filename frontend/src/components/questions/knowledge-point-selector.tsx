@@ -130,6 +130,7 @@ function KnowledgeTreeNodeList({
   visibleNodeIds,
   onToggleExpand,
   onToggleSelect,
+  filteredRootId,
 }: {
   nodes: KnowledgeTreeNode[];
   parentId: string | null;
@@ -140,8 +141,14 @@ function KnowledgeTreeNodeList({
   visibleNodeIds: Set<string>;
   onToggleExpand: (id: string) => void;
   onToggleSelect: (node: KnowledgeTreeNode) => void;
+  filteredRootId?: string;
 }) {
-  const children = nodes.filter((node) => node.parent_id === parentId && visibleNodeIds.has(node.id));
+  const children = nodes.filter(
+    (node) =>
+      node.parent_id === parentId &&
+      visibleNodeIds.has(node.id) &&
+      (depth !== 0 || !filteredRootId || node.id === filteredRootId),
+  );
   if (children.length === 0) return null;
 
   return (
@@ -180,6 +187,7 @@ function KnowledgeTreeNodeList({
                 visibleNodeIds={visibleNodeIds}
                 onToggleExpand={onToggleExpand}
                 onToggleSelect={onToggleSelect}
+                filteredRootId={filteredRootId}
               />
             )}
           </div>
@@ -203,6 +211,7 @@ export function KnowledgePointSelector({
   selectionMode = "multiple",
   showUsageShortcuts = true,
   onOpenChange,
+  filterRootNodeId,
 }: {
   fetcher: KnowledgePointSelectorFetcher;
   selectedKnowledgePoints: SelectedKnowledgePoint[];
@@ -217,6 +226,7 @@ export function KnowledgePointSelector({
   selectionMode?: "single" | "multiple";
   showUsageShortcuts?: boolean;
   onOpenChange?: (open: boolean) => void;
+  filterRootNodeId?: string;
 }) {
   const [majors, setMajors] = useState<KnowledgeMajor[]>([]);
   const [directions, setDirections] = useState<Record<string, KnowledgeDirection[]>>({});
@@ -339,7 +349,7 @@ export function KnowledgePointSelector({
 
   return (
     <div className={cn("space-y-1.5", className)}>
-      <Label>{label}</Label>
+      {label ? <Label>{label}</Label> : null}
       {selectedKnowledgePoints.length > 0 ? (
         <div className="flex flex-wrap gap-1">
           {selectedKnowledgePoints.map((knowledgePoint) => (
@@ -379,9 +389,9 @@ export function KnowledgePointSelector({
           <Button
             variant="outline"
             type="button"
-            className="w-full justify-between"
+            className="w-full justify-between font-normal"
           >
-            <span>
+            <span className={selectedKnowledgePoints.length === 0 ? "text-muted-foreground" : undefined}>
               {selectedKnowledgePoints.length > 0
                 ? selectionMode === "single"
                   ? selectedKnowledgePoints[0]?.name
@@ -516,7 +526,7 @@ export function KnowledgePointSelector({
                 const majorKeywordMatched = hasKeyword && major.name.toLowerCase().includes(normalizedKeyword);
                 const majorExpanded = hasKeyword ? true : expandedMajors.has(major.id);
                 const majorDirections = directions[major.id] ?? [];
-                const visibleDirections = hasKeyword
+                let visibleDirections = hasKeyword
                   ? majorDirections.filter((direction) => {
                       const directionKeywordMatched = direction.name.toLowerCase().includes(normalizedKeyword);
                       const nodesForDirection = treeNodes[direction.id] ?? [];
@@ -524,7 +534,13 @@ export function KnowledgePointSelector({
                       return majorKeywordMatched || directionKeywordMatched || visibility.visibleNodeIds.size > 0;
                     })
                   : majorDirections;
-                if (hasKeyword && !majorKeywordMatched && visibleDirections.length === 0) {
+                if (filterRootNodeId) {
+                  visibleDirections = visibleDirections.filter((direction) => {
+                    const nodes = treeNodes[direction.id] ?? [];
+                    return nodes.length === 0 || nodes.some((n) => n.id === filterRootNodeId && n.parent_id === null);
+                  });
+                }
+                if ((hasKeyword || filterRootNodeId) && !majorKeywordMatched && visibleDirections.length === 0) {
                   return null;
                 }
 
@@ -608,6 +624,7 @@ export function KnowledgePointSelector({
                                 setExpandedNodes(next);
                               }}
                               onToggleSelect={(node) => toggleKnowledgePoint(node, major.name, direction.name)}
+                              filteredRootId={filterRootNodeId}
                             />
                           ) : null}
                         </div>

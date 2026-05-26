@@ -238,8 +238,21 @@ async def get_tree(direction_id: uuid.UUID, db: DB, user: CurrentUser) -> FlowDa
 @router.post("/knowledge-points", response_model=dict, status_code=201)
 async def create_kp(data: KnowledgePointCreate, db: DB, user: WriteUser) -> dict[str, str]:
     is_admin = await _is_knowledge_admin(db, user)
+    normalized_name = data.name.strip()
+    data = data.model_copy(update={"name": normalized_name})
     if data.parent_id is not None:
         await _get_visible_kp_or_404(db, data.parent_id, user, is_admin)
+    else:
+        direction = await service.get_direction(db, data.direction_id, user=user, is_platform_admin=is_admin)
+        if not direction:
+            raise HTTPException(status_code=404, detail="Direction not found")
+        if await service.find_root_knowledge_by_name_for_owner_in_major(
+            db,
+            owner_id=user.id,
+            major_id=direction.major_id,
+            name=normalized_name,
+        ):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该专业下已存在同名主知识点")
     kp = await service.create_knowledge_point(db, data, user.id)
     return {"id": str(kp.id), "name": kp.name, "owner_id": str(kp.owner_id), "visibility": kp.visibility.value}
 
@@ -249,6 +262,20 @@ async def update_kp(kp_id: uuid.UUID, data: KnowledgePointUpdate, db: DB, user: 
     is_admin = await _is_knowledge_admin(db, user)
     kp = await _get_visible_kp_or_404(db, kp_id, user, is_admin)
     _ensure_can_write_kp(kp, user, is_admin)
+    if data.name is not None:
+        data = data.model_copy(update={"name": data.name.strip()})
+    if data.name is not None and kp.parent_id is None and kp.direction_id is not None:
+        direction = await service.get_direction(db, kp.direction_id, user=user, is_platform_admin=is_admin)
+        if not direction:
+            raise HTTPException(status_code=404, detail="Direction not found")
+        if await service.find_root_knowledge_by_name_for_owner_in_major(
+            db,
+            owner_id=kp.owner_id,
+            major_id=direction.major_id,
+            name=data.name.strip(),
+            exclude_id=kp_id,
+        ):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该专业下已存在同名主知识点")
     kp = await service.update_knowledge_point(db, kp, data)
     return {"id": str(kp.id), "name": kp.name, "owner_id": str(kp.owner_id), "visibility": kp.visibility.value}
 

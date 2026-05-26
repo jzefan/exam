@@ -21,12 +21,14 @@ import type { IAppealResponse, IExamResult } from "@/types";
 import { cn } from "@/lib/utils";
 import {
   formatStudentDate,
+  getStudentAnswerCodeLanguage,
   inferStudentAnswerLanguage,
   renderAnswerAsCode,
   renderAnswerSummary,
   renderStandardAnswer,
 } from "./utils";
 import { getStudentLocale, getStudentQuestionTypeLabel, tStudent } from "./i18n";
+import { useIsMobile } from "@/hooks/use-viewport";
 
 const api = axios.create();
 api.interceptors.request.use((config) => {
@@ -38,6 +40,7 @@ api.interceptors.request.use((config) => {
 export function ExamResultPage() {
   const navigate = useNavigate();
   const locale = getStudentLocale();
+  const isMobile = useIsMobile();
   const { id } = useParams<{ id: string }>();
   const [result, setResult] = useState<IExamResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -219,6 +222,8 @@ export function ExamResultPage() {
     const detailToggleLabel = isObjectiveQuestion
       ? tStudent("result_show_feedback_details", undefined, locale)
       : tStudent("result_show_details", undefined, locale);
+    const modelEvaluation = question.feedback?.model_evaluation;
+    const modelMatches = modelEvaluation?.matches?.filter((item) => item.reason?.trim()) ?? [];
 
     return (
       <section key={question.question_id} className="rounded-2xl border border-border/70 bg-background p-6">
@@ -284,22 +289,38 @@ export function ExamResultPage() {
                 question.content,
                 question.answer_content,
               );
+              const studentCodeLanguage = getStudentAnswerCodeLanguage(
+                question.type,
+                question.title,
+                question.content,
+                question.answer_content,
+              );
+              const standardCodeLanguage = getStudentAnswerCodeLanguage(
+                question.type,
+                question.title,
+                question.content,
+                question.standard_answer,
+              );
               const isSqlAnswer = answerLanguage === "sql";
               const studentCode = renderAnswerAsCode(question.answer_content);
               const standardCode = renderAnswerAsCode(question.standard_answer);
+              const shouldRenderStudentCode =
+                (question.type === "code" || Boolean(studentCodeLanguage)) &&
+                Boolean(studentCode.trim());
+              const shouldRenderStandardCode =
+                (question.type === "code" || Boolean(standardCodeLanguage)) &&
+                Boolean(standardCode.trim());
 
               return (
                 <>
                   <div className="rounded-xl bg-muted/35 p-4">
                     <p className="text-[14px] font-medium text-foreground">{tStudent("result_your_answer", undefined, locale)}</p>
-                    {question.type === "code" && typeof question.answer_content.code === "string" && question.answer_content.code.trim() ? (
-                      <div className="mt-3 overflow-hidden rounded-xl border border-border bg-slate-950">
-                        <div className="border-b border-white/10 px-3 py-2 text-[12px] text-slate-300">
-                          {(question.answer_content.language as string | undefined) ?? "code"}
+                    {shouldRenderStudentCode ? (
+                      <div className="mt-3 overflow-hidden rounded-xl border border-border/70 bg-muted/10 p-3">
+                        <div className="mb-2 text-[12px] capitalize text-muted-foreground">
+                          {studentCodeLanguage ?? "code"}
                         </div>
-                        <pre className="overflow-x-auto whitespace-pre-wrap px-4 py-4 font-mono text-[13px] leading-6 text-slate-100">
-                          {question.answer_content.code as string}
-                        </pre>
+                        <CodeBlock code={studentCode} language={studentCodeLanguage} />
                       </div>
                     ) : isSqlAnswer ? (
                       <div className="mt-3 overflow-hidden rounded-xl border border-border/70 bg-muted/10 p-3">
@@ -314,7 +335,17 @@ export function ExamResultPage() {
                   </div>
                   <div className="rounded-xl bg-muted/35 p-4">
                     <p className="text-[14px] font-medium text-foreground">{tStudent("result_standard_answer", undefined, locale)}</p>
-                    {isSqlAnswer ? (
+                    {shouldRenderStandardCode ? (
+                      <div className="mt-3 overflow-hidden rounded-xl border border-border/70 bg-muted/10 p-3">
+                        <div className="mb-2 text-[12px] capitalize text-muted-foreground">
+                          {standardCodeLanguage ?? studentCodeLanguage ?? "code"}
+                        </div>
+                        <CodeBlock
+                          code={standardCode}
+                          language={standardCodeLanguage ?? studentCodeLanguage}
+                        />
+                      </div>
+                    ) : isSqlAnswer ? (
                       <div className="mt-3 overflow-hidden rounded-xl border border-border/70 bg-muted/10 p-3">
                         <div className="mb-2 text-[12px] text-muted-foreground">SQL</div>
                         <CodeBlock code={standardCode} language="sql" />
@@ -427,14 +458,73 @@ export function ExamResultPage() {
               </>
             ) : null}
 
-            {question.analysis ? (
-              <>
-                {detailsExpanded ? (
-                  <div className="rounded-xl bg-muted/25 p-4 text-[14px] leading-6 text-muted-foreground">
-                    {tStudent("result_analysis", { text: question.analysis }, locale)}
+            {question.analysis && detailsExpanded ? (
+              <div className="rounded-xl bg-muted/25 p-4">
+                <p className="text-[14px] font-medium text-foreground">
+                  {tStudent("result_analysis_section", undefined, locale)}
+                </p>
+                <div
+                  className="mt-2 text-[14px] leading-6 text-muted-foreground [&_img]:max-h-80 [&_img]:max-w-full [&_img]:rounded-lg [&_img]:border [&_img]:border-border/60 [&_img]:object-contain [&_p]:m-0 [&_p+*]:mt-3"
+                  dangerouslySetInnerHTML={{
+                    __html: renderLatexInHtml(question.analysis),
+                  }}
+                />
+              </div>
+            ) : null}
+
+            {detailsExpanded && modelEvaluation ? (
+              <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-[14px] font-medium text-foreground">
+                    <Brain className="text-primary" data-icon="inline-start" />
+                    模型评估输出
                   </div>
-                ) : null}
-              </>
+                  {modelEvaluation.model ? (
+                    <Badge variant="secondary" className="rounded-full text-[11px]">
+                      {modelEvaluation.model}
+                    </Badge>
+                  ) : null}
+                </div>
+                {modelMatches.length ? (
+                  <div className="mt-3 flex flex-col gap-2">
+                    {modelMatches.map((match, index) => (
+                      <div
+                        key={`${match.index ?? index}-${match.reason}`}
+                        className="rounded-lg bg-background px-3 py-2 text-[13px] leading-6 text-muted-foreground"
+                      >
+                        <span
+                          className={cn(
+                            "font-medium",
+                            match.is_correct
+                              ? "text-emerald-600"
+                              : (match.score ?? 0) > 0
+                                ? "text-amber-600"
+                                : "text-rose-600",
+                          )}
+                        >
+                          {`第 ${match.index ?? index + 1} 空 · ${
+                            match.is_correct
+                              ? "可接受"
+                              : (match.score ?? 0) > 0
+                                ? `部分得分 (${match.score})`
+                                : "未命中"
+                          }`}
+                        </span>
+                        {match.expected ? (
+                          <div className="mt-1 text-[12px] text-muted-foreground/80">
+                            标准答案：<LatexText>{match.expected}</LatexText>
+                          </div>
+                        ) : null}
+                        <div className="mt-1">
+                          <LatexText>{match.reason || ""}</LatexText>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-[13px] text-muted-foreground">模型未返回可展示的详细理由。</p>
+                )}
+              </div>
             ) : null}
 
             {detailsExpanded ? (
@@ -524,6 +614,74 @@ export function ExamResultPage() {
       </button>
     );
   };
+
+  if (isMobile) {
+    return (
+      <div className="flex flex-col min-h-screen bg-background">
+        {/* Mobile header */}
+        <header className="sticky top-0 z-10 flex h-12 items-center gap-3 border-b bg-background px-4">
+          <button onClick={() => navigate("/my-exams")} className="flex items-center gap-1 text-sm text-muted-foreground">
+            <ArrowLeft className="h-4 w-4" />
+            返回
+          </button>
+          <h1 className="flex-1 truncate text-center text-sm font-semibold">{result.title}</h1>
+        </header>
+
+        <div className="flex flex-col gap-4 px-4 py-4">
+          {/* Score summary */}
+          <section className="rounded-xl border bg-background p-4 text-center">
+            {result.grading_status === "pending_ai" && result.objective_score != null ? (
+              <div className="space-y-1">
+                <p className="text-2xl font-bold text-primary">{result.objective_score}<span className="text-base text-muted-foreground">/{result.total_score}</span></p>
+                <p className="text-xs text-muted-foreground">客观题得分</p>
+                <p className="text-xs text-amber-600 font-medium mt-1">
+                  <Brain className="inline h-3 w-3 mr-0.5" />主观题AI评分中…
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                <p className="text-3xl font-bold text-primary">{result.score ?? 0}<span className="text-lg text-muted-foreground">/{result.total_score}</span></p>
+                <p className="text-xs text-muted-foreground">{tStudent("result_total_score", undefined, locale)}</p>
+                {result.submitted_at && (
+                  <p className="text-xs text-muted-foreground">{formatStudentDate(result.submitted_at)}</p>
+                )}
+              </div>
+            )}
+          </section>
+
+          {/* Per-question cards in single column */}
+          {questions.map((question, index) => (
+            <section key={question.question_id} className="rounded-xl border bg-background overflow-hidden">
+              {/* Question header */}
+              <div className="px-4 py-3 border-b flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Badge variant="secondary" className="shrink-0 text-xs rounded-full px-2 py-0.5">
+                    {getStudentQuestionTypeLabel(question.type, locale)}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground">第 {index + 1} 题</span>
+                </div>
+                <span className="text-xs font-medium shrink-0">
+                  {question.grading_pending ? (
+                    <span className="text-amber-600">评分中</span>
+                  ) : (
+                    <span className={question.is_correct ? "text-emerald-600" : "text-red-500"}>
+                      {question.score_awarded}/{question.total_score}
+                    </span>
+                  )}
+                </span>
+              </div>
+              {/* Question prompt */}
+              <div className="px-4 py-3">
+                {renderQuestionPrompt(question)}
+              </div>
+              {/* Student answer + standard answer */}
+              {renderQuestionCard(question)}
+            </section>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6">

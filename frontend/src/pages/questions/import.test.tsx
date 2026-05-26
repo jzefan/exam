@@ -38,6 +38,7 @@ vi.mock("@refinedev/core", async () => {
   const actual = await vi.importActual<typeof import("@refinedev/core")>("@refinedev/core");
   return {
     ...actual,
+    useGetIdentity: () => ({ data: { primary_org: { role_name: "teacher" } } }),
     useList: () => useListMock(),
   };
 });
@@ -421,7 +422,8 @@ describe("QuestionImportPage", () => {
     expect(screen.getByRole("button", { name: "选择题 1" })).toBeInTheDocument();
     expect(screen.getByPlaceholderText("搜索题目内容、答案、解析或选项...")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "展开查看答案" })).not.toBeInTheDocument();
-    expect(screen.getByText(/答案：/)).toBeInTheDocument();
+    expect(screen.getByText("答案")).toBeInTheDocument();
+    expect(screen.getByText("A")).toBeInTheDocument();
   });
 
   it("re-recognizes the imported document with AI from the review header", async () => {
@@ -529,9 +531,9 @@ describe("QuestionImportPage", () => {
 
     expect(await screen.findByText(/当前 Word 文档可能使用了自动编号/)).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/questions/import/document-recognize",
+      "/api/questions/import/docx-recognize",
       expect.objectContaining({
-        body: expect.stringContaining('"tables":[{"order":1,"rows":[["题号","一"]]}]'),
+        body: expect.any(FormData),
       }),
     );
 

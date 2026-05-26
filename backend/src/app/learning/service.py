@@ -12,7 +12,7 @@ from typing import Any, cast
 from urllib.parse import quote
 
 import httpx
-from sqlalchemy import distinct, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import User
@@ -252,10 +252,16 @@ async def list_root_knowledge_point_options(
 ) -> list[dict[str, Any]]:
     """Return visible top-level knowledge points as selectable roots."""
 
+    count_subq = (
+        select(question_knowledge_points.c.knowledge_point_id, func.count().label("cnt"))
+        .group_by(question_knowledge_points.c.knowledge_point_id)
+        .subquery()
+    )
     stmt = (
-        select(KnowledgePoint, Direction, Major)
+        select(KnowledgePoint, Direction, Major, func.coalesce(count_subq.c.cnt, 0).label("question_count"))
         .join(Direction, KnowledgePoint.direction_id == Direction.id)
         .join(Major, Direction.major_id == Major.id)
+        .outerjoin(count_subq, KnowledgePoint.id == count_subq.c.knowledge_point_id)
         .where(
             KnowledgePoint.deleted_at.is_(None),
             KnowledgePoint.parent_id.is_(None),
@@ -272,12 +278,19 @@ async def list_root_knowledge_point_options(
         {
             "id": kp.id,
             "name": kp.name,
+            "description": kp.description,
+            "tags": kp.tags or [],
+            "difficulty": kp.difficulty,
+            "parent_id": kp.parent_id,
             "direction_id": direction.id,
             "direction_name": direction.name,
             "major_id": major.id,
             "major_name": major.name,
+            "owner_id": kp.owner_id,
+            "visibility": kp.visibility,
+            "question_count": question_count,
         }
-        for kp, direction, major in rows
+        for kp, direction, major, question_count in rows
     ]
 
 
@@ -323,6 +336,32 @@ async def get_direction(
     is_platform_admin: bool = True,
 ) -> Direction | None:
     stmt = select(Direction).where(Direction.id == direction_id, Direction.deleted_at.is_(None))
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def find_root_knowledge_by_name_for_owner_in_major(
+    db: AsyncSession,
+    *,
+    owner_id: uuid.UUID,
+    major_id: uuid.UUID,
+    name: str,
+    exclude_id: uuid.UUID | None = None,
+) -> KnowledgePoint | None:
+    stmt = (
+        select(KnowledgePoint)
+        .join(Direction, KnowledgePoint.direction_id == Direction.id)
+        .where(
+            Direction.major_id == major_id,
+            Direction.deleted_at.is_(None),
+            KnowledgePoint.owner_id == owner_id,
+            KnowledgePoint.parent_id.is_(None),
+            KnowledgePoint.name == name,
+            KnowledgePoint.deleted_at.is_(None),
+        )
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(KnowledgePoint.id != exclude_id)
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
 

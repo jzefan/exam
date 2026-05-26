@@ -77,6 +77,37 @@ class StudentExamResultQuestionResponse(BaseModel):
     needs_human_review: bool = False
 
 
+class SingleQuestionAIGradeResponse(BaseModel):
+    """Minimal payload returned from the per-question AI 判题 endpoint.
+
+    Carries only the fields the answer-detail page needs to refresh the row
+    in place: the new score, correctness, and updated feedback (including
+    `feedback.model_evaluation` from DeepSeek if present).
+    """
+
+    question_id: uuid.UUID
+    total_score: float
+    score_awarded: float
+    is_correct: bool
+    feedback: dict[str, Any] = Field(default_factory=dict)
+
+
+class ManualQuestionScoreRequest(BaseModel):
+    score_awarded: float = Field(ge=0)
+
+
+class ManualQuestionScoreResponse(BaseModel):
+    question_id: uuid.UUID
+    total_score: float
+    score_awarded: float
+    is_correct: bool
+    objective_score: float | None = None
+    subjective_score: float | None = None
+    exam_score: float | None = None
+    grading_status: str | None = None
+    feedback: dict[str, Any] = Field(default_factory=dict)
+
+
 class StudentExamResultResponse(BaseModel):
     exam_id: uuid.UUID
     title: str
@@ -152,3 +183,25 @@ class StudentCodeRunCaseResponse(CodeRunCaseResult):
 
 class StudentCodeRunResponse(CodeRunResult):
     cases: list[StudentCodeRunCaseResponse] = Field(default_factory=list)
+
+
+class AttemptStatusResponse(BaseModel):
+    state: str
+    submitted_at: datetime | None = None
+    latest_submission_id: uuid.UUID | None = None
+    switch_count: int
+    deadline_at: datetime | None = None
+
+
+class VisibilityEvent(BaseModel):
+    hidden: bool
+    at_ms: int = Field(ge=0)
+
+
+class VisibilityEventsRequest(BaseModel):
+    events: list[VisibilityEvent] = Field(default_factory=list)
+
+
+class VisibilityEventsResponse(BaseModel):
+    switch_count: int
+    max_switch_count: int

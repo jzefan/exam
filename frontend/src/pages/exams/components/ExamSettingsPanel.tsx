@@ -66,23 +66,27 @@ export function ExamSettingsPanel({
           />
         </div>
 
-        {category === "exam" ? (
-          <div className="flex items-center justify-between gap-4">
-            <div className="space-y-1">
-              <p className="text-sm font-medium text-foreground">允许已提交学生在考试期间重考</p>
-              <p className="text-xs text-muted-foreground">开启后，学生提交后只要考试未结束，仍可再次开始新的作答。</p>
-            </div>
-            <Switch
-              checked={values.allow_retake}
-              onCheckedChange={(checked) =>
-                onChange({
-                  ...values,
-                  allow_retake: checked,
-                })
-              }
-            />
+        <div className="flex items-center justify-between gap-4">
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-foreground">
+              {category === "exam" ? "允许已提交学生在考试期间重考" : "允许学生重做"}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {category === "exam"
+                ? "开启后，学生提交后只要考试未结束，仍可再次开始新的作答。"
+                : "开启后，学生提交后可以再次开始作答。"}
+            </p>
           </div>
-        ) : null}
+          <Switch
+            checked={values.allow_retake}
+            onCheckedChange={(checked) =>
+              onChange({
+                ...values,
+                allow_retake: checked,
+              })
+            }
+          />
+        </div>
       </div>
 
       <Button className="w-full" disabled={!dirty || saving} onClick={onSave}>

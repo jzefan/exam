@@ -206,6 +206,7 @@ class QuestionStatRow(BaseModel):
     correct_count: int
     correct_rate: float | None = None
     average_score: float | None = None
+    knowledge_point_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 class KnowledgePointStatRow(BaseModel):
@@ -215,11 +216,21 @@ class KnowledgePointStatRow(BaseModel):
     average_correct_rate: float | None = None
 
 
+class AnswerRecord(BaseModel):
+    student_id: uuid.UUID
+    question_id: uuid.UUID
+    score_awarded: float
+    is_correct: bool
+
+
 class ExamAnalysisResponse(BaseModel):
     exam_id: uuid.UUID
     title: str
+    start_time: datetime | None = None
+    category: str | None = None
     overall: AnalysisOverall
     score_distribution: list[ScoreBucket] = Field(default_factory=list)
     students: list[StudentResultRow] = Field(default_factory=list)
     questions: list[QuestionStatRow] = Field(default_factory=list)
     knowledge_points: list[KnowledgePointStatRow] = Field(default_factory=list)
+    answer_records: list[AnswerRecord] = Field(default_factory=list)

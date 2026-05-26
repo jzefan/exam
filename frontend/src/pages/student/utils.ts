@@ -196,6 +196,24 @@ export function inferStudentAnswerLanguage(
   return null;
 }
 
+export function getStudentAnswerCodeLanguage(
+  questionType: string,
+  questionTitle: string,
+  questionContent: Record<string, unknown> | null | undefined,
+  answer: Record<string, unknown> | null | undefined,
+): string | undefined {
+  const inferred = inferStudentAnswerLanguage(questionTitle, questionContent, answer);
+  if (inferred) {
+    return inferred;
+  }
+
+  if (questionType === "code") {
+    return undefined;
+  }
+
+  return undefined;
+}
+
 export function renderAnswerAsCode(answer: Record<string, unknown> | null | undefined): string {
   const locale = getStudentLocale();
   if (!answer) return tStudent("common_not_answered", undefined, locale);

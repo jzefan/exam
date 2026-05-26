@@ -1,4 +1,4 @@
-import { useList } from "@refinedev/core";
+import { useGetIdentity, useList } from "@refinedev/core";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -26,6 +26,8 @@ import {
 
 import type { IQuestionBank } from "@/types";
 import { Button } from "@/components/ui/button";
+import { formatQuestionBankLabel } from "@/lib/question-banks";
+import { getUserRole } from "@/types/rbac";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -69,13 +71,18 @@ import {
   buildStandardImportTemplate,
   buildImportSummary,
   countFastImportEligibleDrafts,
+  detectInlineExamFormat,
   emptyImportSummary,
+  exceedsBackendImportLimits,
   extractQuestionImportPayload,
   generateImportQuestionTitle,
   getNextDraftIdAfterRemoval,
   getBlockingImportIssues,
   isEligibleForFastImport,
   isMissingAnswerIssue,
+  parseInlineExamQuestions,
+  parseJsonQuestions,
+  parseTemplateQuestions,
 } from "./import-utils";
 
 async function questionApiFetch<T>(
@@ -120,7 +127,7 @@ async function questionApiFetch<T>(
   return response.json() as Promise<T>;
 }
 
-const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024;
+const MAX_FILE_SIZE_BYTES = 30 * 1024 * 1024;
 
 type ImportResultSummary = {
   attempted: number;
@@ -133,7 +140,7 @@ type ImportResultSummary = {
 type ImportDocumentPayload = {
   fileName: string;
   rawText: string;
-  sourceFormat: "pdf" | "docx" | "md";
+  sourceFormat: "pdf" | "docx" | "md" | "json" | "zip";
   images: QuestionImportDraft["images"];
   tables?: QuestionImportTableInput[];
 };
@@ -145,6 +152,8 @@ type AiRecognizeOverlayState =
 
 export function QuestionImportPage() {
   const navigate = useNavigate();
+  const { data: identity } = useGetIdentity<{ primary_org?: { role_name?: string } | null }>();
+  const showBankOwner = identity ? getUserRole(identity) === "platform_admin" : false;
   const { toast } = useToast();
   const { showNotice, dismissNotice } = useBackgroundTaskNotice();
   const initialQuestionBankId = new URLSearchParams(window.location.search).get(
@@ -170,6 +179,8 @@ export function QuestionImportPage() {
     useState<QuestionImportDocumentSummary | null>(null);
   const [mode, setMode] = useState<"review" | "source-edit">("review");
   const [sourceEdits, setSourceEdits] = useState<Record<string, string>>({});
+  const [clientParsed, setClientParsed] = useState(false);
+  const [jsonImageWarnings, setJsonImageWarnings] = useState<string[]>([]);
 
   const { query: banksQuery } = useList<IQuestionBank>({
     resource: "question-banks",
@@ -281,22 +292,219 @@ export function QuestionImportPage() {
     if (!file) return;
     if (file.size > MAX_FILE_SIZE_BYTES) {
       setParseError(
-        `文件过大（${(file.size / 1024 / 1024).toFixed(1)} MB），请上传 20 MB 以内的文件。`,
+        `文件过大（${(file.size / 1024 / 1024).toFixed(1)} MB），请上传 30 MB 以内的文件。`,
       );
       return;
     }
 
     setLoading(true);
     setParseError(null);
+    setClientParsed(false);
+
+    let payload: Awaited<ReturnType<typeof extractQuestionImportPayload>> | null = null;
+    let nextDocumentPayload: ImportDocumentPayload | null = null;
+
+    const applyClientParse = (
+      rawText: string,
+      fileName: string,
+      docPayload: ImportDocumentPayload,
+      isJson = false,
+    ) => {
+      // Try JSON parser first if applicable
+      let drafts: QuestionImportDraft[] = [];
+      let parseLabel = "";
+      let unresolvedImageCount = 0;
+
+      if (isJson) {
+        try {
+          const result = parseJsonQuestions(rawText);
+          drafts = result.drafts;
+          unresolvedImageCount = result.unresolvedImages.length;
+          parseLabel = "JSON 题目解析";
+
+          // If images were already resolved from ZIP, inject their URLs into drafts
+          if (docPayload.images && docPayload.images.length > 0) {
+            const urlByFilename = new Map<string, string>();
+            for (const img of docPayload.images) {
+              const fname = img.alt || img.image_id;
+              urlByFilename.set(fname, img.url);
+            }
+            // Re-parse to get per-question image references
+            try {
+              const reparsed = JSON.parse(rawText);
+              const items = Array.isArray(reparsed) ? reparsed : [reparsed];
+              drafts = drafts.map((draft, idx) => {
+                const item = items[idx];
+                if (!item?.images || !Array.isArray(item.images)) return draft;
+                const resolved = item.images
+                  .filter((img: { filename: string }) => urlByFilename.has(img.filename))
+                  .map((img: { filename: string; description?: string }, i: number) => ({
+                    image_id: `resolved-${img.filename.replace(/[^a-zA-Z0-9]/g, "-")}`,
+                    url: urlByFilename.get(img.filename) || "",
+                    order: i + 1,
+                    alt: img.description || img.filename,
+                  }));
+                if (resolved.length > 0) {
+                  return { ...draft, images: resolved };
+                }
+                return draft;
+              });
+            } catch {
+              // Keep drafts as-is if re-parse fails
+            }
+          }
+
+          if (result.unresolvedImages.length > 0 && (!docPayload.images || docPayload.images.length === 0)) {
+            setJsonImageWarnings(
+              result.unresolvedImages.map(
+                (img) => `图片 "${img.filename}" 未上传，建议使用 ZIP 打包上传（JSON + images 文件夹）`,
+              ),
+            );
+          } else {
+            setJsonImageWarnings([]);
+          }
+        } catch {
+          // Fall through to other parsers
+        }
+      } else {
+        setJsonImageWarnings([]);
+      }
+
+      // Try inline exam format, then template format
+      if (drafts.length === 0 && detectInlineExamFormat(rawText)) {
+        drafts = parseInlineExamQuestions(rawText);
+        parseLabel = "前端内联题目解析";
+      }
+      if (drafts.length === 0) {
+        drafts = parseTemplateQuestions(rawText);
+        parseLabel = "前端模板解析";
+      }
+      if (drafts.length === 0) return false;
+
+      setDrafts(drafts);
+      setRecognizedSummary(buildImportSummary(drafts));
+      setSourceEdits(
+        Object.fromEntries(drafts.map((d) => [d.draft_id, d.raw_text])),
+      );
+      setSelectedDraftId(drafts[0]?.draft_id ?? null);
+      setDocumentPayload(docPayload);
+      setSourceFileName(fileName);
+      setClientParsed(true);
+      setMode("review");
+      setParseError(null);
+
+      const descParts: string[] = [];
+      if (isJson) descParts.push("通过前端直接解析");
+      if (unresolvedImageCount > 0) {
+        descParts.push(`检测到 ${unresolvedImageCount} 张引用图片，请手动上传匹配`);
+      }
+      toast({
+        title: `已使用${parseLabel} ${drafts.length} 道题目`,
+        description: descParts.join("。") || undefined,
+      });
+      return true;
+    };
+
+    const uploadFileForBackendRecognize = async (
+      endpoint: string,
+      sourceFormat: "pdf" | "docx",
+      failureLabel: string,
+    ): Promise<QuestionImportDocumentRecognizeResponse> => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const token = localStorage.getItem("access_token");
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(
+          (err as { detail?: string }).detail || `${failureLabel} (${response.status})`,
+        );
+      }
+      const result = (await response.json()) as QuestionImportDocumentRecognizeResponse;
+      setDrafts(result.drafts);
+      setRecognizedSummary(result.summary);
+      if (result.summary.duplicates_removed > 0) {
+        toast({ title: `已自动去除 ${result.summary.duplicates_removed} 道重复题目` });
+      }
+      setSourceEdits(
+        Object.fromEntries(result.drafts.map((draft) => [draft.draft_id, draft.raw_text])),
+      );
+      setSelectedDraftId(result.drafts[0]?.draft_id ?? null);
+      setDocumentPayload({ fileName: file.name, rawText: "", sourceFormat, images: [] });
+      setSourceFileName(file.name);
+      setMode("review");
+      return result;
+    };
+
     try {
-      const payload = await extractQuestionImportPayload(file);
-      const nextDocumentPayload: ImportDocumentPayload = {
+      // PDF files: upload directly to backend for server-side extraction + AI analysis
+      if (file.name.toLowerCase().endsWith(".pdf")) {
+        await uploadFileForBackendRecognize(
+          "/api/questions/import/pdf-recognize",
+          "pdf",
+          "PDF 分析失败",
+        );
+        return;
+      }
+
+      // DOCX files: try backend AI recognition first, fall back to client-side mammoth extraction
+      if (file.name.toLowerCase().endsWith(".docx")) {
+        try {
+          await uploadFileForBackendRecognize(
+            "/api/questions/import/docx-recognize",
+            "docx",
+            "DOCX 智能识别失败",
+          );
+          return;
+        } catch (docxBackendError) {
+          // Fall through to the existing client-side extraction path below.
+          // Surface the reason so the user knows why we're switching paths.
+          const reason =
+            docxBackendError instanceof Error
+              ? docxBackendError.message
+              : "DOCX 智能识别失败";
+          toast({
+            title: "DOCX 智能识别失败，已回退到本地解析",
+            description: reason,
+          });
+        }
+      }
+
+      const extractedPayload = await extractQuestionImportPayload(file);
+      payload = extractedPayload;
+      nextDocumentPayload = {
         fileName: file.name,
-        rawText: payload.rawText,
-        sourceFormat: payload.sourceFormat,
-        images: payload.images,
-        tables: payload.tables,
+        rawText: extractedPayload.rawText,
+        sourceFormat: extractedPayload.sourceFormat,
+        images: extractedPayload.images,
+        tables: extractedPayload.tables,
       };
+
+      // Use client-side parsing when content exceeds limits OR when
+      // the text matches a well-structured format (faster & more reliable than AI)
+      const isJsonFile = extractedPayload.sourceFormat === "json";
+      const useClientParse =
+        isJsonFile ||
+        exceedsBackendImportLimits(extractedPayload.rawText, extractedPayload.images) ||
+        detectInlineExamFormat(extractedPayload.rawText);
+
+      if (useClientParse) {
+        if (applyClientParse(extractedPayload.rawText, file.name, nextDocumentPayload, isJsonFile)) {
+          return;
+        }
+        if (exceedsBackendImportLimits(extractedPayload.rawText, extractedPayload.images)) {
+          throw new Error(
+            "内容超过系统处理限制（文本 > 1000000 字符或图片 > 500 张），且未匹配到任何题目格式。请拆分文件后重试。",
+          );
+        }
+        // Fall through to backend recognition if client parse fails
+        // for content within limits
+      }
+
       const response = await recognizeImportDocument(
         nextDocumentPayload,
         "fast",
@@ -318,12 +526,27 @@ export function QuestionImportPage() {
       setSourceFileName(file.name);
       setMode("review");
     } catch (error) {
-      setParseError(error instanceof Error ? error.message : "文件解析失败");
+      // If backend rejected due to size limits, try client-side template parsing
+      const errorMessage = error instanceof Error ? error.message : "文件解析失败";
+      const isSizeLimitError =
+        /1000000|500 items|too many|too large|过长|过多/i.test(errorMessage);
+      if (
+        isSizeLimitError &&
+        payload &&
+        nextDocumentPayload &&
+        exceedsBackendImportLimits(payload.rawText, payload.images)
+      ) {
+        if (applyClientParse(payload.rawText, file.name, nextDocumentPayload, false)) {
+          return;
+        }
+      }
+      setParseError(errorMessage);
       setDrafts([]);
       setRecognizedSummary(null);
       setDocumentPayload(null);
       setSourceEdits({});
       setSelectedDraftId(null);
+      setClientParsed(false);
     } finally {
       setLoading(false);
     }
@@ -842,10 +1065,20 @@ export function QuestionImportPage() {
                     审核模式
                   </Badge>
                 )}
+                {clientParsed && (
+                  <Badge
+                    variant="secondary"
+                    className="h-5 border-none bg-amber-100 px-2 text-[11px] font-bold text-amber-700"
+                  >
+                    前端模板解析
+                  </Badge>
+                )}
               </div>
-              <p className="max-w-[360px] truncate text-xs leading-snug text-muted-foreground">
+              <p className="text-xs leading-snug text-muted-foreground">
                 {showReviewer
-                  ? `正在处理: ${sourceFileName}`
+                  ? clientParsed
+                    ? `模板解析: ${sourceFileName}（内容超过服务端限制，已通过前端模板格式解析）`
+                    : `正在处理: ${sourceFileName}`
                   : "通过 AI 快速解析并导入多格式题目"}
               </p>
             </div>
@@ -902,7 +1135,7 @@ export function QuestionImportPage() {
                           value={bank.id}
                           className="text-sm"
                         >
-                          {bank.name}
+                          {formatQuestionBankLabel(bank, { showOwner: showBankOwner })}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -912,9 +1145,10 @@ export function QuestionImportPage() {
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={importing || aiRecognizing || !documentPayload}
+                  disabled={importing || aiRecognizing || !documentPayload || clientParsed}
                   onClick={handleAiReRecognize}
                   className="h-9 rounded-lg px-3 text-sm font-bold"
+                  title={clientParsed ? "前端模板解析模式下不可用（内容超过服务端限制）" : undefined}
                 >
                   {aiRecognizing ? (
                     <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
@@ -928,7 +1162,8 @@ export function QuestionImportPage() {
                   <Button
                     type="button"
                     variant="outline"
-                    disabled={importing || aiRecognizing || !documentPayload}
+                    disabled={importing || aiRecognizing || !documentPayload || clientParsed}
+                    title={clientParsed ? "前端模板解析模式下不可用（内容超过服务端限制）" : undefined}
                     onClick={handleVisualRecognize}
                     className="h-9 rounded-lg px-3 text-sm font-bold"
                   >
@@ -987,6 +1222,32 @@ export function QuestionImportPage() {
             <AlertDescription className="text-sm font-medium leading-snug">
               {parseError}
             </AlertDescription>
+          </Alert>
+        </div>
+      )}
+
+      {jsonImageWarnings.length > 0 && (
+        <div className="mx-8 mt-4">
+          <Alert className="flex items-start gap-3 rounded-[16px] border border-blue-200 bg-blue-50 p-4 text-blue-800 shadow-sm [&>svg]:static [&>svg]:translate-y-0">
+            <Upload className="mt-0.5 h-4 w-4 shrink-0" />
+            <div className="min-w-0">
+              <AlertDescription className="text-sm font-medium leading-snug">
+                检测到 {jsonImageWarnings.length} 张引用图片，请上传匹配
+              </AlertDescription>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {jsonImageWarnings.map((warning, idx) => (
+                  <span
+                    key={idx}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-blue-100 px-2.5 py-1 text-xs text-blue-700"
+                  >
+                    {warning}
+                  </span>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-blue-600">
+                请将对应的图片文件拖拽到下方区域，按文件名匹配后自动关联到题目
+              </p>
+            </div>
           </Alert>
         </div>
       )}
@@ -1052,7 +1313,7 @@ export function QuestionImportPage() {
                   ref={fileInputRef}
                   data-testid="question-import-file-input"
                   className="hidden"
-                  accept=".pdf,.docx,.md,.markdown"
+                  accept=".pdf,.docx,.md,.markdown,.json,.zip"
                   onChange={(e) => void handleFileChange(e)}
                   type="file"
                 />
@@ -1084,7 +1345,7 @@ export function QuestionImportPage() {
                         拖拽文件到这里，或点击选择
                       </p>
                       <p className="text-sm leading-snug text-muted-foreground">
-                        支持 PDF、Word（docx格式），单文件不超过 20MB
+                        支持 PDF、Word、JSON、ZIP（JSON+图片打包），单文件不超过 30MB
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center justify-center gap-3">

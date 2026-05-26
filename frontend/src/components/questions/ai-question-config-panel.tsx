@@ -54,6 +54,7 @@ type AIQuestionConfigPanelProps = {
    * to a specific node).
    */
   lockedKnowledgePointPaths?: string[];
+  filterRootNodeId?: string;
 };
 
 export function AIQuestionConfigPanel({
@@ -76,6 +77,7 @@ export function AIQuestionConfigPanel({
   allocationError,
   footer,
   lockedKnowledgePointPaths,
+  filterRootNodeId,
 }: AIQuestionConfigPanelProps) {
   const totalCountId = useId();
 
@@ -181,6 +183,7 @@ export function AIQuestionConfigPanel({
           selectedKnowledgePoints={selectedKnowledgePoints}
           onSelectedKnowledgePointsChange={onSelectedKnowledgePointsChange}
           storageKey={storageKey}
+          filterRootNodeId={filterRootNodeId}
         />
       )}
 

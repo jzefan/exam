@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>离线 — 智评线考试</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif;
+      background: #f8f8f8;
+      color: #333;
+      padding: 1.5rem;
+      text-align: center;
+    }
+    .icon {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+    }
+    h1 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+    }
+    p {
+      font-size: 0.875rem;
+      color: #666;
+      max-width: 280px;
+      line-height: 1.6;
+      margin-bottom: 1.5rem;
+    }
+    button {
+      background: #6366f1;
+      color: #fff;
+      border: none;
+      border-radius: 9999px;
+      padding: 0.75rem 2rem;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      min-height: 44px;
+    }
+    button:active { opacity: 0.8; }
+  </style>
+</head>
+<body>
+  <div class="icon">📡</div>
+  <h1>当前处于离线状态</h1>
+  <p>请检查网络连接后重试。如果正在参加考试，您的答案已保存在本地，恢复网络后将自动同步。</p>
+  <button onclick="window.location.reload()">重新连接</button>
+</body>
+</html>

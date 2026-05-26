@@ -435,7 +435,7 @@ export function ClassStudentSelector({
           <p className="text-xs text-muted-foreground">优先从班级中批量选择学生，其它方式作为补充。</p>
         </div>
 
-        <div className="flex min-h-[260px] overflow-hidden rounded-xl border border-border bg-background">
+        <div className="flex h-[420px] overflow-hidden rounded-xl border border-border bg-background">
           <div className="w-40 shrink-0 overflow-y-auto border-r border-border bg-muted/25 py-2">
             <div className="flex flex-col gap-1">
               {classGroups.map((group) => (

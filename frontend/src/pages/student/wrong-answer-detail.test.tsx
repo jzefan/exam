@@ -72,9 +72,53 @@ describe("WrongAnswerDetailPage", () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findAllByTestId("code-block")).toHaveLength(2);
-    expect(screen.getAllByText("SQL")).toHaveLength(2);
+    const codeBlocks = await screen.findAllByTestId("code-block");
+    expect(codeBlocks).toHaveLength(2);
+    expect(codeBlocks[0]).toHaveAttribute("data-language", "sql");
+    expect(codeBlocks[1]).toHaveAttribute("data-language", "sql");
     expect(screen.getByText("SELECT * FROM scores WHERE score > 90;")).toBeInTheDocument();
     expect(screen.getByText("SELECT name FROM scores WHERE score > 90;")).toBeInTheDocument();
+  });
+
+  it("renders code answers with syntax highlighting and shows rich analysis", async () => {
+    useOneMock.mockReturnValue({
+      query: {
+        isLoading: false,
+        data: {
+          data: {
+            id: "wa-code",
+            question_id: "q-code",
+            question_title: "实现一个二分查找",
+            question_type: "code",
+            exam_title: "算法考试",
+            wrong_count: 1,
+            last_wrong_at: "2026-04-10T10:00:00.000Z",
+            tags: [],
+            mastered: false,
+            question_content: { text: "<p>请使用 Python 实现二分查找。</p>", language: "python" },
+            standard_answer: { language: "python", code: "def search(nums, target):\n    return -1" },
+            analysis:
+              '<p>注意左右边界更新。</p><p><img src="https://example.com/binary-search.png" alt="二分查找示意图" /></p>',
+            student_answer: { language: "python", code: "def search(nums, target):\n    pass" },
+            feedback: { strengths: [], deductions: [], suggestions: [] },
+          },
+        },
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/wrong-answers/wa-code"]}>
+        <Routes>
+          <Route path="/wrong-answers/:id" element={<WrongAnswerDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const blocks = await screen.findAllByTestId("code-block");
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toHaveAttribute("data-language", "python");
+    expect(blocks[1]).toHaveAttribute("data-language", "python");
+    expect(screen.getByText("注意左右边界更新。")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "二分查找示意图" })).toBeInTheDocument();
   });
 });

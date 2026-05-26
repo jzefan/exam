@@ -100,10 +100,28 @@ export function ImportReviewEditor({
               onChange={(event) => onChange({ content_text: event.target.value })}
             />
 
-            {/<img\s/i.test(draft.content_text) && (
+            {(/<img\s/i.test(draft.content_text) || (draft.images && draft.images.length > 0)) && (
               <div className="rounded-2xl border border-slate-100 bg-slate-50/60 p-4">
                 <p className="mb-3 text-[11px] font-bold uppercase tracking-widest text-slate-400">图片预览</p>
-                <RichContent html={importTextToHtml(draft.content_text)} />
+                {/<img\s/i.test(draft.content_text) && (
+                  <RichContent html={importTextToHtml(draft.content_text)} />
+                )}
+                {draft.images && draft.images.length > 0 && (
+                  <div className="flex flex-wrap gap-3">
+                    {draft.images.map((img) => (
+                      <div key={img.image_id} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                        <img
+                          src={img.url}
+                          alt={img.alt || "题目图片"}
+                          className="max-h-64 w-auto object-contain"
+                        />
+                        {img.alt ? (
+                          <p className="px-3 py-2 text-[11px] text-slate-500">{img.alt}</p>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </section>

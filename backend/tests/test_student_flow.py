@@ -240,8 +240,8 @@ async def test_fill_in_answer_is_evaluated_on_save_and_reused_on_submit(
         assert expected_answers == ["A", "B"]
         assert student_answers == ["甲", "乙"]
         return [
-            {"is_correct": True, "reason": "甲可等价于 A。"},
-            {"is_correct": True, "reason": "乙可等价于 B。"},
+            {"score": 1.0, "is_correct": True, "reason": "甲可等价于 A。"},
+            {"score": 1.0, "is_correct": True, "reason": "乙可等价于 B。"},
         ]
 
     monkeypatch.setattr("app.exams.student_router._request_fill_in_equivalence_with_deepseek", fake_ai)

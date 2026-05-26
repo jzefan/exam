@@ -20,9 +20,19 @@ from app.common.pagination import (
     parse_pagination,
 )
 from app.database import get_db
-from app.exams.models import Exam, ExamQuestion, ExamStudent, GradingStatus, StudentExamAnswer, StudentExamAppeal, StudentExamSubmission
+from app.exams.models import (
+    Exam,
+    ExamQuestion,
+    ExamStudent,
+    GradingStatus,
+    StudentExamAnswer,
+    StudentExamAppeal,
+    StudentExamSubmission,
+    StudentExamSubmissionAnswer,
+)
 from app.exams.schemas import (
     AnalysisOverall,
+    AnswerRecord,
     ExamAnalysisResponse,
     ExamCreate,
     ExamDetailResponse,
@@ -36,15 +46,25 @@ from app.exams.schemas import (
     ScoreBucket,
     StudentResultRow,
 )
-from app.exams.student_schemas import StudentExamResultQuestionResponse, StudentExamResultResponse
+from app.exams.student_schemas import (
+    ManualQuestionScoreRequest,
+    ManualQuestionScoreResponse,
+    SingleQuestionAIGradeResponse,
+    StudentExamResultQuestionResponse,
+    StudentExamResultResponse,
+)
 from app.exams.student_router import _build_student_question_content
 from app.exams.time_utils import (
     coerce_exam_input_datetime_to_utc,
     coerce_persisted_exam_datetime_to_utc,
 )
 from app.questions.service import cleanup_soft_deleted_question_if_orphaned
+from app.questions.models import question_knowledge_points
+from app.learning.models import KnowledgePoint
 
 router = APIRouter()
+
+_OBJECTIVE_QUESTION_TYPES = {"choice", "true_false", "fill_in"}
 
 
 async def _exam_has_student_history(db: AsyncSession, exam_id: uuid.UUID) -> bool:
@@ -289,6 +309,29 @@ async def list_exams(
 
     filters = parse_filters(request, Exam)
     filtered_query = apply_filters(base_query, filters, Exam)
+
+    root_kp_id_str = request.query_params.get("root_knowledge_point_id")
+    if root_kp_id_str:
+        try:
+            root_kp_id = uuid.UUID(root_kp_id_str)
+            kp_anchor = (
+                select(KnowledgePoint.id)
+                .where(KnowledgePoint.id == root_kp_id)
+                .cte(name="kp_subtree", recursive=True)
+            )
+            kp_subtree = kp_anchor.union_all(
+                select(KnowledgePoint.id)
+                .where(KnowledgePoint.parent_id == kp_anchor.c.id)
+            )
+            matching_exam_ids = (
+                select(ExamQuestion.exam_id)
+                .join(question_knowledge_points, ExamQuestion.question_id == question_knowledge_points.c.question_id)
+                .where(question_knowledge_points.c.knowledge_point_id.in_(select(kp_subtree.c.id)))
+                .distinct()
+            )
+            filtered_query = filtered_query.where(Exam.id.in_(matching_exam_ids))
+        except ValueError:
+            pass
 
     total = await get_total_count(db, filtered_query)
     response.headers["X-Total-Count"] = str(total)
@@ -659,6 +702,210 @@ async def get_student_result_for_teacher(
     )
 
 
+@router.post(
+    "/{exam_id}/students/{student_id}/questions/{question_id}/ai-grade",
+    response_model=SingleQuestionAIGradeResponse,
+)
+async def ai_grade_single_fill_in_for_student(
+    exam_id: uuid.UUID,
+    student_id: uuid.UUID,
+    question_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+) -> SingleQuestionAIGradeResponse:
+    """Re-run DeepSeek fill-in grading for one student's one fill-in answer.
+
+    Returns only this question's updated score, correctness, and feedback so
+    the answer-detail view can refresh the row in place without re-fetching
+    the entire exam result.
+
+    Access: any user who can write the exam — that is, platform/school/
+    enterprise admins for any exam, plus the exam owner (typically a teacher
+    or evaluator) for their own exams. The frontend "AI 判题" button on the
+    answer-detail view targets this endpoint.
+    """
+    from app.operations.service import regrade_single_student_fill_in
+
+    await _get_writable_exam_or_404(db, exam_id, user)
+    try:
+        outcome = await regrade_single_student_fill_in(
+            db,
+            exam_id=exam_id,
+            student_id=student_id,
+            question_id=question_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    return SingleQuestionAIGradeResponse(
+        question_id=outcome.question_id,
+        total_score=outcome.total_score,
+        score_awarded=outcome.score_awarded,
+        is_correct=outcome.is_correct,
+        feedback=outcome.feedback,
+    )
+
+
+@router.patch(
+    "/{exam_id}/students/{student_id}/questions/{question_id}/score",
+    response_model=ManualQuestionScoreResponse,
+)
+async def update_student_question_score_for_teacher(
+    exam_id: uuid.UUID,
+    student_id: uuid.UUID,
+    question_id: uuid.UUID,
+    body: ManualQuestionScoreRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+) -> ManualQuestionScoreResponse:
+    exam = await _get_writable_exam_or_404(db, exam_id, user)
+
+    exam_student = (
+        await db.execute(
+            select(ExamStudent).where(
+                ExamStudent.exam_id == exam_id,
+                ExamStudent.student_id == student_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if exam_student is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found in this exam")
+    if exam_student.submitted_at is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Student has not submitted this exam")
+
+    exam_question = (
+        await db.execute(
+            select(ExamQuestion).where(
+                ExamQuestion.exam_id == exam_id,
+                ExamQuestion.question_id == question_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if exam_question is None or exam_question.question is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found in this exam")
+
+    total_score = exam_question.score_override if exam_question.score_override is not None else exam_question.question.score
+    total_score = float(total_score or 0.0)
+    score_awarded = round(float(body.score_awarded), 2)
+    if score_awarded > total_score:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Score cannot exceed question total score ({total_score})",
+        )
+
+    answer = (
+        await db.execute(
+            select(StudentExamAnswer).where(
+                StudentExamAnswer.exam_id == exam_id,
+                StudentExamAnswer.student_id == student_id,
+                StudentExamAnswer.question_id == question_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if answer is None:
+        answer = StudentExamAnswer(
+            exam_id=exam_id,
+            student_id=student_id,
+            question_id=question_id,
+            answer_content={},
+            feedback={},
+        )
+        db.add(answer)
+
+    now = datetime.now(timezone.utc)
+    feedback = dict(answer.feedback or {})
+    feedback["manual_score"] = {
+        "score_awarded": score_awarded,
+        "updated_by": str(user.id),
+        "updated_at": now.isoformat(),
+    }
+    answer.score_awarded = score_awarded
+    answer.is_correct = total_score > 0 and score_awarded >= total_score
+    answer.feedback = feedback
+
+    latest_submission_id = exam_student.latest_submission_id
+    if latest_submission_id is not None:
+        submission_answer = (
+            await db.execute(
+                select(StudentExamSubmissionAnswer).where(
+                    StudentExamSubmissionAnswer.submission_id == latest_submission_id,
+                    StudentExamSubmissionAnswer.question_id == question_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if submission_answer is None:
+            submission_answer = StudentExamSubmissionAnswer(
+                submission_id=latest_submission_id,
+                exam_id=exam_id,
+                student_id=student_id,
+                question_id=question_id,
+                answer_content=answer.answer_content or {},
+                feedback={},
+            )
+            db.add(submission_answer)
+        submission_answer.score_awarded = score_awarded
+        submission_answer.is_correct = answer.is_correct
+        submission_answer.feedback = feedback
+
+    answers_result = await db.execute(
+        select(StudentExamAnswer).where(
+            StudentExamAnswer.exam_id == exam_id,
+            StudentExamAnswer.student_id == student_id,
+        )
+    )
+    answers_by_question = {item.question_id: item for item in answers_result.scalars().all()}
+
+    objective_score = 0.0
+    subjective_score = 0.0
+    for item in exam.exam_questions:
+        question = item.question
+        if question is None:
+            continue
+        row = answers_by_question.get(question.id)
+        awarded = float(row.score_awarded) if row is not None else 0.0
+        question_type = getattr(question.type, "value", str(question.type))
+        if question_type in _OBJECTIVE_QUESTION_TYPES:
+            objective_score += awarded
+        else:
+            subjective_score += awarded
+
+    exam_student.objective_score = round(objective_score, 2)
+    exam_student.subjective_score = round(subjective_score, 2)
+    exam_student.score = round(objective_score + subjective_score, 2)
+    exam_student.grading_status = GradingStatus.REVIEWED.value
+    exam_student.reviewed_at = now
+
+    if latest_submission_id is not None:
+        submission = (
+            await db.execute(
+                select(StudentExamSubmission).where(StudentExamSubmission.id == latest_submission_id)
+            )
+        ).scalar_one_or_none()
+        if submission is not None:
+            submission.objective_score = exam_student.objective_score
+            submission.subjective_score = exam_student.subjective_score
+            submission.score = exam_student.score
+            submission.grading_status = exam_student.grading_status
+
+    await db.commit()
+    await db.refresh(answer)
+    await db.refresh(exam_student)
+
+    return ManualQuestionScoreResponse(
+        question_id=question_id,
+        total_score=total_score,
+        score_awarded=answer.score_awarded,
+        is_correct=answer.is_correct,
+        objective_score=exam_student.objective_score,
+        subjective_score=exam_student.subjective_score,
+        exam_score=exam_student.score,
+        grading_status=exam_student.grading_status,
+        feedback=answer.feedback or {},
+    )
+
+
 @router.post("/{exam_id}/students", status_code=status.HTTP_201_CREATED)
 async def add_exam_students(
     exam_id: uuid.UUID,
@@ -796,6 +1043,7 @@ def _build_analysis_response(
                 correct_count=correct_count,
                 correct_rate=(correct_count / attempt_count) if attempt_count else None,
                 average_score=avg_score,
+                knowledge_point_ids=[kp.id for kp in (eq.question.knowledge_points or [])] if eq.question else [],
             )
         )
 
@@ -832,14 +1080,27 @@ def _build_analysis_response(
         )
     knowledge_points.sort(key=lambda r: r.name)
 
+    answer_records = [
+        AnswerRecord(
+            student_id=ans.student_id,
+            question_id=ans.question_id,
+            score_awarded=ans.score_awarded,
+            is_correct=ans.is_correct,
+        )
+        for ans in answers
+    ]
+
     return ExamAnalysisResponse(
         exam_id=exam.id,
         title=exam.title,
+        start_time=exam.start_time,
+        category=exam.category,
         overall=overall,
         score_distribution=buckets,
         students=student_rows,
         questions=question_rows,
         knowledge_points=knowledge_points,
+        answer_records=answer_records,
     )
 
 

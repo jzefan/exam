@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { CheckCircle2, Circle, Filter, Search, SkipForward, Trash2 } from "lucide-react";
+import { CheckCircle2, Filter, Search, SkipForward, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,18 +14,6 @@ const filterOptions: Array<{ value: ImportFilter; label: string }> = [
   { value: "issues", label: "异常" },
   { value: "missing_answer", label: "缺答案" },
 ];
-
-function getStatusColor(status: QuestionImportDraft["review_status"]) {
-  if (status === "approved") return "text-emerald-500 bg-emerald-500/10 border-emerald-500/20";
-  if (status === "skipped") return "text-slate-400 bg-slate-400/10 border-slate-400/20";
-  return "text-amber-500 bg-amber-500/10 border-amber-500/20";
-}
-
-function getStatusIcon(status: QuestionImportDraft["review_status"]) {
-  if (status === "approved") return <CheckCircle2 size={12} />;
-  if (status === "skipped") return <SkipForward size={12} />;
-  return <Circle size={12} />;
-}
 
 function filterImportDrafts(drafts: QuestionImportDraft[], filter: ImportFilter, query: string) {
   const normalizedQuery = query.trim().toLowerCase();
@@ -143,20 +131,20 @@ export function ImportReviewSidebar({
           ) : (
             visibleDrafts.map((draft, index) => {
               const isSelected = selectedDraftId === draft.draft_id;
-              const statusClasses = getStatusColor(draft.review_status);
               const blockingIssues = getBlockingImportIssues(draft);
               const hasMissingAnswer = !draft.answer_text?.trim() || draft.issues.some(isMissingAnswerIssue);
-              
+              const reviewStatus = draft.review_status;
+
               return (
                 <div
                   key={draft.draft_id}
                   role="button"
                   tabIndex={0}
                   className={cn(
-                    "group relative w-full cursor-pointer overflow-hidden rounded-xl border px-3.5 py-3 text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
-                    isSelected 
-                      ? "border-primary bg-white shadow-sm" 
-                      : "border-slate-100 hover:border-primary/30 hover:bg-slate-50/50"
+                    "group relative w-full cursor-pointer overflow-hidden rounded-lg border py-2 text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
+                    isSelected
+                      ? "border-primary bg-white shadow-sm pl-2 pr-2"
+                      : "border-slate-100 pl-2 pr-2 hover:border-primary/30 hover:bg-slate-50/50"
                   )}
                   onClick={() => onSelect(draft.draft_id)}
                   onKeyDown={(event) => {
@@ -165,44 +153,61 @@ export function ImportReviewSidebar({
                     onSelect(draft.draft_id);
                   }}
                 >
-                  {/* Active Indicator */}
                   {isSelected && (
-                    <div className="absolute left-0 top-1/2 h-8 w-1 -translate-y-1/2 rounded-r-full bg-primary" />
+                    <div className="absolute left-0 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r-full bg-primary" />
                   )}
 
-                  <div className="mb-1.5 flex items-start justify-between gap-2">
-                    <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-                      <div className={cn(
-                        "flex size-5 shrink-0 items-center justify-center rounded-md text-[11px] font-black transition-all",
-                        isSelected ? "bg-primary text-white" : "bg-slate-100 text-slate-400 group-hover:bg-slate-200"
-                      )}>
-                        {index + 1}
-                      </div>
-                      <Badge 
-                        variant="outline" 
-                        className="h-5 shrink-0 border-slate-200 bg-white px-1.5 py-0 text-[10px] font-bold tracking-wide text-slate-500"
-                      >
-                        {getQuestionTypeLabel(draft.type)}
-                      </Badge>
-                      <div className={cn(
-                        "flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-bold transition-all",
-                        statusClasses,
-                      )}>
-                        {getStatusIcon(draft.review_status)}
-                        <span className="tracking-tight">
-                          {draft.review_status === "approved" ? "已确认" : draft.review_status === "skipped" ? "已跳过" : "待审核"}
-                        </span>
-                      </div>
-                      {hasMissingAnswer && (
-                        <div className="flex shrink-0 items-center rounded-full border border-amber-100 bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-600">
-                          缺答案
-                        </div>
-                      )}
+                  <div className="flex items-center gap-2">
+                    {/* Number */}
+                    <div className={cn(
+                      "flex size-5 shrink-0 items-center justify-center rounded-md text-[11px] font-black transition-all",
+                      isSelected ? "bg-primary text-white" : "bg-slate-100 text-slate-400 group-hover:bg-slate-200"
+                    )}>
+                      {index + 1}
                     </div>
+
+                    {/* Type badge */}
+                    <Badge
+                      variant="outline"
+                      className="h-5 shrink-0 border-slate-200 bg-white px-1.5 py-0 text-[10px] font-bold tracking-wide text-slate-500"
+                    >
+                      {getQuestionTypeLabel(draft.type)}
+                    </Badge>
+
+                    {/* Content — single line truncation inline */}
+                    <p
+                      className={cn(
+                        "min-w-0 flex-1 truncate text-[13px] font-medium leading-tight transition-colors",
+                        isSelected ? "text-slate-700" : "text-slate-500 group-hover:text-slate-600",
+                        reviewStatus === "skipped" && "line-through text-slate-300",
+                      )}
+                    >
+                      {getDraftPreviewText(draft)}
+                    </p>
+
+                    {/* Status indicator — icon only */}
+                    {reviewStatus === "approved" && (
+                      <CheckCircle2 size={14} className="shrink-0 text-emerald-400" />
+                    )}
+                    {reviewStatus === "skipped" && (
+                      <SkipForward size={14} className="shrink-0 text-slate-300" />
+                    )}
+                    {hasMissingAnswer && (
+                      <span className="shrink-0 rounded bg-amber-50 px-1.5 py-px text-[10px] font-bold text-amber-600">
+                        缺答案
+                      </span>
+                    )}
+                    {blockingIssues.length > 0 && (
+                      <span className="shrink-0 rounded bg-red-50 px-1.5 py-px text-[10px] font-bold text-red-500">
+                        {blockingIssues.length} 异常
+                      </span>
+                    )}
+
+                    {/* Delete */}
                     <button
                       type="button"
                       aria-label={`删除第 ${index + 1} 题`}
-                      className="flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-[11px] font-bold text-slate-400 transition-all hover:bg-red-50 hover:text-red-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200"
+                      className="flex h-6 shrink-0 items-center justify-center rounded-md px-1.5 text-[11px] font-bold text-slate-400 transition-all hover:bg-red-50 hover:text-red-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200"
                       onClick={(event) => {
                         event.stopPropagation();
                         onDelete(draft.draft_id);
@@ -212,30 +217,8 @@ export function ImportReviewSidebar({
                       }}
                     >
                       <Trash2 size={13} />
-                      删除
                     </button>
                   </div>
-
-                  <p
-                    className={cn(
-                      "overflow-hidden break-words text-sm font-medium leading-relaxed transition-colors [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] [overflow-wrap:anywhere]",
-                      isSelected ? "text-slate-600" : "text-slate-500 group-hover:text-slate-600",
-                    )}
-                  >
-                    {getDraftPreviewText(draft)}
-                  </p>
-
-                  {blockingIssues.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      <div className="flex w-fit items-center gap-1.5 rounded-md border border-red-100 bg-red-50 px-2 py-0.5 text-xs font-bold text-red-600">
-                        <span className="relative flex h-1.5 w-1.5">
-                          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75"></span>
-                          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-red-500"></span>
-                        </span>
-                        {blockingIssues.length} 个异常
-                      </div>
-                    </div>
-                  )}
                 </div>
               );
             })

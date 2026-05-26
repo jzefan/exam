@@ -77,6 +77,9 @@ async function extractPaperImportPayload(
   const extension = file.name.split(".").pop()?.toLowerCase();
   if (extension !== "pdf") {
     const payload = await extractQuestionImportPayload(file);
+    if (payload.sourceFormat === "json" || payload.sourceFormat === "zip") {
+      throw new Error("试卷导入暂不支持 JSON 或 ZIP 文件，请上传 PDF、Word(docx) 或 Markdown 文件。");
+    }
     return {
       fileName: file.name,
       rawText: payload.rawText,

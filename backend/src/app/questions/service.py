@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import uuid
+from pathlib import Path
 from typing import Any
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -208,8 +209,14 @@ async def list_question_banks(
         .subquery()
     )
     stmt = (
-        select(QuestionBank, func.coalesce(count_subq.c.cnt, 0).label("question_count"))
+        select(
+            QuestionBank,
+            func.coalesce(count_subq.c.cnt, 0).label("question_count"),
+            User.username.label("owner_username"),
+            User.full_name.label("owner_full_name"),
+        )
         .outerjoin(count_subq, QuestionBank.id == count_subq.c.question_bank_id)
+        .join(User, User.id == QuestionBank.owner_id)
         .where(QuestionBank.deleted_at.is_(None))
     )
     if not is_platform_admin:
@@ -226,7 +233,15 @@ async def list_question_banks(
     no_bank_result = await db.execute(no_bank_stmt)
     no_bank_count = no_bank_result.scalar_one()
 
-    return [{"bank": row[0], "question_count": row[1]} for row in rows], no_bank_count
+    return [
+        {
+            "bank": row[0],
+            "question_count": row[1],
+            "owner_username": row[2],
+            "owner_full_name": row[3],
+        }
+        for row in rows
+    ], no_bank_count
 
 
 async def create_question_bank(db: AsyncSession, data: QuestionBankCreate, user_id: uuid.UUID) -> QuestionBank:
@@ -826,7 +841,10 @@ _http_client: httpx.AsyncClient | None = None
 def _get_http_client() -> httpx.AsyncClient:
     global _http_client
     if _http_client is None or _http_client.is_closed:
-        _http_client = httpx.AsyncClient(timeout=120.0)
+        _http_client = httpx.AsyncClient(
+            timeout=120.0,
+            limits=httpx.Limits(max_connections=200, max_keepalive_connections=100),
+        )
     return _http_client
 
 
@@ -966,7 +984,11 @@ _TEMPLATE_PREFIXES = (
     "[难度]",
 )
 _QUESTION_START_PATTERNS = [
-    re.compile(r"^\s*(\d+(?:[\.．\)）、]|(?=\s+))|[\(\（]\d+[\)）]|\[\d+\]|【\d+】)\s*"),
+    # NOTE: question numbers must have an explicit delimiter (".", ")", "、",
+    # bracket pair, etc.). Stripping bare "\d+(?=\s+)" used to wipe the leading
+    # number out of stems like "26 岁初产妇" because it looked like a question
+    # number followed by whitespace.
+    re.compile(r"^\s*(\d+[\.．\)）、]|[\(\（]\d+[\)）]|\[\d+\]|【\d+】)\s*"),
     re.compile(r"^\s*([一二三四五六七八九十]+[、\.．])\s*"),
     re.compile(r"^\s*(单选题|单选|多选题|多选|选择题|判断题|判断|填空题|填空|简答题|简答|编程题|编程|论述题|论述)\b"),
 ]
@@ -1883,7 +1905,7 @@ def _build_document_ai_prompt(
 {recognition_prompt.strip()}
 """
     # Allow up to 120K characters to support large papers (40+ questions).
-    # Schema already validates max_length=200000 upstream.
+    # Schema already validates max_length=1000000 upstream.
     truncated = raw_text[:120000]
     return f"""分析题目文本，只输出JSON: {{"questions":[{{"type":"choice|true_false|fill_in|short_answer|essay|code","content_text":"题干","options":{{"A":"..."}}|null,"answer_text":"答案或空","analysis":"解析或空","difficulty":1-5,"raw_text":"原文","images":[]}}]}}
 {paper_rules}{custom_rules}
@@ -1941,6 +1963,61 @@ def _build_ai_import_draft(
         issues.append("选择题选项不完整")
     if not answer_text:
         issues.append("未识别到答案")
+    return QuestionImportDraft(
+        draft_id=str(uuid.uuid4()),
+        raw_text=question["raw_text"] or question["content_text"],
+        title=(question["content_text"] or question["raw_text"]).replace("\n", " ")[:120],
+        type=question["type"],
+        content_text=question["content_text"],
+        options={str(key): str(value).strip() for key, value in (question["options"] or {}).items()} or None,
+        answer_text=answer_text,
+        analysis=question["analysis"] or None,
+        difficulty=question["difficulty"],
+        segment_source="ai_full",
+        type_confidence="high",
+        boundary_confidence="medium",
+        issues=issues,
+        images=linked_images,
+        comparison_flags=[],
+        review_status=ImportReviewStatus.PENDING,
+        review_required=True,
+    )
+
+
+def _build_ai_import_draft_with_images(
+    question: dict,
+    image_urls: dict[str, str],
+) -> QuestionImportDraft:
+    """Build a draft with image filenames from LLM resolved to URLs.
+
+    LLM outputs image filenames in the `images` field (via compact key `imgs`).
+    This function resolves each filename to its full URL from `image_urls`.
+    Unmatched filenames generate a warning issue.
+    """
+    image_filenames: list[str] = question.get("images") or []
+    linked_images: list[QuestionImportImageInput] = []
+    issues: list[str] = []
+    for order, filename in enumerate(image_filenames):
+        url = image_urls.get(filename)
+        if url:
+            linked_images.append(
+                QuestionImportImageInput(
+                    image_id=filename,
+                    url=url,
+                    order=order + 1,
+                )
+            )
+        else:
+            issues.append(f"图片未匹配：{filename}")
+
+    answer_text = question["answer_text"] or None
+    if not question["content_text"]:
+        issues.append("题目内容为空")
+    if question["type"] == "choice" and len(question["options"] or {}) < 2:
+        issues.append("选择题选项不完整")
+    if not answer_text:
+        issues.append("未识别到答案")
+
     return QuestionImportDraft(
         draft_id=str(uuid.uuid4()),
         raw_text=question["raw_text"] or question["content_text"],
@@ -2045,12 +2122,18 @@ async def recognize_question_document_with_ai(
 
 
 def _draft_dedup_key(draft: QuestionImportDraft) -> str:
-    """Build a dedup key from normalized content_text + sorted options."""
+    """Build a dedup key from normalized content_text + sorted options + answer.
+
+    Including the answer prevents collapsing questions that share an identical
+    stem and option set but legitimately have different correct answers (e.g.
+    K-type stem reused with shuffled options or twin questions in case series).
+    """
     text = " ".join(draft.content_text.split()).strip().lower()
+    answer = " ".join((draft.answer_text or "").split()).strip().lower()
     if draft.options:
         opts = "|".join(f"{k}={' '.join(v.split()).strip().lower()}" for k, v in sorted(draft.options.items()))
-        return f"{text}||{opts}"
-    return text
+        return f"{text}||{opts}||{answer}"
+    return f"{text}||{answer}"
 
 
 def deduplicate_drafts(
@@ -2107,6 +2190,556 @@ def build_import_document_summary(
     )
 
 
+_DEEPSEEK_DOC_PROMPT_TEMPLATE = """以下文本已用 `[Q]` 标记分隔每道题目。请逐题输出一行紧凑 JSON（JSONL；不要数组包裹，不要 markdown 围栏，不要说明文字）：
+{{"t":"choice|true_false|fill_in|short_answer|essay|code","c":"...","o":{{"A":"","B":""}}|null,"a":"...","an":"...","imgs":["..."]|[]}}
+
+字段说明：
+- t: 题型
+- c: 题干。从 `[Q]` 之后到第一个选项（A. / A、/ A:）或解析段之前的所有字符，**完整原样保留**，不要删除任何字符。**不要输出 `[Q]` 标记本身**。文本中出现的 `[IMG:xxx.png]` 指该处有配图，保留在c字段中
+- o: 选择题选项，键为 A/B/C/D/E，值为不含字母前缀的纯文本；非选择题为 null
+- a: 答案。选择题填字母（如 "A" 或 "ABC"），其他题型填答案文本
+- an: 解析。原文出现"解析"/"分析"/"答案解析"/"参考解析"/"详解"等段落，必须完整提取到该字段；题目后跟随的 "●A:" "•B:" 等逐项点评也并入该字段。没有解析填空字符串
+- imgs: 该题所配图片的文件名数组。从题干中出现的 [IMG:xxx] 标记提取 xxx 填入（如 ["a1b2c3.png"]）。题干无标记则为空数组 []
+
+规则：
+- 每个 `[Q]` 块对应一道题，独立输出一行 JSON
+- 行间不要空行、不要逗号、不要数组括号
+- 不要省略、概括或改写任何字段内容
+
+文本：
+{text}"""
+
+
+_QUESTION_NUMBER_PREFIX_RE = re.compile(
+    r"^\s*(?:第\s*\d+\s*题\s*[:：.、]?\s*|题\s*\d+\s*[:：.、]?\s*|\d+\s*[.、]\s*|[(（]\s*\d+\s*[)）]\s*)",
+)
+
+_QUESTION_NUMBER_BOUNDARY_RE = re.compile(
+    r"(?m)^\s*(?:第\s*\d+\s*题\s*[:：.、]?|题\s*\d+\s*[:：.、]?|\d+\s*[.、]|[(（]\s*\d+\s*[)）])\s*",
+)
+
+
+def _strip_question_number_prefix(text: str) -> str:
+    """Remove leading '第 N 题：' / '1.' / '(1)' style prefix from a question stem."""
+    return _QUESTION_NUMBER_PREFIX_RE.sub("", text, count=1).lstrip()
+
+
+def _normalize_question_boundaries(text: str) -> str:
+    """Replace Chinese question-number prefixes with an unambiguous English marker.
+
+    Without this, DeepSeek conflates the leading number of the next question
+    (e.g. "26" in "第 1 题：26 岁初产妇") with the question label and silently
+    drops it. Replacing the label up front removes that failure mode entirely.
+    """
+    return _QUESTION_NUMBER_BOUNDARY_RE.sub("\n[Q]\n", text)
+
+
+_COMPACT_KEY_MAP = {"t": "type", "c": "content_text", "o": "options", "a": "answer_text", "an": "analysis", "imgs": "images"}
+
+
+def _parse_doc_recognition_jsonl(content: str) -> list[dict]:
+    """Parse the model's JSONL output and expand compact keys back to full names."""
+    questions: list[dict] = []
+    for line in content.splitlines():
+        line = line.strip().rstrip(",")
+        if not line or line in ("[", "]", "{", "}"):
+            continue
+        if line.startswith("```"):
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        expanded = {_COMPACT_KEY_MAP.get(k, k): v for k, v in obj.items()}
+        expanded.setdefault("difficulty", 3)
+        expanded.setdefault("analysis", "")
+        content_text = expanded.get("content_text")
+        if isinstance(content_text, str):
+            expanded["content_text"] = _strip_question_number_prefix(content_text)
+        questions.append(expanded)
+    return questions
+
+
+_DOC_RECOGNITION_CHUNK_SIZE = 6000
+_DOC_RECOGNITION_CONCURRENCY = 50
+
+
+def _split_text_at_question_boundaries(full_text: str, chunk_size: int = _DOC_RECOGNITION_CHUNK_SIZE) -> list[str]:
+    """Pack the document into chunks that always end on a question boundary.
+
+    Boundary detection uses the same regex that the prompt-side normalizer uses
+    (`第 N 题：`, `1.`, `(1)`, etc.). Splitting only at boundaries guarantees
+    that no question is cut in half, which was the main source of missing
+    questions in the previous page/paragraph-packed chunker.
+    """
+    boundaries = [m.start() for m in _QUESTION_NUMBER_BOUNDARY_RE.finditer(full_text)]
+    if len(boundaries) < 2:
+        # No detectable structure — fall back to plain size splitting
+        return [full_text[i : i + chunk_size] for i in range(0, len(full_text), chunk_size)] or [full_text]
+
+    boundaries.append(len(full_text))  # sentinel for the tail block
+    chunks: list[str] = []
+    chunk_start = boundaries[0]
+    last_emitted_end = boundaries[0]
+    for next_boundary in boundaries[1:]:
+        if next_boundary - chunk_start > chunk_size and last_emitted_end > chunk_start:
+            chunks.append(full_text[chunk_start:last_emitted_end])
+            chunk_start = last_emitted_end
+        last_emitted_end = next_boundary
+    if last_emitted_end > chunk_start:
+        chunks.append(full_text[chunk_start:last_emitted_end])
+    return [c for c in chunks if c.strip()]
+
+
+_MAX_EXTRACTED_IMAGES = 300
+_IMG_UPLOAD_DIR = Path(__file__).resolve().parents[3] / "uploads"
+
+
+def _save_image_bytes(data: bytes, ext: str) -> tuple[str, str]:
+    """Save image bytes to UPLOAD_DIR, return (filename, url)."""
+    _IMG_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}.{ext}"
+    (_IMG_UPLOAD_DIR / filename).write_bytes(data)
+    return filename, f"/api/uploads/files/{filename}"
+
+
+def _extract_pdf_text_and_images(
+    file_bytes: bytes,
+) -> tuple[str, dict[str, str], int]:
+    """Extract text + unique images from PDF.
+
+    Returns (full_text, filename_to_url_map, total_images_found).
+    Text contains `[IMG:filename]` markers inline where images appear.
+    Images are deduplicated by xref; same image on multiple pages is saved once.
+    """
+    import io
+    import pdfplumber
+    import fitz
+
+    filename_to_url: dict[str, str] = {}
+    xref_to_filename: dict[int, str] = {}
+    total_images = 0
+    img_count = 0
+
+    mu_doc = fitz.open(stream=file_bytes, filetype="pdf")
+
+    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+        page_texts: list[str] = []
+        for page_num, page in enumerate(pdf.pages):
+            text = page.extract_text() or ""
+
+            # Extract images for this page via PyMuPDF
+            mu_page = mu_doc[page_num]
+            image_markers: list[str] = []
+            for img_info in mu_page.get_images(full=True):
+                total_images += 1
+                xref = img_info[0]
+
+                if xref not in xref_to_filename:
+                    if img_count >= _MAX_EXTRACTED_IMAGES:
+                        break
+                    base = mu_doc.extract_image(xref)
+                    ext = base["ext"]
+                    data = base["image"]
+                    # Skip tiny images (watermarks/logos under 2KB or < 100px either side)
+                    w, h = base["width"], base["height"]
+                    if len(data) < 2000 or w < 100 or h < 100:
+                        continue
+                    img_count += 1
+                    filename, url = _save_image_bytes(data, ext)
+                    xref_to_filename[xref] = filename
+                    filename_to_url[filename] = url
+
+                if xref in xref_to_filename:
+                    image_markers.append(f"[IMG:{xref_to_filename[xref]}]")
+
+            if image_markers:
+                text = " ".join(image_markers) + "\n" + text
+            page_texts.append(text)
+
+    mu_doc.close()
+    return "\n".join(page_texts), filename_to_url, total_images
+
+
+def _extract_docx_text_and_images(
+    file_bytes: bytes,
+) -> tuple[str, dict[str, str], int]:
+    """Extract text + images from DOCX.
+
+    Returns (full_text, filename_to_url_map, total_images_found).
+    Images are saved alongside `[IMG:filename]` inline markers.
+    """
+    import io
+    from docx import Document
+    from docx.opc.constants import RELATIONSHIP_TYPE as RT
+
+    document = Document(io.BytesIO(file_bytes))
+    filename_to_url: dict[str, str] = {}
+    img_count = 0
+    lines: list[str] = []
+
+    # Collect image parts
+    image_parts: dict[str, bytes] = {}
+    for rel in document.part.rels.values():
+        if "image" in rel.reltype:
+            try:
+                image_parts[rel.rId] = rel.target_part.blob
+            except Exception:
+                continue
+
+    # Find all blip (image reference) elements scoped to each paragraph
+    para_blips: dict[int, list[str]] = {}  # paragraph index → [rId, ...]
+    for i, paragraph in enumerate(document.paragraphs):
+        for blip in paragraph._element.findall(
+            ".//{http://schemas.openxmlformats.org/drawingml/2006/main}blip",
+        ):
+            rId = blip.get(
+                "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"
+            )
+            if rId and rId in image_parts:
+                para_blips.setdefault(i, []).append(rId)
+
+    for i, paragraph in enumerate(document.paragraphs):
+        text = paragraph.text.strip()
+
+        image_markers: list[str] = []
+        if i in para_blips:
+            for rId in para_blips[i]:
+                img_count += 1
+                if img_count > _MAX_EXTRACTED_IMAGES:
+                    break
+                ext = _guess_image_ext(image_parts[rId][:16])
+                filename, url = _save_image_bytes(image_parts[rId], ext)
+                filename_to_url[filename] = url
+                image_markers.append(f"[IMG:{filename}]")
+
+        if image_markers:
+            text = " ".join(image_markers) + ("\n" + text if text else "")
+        if text:
+            lines.append(text)
+
+    for table in document.tables:
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+            if cells:
+                lines.append(" | ".join(cells))
+
+    return "\n".join(lines), filename_to_url, img_count
+
+
+def _guess_image_ext(header_bytes: bytes) -> str:
+    if header_bytes[:4] == b"\x89PNG":
+        return "png"
+    if header_bytes[:2] == b"\xff\xd8":
+        return "jpg"
+    if header_bytes[:4] == b"GIF8":
+        return "gif"
+    if header_bytes[:4] == b"RIFF":
+        return "webp"
+    return "png"
+
+
+async def _recognize_full_text_with_ai(
+    full_text: str,
+    image_urls: dict[str, str],
+    file_name: str,
+    source_format: str,
+    empty_text_error: str,
+    no_drafts_error: str,
+) -> "QuestionImportDocumentRecognizeResponse":
+    """Split the document at question boundaries, dispatch LLM calls in parallel, merge results.
+
+    Boundary-aware chunking ensures no question gets cut in half between two
+    chunks. Each chunk's per-call output cap is high enough to accommodate
+    reasoning-model traces (e.g. deepseek-v4-pro).
+
+    Image URL map is passed through to draft building so LLM-referenced images
+    get full URLs.
+    """
+    import pathlib
+
+    if not full_text.strip():
+        raise ValueError(empty_text_error)
+
+    chunks = _split_text_at_question_boundaries(full_text)
+
+    semaphore = asyncio.Semaphore(_DOC_RECOGNITION_CONCURRENCY)
+    chunk_diag: list[dict] = []
+
+    async def recognize_one(idx: int, chunk: str) -> list[QuestionImportDraft]:
+        normalized = _normalize_question_boundaries(chunk)
+        prompt = _DEEPSEEK_DOC_PROMPT_TEMPLATE.format(text=normalized)
+        async with semaphore:
+            try:
+                questions = await _request_doc_recognition_questions(prompt)
+                validated = _validate_ai_document_questions({"questions": questions})
+                drafts = [_build_ai_import_draft_with_images(q, image_urls) for q in validated]
+                chunk_diag.append({"idx": idx, "chars": len(chunk), "questions": len(drafts), "status": "ok"})
+                return drafts
+            except Exception as exc:
+                chunk_diag.append({"idx": idx, "chars": len(chunk), "questions": 0, "status": f"error:{type(exc).__name__}:{str(exc)[:100]}"})
+                return []
+
+    chunk_results = await asyncio.gather(
+        *(recognize_one(i, chunk) for i, chunk in enumerate(chunks))
+    )
+    all_drafts: list[QuestionImportDraft] = [
+        draft for chunk_drafts in chunk_results for draft in chunk_drafts
+    ]
+
+    if not all_drafts:
+        raise RuntimeError(no_drafts_error)
+
+    unique_drafts, duplicates_removed = deduplicate_drafts(all_drafts)
+
+    _debug_dir = pathlib.Path("/tmp/question_import_debug")
+    _debug_dir.mkdir(parents=True, exist_ok=True)
+    _debug_ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    _debug_path = _debug_dir / f"{source_format}_recognize_{_debug_ts}.json"
+    _debug_path.write_text(
+        json.dumps(
+            {
+                "file_name": file_name,
+                "source_format": source_format,
+                "total_chars": len(full_text),
+                "chunks_count": len(chunks),
+                "images_found": len(image_urls),
+                "drafts_before_dedup": len(all_drafts),
+                "duplicates_removed": duplicates_removed,
+                "drafts_count": len(unique_drafts),
+                "chunk_diagnostics": sorted(chunk_diag, key=lambda d: d["idx"]),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    summary = build_import_document_summary(unique_drafts, duplicates_removed)
+    return QuestionImportDocumentRecognizeResponse(
+        mode=ImportRecognitionMode.SMART,
+        summary=summary,
+        drafts=unique_drafts,
+    )
+
+
+async def recognize_pdf_with_ai(file_bytes: bytes, file_name: str) -> "QuestionImportDocumentRecognizeResponse":
+    """Extract text + images from PDF, split at question boundaries, call AI in parallel.
+
+    Text contains inline `[IMG:filename]` markers that the LLM will reference
+    in its JSONL output, producing per-question image lists with resolved URLs.
+    """
+    full_text, image_urls, img_count = await asyncio.to_thread(_extract_pdf_text_and_images, file_bytes)
+    result = await _recognize_full_text_with_ai(
+        full_text=full_text,
+        image_urls=image_urls,
+        file_name=file_name,
+        source_format="pdf",
+        empty_text_error="PDF 文件中未提取到文本内容",
+        no_drafts_error="AI 未能从 PDF 中识别出任何题目，请检查文件内容",
+    )
+    # Inject image count into summary for diagnostics
+    result.summary = result.summary.model_copy(update={"visual_retry_recommended": img_count > 0})
+    return result
+
+
+async def recognize_docx_with_ai(file_bytes: bytes, file_name: str) -> "QuestionImportDocumentRecognizeResponse":
+    """Extract text + images from DOCX, split at question boundaries, call AI in parallel."""
+    full_text, image_urls, img_count = await asyncio.to_thread(_extract_docx_text_and_images, file_bytes)
+    result = await _recognize_full_text_with_ai(
+        full_text=full_text,
+        image_urls=image_urls,
+        file_name=file_name,
+        source_format="docx",
+        empty_text_error="DOCX 文件中未提取到文本内容",
+        no_drafts_error="AI 未能从 DOCX 中识别出任何题目，请检查文件内容",
+    )
+    result.summary = result.summary.model_copy(update={"visual_retry_recommended": img_count > 0})
+    return result
+
+
+def _strip_json_fences(content: str) -> str:
+    payload = content.strip()
+    if "```" in payload:
+        start = payload.find("```")
+        end = payload.rfind("```")
+        if start != -1 and end != -1 and end > start:
+            payload = payload[start + 3 : end].strip()
+            if payload.startswith("json"):
+                payload = payload[4:].strip()
+    return payload
+
+
+async def _request_openai_compatible_text(
+    *,
+    provider_name: str,
+    api_key: str | None,
+    base_url: str,
+    model_name: str,
+    prompt: str,
+    system_prompt: str,
+    max_tokens: int,
+    timeout: float,
+) -> str:
+    """OpenAI-compatible chat-completion call returning raw content string."""
+    if not api_key:
+        raise RuntimeError(f"未配置 {provider_name} API Key")
+
+    client = _get_http_client()
+    response = await client.post(
+        f"{base_url.rstrip('/')}/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt.strip()},
+            ],
+            "temperature": 0.1,
+            "max_tokens": max_tokens,
+        },
+        timeout=timeout,
+    )
+
+    if response.status_code >= 400:
+        raise RuntimeError(response.text.strip() or f"{provider_name} 分析失败")
+
+    content = response.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError(f"{provider_name} 没有返回分析结果")
+    return content
+
+
+async def _request_openai_compatible_json_large(
+    *,
+    provider_name: str,
+    api_key: str | None,
+    base_url: str,
+    model_name: str,
+    prompt: str,
+) -> dict:
+    """OpenAI-compatible chat-completion call that returns parsed JSON. Used by callers expecting a top-level JSON object."""
+    content = await _request_openai_compatible_text(
+        provider_name=provider_name,
+        api_key=api_key,
+        base_url=base_url,
+        model_name=model_name,
+        prompt=prompt,
+        system_prompt="你只输出合法 JSON。不要输出任何其他内容。",
+        max_tokens=6000,
+        timeout=120.0,
+    )
+    return json.loads(_strip_json_fences(content))
+
+
+async def _request_openai_compatible_jsonl(
+    *,
+    provider_name: str,
+    api_key: str | None,
+    base_url: str,
+    model_name: str,
+    prompt: str,
+) -> list[dict]:
+    """OpenAI-compatible chat-completion call returning parsed JSONL (one JSON object per line).
+
+    max_tokens=16000 leaves headroom for reasoning models (e.g. deepseek-v4-pro)
+    that consume thousands of tokens in `reasoning_content` before the final answer.
+    """
+    content = await _request_openai_compatible_text(
+        provider_name=provider_name,
+        api_key=api_key,
+        base_url=base_url,
+        model_name=model_name,
+        prompt=prompt,
+        system_prompt="你只输出 JSONL，每行一个紧凑 JSON 对象，不要数组包裹，不要 markdown 围栏。",
+        max_tokens=16000,
+        timeout=180.0,
+    )
+    return _parse_doc_recognition_jsonl(content)
+
+
+async def _request_deepseek_json_large(prompt: str) -> dict:
+    return await _request_openai_compatible_json_large(
+        provider_name="DeepSeek",
+        api_key=settings.deepseek_api_key,
+        base_url=settings.deepseek_base_url,
+        model_name=settings.deepseek_model_name,
+        prompt=prompt,
+    )
+
+
+async def _request_qwen_json_large(prompt: str) -> dict:
+    return await _request_openai_compatible_json_large(
+        provider_name="Qwen",
+        api_key=settings.qwen_api_key,
+        base_url=settings.qwen_base_url,
+        model_name=settings.qwen_model_name,
+        prompt=prompt,
+    )
+
+
+async def _request_doc_recognition_json(prompt: str) -> dict:
+    """Try DeepSeek first (fastest in benchmark for this prompt size), fall back to Qwen on failure."""
+    providers = (
+        ("DeepSeek", _request_deepseek_json_large, bool(settings.deepseek_api_key)),
+        ("Qwen", _request_qwen_json_large, bool(settings.qwen_api_key)),
+    )
+    last_exc: Exception | None = None
+    for name, fn, available in providers:
+        if not available:
+            continue
+        try:
+            return await fn(prompt)
+        except Exception as exc:
+            last_exc = exc
+            continue
+    if last_exc is None:
+        raise RuntimeError("未配置任何 AI 识别服务的 API Key")
+    raise RuntimeError(f"AI 题目识别失败：{last_exc}") from last_exc
+
+
+async def _request_doc_recognition_questions(prompt: str) -> list[dict]:
+    """Compact JSONL recognition path: returns a list of question dicts directly.
+
+    Halves output tokens vs the verbose `{"questions":[...]}` envelope, which is
+    the wall-time bottleneck under concurrent DeepSeek load.
+    """
+    providers = (
+        (
+            "DeepSeek",
+            settings.deepseek_api_key,
+            settings.deepseek_base_url,
+            settings.deepseek_model_name,
+        ),
+        (
+            "Qwen",
+            settings.qwen_api_key,
+            settings.qwen_base_url,
+            settings.qwen_model_name,
+        ),
+    )
+    last_exc: Exception | None = None
+    for name, api_key, base_url, model_name in providers:
+        if not api_key:
+            continue
+        try:
+            return await _request_openai_compatible_jsonl(
+                provider_name=name,
+                api_key=api_key,
+                base_url=base_url,
+                model_name=model_name,
+                prompt=prompt,
+            )
+        except Exception as exc:
+            last_exc = exc
+            continue
+    if last_exc is None:
+        raise RuntimeError("未配置任何 AI 识别服务的 API Key")
+    raise RuntimeError(f"AI 题目识别失败：{last_exc}") from last_exc
+
+
 async def recognize_question_document(
     payload: QuestionImportDocumentRecognizeRequest,
 ) -> QuestionImportDocumentRecognizeResponse:
@@ -2135,6 +2768,29 @@ async def recognize_question_document(
         if draft.type.value == "choice" and "选择题选项不完整" in draft.issues
     )
     visual_retry_recommended = payload.source_format == "docx" and incomplete_choice_count >= 2
+
+    # DEBUG: save recognition result to file for inspection
+    import pathlib
+    _debug_dir = pathlib.Path("/tmp/question_import_debug")
+    _debug_dir.mkdir(parents=True, exist_ok=True)
+    _debug_ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    _debug_path = _debug_dir / f"recognize_{_debug_ts}.json"
+    _debug_path.write_text(
+        json.dumps(
+            {
+                "file_name": payload.file_name,
+                "raw_text_length": len(payload.raw_text),
+                "raw_text_preview": payload.raw_text[:2000],
+                "images_count": len(payload.images),
+                "mode": mode,
+                "drafts_count": len(unique_drafts),
+                "drafts": [d.model_dump(mode="json") for d in unique_drafts],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
     return QuestionImportDocumentRecognizeResponse(
         mode=mode,  # type: ignore[arg-type]
@@ -2240,7 +2896,13 @@ async def bulk_create_questions(
 async def bulk_create_questions_fast(
     db: AsyncSession, questions: list[QuestionCreate], user_id: uuid.UUID
 ) -> BulkCreateQuestionsResult:
-    """Create many questions in one flush while preserving provided relations."""
+    """Create many questions in batched flushes to avoid one giant transaction.
+
+    A single `db.add_all(2000+)` + `db.flush()` can exhaust the PostgreSQL
+    statement timeout or OOM uvicorn under heavy load. Splitting into batches
+    of 500 keeps each flush small and predictable.
+    """
+    BATCH_SIZE = 500
     existing_signatures = await _existing_question_signatures(db, user_id)
     tag_ids = {tag_id for data in questions for tag_id in data.tag_ids}
     knowledge_point_ids = {
@@ -2257,17 +2919,35 @@ async def bulk_create_questions_fast(
         kp_rows = await db.execute(select(KnowledgePoint).where(KnowledgePoint.id.in_(knowledge_point_ids)))
         knowledge_points_by_id = {kp.id: kp for kp in kp_rows.scalars().all()}
 
-    created_questions: list[Question] = []
-    created_question_inputs: list[QuestionCreate] = []
-    existing = 0
-    existing_question_ids: list[uuid.UUID] = []
+    all_created_ids: list[uuid.UUID] = []
+    all_created_inputs: list[QuestionCreate] = []
+    all_existing = 0
+    all_existing_ids: list[uuid.UUID] = []
+
+    batch_questions: list[Question] = []
+    batch_inputs: list[QuestionCreate] = []
+
+    async def _flush_batch() -> None:
+        nonlocal all_created_ids, all_created_inputs
+        if not batch_questions:
+            return
+        db.add_all(batch_questions)
+        await db.flush()
+        all_created_ids.extend(q.id for q in batch_questions)
+        all_created_inputs.extend(batch_inputs)
+        batch_questions.clear()
+        batch_inputs.clear()
+
     for data in questions:
         signature = _question_duplicate_signature(data)
+
+        # Skip duplicates (already in DB or in current batch)
         existing_id = existing_signatures.get(signature)
         if existing_id is not None:
-            existing += 1
-            existing_question_ids.append(existing_id)
+            all_existing += 1
+            all_existing_ids.append(existing_id)
             continue
+
         question = Question(
             type=data.type,
             title=data.title,
@@ -2289,17 +2969,21 @@ async def bulk_create_questions_fast(
                 for knowledge_point_id in data.knowledge_point_ids
                 if knowledge_point_id in knowledge_points_by_id
             ]
-        created_questions.append(question)
-        created_question_inputs.append(data)
-        existing_signatures[signature] = question.id
 
-    db.add_all(created_questions)
-    await db.flush()
+        batch_questions.append(question)
+        batch_inputs.append(data)
+        existing_signatures[signature] = question.id  # id assigned at flush
+
+        if len(batch_questions) >= BATCH_SIZE:
+            await _flush_batch()
+
+    await _flush_batch()  # flush remainder
+
     return BulkCreateQuestionsResult(
-        created_question_ids=[question.id for question in created_questions],
-        created_questions=created_question_inputs,
-        existing=existing,
-        existing_question_ids=existing_question_ids,
+        created_question_ids=all_created_ids,
+        created_questions=all_created_inputs,
+        existing=all_existing,
+        existing_question_ids=all_existing_ids,
     )
 
 

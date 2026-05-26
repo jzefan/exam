@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useList } from "@refinedev/core";
 import { useNavigate } from "react-router-dom";
+import { useIsMobile } from "@/hooks/use-viewport";
 import {
   FileText,
   ChevronRight,
@@ -202,6 +203,7 @@ function CompletedExamRow({
 export function MyExams() {
   const navigate = useNavigate();
   const locale = getStudentLocale();
+  const isMobile = useIsMobile();
   const [tab, setTab] = useState<TabKey>("pending");
   const [noticeExam, setNoticeExam] = useState<IMyExam | null>(null);
 
@@ -234,6 +236,104 @@ export function MyExams() {
 
   const ongoingExams = pending.filter(e => e.effectiveStatus === "ongoing");
   const upcomingExams = pending.filter(e => e.effectiveStatus === "upcoming");
+
+  if (isMobile) {
+    const ongoingExamsForMobile = pending.filter((e) => e.effectiveStatus === "ongoing");
+    const upcomingExamsForMobile = pending.filter((e) => e.effectiveStatus === "upcoming");
+    const tabItems = [
+      { key: "pending" as const, label: tStudent("my_exams_pending_tab", undefined, locale), count: pending.length },
+      { key: "completed" as const, label: tStudent("my_exams_completed_tab", undefined, locale), count: completed.length },
+    ];
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="flex w-full rounded-xl bg-muted/50 p-1">
+          {tabItems.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={cn(
+                "flex flex-1 items-center justify-center gap-1.5 rounded-lg py-2 text-sm font-semibold transition-all",
+                tab === t.key
+                  ? "bg-background text-primary shadow-sm ring-1 ring-border/50"
+                  : "text-muted-foreground",
+              )}
+            >
+              {t.label}
+              {t.count > 0 && (
+                <span className="rounded px-1 text-[10px] tabular-nums bg-primary/10 text-primary">
+                  {t.count}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+        {tab === "pending" ? (
+          <div className="space-y-3">
+            {isLoading ? (
+              <div className="space-y-3">
+                {[1, 2].map((i) => (
+                  <div key={i} className="h-20 rounded-xl border border-border/40 bg-muted/60 animate-pulse" />
+                ))}
+              </div>
+            ) : pending.length === 0 ? (
+              <p className="py-12 text-center text-sm text-muted-foreground">暂无待考考试</p>
+            ) : (
+              <>
+                {ongoingExamsForMobile.map((exam) => (
+                  <StudentPendingExamCard
+                    key={exam.id}
+                    title={exam.title}
+                    startTime={exam.start_time}
+                    endTime={exam.end_time}
+                    durationMinutes={exam.duration_minutes}
+                    createdByName={exam.created_by_name}
+                    status="ongoing"
+                    onAction={() => navigate(`/my-exams/${exam.id}/take`)}
+                  />
+                ))}
+                {upcomingExamsForMobile.map((exam) => (
+                  <StudentPendingExamCard
+                    key={exam.id}
+                    title={exam.title}
+                    startTime={exam.start_time}
+                    endTime={exam.end_time}
+                    durationMinutes={exam.duration_minutes}
+                    createdByName={exam.created_by_name}
+                    status="upcoming"
+                    onAction={() => navigate(`/my-exams/${exam.id}/take`)}
+                  />
+                ))}
+              </>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {completed.length === 0 ? (
+              <p className="py-12 text-center text-sm text-muted-foreground">暂无已完成考试</p>
+            ) : (
+              completed.map((exam) => (
+                <button
+                  key={exam.id}
+                  className="w-full rounded-xl border border-border/40 bg-card/30 px-4 py-3.5 text-left"
+                  onClick={() => navigate(`/my-exams/${exam.id}/result`)}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate font-semibold text-sm text-foreground">{exam.title}</span>
+                    {exam.score !== null && (
+                      <span className="shrink-0 text-sm font-bold text-primary">{exam.score} 分</span>
+                    )}
+                  </div>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    {exam.submitted_at ? formatDateShort(exam.submitted_at) : "--"}
+                  </p>
+                </button>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-8">

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useList, useGetIdentity } from "@refinedev/core";
 import { useNavigate } from "react-router-dom";
 import { ArrowRight, BookOpen, CalendarClock, Target, Medal } from "lucide-react";
+import { useIsMobile } from "@/hooks/use-viewport";
 import {
   Table,
   TableBody,
@@ -85,6 +86,7 @@ type CompletedFilter = "all" | "graded" | "pending";
 export function StudentDashboard() {
   const navigate = useNavigate();
   const locale = getStudentLocale();
+  const isMobile = useIsMobile();
   const { data: identity } = useGetIdentity<{ name: string; role?: string }>();
   const [completedFilter, setCompletedFilter] = useState<CompletedFilter>("all");
 
@@ -153,6 +155,80 @@ export function StudentDashboard() {
     { key: "graded", label: tStudent("dashboard_graded", undefined, locale) },
     { key: "pending", label: tStudent("dashboard_pending_review", undefined, locale) },
   ];
+
+  if (isMobile) {
+    const activeExam = pending.find((e) => e.effectiveStatus === "ongoing");
+    const nextExam = pending.find((e) => e.effectiveStatus === "upcoming");
+    const recentCompleted = filteredCompleted[0];
+    return (
+      <div className="space-y-4 px-1 py-2">
+        <h2 className="text-base font-bold text-foreground">
+          {tStudent("dashboard_greeting", { name: userName }, locale)}
+        </h2>
+        {activeExam && (
+          <button
+            className="w-full rounded-2xl border border-primary/20 bg-primary/8 p-4 text-left"
+            onClick={() => navigate(`/my-exams/${activeExam.id}/take`)}
+          >
+            <span className="text-xs font-bold text-primary uppercase tracking-wide">进行中</span>
+            <p className="mt-1 font-bold text-foreground truncate">{activeExam.title}</p>
+          </button>
+        )}
+        {nextExam && (
+          <button
+            className="w-full rounded-2xl border border-border bg-muted/30 p-4 text-left"
+            onClick={() => navigate(`/my-exams/${nextExam.id}/take`)}
+          >
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">即将开始</span>
+            <p className="mt-1 font-semibold text-foreground truncate">{nextExam.title}</p>
+          </button>
+        )}
+        {recentCompleted && (
+          <button
+            className="w-full rounded-2xl border border-border bg-card p-4 text-left"
+            onClick={() => navigate(`/my-exams/${recentCompleted.id}/result`)}
+          >
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">最近成绩</span>
+            <p className="mt-1 font-semibold text-foreground truncate">{recentCompleted.title}</p>
+            {recentCompleted.score !== null && (
+              <p className="mt-0.5 text-sm font-bold text-primary">{recentCompleted.score} 分</p>
+            )}
+          </button>
+        )}
+        {hasWrongAnswers && (
+          <button
+            className="w-full rounded-2xl border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950 p-4 text-left"
+            onClick={() => navigate("/wrong-answers")}
+          >
+            <span className="text-xs font-medium text-amber-700 dark:text-amber-400">错题复习</span>
+            <p className="mt-1 text-sm font-semibold text-foreground">
+              {wrongAnswersCount} 道错题待复习
+            </p>
+          </button>
+        )}
+        <div className="grid grid-cols-3 gap-2">
+          <div className="rounded-xl border border-border bg-card p-3 text-center">
+            <p className="text-lg font-bold tabular-nums text-foreground">{avgScore}</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">平均分</p>
+          </div>
+          <div className="rounded-xl border border-border bg-card p-3 text-center">
+            <p className="text-lg font-bold tabular-nums text-foreground">{passedCount}</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">已完成</p>
+          </div>
+          <div className="rounded-xl border border-border bg-card p-3 text-center">
+            <p className="text-lg font-bold tabular-nums text-foreground">{pendingCount}</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">待考</p>
+          </div>
+        </div>
+        <button
+          className="w-full text-center text-xs text-primary font-medium py-2"
+          onClick={() => navigate("/my-exams")}
+        >
+          查看全部考试 →
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">

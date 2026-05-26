@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useList, useDelete, useUpdate, type CrudFilters } from "@refinedev/core";
+import { useList, useDelete, useUpdate, useGetIdentity, type CrudFilters } from "@refinedev/core";
 import { useNavigate } from "react-router-dom";
 import {
   Plus,
@@ -55,6 +55,10 @@ import { getEffectiveExamStatus } from "./utils";
 import type { ExamStatus, IExam } from "@/types";
 import { getErrorMessage } from "./components/exam-form-utils";
 import { getExamDeleteDescription } from "@/lib/deletion-copy";
+import { PageIntroHeader } from "@/components/ui/page-intro-header";
+import { getUserRole } from "@/types/rbac";
+import { KnowledgePointSelector, type SelectedKnowledgePoint } from "@/components/questions/knowledge-point-selector";
+import { apiRequest } from "@/pages/grading/api";
 
 type FilterKey = "all" | ExamStatus;
 type CategoryKey = "all" | "exam" | "practice";
@@ -246,12 +250,16 @@ function EmptyState() {
 
 export function ExamList() {
   const navigate = useNavigate();
+  const { data: identity } = useGetIdentity<{ primary_org?: { role_name: string } | null }>();
+  const role = identity ? getUserRole(identity) : "";
+  const kpFilterLabel = role === "evaluator" ? "主技能点" : "课程";
   const [filter, setFilter] = useState<FilterKey>("all");
   const [category, setCategory] = useState<CategoryKey>("all");
   const [filterOpen, setFilterOpen] = useState(false);
   const [searchText, setSearchText] = useState("");
   const [timeFrom, setTimeFrom] = useState<Date | undefined>(undefined);
   const [timeTo, setTimeTo] = useState<Date | undefined>(undefined);
+  const [mainKPFilter, setMainKPFilter] = useState<SelectedKnowledgePoint | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [deleteTarget, setDeleteTarget] = useState<IExam | null>(null);
@@ -298,6 +306,7 @@ export function ExamList() {
     end.setHours(23, 59, 59, 999);
     activeFilters.push({ field: "start_time", operator: "lte", value: end.toISOString() });
   }
+  if (mainKPFilter) activeFilters.push({ field: "root_knowledge_point_id", operator: "eq", value: mainKPFilter.id });
 
   const { query } = useList<IExam>({
     resource: "exams",
@@ -318,31 +327,28 @@ export function ExamList() {
   const deleteTargetLabel = deleteTarget?.category === "practice" ? "练习" : "考试";
 
   return (
-    <div className="space-y-8 max-w-[1200px] mx-auto">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
-        <div className="space-y-1">
-          <h1 className="text-xl font-bold text-foreground tracking-tight">
-            考试与练习管理
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            统一管理考试与练习的发布、参与和进度状态
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2 self-start sm:self-auto">
-          <Button variant="outline" className="h-9 w-fit shrink-0 px-4 font-medium" onClick={() => navigate("/exams/practice/create")}>
-            <Plus size={16} className="mr-1.5" />
-            发布练习
-          </Button>
-          <Button className="h-9 w-fit shrink-0 px-4 font-medium" onClick={() => navigate("/exams/create")}>
-            <Plus size={16} className="mr-1.5" />
-            创建考试
-          </Button>
-        </div>
-      </div>
+    <div className="space-y-6">
+      <PageIntroHeader
+        title="考试与练习"
+        description="统一管理考试与练习的发布、参与和进度状态"
+        actions={
+          <>
+            <Button variant="outline" className="h-9 w-fit shrink-0 px-4 font-medium" onClick={() => navigate("/exams/practice/create")}>
+              <Plus size={16} className="mr-1.5" />
+              发布练习
+            </Button>
+            <Button className="h-9 w-fit shrink-0 px-4 font-medium" onClick={() => navigate("/exams/create")}>
+              <Plus size={16} className="mr-1.5" />
+              创建考试
+            </Button>
+          </>
+        }
+      />
 
+      <div className="max-w-[1200px] mx-auto space-y-6">
       {/* Filters Bar */}
       <div className="flex flex-wrap items-center gap-3 p-4 rounded-xl border border-border/40 bg-muted/5">
+        {/* Left: category tabs */}
         <div className="inline-flex items-center rounded-lg border border-border/60 bg-background p-1">
           {[
             { value: "all", label: "全部" },
@@ -367,6 +373,23 @@ export function ExamList() {
             </button>
           ))}
         </div>
+
+        <KnowledgePointSelector
+          fetcher={apiRequest}
+          selectedKnowledgePoints={mainKPFilter ? [mainKPFilter] : []}
+          onSelectedKnowledgePointsChange={(points) => {
+            setMainKPFilter(points[points.length - 1] ?? null);
+            setPage(1);
+          }}
+          label=""
+          storageKey="exam-list-main-kp-filter"
+          triggerLabel={kpFilterLabel}
+          selectionTarget="root"
+          selectionMode="single"
+          showUsageShortcuts={false}
+          popoverSide="bottom"
+          className="w-[140px]"
+        />
 
         <div className="flex items-center gap-2">
           <Filter size={14} className="text-muted-foreground/60 ml-1" />
@@ -425,19 +448,19 @@ export function ExamList() {
           </Popover>
         </div>
 
-        <div className="relative">
+        {/* Search — grows to fill remaining space */}
+        <div className="relative min-w-[200px] flex-1">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/40" />
           <Input
             placeholder={category === "practice" ? "搜索练习..." : "搜索考试 / 练习..."}
             value={searchText}
             onChange={(e) => { setSearchText(e.target.value); setPage(1); }}
-            className="h-9 pl-9 w-[240px] text-xs font-medium border-border/60 focus-visible:ring-primary/20"
+            className="h-9 w-full pl-9 text-xs font-medium border-border/60 focus-visible:ring-primary/20"
           />
         </div>
 
-        <div className="h-4 w-px bg-border/60 mx-1 hidden md:block" />
-
-        <div className="flex items-center gap-2">
+        {/* Dates pushed to the right */}
+        <div className="flex items-center gap-2 ml-auto">
           <DatePicker
             value={timeFrom}
             onChange={(d) => { setTimeFrom(d); setPage(1); }}
@@ -451,18 +474,17 @@ export function ExamList() {
             placeholder="截止日期"
             className="h-9 w-[130px] text-xs font-medium"
           />
+          {(category !== "all" || filter !== "all" || searchText || timeFrom || timeTo || mainKPFilter) && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-9 px-3 text-xs font-bold text-muted-foreground hover:text-foreground"
+              onClick={() => { setCategory("all"); setFilter("all"); setSearchText(""); setTimeFrom(undefined); setTimeTo(undefined); setMainKPFilter(null); setPage(1); }}
+            >
+              清除筛选
+            </Button>
+          )}
         </div>
-
-        {(category !== "all" || filter !== "all" || searchText || timeFrom || timeTo) && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-9 px-3 text-xs font-bold text-muted-foreground hover:text-foreground"
-            onClick={() => { setCategory("all"); setFilter("all"); setSearchText(""); setTimeFrom(undefined); setTimeTo(undefined); setPage(1); }}
-          >
-            清除筛选
-          </Button>
-        )}
       </div>
 
       {/* Exam list */}
@@ -614,6 +636,7 @@ export function ExamList() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      </div>
     </div>
   );
 }

@@ -31,6 +31,11 @@ import { QuestionRenderer } from "./components/question-renderer";
 import { getStudentLocale, tStudent, translateStudentError } from "./i18n";
 import { useExamTaking } from "@/hooks/use-exam-taking";
 import { useVisibilityDetection } from "@/hooks/use-visibility-detection";
+import { useIsMobile } from "@/hooks/use-viewport";
+import { ExamTakingMobile } from "./exam-taking-mobile";
+import { getDraft } from "@/lib/exam-draft";
+import { DraftRecoveryBanner, type DivergedQuestion } from "./mobile/draft-recovery-banner";
+import { useExamPrincipal } from "@/hooks/use-exam-principal";
 
 /* ------------------------------------------------------------------ */
 /*  API client                                                         */
@@ -90,8 +95,13 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
   const [isNavigatingQuestion, setIsNavigatingQuestion] = useState(false);
   const [pendingNavigationIndex, setPendingNavigationIndex] = useState<number | null>(null);
   const [isSubmittingAction, setIsSubmittingAction] = useState(false);
+  const [divergedDraft, setDivergedDraft] = useState<DivergedQuestion[]>([]);
+  const [showRecovery, setShowRecovery] = useState(false);
   const handleSubmitRef = useRef<((reason?: "time-up" | "switch-limit") => Promise<void>) | null>(null);
   const submitInFlightRef = useRef(false);
+  const isMobile = useIsMobile();
+  const principal = useExamPrincipal();
+  const principalId = principal?.id ?? "";
 
   /* ---- Load exam data (once, with jitter to smooth the enrollment burst) ---- */
   useEffect(() => {
@@ -135,23 +145,48 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
     updateAnswer,
     flushQuestion,
     submitExam,
-    reportSwitch,
-  } = useExamTaking({ examData });
+  } = useExamTaking({ examData, principalId });
 
   /* ---- Switch count init ---- */
   useEffect(() => {
     if (examData) setSwitchCount(examData.switch_count);
   }, [examData?.switch_count]);
 
-  /* ---- Visibility detection ---- */
-  const handleSwitch = useCallback(
-    (count: number) => {
-      setSwitchCount(count);
-      reportSwitch(count);
-    },
-    [reportSwitch],
-  );
+  /* ---- Draft recovery: detect local draft divergence after load ---- */
+  useEffect(() => {
+    if (!examData || !principalId) return;
+    const draft = getDraft(principalId, examData.exam_id);
+    if (!draft) return;
+    const diverged: DivergedQuestion[] = [];
+    for (const q of examData.questions) {
+      const localAns = draft.answers[q.question_id] as Record<string, unknown> | undefined;
+      if (!localAns) continue;
+      const serverAns = examData.saved_answers[q.question_id];
+      const localHasContent = Object.values(localAns).some((v) =>
+        Array.isArray(v) ? v.length > 0 && v.some(Boolean) : v !== "" && v !== null && v !== undefined,
+      );
+      if (!localHasContent) continue;
+      const serverEmpty = !serverAns || Object.values(serverAns).every((v) =>
+        Array.isArray(v) ? v.length === 0 || v.every((x) => !x) : v === "" || v === null || v === undefined,
+      );
+      const differs = serverEmpty || JSON.stringify(localAns) !== JSON.stringify(serverAns);
+      if (differs) {
+        diverged.push({
+          questionId: q.question_id,
+          order: q.order,
+          title: q.title,
+          localAnswer: localAns,
+          serverAnswer: serverAns,
+        });
+      }
+    }
+    if (diverged.length > 0) {
+      setDivergedDraft(diverged);
+      setShowRecovery(true);
+    }
+  }, [examData, principalId]);
 
+  /* ---- Visibility detection ---- */
   const handleMaxReached = useCallback(() => {
     if (submitInFlightRef.current || submitted) return;
     setSwitchWarning(tStudent("switch_limit_countdown", { seconds: 2 }, locale));
@@ -166,8 +201,10 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
   }, [locale]);
 
   const { setCount: setVisibilityCount } = useVisibilityDetection({
+    examId: examData?.exam_id,
     maxSwitchCount: examData?.max_switch_count ?? 0,
-    onSwitch: handleSwitch,
+    initialSwitchCount: examData?.switch_count ?? 0,
+    onSwitchCountUpdate: setSwitchCount,
     onMaxReached: handleMaxReached,
     onWarning: handleWarning,
     enabled: !!examData && !submitted,
@@ -232,6 +269,28 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
   useEffect(() => {
     handleSubmitRef.current = handleSubmit;
   }, [handleSubmit]);
+
+  const handleApplyDraft = useCallback(
+    (recovered: Record<string, Record<string, unknown>>) => {
+      for (const [qid, ans] of Object.entries(recovered)) {
+        updateAnswer(qid, ans);
+      }
+      void (async () => {
+        if (!examData) return;
+        try {
+          await apiClient.post(`/api/student/exams/${examData.exam_id}/answers`, {
+            answers: Object.entries(recovered).map(([question_id, answer_content]) => ({
+              question_id,
+              answer_content,
+            })),
+          });
+        } catch {
+          // flushQuestion will retry via normal save flow
+        }
+      })();
+    },
+    [examData, updateAnswer],
+  );
 
   const handleTimeUp = useCallback(() => {
     if (submitInFlightRef.current || submitted) return;
@@ -374,12 +433,55 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
   /*  Main exam UI                                                     */
   /* ---------------------------------------------------------------- */
 
+  if (isMobile && examData) {
+    return (
+      <>
+        {showRecovery && divergedDraft.length > 0 && (
+          <div className="fixed top-0 left-0 right-0 z-[70]">
+            <DraftRecoveryBanner
+              diverged={divergedDraft}
+              questions={examData.questions}
+              onApplyAll={handleApplyDraft}
+              onDismiss={() => setShowRecovery(false)}
+            />
+          </div>
+        )}
+        <ExamTakingMobile
+          examData={examData}
+          answers={answers}
+          currentIndex={currentIndex}
+          setCurrentIndex={setCurrentIndex}
+          saveState={saveState}
+          updateAnswer={updateAnswer}
+          flushQuestion={flushQuestion}
+          isSubmittingAction={isSubmittingAction}
+          switchWarning={switchWarning}
+          onBack={() => navigate("/my-exams")}
+          onTimeUp={handleTimeUp}
+          onSubmitConfirm={() => void handleSubmit()}
+        />
+      </>
+    );
+  }
+
   return (
     <div className="fixed inset-0 flex flex-col bg-background overflow-hidden">
       {/* ── Switch warning banner ── */}
       {switchWarning && (
         <div className="absolute top-0 left-0 right-0 z-[60] bg-red-600 text-white text-center py-2.5 text-sm font-medium">
           {switchWarning}
+        </div>
+      )}
+
+      {/* ── Draft recovery banner ── */}
+      {showRecovery && divergedDraft.length > 0 && (
+        <div className="z-50 shrink-0">
+          <DraftRecoveryBanner
+            diverged={divergedDraft}
+            questions={examData.questions}
+            onApplyAll={handleApplyDraft}
+            onDismiss={() => setShowRecovery(false)}
+          />
         </div>
       )}
 

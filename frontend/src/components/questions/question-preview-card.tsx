@@ -243,7 +243,10 @@ export function QuestionPreviewCard({
   const isExpanded = expanded ?? defaultExpanded;
   const showDetails = expandOnHover ? isHoverExpanded : mode === "detailed" ? isExpanded : defaultExpanded;
   const html = getQuestionContentHtml(question);
+  const hasInlineImages = Boolean(html && /<img\s/i.test(html));
   const normalizedType = normalizeQuestionType(question.type);
+  const isInlineAnswerType =
+    normalizedType === "choice" || normalizedType === "fill_in" || normalizedType === "true_false";
   const recognitionMeta = knowledgeRecognitionStatus ? knowledgeRecognitionConfig[knowledgeRecognitionStatus] : null;
   const RecognitionIcon = recognitionMeta?.icon;
 
@@ -273,7 +276,7 @@ export function QuestionPreviewCard({
 
   return (
     <div
-      className={cn("rounded-lg border border-border bg-card p-3 sm:p-4", className)}
+      className={cn("group relative rounded-lg border border-border bg-card p-3 sm:p-4", className)}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => {
         setIsHovered(false);
@@ -281,50 +284,56 @@ export function QuestionPreviewCard({
       }}
       {...props}
     >
-      <div className="flex gap-2">
-        {typeof index === "number" ? (
-          <div className="w-5 flex-shrink-0 pt-0.5 text-left text-sm font-bold text-muted-foreground">
-            {index}.
-          </div>
-        ) : null}
+      {(trailing || !hideTypeBadge) && (
+        <div className="absolute right-3 top-3 z-10 flex items-center gap-2">
+          {!hideTypeBadge ? (
+            <div
+              className={cn(
+                "flex h-6 w-6 items-center justify-center rounded text-[11px] font-bold",
+                normalizedType === "choice" && isMultiChoice(question)
+                  ? "bg-cyan-500 text-white"
+                  : normalizedType
+                    ? questionTypeColorClass[normalizedType]
+                    : "bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
+              )}
+            >
+                  {normalizedType === "choice"
+                    ? isMultiChoice(question)
+                      ? "多"
+                      : "单"
+                    : normalizedType
+                      ? questionTypeChar[normalizedType]
+                      : "题"}
+                </div>
+              ) : null}
+              {trailing}
+            </div>
+          )}
 
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start gap-2">
-            {html ? (
-              <RichContent html={html} className="flex-1 text-sm leading-relaxed text-foreground" />
-            ) : (
-              <p className="flex-1 text-sm leading-relaxed text-foreground">
-                {renderHighlightedLatexText(getQuestionTitle(question), highlightKeyword)}
-              </p>
-            )}
-            {(trailing || !hideTypeBadge) && (
-              <div className="ml-2 flex flex-shrink-0 items-center gap-2">
-                {!hideTypeBadge ? (
-                  <div
-                    className={cn(
-                      "flex h-6 w-6 items-center justify-center rounded text-[11px] font-bold",
-                      normalizedType === "choice" && isMultiChoice(question)
-                        ? "bg-cyan-500 text-white"
-                        : normalizedType
-                          ? questionTypeColorClass[normalizedType]
-                          : "bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
-                    )}
-                  >
-                    {normalizedType === "choice"
-                      ? isMultiChoice(question)
-                        ? "多"
-                        : "单"
-                      : normalizedType
-                        ? questionTypeChar[normalizedType]
-                        : "题"}
-                  </div>
-                ) : null}
-                {trailing}
+          <div className="flex gap-2">
+            {typeof index === "number" ? (
+              <div className="w-5 flex-shrink-0 pt-0.5 text-left text-sm font-bold text-muted-foreground">
+                {index}.
               </div>
-            )}
-          </div>
+            ) : null}
 
-          <ChoiceOptions question={question} highlightKeyword={highlightKeyword} />
+            <div className="min-w-0 flex-1">
+              <div className="flex-1 space-y-2">
+                {mode === "detailed" && (
+                  <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/75">
+                    <span>{hasInlineImages ? "题干与图片" : "题干"}</span>
+                  </div>
+                )}
+                {html ? (
+                  <RichContent html={html} className="flex-1 text-sm leading-relaxed text-foreground" />
+                ) : (
+                  <p className="flex-1 text-sm leading-relaxed text-foreground">
+                    {renderHighlightedLatexText(getQuestionTitle(question), highlightKeyword)}
+                  </p>
+                )}
+              </div>
+
+              <ChoiceOptions question={question} highlightKeyword={highlightKeyword} />
           {recognitionMeta ? (
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <Badge variant="outline" className={cn("gap-1.5 px-2 py-0.5", recognitionMeta.className)}>
@@ -339,10 +348,25 @@ export function QuestionPreviewCard({
             </div>
           ) : null}
           {!hideAnswer && answerText !== "" ? (
-            <p className="mt-2 text-sm text-muted-foreground">
-              {normalizedType === "short_answer" || normalizedType === "essay" ? "答案要点：" : "答案："}
-              <LatexText>{answerText}</LatexText>
-            </p>
+            <div className="mt-3 rounded-xl border border-emerald-200/70 bg-emerald-50/70 px-3 py-2 dark:border-emerald-900/60 dark:bg-emerald-950/20">
+              {isInlineAnswerType ? (
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-emerald-900 dark:text-emerald-100">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-700/80 dark:text-emerald-300/80">
+                    答案
+                  </span>
+                  <LatexText>{answerText}</LatexText>
+                </div>
+              ) : (
+                <>
+                  <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-700/80 dark:text-emerald-300/80">
+                    {normalizedType === "short_answer" || normalizedType === "essay" ? "答案要点" : "答案"}
+                  </div>
+                  <div className="text-sm text-emerald-900 dark:text-emerald-100">
+                    <LatexText>{answerText}</LatexText>
+                  </div>
+                </>
+              )}
+            </div>
           ) : null}
 
           <div
@@ -352,19 +376,23 @@ export function QuestionPreviewCard({
             )}
           >
             <div className="overflow-hidden">
-              <div className="space-y-2">
+              <div className="space-y-3 border-t border-border/60 pt-3">
               {renderCodeAnswer(question)}
               {mode === "detailed" && question.analysis ? (
-                <div className="text-sm text-muted-foreground">
-                  <span className="text-xs text-muted-foreground/70">解析：</span>
-                  {question.analysis.startsWith("<") ? (
-                    <RichContent html={question.analysis} />
-                  ) : (
-                    <RenderTextWithCode
-                      text={question.analysis}
-                      language={(question.content?.language as string) || undefined}
-                    />
-                  )}
+                <div className="rounded-xl border border-sky-200/70 bg-sky-50/70 px-3 py-2 dark:border-sky-900/60 dark:bg-sky-950/20">
+                  <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-700/80 dark:text-sky-300/80">
+                    解析
+                  </div>
+                  <div className="text-sm text-sky-950 dark:text-sky-50">
+                    {question.analysis.startsWith("<") ? (
+                      <RichContent html={question.analysis} />
+                    ) : (
+                      <RenderTextWithCode
+                        text={question.analysis}
+                        language={(question.content?.language as string) || undefined}
+                      />
+                    )}
+                  </div>
                 </div>
               ) : null}
 

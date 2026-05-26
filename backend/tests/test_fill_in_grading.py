@@ -38,14 +38,14 @@ async def test_fill_in_grading_scores_by_blank_count_with_local_normalization() 
 
 @pytest.mark.asyncio
 async def test_fill_in_grading_uses_deepseek_equivalence_for_disputed_blanks(monkeypatch) -> None:
-    async def fake_ai(*, question_text, expected_answers, student_answers):
+    async def fake_ai(*, question_text, expected_answers, student_answers, knowledge_points=None):
         assert "Pandas" in question_text
         assert expected_answers == ["groupby", "agg", "transform"]
         assert student_answers == ["group by", "apply", "transform"]
         return [
-            {"is_correct": True, "reason": "group by 与 groupby 表达同一 Pandas 方法。"},
-            {"is_correct": False, "reason": "apply 不是标准答案中的 agg。"},
-            {"is_correct": True, "reason": "完全一致。"},
+            {"score": 1.0, "is_correct": True, "reason": "group by 与 groupby 表达同一 Pandas 方法。"},
+            {"score": 0.0, "is_correct": False, "reason": "apply 不是标准答案中的 agg。"},
+            {"score": 1.0, "is_correct": True, "reason": "完全一致。"},
         ]
 
     monkeypatch.setattr("app.exams.student_router._request_fill_in_equivalence_with_deepseek", fake_ai)
@@ -62,6 +62,8 @@ async def test_fill_in_grading_uses_deepseek_equivalence_for_disputed_blanks(mon
     assert feedback["dimensions"][0]["comment"] == "共命中 2/3 个空。"
     assert feedback["deductions"] == ["第 2 空应为 agg"]
     assert "DeepSeek 判定第 1 空等价：group by 与 groupby 表达同一 Pandas 方法。" in feedback["strengths"]
+    assert feedback["model_evaluation"]["model"] == "deepseek-v4-flash"
+    assert feedback["model_evaluation"]["matches"][0]["reason"] == "group by 与 groupby 表达同一 Pandas 方法。"
 
 
 @pytest.mark.asyncio
@@ -137,6 +139,26 @@ async def test_fill_in_grading_scores_partial_matches_without_requiring_blank_or
 
 
 @pytest.mark.asyncio
+async def test_fill_in_grading_treats_empty_function_calls_as_function_names(monkeypatch) -> None:
+    async def fail_ai(**_kwargs):
+        raise AssertionError("local normalization should match empty function calls")
+
+    monkeypatch.setattr("app.exams.student_router._request_fill_in_equivalence_with_deepseek", fail_ai)
+    question = _build_fill_in_question({"correct": ["groupby", "agg", "transform"]})
+
+    score, correct, feedback = await _grade_question_with_ai(
+        question,
+        {"blanks": ["agg()", "apply()", "transform()"]},
+        2,
+    )
+
+    assert score == 1.33
+    assert correct is False
+    assert feedback["dimensions"][0]["comment"] == "共命中 2/3 个空。"
+    assert feedback["deductions"] == ["第 1 空应为 groupby"]
+
+
+@pytest.mark.asyncio
 async def test_fill_in_grading_skips_ai_when_student_did_not_answer(monkeypatch) -> None:
     async def fail_ai(**_kwargs):
         raise AssertionError("AI should not be called for an empty fill-in answer")
@@ -161,8 +183,8 @@ async def test_fill_in_grading_reuses_cached_ai_result_when_answer_is_unchanged(
         assert expected_answers == ["A", "B"]
         assert student_answers == ["甲", "乙"]
         return [
-            {"is_correct": True, "reason": "甲可等价于 A。"},
-            {"is_correct": True, "reason": "乙可等价于 B。"},
+            {"score": 1.0, "is_correct": True, "reason": "甲可等价于 A。"},
+            {"score": 1.0, "is_correct": True, "reason": "乙可等价于 B。"},
         ]
 
     monkeypatch.setattr("app.exams.student_router._request_fill_in_equivalence_with_deepseek", fake_ai)
@@ -177,3 +199,138 @@ async def test_fill_in_grading_reuses_cached_ai_result_when_answer_is_unchanged(
     assert first_correct is True
     assert second_correct is True
     assert second_feedback["dimensions"][0]["comment"] == "共命中 2/2 个空。"
+
+
+@pytest.mark.asyncio
+async def test_fill_in_grading_does_not_cache_when_ai_call_fails(monkeypatch) -> None:
+    """A failed DeepSeek call should NOT poison the cache with a low score.
+
+    Otherwise a transient outage permanently locks the student at 0 until a
+    manual force-recompute is triggered.
+    """
+    call_count = 0
+
+    async def flaky_ai(*, question_text, expected_answers, student_answers, knowledge_points=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("DeepSeek rate-limited")
+        return [{"score": 1.0, "is_correct": True, "reason": "equivalent"}]
+
+    monkeypatch.setattr(
+        "app.exams.student_router._request_fill_in_equivalence_with_deepseek", flaky_ai
+    )
+    question = _build_fill_in_question({"correct": ["xlabel"]})
+    answer = {"blanks": ["plt.xlabel()"]}
+
+    first_score, first_correct, first_feedback = await _grade_question_with_ai(question, answer, 2)
+    assert first_score == 0
+    assert first_correct is False
+    assert "grading_warning" in first_feedback
+    assert "_fill_in_grading_cache" not in answer  # NOT cached
+
+    # Second call retries the LLM rather than returning the cached 0.
+    second_score, second_correct, _ = await _grade_question_with_ai(question, answer, 2)
+    assert call_count == 2
+    assert second_score == 2
+    assert second_correct is True
+
+
+@pytest.mark.asyncio
+async def test_fill_in_grading_force_recompute_bypasses_cache(monkeypatch) -> None:
+    """force_recompute=True must re-run the AI matcher, ignoring prior cache."""
+    call_count = 0
+
+    async def counting_ai(*, question_text, expected_answers, student_answers, knowledge_points=None):
+        nonlocal call_count
+        call_count += 1
+        # First call returns wrong verdict, second returns right verdict (simulates
+        # what happens when the standard answer or model behavior changes between
+        # submission time and a teacher-initiated regrade).
+        verdict_score = 1.0 if call_count > 1 else 0.0
+        return [{"score": verdict_score, "is_correct": verdict_score >= 1.0, "reason": "v" + str(call_count)}]
+
+    monkeypatch.setattr(
+        "app.exams.student_router._request_fill_in_equivalence_with_deepseek", counting_ai
+    )
+    question = _build_fill_in_question({"correct": ["xlabel"]})
+    answer = {"blanks": ["plt.xlabel()"]}
+
+    initial_score, _, _ = await _grade_question_with_ai(question, answer, 2)
+    assert initial_score == 0
+    assert call_count == 1
+
+    # Same inputs, no force_recompute → cache hit, no new AI call.
+    cached_score, _, _ = await _grade_question_with_ai(question, answer, 2)
+    assert call_count == 1
+    assert cached_score == 0
+
+    # force_recompute → bypass cache, hit AI again, return new verdict.
+    fresh_score, fresh_correct, _ = await _grade_question_with_ai(
+        question, answer, 2, force_recompute=True
+    )
+    assert call_count == 2
+    assert fresh_score == 2
+    assert fresh_correct is True
+
+
+@pytest.mark.asyncio
+async def test_fill_in_grading_awards_partial_credit_when_ai_returns_half(monkeypatch) -> None:
+    """When DeepSeek returns score=0.5 for a knowledge-point-aligned answer,
+    the student gets half credit (not full and not zero)."""
+
+    async def fake_ai(*, question_text, expected_answers, student_answers, knowledge_points=None):
+        # First blank: full credit (semantically equivalent).
+        # Second blank: partial credit (matches knowledge point but text differs).
+        # Third blank: no credit.
+        return [
+            {"score": 1.0, "is_correct": True, "reason": "exact"},
+            {"score": 0.5, "is_correct": False, "reason": "concept match, wording off"},
+            {"score": 0.0, "is_correct": False, "reason": "no match"},
+        ]
+
+    monkeypatch.setattr(
+        "app.exams.student_router._request_fill_in_equivalence_with_deepseek", fake_ai
+    )
+    question = _build_fill_in_question({"correct": ["A1", "A2", "A3"]})
+
+    score, correct, feedback = await _grade_question_with_ai(
+        question,
+        {"blanks": ["alt1", "alt2", "wrong"]},
+        9,
+    )
+
+    # Per-blank max = 9/3 = 3. Total credit = 1.0 + 0.5 + 0.0 = 1.5 → 1.5 * 3 = 4.5.
+    assert score == 4.5
+    assert correct is False
+    assert "另有 1 个空获得部分分" in feedback["dimensions"][0]["comment"]
+    # Partial-credit blank is NOT in deductions (only blanks scoring exactly 0 are).
+    assert feedback["deductions"] == ["第 3 空应为 A3"]
+    assert any("第 2 空部分得分" in s for s in feedback["strengths"])
+    assert feedback["model_evaluation"]["matches"][1]["score"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_fill_in_grading_passes_knowledge_points_to_ai(monkeypatch) -> None:
+    """KP names from the question are forwarded to DeepSeek for the
+    knowledge-point-correction rule."""
+    from app.learning.models import KnowledgePoint
+
+    captured: dict[str, object] = {}
+
+    async def fake_ai(*, question_text, expected_answers, student_answers, knowledge_points=None):
+        captured["knowledge_points"] = knowledge_points
+        return [{"score": 1.0, "is_correct": True, "reason": "ok"}]
+
+    monkeypatch.setattr(
+        "app.exams.student_router._request_fill_in_equivalence_with_deepseek", fake_ai
+    )
+
+    question = _build_fill_in_question({"correct": ["xlabel"]})
+    question.knowledge_points = [
+        KnowledgePoint(name="Matplotlib 绘图"),
+        KnowledgePoint(name="图表注释"),
+    ]
+
+    await _grade_question_with_ai(question, {"blanks": ["set_xlabel"]}, 2)
+    assert captured["knowledge_points"] == ["Matplotlib 绘图", "图表注释"]

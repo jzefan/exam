@@ -54,9 +54,11 @@ import type {
   IFlowData,
   IKnowledgePointDetail,
   IMajor,
+  IRootKnowledgePointOption,
 } from "./types";
 
 const API = "/api/knowledge";
+const DEFAULT_DIRECTION_NAME = "通用";
 
 type StructureFormState = {
   open: boolean;
@@ -149,6 +151,7 @@ export function KnowledgeManagementPage() {
   const { data: identity } = useGetIdentity<{ id?: string; primary_org?: { role_name?: string } | null }>();
   const [majors, setMajors] = useState<IMajor[]>([]);
   const [directions, setDirections] = useState<IDirection[]>([]);
+  const [rootKnowledgeOptions, setRootKnowledgeOptions] = useState<IRootKnowledgePointOption[]>([]);
   const [selectedDirectionId, setSelectedDirectionId] = useState<string | null>(null);
   const [selectedRootKnowledgeId, setSelectedRootKnowledgeId] = useState<string | null>(null);
   const [nodes, setNodes] = useState<Node[]>([]);
@@ -222,6 +225,14 @@ export function KnowledgeManagementPage() {
     [directions],
   );
 
+  const getMajorRootKnowledgePoints = useCallback(
+    (majorId: string) =>
+      rootKnowledgeOptions
+        .filter((knowledge) => knowledge.major_id === majorId)
+        .sort((a, b) => a.name.localeCompare(b.name, "zh-CN")),
+    [rootKnowledgeOptions],
+  );
+
   const selectedDirection = useMemo(
     () => directions.find((direction) => direction.id === selectedDirectionId) ?? null,
     [directions, selectedDirectionId],
@@ -254,14 +265,21 @@ export function KnowledgeManagementPage() {
     [rootKnowledgePoints, selectedDirectionId],
   );
 
+  const refreshRootKnowledgeOptions = useCallback(async () => {
+    const roots = await apiFetch<IRootKnowledgePointOption[]>(`${API}/root-knowledge-points`);
+    setRootKnowledgeOptions(roots);
+  }, []);
+
   const refreshStructure = useCallback(async () => {
     const nextMajors = await apiFetch<IMajor[]>(`${API}/majors`);
     const directionGroups = await Promise.all(
       nextMajors.map(async (major) => apiFetch<IDirection[]>(`${API}/majors/${major.id}/directions`)),
     );
     const nextDirections = directionGroups.flat();
+    const nextRoots = await apiFetch<IRootKnowledgePointOption[]>(`${API}/root-knowledge-points`);
     setMajors(nextMajors);
     setDirections(nextDirections);
+    setRootKnowledgeOptions(nextRoots);
     setSelectedDirectionId((current) => {
       if (current && !nextDirections.some((direction) => direction.id === current)) {
         setNodes([]);
@@ -334,6 +352,66 @@ export function KnowledgeManagementPage() {
     void loadTree(direction.id);
   }, [loadTree]);
 
+  const ensureDefaultDirection = useCallback(
+    async (major: IMajor) => {
+      const existing = directions.find(
+        (direction) => direction.major_id === major.id && direction.name === DEFAULT_DIRECTION_NAME,
+      );
+      if (existing) {
+        return existing;
+      }
+
+      try {
+        const created = await apiFetch<IDirection>(`${API}/directions`, {
+          method: "POST",
+          body: JSON.stringify({
+            major_id: major.id,
+            name: DEFAULT_DIRECTION_NAME,
+            description: null,
+          }),
+        });
+        setDirections((current) => [...current, created]);
+        return created;
+      } catch (error) {
+        const latestDirections = await apiFetch<IDirection[]>(`${API}/majors/${major.id}/directions`);
+        setDirections((current) => [
+          ...current.filter((direction) => direction.major_id !== major.id),
+          ...latestDirections,
+        ]);
+        const fallback = latestDirections.find(
+          (direction) => direction.major_id === major.id && direction.name === DEFAULT_DIRECTION_NAME,
+        );
+        if (fallback) {
+          return fallback;
+        }
+        throw error;
+      }
+    },
+    [directions],
+  );
+
+  const handleCreateRootKnowledgeInMajor = useCallback(
+    async (major: IMajor) => {
+      try {
+        const direction = await ensureDefaultDirection(major);
+        setSelectedDirectionId(direction.id);
+        setSelectedRootKnowledgeId(null);
+        setSelectedNodeId(null);
+        setEditingNodeId(null);
+        setPanelInitial({ directionId: direction.id, parent_id: null });
+        setPanelOpen(true);
+        await loadTree(direction.id);
+      } catch (error) {
+        toast({
+          title: "无法创建主知识/技能",
+          description: error instanceof Error ? error.message : "默认方向创建失败",
+          variant: "destructive",
+        });
+      }
+    },
+    [ensureDefaultDirection, loadTree, toast],
+  );
+
   const handleImportKnowledgePaths = useCallback(
     async (paths: KnowledgeImportPath[]) => {
       if (!selectedDirectionId) {
@@ -381,6 +459,7 @@ export function KnowledgeManagementPage() {
       const focusRootId = focusRootName ? nodeIdByKey.get(`root::${focusRootName}`) ?? null : null;
 
       await loadTree(selectedDirectionId);
+      await refreshRootKnowledgeOptions();
       if (focusRootId) {
         setSelectedRootKnowledgeId(focusRootId);
         setSelectedNodeId(focusRootId);
@@ -391,7 +470,7 @@ export function KnowledgeManagementPage() {
         description: createdCount > 0 ? `新增 ${createdCount} 个知识点。` : "导入内容已存在，没有重复创建。",
       });
     },
-    [loadTree, nodes, selectedDirectionId, toast],
+    [loadTree, nodes, refreshRootKnowledgeOptions, selectedDirectionId, toast],
   );
 
   const handleRecognizeCatalogPhoto = useCallback(
@@ -574,6 +653,52 @@ export function KnowledgeManagementPage() {
     [isReadOnlySharedNode, nodes, notifyReadOnly],
   );
 
+  const handleEditRootKnowledge = useCallback(
+    (knowledge: IKnowledgePointDetail | IRootKnowledgePointOption) => {
+      if (isReadOnlySharedNode(knowledge as IKnowledgePointDetail)) {
+        notifyReadOnly(getReadOnlyKnowledgeFeedback(knowledge as IKnowledgePointDetail));
+        return;
+      }
+      if (!knowledge.direction_id) {
+        return;
+      }
+      setSelectedDirectionId(knowledge.direction_id);
+      setSelectedRootKnowledgeId(knowledge.id);
+      setSelectedNodeId(knowledge.id);
+      setEditingNodeId(null);
+      setPanelInitial({
+        ...(knowledge as IKnowledgePointDetail),
+        id: knowledge.id,
+        directionId: knowledge.direction_id,
+      });
+      setPanelOpen(true);
+      void loadTree(knowledge.direction_id);
+    },
+    [isReadOnlySharedNode, loadTree, notifyReadOnly],
+  );
+
+  const handleDeleteRootKnowledge = useCallback(
+    (knowledge: IKnowledgePointDetail | IRootKnowledgePointOption) => {
+      if (isReadOnlySharedNode(knowledge as IKnowledgePointDetail)) {
+        notifyReadOnly(getReadOnlyKnowledgeFeedback(knowledge as IKnowledgePointDetail));
+        return;
+      }
+      if (knowledge.direction_id) {
+        setSelectedDirectionId(knowledge.direction_id);
+        setSelectedRootKnowledgeId(knowledge.id);
+        setSelectedNodeId(knowledge.id);
+      }
+      setDeleteState({
+        open: true,
+        kind: "knowledge-point",
+        id: knowledge.id,
+        name: knowledge.name,
+        description: "删除后会同时移除该主知识/技能下的子知识点。",
+      });
+    },
+    [isReadOnlySharedNode, notifyReadOnly],
+  );
+
   const getKnowledgeNode = useCallback(
     (nodeId: string) => nodes.find((node) => node.id === nodeId)?.data as IKnowledgePointDetail | undefined,
     [nodes],
@@ -615,8 +740,9 @@ export function KnowledgeManagementPage() {
         setSelectedRootKnowledgeId(created.id);
       }
       await loadTree(selectedDirectionId);
+      await refreshRootKnowledgeOptions();
     },
-    [loadTree, selectedDirectionId],
+    [loadTree, refreshRootKnowledgeOptions, selectedDirectionId],
   );
 
   const handleStartRename = useCallback(
@@ -658,7 +784,8 @@ export function KnowledgeManagementPage() {
     if (selectedDirectionId) {
       await loadTree(selectedDirectionId);
     }
-  }, [editingNodeId, getKnowledgeNode, isReadOnlySharedNode, loadTree, notifyReadOnly, renameDraft, selectedDirectionId]);
+    await refreshRootKnowledgeOptions();
+  }, [editingNodeId, getKnowledgeNode, isReadOnlySharedNode, loadTree, notifyReadOnly, refreshRootKnowledgeOptions, renameDraft, selectedDirectionId]);
 
   const handleRenameCancel = useCallback(() => {
     setEditingNodeId(null);
@@ -825,7 +952,7 @@ export function KnowledgeManagementPage() {
       }
       await refreshMaterials(resourcesNodeId);
     },
-    [refreshMaterials, resourcesNodeId],
+    [refreshMaterials, resourcesNodeId, toast],
   );
 
   const deleteMaterial = useCallback(
@@ -1011,6 +1138,7 @@ export function KnowledgeManagementPage() {
         if (selectedDirectionId) {
           await loadTree(selectedDirectionId);
         }
+        await refreshRootKnowledgeOptions();
       }
       setDeleteState({ open: false });
     } catch (error) {
@@ -1018,7 +1146,7 @@ export function KnowledgeManagementPage() {
     } finally {
       setDeleteSubmitting(false);
     }
-  }, [deleteState, loadTree, refreshStructure, selectedDirectionId]);
+  }, [deleteState, loadTree, refreshRootKnowledgeOptions, refreshStructure, selectedDirectionId]);
 
   const handleSave = useCallback(
     async (data: Partial<IKnowledgePointDetail>) => {
@@ -1048,25 +1176,28 @@ export function KnowledgeManagementPage() {
       if (selectedDirectionId) {
         await loadTree(selectedDirectionId);
       }
+      await refreshRootKnowledgeOptions();
     },
-    [isReadOnlySharedNode, loadTree, panelInitial, selectedDirectionId],
+    [isReadOnlySharedNode, loadTree, panelInitial, refreshRootKnowledgeOptions, selectedDirectionId],
   );
 
   return (
     <div className="flex h-[calc(100vh-3.5rem)] overflow-hidden">
       <MajorDirectionSidebar
         getDirections={getDirections}
+        getMajorRootKnowledgePoints={getMajorRootKnowledgePoints}
         getRootKnowledgePoints={getRootKnowledgePoints}
         majors={majors}
         onCreateDirection={handleCreateDirection}
         onCreateMajor={handleCreateMajor}
+        onCreateRootKnowledgeInMajor={handleCreateRootKnowledgeInMajor}
         onCreateRootKnowledge={handleCreateRootKnowledge}
         onDeleteDirection={handleDeleteDirection}
         onDeleteMajor={handleDeleteMajor}
-        onDeleteRootKnowledge={(knowledge) => void handleDelete(knowledge.id, knowledge.name)}
+        onDeleteRootKnowledge={handleDeleteRootKnowledge}
         onEditDirection={handleEditDirection}
         onEditMajor={handleEditMajor}
-        onEditRootKnowledge={(knowledge) => handleEdit(knowledge.id)}
+        onEditRootKnowledge={handleEditRootKnowledge}
         onSelect={handleSelectDirection}
         onSelectRootKnowledge={handleSelectRootKnowledge}
         selectedDirectionId={selectedDirectionId}

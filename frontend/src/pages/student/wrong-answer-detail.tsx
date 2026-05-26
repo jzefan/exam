@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import type { IWrongAnswerDetail } from "@/types";
 import {
   formatStudentDate,
+  getStudentAnswerCodeLanguage,
   inferStudentAnswerLanguage,
   renderAnswerAsCode,
   renderAnswerSummary,
@@ -60,6 +61,29 @@ export function WrongAnswerDetailPage() {
     );
   }
 
+  const studentCodeLanguage = getStudentAnswerCodeLanguage(
+    item.question_type,
+    item.question_title,
+    item.question_content,
+    item.student_answer,
+  );
+  const standardCodeLanguage = getStudentAnswerCodeLanguage(
+    item.question_type,
+    item.question_title,
+    item.question_content,
+    item.standard_answer,
+  );
+  const studentCode = renderAnswerAsCode(item.student_answer);
+  const standardCode = renderAnswerAsCode(item.standard_answer);
+  const isSqlAnswer =
+    inferStudentAnswerLanguage(item.question_title, item.question_content, item.student_answer) === "sql";
+  const shouldRenderStudentCode =
+    (item.question_type === "code" || Boolean(studentCodeLanguage)) &&
+    Boolean(studentCode.trim());
+  const shouldRenderStandardCode =
+    (item.question_type === "code" || Boolean(standardCodeLanguage)) &&
+    Boolean(standardCode.trim());
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -107,19 +131,17 @@ export function WrongAnswerDetailPage() {
       <div className="grid gap-6 lg:grid-cols-2">
         <section className="rounded-2xl border border-[#ebe3f4] bg-white/90 p-6">
           <h2 className="text-[16px] font-semibold">{tStudent("wrong_detail_your_answer", undefined, locale)}</h2>
-          {item.question_type === "code" && typeof item.student_answer.code === "string" && item.student_answer.code.trim() ? (
-            <div className="mt-3 overflow-hidden rounded-xl border border-[#e9e0f5] bg-[#1f1830]">
-              <div className="border-b border-white/8 px-3 py-2 text-[12px] text-[#d6cfee]">
-                {(item.student_answer.language as string | undefined) ?? "code"}
+          {shouldRenderStudentCode ? (
+            <div className="mt-3 overflow-hidden rounded-xl border border-border/70 bg-muted/10 p-3">
+              <div className="mb-2 text-[12px] capitalize text-muted-foreground">
+                {studentCodeLanguage ?? "code"}
               </div>
-              <pre className="overflow-x-auto whitespace-pre-wrap px-4 py-4 font-mono text-[13px] leading-6 text-[#f5f1ff]">
-                {item.student_answer.code as string}
-              </pre>
+              <CodeBlock code={studentCode} language={studentCodeLanguage} />
             </div>
-          ) : inferStudentAnswerLanguage(item.question_title, item.question_content, item.student_answer) === "sql" ? (
+          ) : isSqlAnswer ? (
             <div className="mt-3 overflow-hidden rounded-xl border border-border/70 bg-muted/10 p-3">
               <div className="mb-2 text-[12px] text-muted-foreground">SQL</div>
-              <CodeBlock code={renderAnswerAsCode(item.student_answer)} language="sql" />
+              <CodeBlock code={studentCode} language="sql" />
             </div>
           ) : (
             <p className="mt-3 text-[14px] leading-6 text-muted-foreground">
@@ -130,10 +152,17 @@ export function WrongAnswerDetailPage() {
 
         <section className="rounded-2xl border border-[#ebe3f4] bg-white/90 p-6">
           <h2 className="text-[16px] font-semibold">{tStudent("wrong_detail_standard_answer", undefined, locale)}</h2>
-          {inferStudentAnswerLanguage(item.question_title, item.question_content, item.student_answer) === "sql" ? (
+          {shouldRenderStandardCode ? (
+            <div className="mt-3 overflow-hidden rounded-xl border border-border/70 bg-muted/10 p-3">
+              <div className="mb-2 text-[12px] capitalize text-muted-foreground">
+                {standardCodeLanguage ?? studentCodeLanguage ?? "code"}
+              </div>
+              <CodeBlock code={standardCode} language={standardCodeLanguage ?? studentCodeLanguage} />
+            </div>
+          ) : isSqlAnswer ? (
             <div className="mt-3 overflow-hidden rounded-xl border border-border/70 bg-muted/10 p-3">
               <div className="mb-2 text-[12px] text-muted-foreground">SQL</div>
-              <CodeBlock code={renderAnswerAsCode(item.standard_answer)} language="sql" />
+              <CodeBlock code={standardCode} language="sql" />
             </div>
           ) : (
             <p className="mt-3 text-[14px] leading-6 text-muted-foreground">
@@ -160,8 +189,14 @@ export function WrongAnswerDetailPage() {
           ))}
         </div>
         {item.analysis ? (
-          <div className="mt-5 rounded-xl bg-[#f8f5fc] p-4 text-[14px] leading-6 text-muted-foreground">
-            {tStudent("result_analysis", { text: item.analysis }, locale)}
+          <div className="mt-5 rounded-xl bg-[#f8f5fc] p-4">
+            <p className="text-[14px] font-medium text-foreground">
+              {tStudent("result_analysis_section", undefined, locale)}
+            </p>
+            <div
+              className="mt-2 text-[14px] leading-6 text-muted-foreground [&_img]:max-h-80 [&_img]:max-w-full [&_img]:rounded-lg [&_img]:border [&_img]:border-border/60 [&_img]:object-contain [&_p]:m-0 [&_p+*]:mt-3"
+              dangerouslySetInnerHTML={{ __html: renderLatexInHtml(item.analysis) }}
+            />
           </div>
         ) : null}
       </section>

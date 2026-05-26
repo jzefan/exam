@@ -67,6 +67,39 @@ class _CapturingAsyncClient:
         return _FakeStreamResponse(self._lines)
 
 
+class _SequentialAsyncClient:
+    def __init__(self, line_groups: list[list[str]], capture: dict[str, Any] | None = None, *args, **kwargs) -> None:
+        self._line_groups = line_groups
+        self._capture = capture if capture is not None else {}
+        self._stream_index = 0
+
+    async def __aenter__(self) -> "_SequentialAsyncClient":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+    def stream(self, method: str, url: str, **kwargs) -> _FakeStreamResponse:
+        self._capture.setdefault("calls", []).append(
+            {"method": method, "url": url, "payload": kwargs.get("json")},
+        )
+        if self._stream_index >= len(self._line_groups):
+            return _FakeStreamResponse(["data: [DONE]"])
+        lines = self._line_groups[self._stream_index]
+        self._stream_index += 1
+        return _FakeStreamResponse(lines)
+
+
+def _question_stream_line(index: int) -> str:
+    return (
+        'data: {"choices":[{"delta":{"content":"'
+        f'{{\\"type\\":\\"choice\\",\\"title\\":\\"Q{index}\\",'
+        f'\\"content\\":{{\\"text\\":\\"C{index}\\"}},\\"options\\":null,'
+        f'\\"answer\\":{{\\"text\\":\\"A{index}\\"}},\\"analysis\\":\\"解析{index}\\",\\"difficulty\\":3}}'
+        '"}}]}'
+    )
+
+
 def test_ai_generate_request_defaults_to_qwen() -> None:
     request = AIGenerateRequest()
 
@@ -120,6 +153,65 @@ async def test_generate_questions_stream_never_yields_more_than_total_count(
     assert len(question_events) == 2
     assert [event["index"] for event in question_events] == [1, 2]
     assert done_event["total"] == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_questions_stream_continues_when_provider_stops_after_one_question(
+    db_session,
+    admin_token: str,
+) -> None:
+    line_groups = [
+        [_question_stream_line(1), "data: [DONE]"],
+        [_question_stream_line(2), _question_stream_line(3), "data: [DONE]"],
+    ]
+    capture: dict[str, Any] = {}
+    admin = (await db_session.execute(select(User).where(User.username == "admin"))).scalar_one()
+
+    with patch("app.questions.ai_generate._get_model_config", return_value=("qwen", "test-key", "https://api.example.com", "test-model")):
+        with patch("httpx.AsyncClient", side_effect=lambda *args, **kwargs: _SequentialAsyncClient(line_groups, capture, *args, **kwargs)):
+            events = [
+                event
+                async for event in generate_questions_stream(
+                    db_session,
+                    AIGenerateRequest(total_count=3, difficulty=3, model="qwen"),
+                    user_id=admin.id,
+                )
+            ]
+
+    question_events = [event for event in events if event["type"] == "question"]
+
+    assert [event["data"]["title"] for event in question_events] == ["Q1", "Q2", "Q3"]
+    assert [event["type"] for event in events][-1] == "done"
+    assert len(capture["calls"]) == 2
+    assert "还差 2 道" in capture["calls"][1]["payload"]["messages"][1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_generate_questions_stream_expands_questions_envelope(
+    db_session,
+    admin_token: str,
+) -> None:
+    stream_lines = [
+        'data: {"choices":[{"delta":{"content":"{\\"questions\\":[{\\"type\\":\\"choice\\",\\"title\\":\\"Q1\\",\\"content\\":{\\"text\\":\\"C1\\"},\\"options\\":null,\\"answer\\":{\\"text\\":\\"A1\\"},\\"analysis\\":\\"解析1\\",\\"difficulty\\":3},{\\"type\\":\\"choice\\",\\"title\\":\\"Q2\\",\\"content\\":{\\"text\\":\\"C2\\"},\\"options\\":null,\\"answer\\":{\\"text\\":\\"A2\\"},\\"analysis\\":\\"解析2\\",\\"difficulty\\":3}]}"}}]}',
+        "data: [DONE]",
+    ]
+    admin = (await db_session.execute(select(User).where(User.username == "admin"))).scalar_one()
+
+    with patch("app.questions.ai_generate._get_model_config", return_value=("qwen", "test-key", "https://api.example.com", "test-model")):
+        with patch("httpx.AsyncClient", side_effect=lambda *args, **kwargs: _FakeAsyncClient(stream_lines, *args, **kwargs)):
+            events = [
+                event
+                async for event in generate_questions_stream(
+                    db_session,
+                    AIGenerateRequest(total_count=2, difficulty=3, model="qwen"),
+                    user_id=admin.id,
+                )
+            ]
+
+    question_events = [event for event in events if event["type"] == "question"]
+
+    assert [event["data"]["title"] for event in question_events] == ["Q1", "Q2"]
+    assert events[-1] == {"type": "done", "total": 2}
 
 
 @pytest.mark.asyncio

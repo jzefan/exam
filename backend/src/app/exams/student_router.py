@@ -11,7 +11,9 @@ from datetime import datetime, timezone
 from typing import Annotated, Any
 import unicodedata
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, WebSocket, WebSocketException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, WebSocket, WebSocketException, status
+
+from app.activity_logs.service import CATEGORY_EXAM, log_event
 import httpx
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +29,7 @@ from app.database import async_session, get_db
 from app.exams.models import (
     AppealStatus,
     Exam,
+    ExamAttemptState,
     ExamStudent,
     GradingStatus,
     StudentExamAnswer,
@@ -36,10 +39,12 @@ from app.exams.models import (
     StudentExamSubmissionAnswer,
     StudentQuestionProgress,
 )
+from app.exams.question_sanitizer import sanitize_question_content, sanitize_question_options
 from app.exams.time_utils import coerce_persisted_exam_datetime_to_utc
 from app.exams.student_schemas import (
     AppealCreateRequest,
     AppealResponse,
+    AttemptStatusResponse,
     SaveAnswersRequest,
     StartExamRequest,
     StudentCodeRunRequest,
@@ -52,6 +57,8 @@ from app.exams.student_schemas import (
     StudentExamStartResponse,
     StudentQuestionPayload,
     SwitchReportRequest,
+    VisibilityEventsRequest,
+    VisibilityEventsResponse,
     WrongAnswerDetailResponse,
     WrongAnswerListItem,
 )
@@ -92,10 +99,238 @@ def _strip_html(value: str | None) -> str:
     return re.sub(r"\s+", " ", without_tags).strip()
 
 
+def _question_type_value(question_type: Any) -> str:
+    if isinstance(question_type, QuestionType):
+        return question_type.value
+    value = getattr(question_type, "value", question_type)
+    return str(value)
+
+
+def _normalize_answer_points(answer: dict[str, Any]) -> list[str]:
+    raw_points = answer.get("points")
+    if isinstance(raw_points, list):
+        return [str(item).strip() for item in raw_points if str(item).strip()]
+    if isinstance(raw_points, str) and raw_points.strip():
+        return [line.strip() for line in raw_points.splitlines() if line.strip()]
+
+    for key in ("summary", "text", "answer", "correct"):
+        value = answer.get(key)
+        if isinstance(value, list):
+            points = [str(item).strip() for item in value if str(item).strip()]
+            if points:
+                return points
+        if isinstance(value, str) and value.strip():
+            return [line.strip() for line in value.splitlines() if line.strip()]
+
+    return []
+
+
+def _dimension_max_scores(question_score: float, weights: dict[str, float]) -> dict[str, float]:
+    return {key: round(question_score * weight, 2) for key, weight in weights.items()}
+
+
+def _build_default_rubric_definition(question_type: str, question_score: float) -> tuple[dict[str, Any], dict[str, float]]:
+    if question_type == QuestionType.CODE.value:
+        weights = {
+            "test_correctness": 0.55,
+            "functional_completeness": 0.25,
+            "edge_cases": 0.1,
+            "code_quality": 0.1,
+        }
+        max_scores = _dimension_max_scores(question_score, weights)
+        return (
+            {
+                "source": "system_default",
+                "version": "2026-05-subjective-rubric-v1",
+                "dimensions": [
+                    {
+                        "key": "test_correctness",
+                        "label": "测试正确性",
+                        "weight": weights["test_correctness"],
+                        "max_score": max_scores["test_correctness"],
+                        "criteria": "依据公开和隐藏测试、编译结果、运行结果判断输出是否符合期望。",
+                    },
+                    {
+                        "key": "functional_completeness",
+                        "label": "功能完整度",
+                        "weight": weights["functional_completeness"],
+                        "max_score": max_scores["functional_completeness"],
+                        "criteria": "核心算法、输入读取、输出格式和题目要求的主要功能是否完整实现。",
+                    },
+                    {
+                        "key": "edge_cases",
+                        "label": "边界与异常处理",
+                        "weight": weights["edge_cases"],
+                        "max_score": max_scores["edge_cases"],
+                        "criteria": "是否考虑边界数据、空值、重复值、极值、异常路径或题目要求的特殊情况。",
+                    },
+                    {
+                        "key": "code_quality",
+                        "label": "代码质量",
+                        "weight": weights["code_quality"],
+                        "max_score": max_scores["code_quality"],
+                        "criteria": "代码结构、可读性、复杂度、变量命名和实现方式是否合理。",
+                    },
+                ],
+            },
+            weights,
+        )
+
+    if question_type == QuestionType.ESSAY.value:
+        weights = {
+            "answer_point_coverage": 0.35,
+            "argument_accuracy": 0.25,
+            "argument_depth": 0.25,
+            "structure_expression": 0.15,
+        }
+        max_scores = _dimension_max_scores(question_score, weights)
+        return (
+            {
+                "source": "system_default",
+                "version": "2026-05-subjective-rubric-v1",
+                "dimensions": [
+                    {
+                        "key": "answer_point_coverage",
+                        "label": "要点覆盖",
+                        "weight": weights["answer_point_coverage"],
+                        "max_score": max_scores["answer_point_coverage"],
+                        "criteria": "是否覆盖标准答案或答案要点中的核心观点、概念和结论。",
+                    },
+                    {
+                        "key": "argument_accuracy",
+                        "label": "观点准确性",
+                        "weight": weights["argument_accuracy"],
+                        "max_score": max_scores["argument_accuracy"],
+                        "criteria": "核心判断、术语使用、事实和逻辑是否准确，是否存在明显错误。",
+                    },
+                    {
+                        "key": "argument_depth",
+                        "label": "论证深度",
+                        "weight": weights["argument_depth"],
+                        "max_score": max_scores["argument_depth"],
+                        "criteria": "是否有充分解释、因果链条、例证、对比或场景分析，而不是只罗列结论。",
+                    },
+                    {
+                        "key": "structure_expression",
+                        "label": "结构与表达",
+                        "weight": weights["structure_expression"],
+                        "max_score": max_scores["structure_expression"],
+                        "criteria": "行文结构、层次、表达清晰度和专业表述是否达到题目要求。",
+                    },
+                ],
+            },
+            weights,
+        )
+
+    weights = {
+        "answer_point_coverage": 0.5,
+        "accuracy": 0.3,
+        "logic_completeness": 0.15,
+        "expression_quality": 0.05,
+    }
+    max_scores = _dimension_max_scores(question_score, weights)
+    return (
+        {
+            "source": "system_default",
+            "version": "2026-05-subjective-rubric-v1",
+            "dimensions": [
+                {
+                    "key": "answer_point_coverage",
+                    "label": "要点覆盖",
+                    "weight": weights["answer_point_coverage"],
+                    "max_score": max_scores["answer_point_coverage"],
+                    "criteria": "是否覆盖标准答案或答案要点中的核心概念、条件、步骤和结论。",
+                },
+                {
+                    "key": "accuracy",
+                    "label": "准确性",
+                    "weight": weights["accuracy"],
+                    "max_score": max_scores["accuracy"],
+                    "criteria": "知识点、术语、关系和结论是否准确，是否存在概念混淆。",
+                },
+                {
+                    "key": "logic_completeness",
+                    "label": "逻辑完整性",
+                    "weight": weights["logic_completeness"],
+                    "max_score": max_scores["logic_completeness"],
+                    "criteria": "解释链条是否完整，是否说明原因、条件、过程或必要补充。",
+                },
+                {
+                    "key": "expression_quality",
+                    "label": "表达规范性",
+                    "weight": weights["expression_quality"],
+                    "max_score": max_scores["expression_quality"],
+                    "criteria": "表述是否清晰、规范、易理解；非关键措辞差异不得机械扣分。",
+                },
+            ],
+        },
+        weights,
+    )
+
+
+def _build_scoring_points(question_type: str, answer: dict[str, Any], content: dict[str, Any]) -> list[dict[str, Any]]:
+    if question_type == QuestionType.CODE.value:
+        points: list[dict[str, Any]] = [
+            {
+                "key": "test_correctness",
+                "expected": "通过公开与隐藏测试用例，输出与期望结果一致",
+            }
+        ]
+        sample_tests = content.get("sample_tests")
+        if isinstance(sample_tests, list) and sample_tests:
+            points.append(
+                {
+                    "key": "sample_tests",
+                    "expected": "至少正确处理题目提供的示例测试",
+                    "cases": sample_tests,
+                }
+            )
+        for key, label in (
+            ("input_description", "输入说明"),
+            ("output_description", "输出说明"),
+            ("constraints", "约束条件"),
+            ("function_name", "函数名"),
+            ("signature", "函数签名"),
+        ):
+            value = content.get(key)
+            if value:
+                points.append({"key": key, "expected": f"{label}: {value}"})
+        return points
+
+    points = _normalize_answer_points(answer)
+    return [
+        {
+            "key": f"point_{index + 1}",
+            "expected": point,
+            "weight": round(1 / len(points), 4) if points else 1,
+        }
+        for index, point in enumerate(points)
+    ]
+
+
+def _build_standard_answers(question_type: str, answer: dict[str, Any], analysis: str | None) -> list[dict[str, Any]]:
+    analysis_text = _strip_html(analysis)
+    if question_type == QuestionType.CODE.value:
+        reference_code = answer.get("code")
+        item: dict[str, Any] = {}
+        if isinstance(reference_code, str) and reference_code.strip():
+            item["reference_code"] = reference_code.strip()
+        if analysis_text:
+            item["analysis"] = analysis_text
+        return [item] if item else []
+
+    points = _normalize_answer_points(answer)
+    item: dict[str, Any] = {"points": points}
+    if analysis_text:
+        item["analysis"] = analysis_text
+    return [item] if points or analysis_text else []
+
+
 _FILL_IN_BLANK_PLACEHOLDER_RE = re.compile(r"_{3,}|（\s*）|\(\s*\)|【\s*】")
 _FILL_IN_EDGE_PUNCT_RE = re.compile(r"^[\s,，、.。．;；:：]+|[\s,，、.。．;；:：]+$")
 _FILL_IN_GRADING_MODEL = "deepseek-v4-flash"
 _FILL_IN_INVISIBLE_CHAR_RE = re.compile(r"[\u200b\u200c\u200d\ufeff]")
+_FILL_IN_EMPTY_CALL_RE = re.compile(r"^([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*)\(\)$")
 _FILL_IN_SIMPLE_SUBSCRIPT_RE = re.compile(r"_\{([a-z0-9]+)\}")
 _FILL_IN_FORMULA_SPACING_RE = re.compile(r"\s*([{}_^=+\-*/(),;:])\s*")
 _FILL_IN_GRADING_CACHE_KEY = "_fill_in_grading_cache"
@@ -138,6 +373,10 @@ def _normalize_fill_in_text(value: str) -> str:
         normalized = _FILL_IN_SIMPLE_SUBSCRIPT_RE.sub(r"_\1", normalized)
         normalized = _FILL_IN_FORMULA_SPACING_RE.sub(r"\1", normalized)
 
+    empty_call_match = _FILL_IN_EMPTY_CALL_RE.fullmatch(normalized.strip())
+    if empty_call_match:
+        normalized = empty_call_match.group(1)
+
     return _FILL_IN_EDGE_PUNCT_RE.sub("", _normalize_text(normalized))
 
 
@@ -157,6 +396,22 @@ def _is_fill_in_unordered_full_match(provided_list: list[str], expected_list: li
     if any(not item for item in normalized_provided) or any(not item for item in normalized_expected):
         return False
     return Counter(normalized_provided) == Counter(normalized_expected)
+
+
+def _try_joined_fill_in_match(provided_list: list[str], expected_list: list[str]) -> bool:
+    """Check if a single provided answer matches all expected items joined together.
+
+    Handles the common case where a standard answer containing commas (e.g. inside a
+    LaTeX expression) is incorrectly split into multiple expected items at import time,
+    while the student answers the whole thing as one blank.
+    """
+    if len(provided_list) != 1 or len(expected_list) <= 1:
+        return False
+    for sep in (",", "，", ";", "；"):
+        joined = sep.join(expected_list)
+        if _is_fill_in_exact_match(provided_list[0], joined):
+            return True
+    return False
 
 
 def _build_fill_in_unordered_exact_match_flags(
@@ -183,16 +438,22 @@ def _build_fill_in_unordered_exact_match_flags(
     return match_flags
 
 
+_FILL_IN_GRADING_SIGNATURE_VERSION = "v3"  # bump to invalidate old caches
+
+
 def _build_fill_in_grading_signature(
     *,
     expected_list: list[str],
     provided_list: list[str],
     score: float,
+    knowledge_points: list[str] | None = None,
 ) -> str:
     payload = {
+        "v": _FILL_IN_GRADING_SIGNATURE_VERSION,
         "expected": [_normalize_fill_in_text(item) for item in expected_list],
         "provided": [_normalize_fill_in_text(item) for item in provided_list],
         "score": round(float(score), 4),
+        "knowledge_points": sorted(knowledge_points or []),
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -292,35 +553,49 @@ async def _request_fill_in_equivalence_with_deepseek(
     question_text: str,
     expected_answers: list[str],
     student_answers: list[str],
+    knowledge_points: list[str] | None = None,
 ) -> list[dict[str, Any]]:
+    """Ask DeepSeek to score each blank in a fill-in question.
+
+    Returns a list of `{"score": 0|0.5|1, "is_correct": bool, "reason": str}`
+    entries, one per `expected_answers[i]`. Score 1 = full credit, 0.5 =
+    partial credit (knowledge-point aligned but text mismatch), 0 = no credit.
+    """
     if not settings.deepseek_api_key:
         raise RuntimeError("未配置 DeepSeek API Key")
 
+    knowledge_block = ""
+    if knowledge_points:
+        knowledge_block = f"\n知识点：{json.dumps(knowledge_points, ensure_ascii=False)}"
+
     prompt = f"""
-你是考试填空题自动批改助手。请判断学生每个填空答案是否可接受。
+你是考试填空题自动批改助手。请对每个填空进行评分。
 
-判定原则：
-1. 不要求字符串完全相同，允许大小写、末尾标点、轻微格式差异、常见中英文术语写法差异。
-2. 只有语义或术语确实等价时才判为正确，不能因为主题相关就判正确。
-3. 多个空按无序集合判定：学生答案顺序可以不同，但每个学生答案最多只能匹配一个标准答案。
-4. 技术类等价写法应视为正确，包括但不限于：
-   - 模块/包路径：学生只写末尾组件也算正确，例如标准答案为 numpy.random，学生答 random，应给分；matplotlib.pyplot → pyplot 同理。
-   - 函数/方法引用：省略类名或模块前缀但指向同一目标时，视为正确。
-   - 数据类型别名：如 int64 与 numpy.int64、str 与 String 在特定语境下等价。
-   - 命令/路径：允许省略可推断的前缀或后缀（如文件扩展名、绝对路径中的公共前缀）。
-5. 若学生写的是标准答案的合理缩写、别名或惯用简写（如 pd 代表 pandas、np 代表 numpy），且在题干语境下无歧义，应视为正确。
+输入说明：
+- 题目内容：题目原文。
+- 考生答案：考生在每个空填写的内容（按空的顺序）。
+- 标准答案：每个空对应一个可接受答案列表，按优先级排序；考生命中任意一项即视为正确。
+- 知识点（可选）：题目涉及的知识点，可作为部分分判定依据。
 
-题干：{question_text}
+判题规则：
+1. 同义词匹配：考生答案与该空任一标准答案语义等价，视为正确（得 1 分）。
+2. 格式宽容：忽略前后空格、全/半角差异；字母不分大小写；忽略末尾标点。
+3. 顺序无关：多个空之间允许位置错位，只要"该空填的内容"在标准答案集合中可被一一对应即可，但每个考生答案至多匹配一个标准答案。
+4. 知识点修正：若知识点明确、考生答案符合该知识点但文字不完全匹配，可酌情给部分分数 0.5。
+5. 完全错误：答案与标准答案无任何语义或文字关联，计 0 分。
+
+题目内容：{question_text}{knowledge_block}
 标准答案：{json.dumps(expected_answers, ensure_ascii=False)}
-学生答案：{json.dumps(student_answers, ensure_ascii=False)}
+考生答案：{json.dumps(student_answers, ensure_ascii=False)}
 
-只输出 JSON：
+只输出 JSON，禁止包含 Markdown 围栏或额外说明：
 {{
   "matches": [
-    {{"is_correct": true, "reason": "简短理由"}}
+    {{"score": 1, "reason": "简短理由"}}
   ]
 }}
-matches 的长度必须等于标准答案长度，顺序与标准答案一致；每一项表示对应标准答案能否在学生答案集合中找到可接受答案。
+matches 的长度必须等于标准答案长度，顺序与标准答案一致。
+score 取值仅允许 0、0.5、1 中之一。
 """
 
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -349,23 +624,53 @@ matches 的长度必须等于标准答案长度，顺序与标准答案一致；
     matches = payload.get("matches") if isinstance(payload, dict) else payload
     if not isinstance(matches, list):
         raise RuntimeError("DeepSeek 填空题判分结果格式无效")
-    return [item for item in matches if isinstance(item, dict)]
+    return [_normalize_fill_in_match_payload(item) for item in matches if isinstance(item, dict)]
+
+
+def _normalize_fill_in_match_payload(item: dict[str, Any]) -> dict[str, Any]:
+    """Coerce one match entry to {score, is_correct, reason}.
+
+    Accepts the new {score} schema and the legacy {is_correct} schema so a
+    half-rolled-out prompt or a cached LLM call doesn't crash the grader.
+    """
+    score_raw = item.get("score")
+    if isinstance(score_raw, (int, float)):
+        score = float(score_raw)
+    elif isinstance(score_raw, str):
+        try:
+            score = float(score_raw)
+        except ValueError:
+            score = 1.0 if item.get("is_correct") is True else 0.0
+    else:
+        score = 1.0 if item.get("is_correct") is True else 0.0
+    # Clamp to {0, 0.5, 1} — the prompt forbids other values, but a tolerant
+    # parser is cheaper than an LLM retry on a rare malformed response.
+    if score >= 1.0:
+        score = 1.0
+    elif score >= 0.5:
+        score = 0.5
+    else:
+        score = 0.0
+    reason = item.get("reason")
+    return {
+        "score": score,
+        "is_correct": score >= 1.0,
+        "reason": str(reason).strip() if isinstance(reason, str) else "",
+    }
 
 
 def _build_student_question_content(question: Question) -> dict[str, Any]:
     content = deepcopy(question.content) if isinstance(question.content, dict) else {}
     question_type = question.type.value if isinstance(question.type, QuestionType) else str(question.type)
-    if question_type != QuestionType.FILL_IN.value:
-        return content
-
-    explicit_count = content.get("blank_count")
-    counts = [
-        explicit_count if isinstance(explicit_count, int) and explicit_count > 0 else 0,
-        len(_get_fill_in_expected_answers(question.answer or {})),
-        _count_fill_in_placeholders(content),
-    ]
-    content["blank_count"] = max(counts) or 1
-    return content
+    if question_type == QuestionType.FILL_IN.value:
+        explicit_count = content.get("blank_count")
+        counts = [
+            explicit_count if isinstance(explicit_count, int) and explicit_count > 0 else 0,
+            len(_get_fill_in_expected_answers(question.answer or {})),
+            _count_fill_in_placeholders(content),
+        ]
+        content["blank_count"] = max(counts) or 1
+    return sanitize_question_content(content)
 
 
 def _extract_answer_text(answer_content: dict[str, Any]) -> str:
@@ -483,10 +788,14 @@ def _build_grading_task_payload(
     role_binding_version: int,
     source_business_id: str,
 ) -> dict[str, Any]:
-    question_type = question.type.value if isinstance(question.type, QuestionType) else str(question.type)
+    question_type = _question_type_value(question.type)
     question_content = question.content.get("text") if isinstance(question.content, dict) else None
     raw_question_content = _strip_html(question_content if isinstance(question_content, str) else question.title)
     standard_answer = question.answer if isinstance(question.answer, dict) else {}
+    question_content_structured = question.content if isinstance(question.content, dict) else {}
+    standard_answers = _build_standard_answers(question_type, standard_answer, question.analysis)
+    scoring_points = _build_scoring_points(question_type, standard_answer, question_content_structured)
+    rubric_definition, dimension_weights = _build_default_rubric_definition(question_type, question_score)
     language = answer_content.get("language") if isinstance(answer_content.get("language"), str) else None
 
     return {
@@ -502,12 +811,26 @@ def _build_grading_task_payload(
         "student_answer_raw": _extract_answer_text(answer_content),
         "student_answer_structured": answer_content,
         "attachment_refs": _extract_attachment_refs(answer_content),
-        "standard_answers": [standard_answer],
-        "rubric_definition": {},
-        "scoring_points": [],
-        "dimension_weights": {},
-        "deduction_rules": [],
-        "fatal_error_rules": [],
+        "standard_answers": standard_answers,
+        "rubric_definition": rubric_definition,
+        "scoring_points": scoring_points,
+        "dimension_weights": dimension_weights,
+        "deduction_rules": [
+            {
+                "condition": "answer_is_empty_or_irrelevant",
+                "rule": "未作答、明显空泛、与题目无关时，对相关维度给 0 分，并在 risk_flags 标记。",
+            },
+            {
+                "condition": "semantic_equivalent_expression",
+                "rule": "表达方式不同但与标准答案语义等价时，应按对应要点给分，不按关键词机械扣分。",
+            },
+        ],
+        "fatal_error_rules": [
+            {
+                "condition": "blank_answer",
+                "rule": "学生完全未作答或仅输入无意义字符时，总分为 0。",
+            }
+        ],
         "role_binding_version": role_binding_version,
         "programming_language": language,
         "runtime_logs": [],
@@ -822,20 +1145,32 @@ async def _grade_fill_in_question_with_ai(
     question: Question,
     answer_content: dict[str, Any],
     score: float,
+    *,
+    force_recompute: bool = False,
 ) -> tuple[float, bool, dict[str, Any]]:
     expected_list = _get_fill_in_expected_answers(question.answer or {})
     provided = answer_content.get("blanks", [])
     provided_list = [str(item) for item in provided] if isinstance(provided, list) else [str(provided)]
     total = max(len(expected_list), 1)
+    knowledge_points = [
+        kp.name for kp in (question.knowledge_points or [])
+        if getattr(kp, "name", None)
+    ]
     signature = _build_fill_in_grading_signature(
         expected_list=expected_list,
         provided_list=provided_list,
         score=score,
+        knowledge_points=knowledge_points,
     )
 
-    cached = _get_cached_fill_in_grading(answer_content, signature)
-    if cached is not None:
-        return cached
+    if force_recompute:
+        # Drop any prior cached verdict so an admin-triggered regrade really
+        # re-runs the matchers and the equivalence LLM.
+        answer_content.pop(_FILL_IN_GRADING_CACHE_KEY, None)
+    else:
+        cached = _get_cached_fill_in_grading(answer_content, signature)
+        if cached is not None:
+            return cached
 
     if not _has_fill_in_answer(provided_list):
         feedback = {
@@ -887,60 +1222,123 @@ async def _grade_fill_in_question_with_ai(
             feedback,
         )
 
-    match_flags = _build_fill_in_unordered_exact_match_flags(provided_list, expected_list)
-    ai_reasons: dict[int, str] = {}
+    if expected_list and _try_joined_fill_in_match(provided_list, expected_list):
+        feedback = {
+            "dimensions": [
+                {
+                    "name": "填空准确率",
+                    "score": score,
+                    "max_score": score,
+                    "comment": f"共命中 {len(expected_list)}/{len(expected_list)} 个空（合并比对）。",
+                }
+            ],
+            "strengths": ["答案内容与标准答案等价（合并比对判定正确）。"],
+            "deductions": [],
+            "suggestions": [],
+        }
+        _set_cached_fill_in_grading(
+            answer_content,
+            signature=signature,
+            score_awarded=score,
+            is_correct=True,
+            feedback=feedback,
+        )
+        return score, True, feedback
 
-    if expected_list and not all(match_flags):
+    match_flags = _build_fill_in_unordered_exact_match_flags(provided_list, expected_list)
+    # Per-blank fractional score: exact match → 1.0, AI partial credit → 0.5,
+    # AI full credit → 1.0, AI no credit → 0.0.
+    match_scores: list[float] = [1.0 if flag else 0.0 for flag in match_flags]
+    ai_reasons: dict[int, str] = {}
+    model_evaluation: dict[str, Any] | None = None
+    ai_attempted = False
+    ai_succeeded = True  # vacuously true when no AI call is needed
+
+    if expected_list and not all(flag for flag in match_flags):
+        ai_attempted = True
+        ai_succeeded = False
         try:
             ai_matches = await _request_fill_in_equivalence_with_deepseek(
                 question_text=_get_question_plain_text(question),
                 expected_answers=expected_list,
                 student_answers=[provided_list[index] if index < len(provided_list) else "" for index in range(len(expected_list))],
+                knowledge_points=knowledge_points or None,
             )
             for index, item in enumerate(ai_matches[: len(expected_list)]):
                 if match_flags[index]:
                     continue
-                if item.get("is_correct") is True:
-                    match_flags[index] = True
-                    reason = item.get("reason")
-                    if isinstance(reason, str) and reason.strip():
-                        ai_reasons[index] = reason.strip()
+                ai_score = float(item.get("score") or 0.0)
+                if ai_score > match_scores[index]:
+                    match_scores[index] = ai_score
+                reason = item.get("reason")
+                if isinstance(reason, str) and reason.strip():
+                    ai_reasons[index] = reason.strip()
+            model_evaluation = {
+                "model": _FILL_IN_GRADING_MODEL,
+                "matches": [
+                    {
+                        "index": index + 1,
+                        "expected": expected_list[index] if index < len(expected_list) else "",
+                        "score": float(item.get("score") or 0.0),
+                        "is_correct": bool(item.get("is_correct")),
+                        "reason": str(item.get("reason") or "").strip(),
+                    }
+                    for index, item in enumerate(ai_matches[: len(expected_list)])
+                ],
+            }
+            ai_succeeded = True
         except Exception as exc:  # noqa: BLE001 - AI grading must not block exam submission.
             logger.warning("DeepSeek fill-in grading unavailable: %s", exc)
 
-    matched = sum(1 for item in match_flags if item)
+    total_credit = sum(match_scores)
+    full_matches = sum(1 for s in match_scores if s >= 1.0)
+    partial_matches = sum(1 for s in match_scores if 0.0 < s < 1.0)
     missing_points = [
         f"第 {index + 1} 空应为 {expected_item}"
         for index, expected_item in enumerate(expected_list)
-        if not match_flags[index]
+        if match_scores[index] <= 0.0
     ]
-    actual_score = round(score * matched / total, 2)
-    correct = matched == total
-    ai_strengths = [
-        f"DeepSeek 判定第 {index + 1} 空等价：{reason}"
-        for index, reason in sorted(ai_reasons.items())
-    ]
+    actual_score = round(score * total_credit / total, 2)
+    correct = full_matches == total
+    ai_strengths: list[str] = []
+    for index, reason in sorted(ai_reasons.items()):
+        if match_scores[index] >= 1.0:
+            ai_strengths.append(f"DeepSeek 判定第 {index + 1} 空等价：{reason}")
+        elif match_scores[index] > 0.0:
+            ai_strengths.append(f"DeepSeek 判定第 {index + 1} 空部分得分：{reason}")
 
+    comment_parts = [f"共命中 {full_matches}/{total} 个空"]
+    if partial_matches:
+        comment_parts.append(f"另有 {partial_matches} 个空获得部分分")
     feedback = {
         "dimensions": [
             {
                 "name": "填空准确率",
                 "score": actual_score,
                 "max_score": score,
-                "comment": f"共命中 {matched}/{total} 个空。",
+                "comment": "，".join(comment_parts) + "。",
             }
         ],
-        "strengths": ([f"命中 {matched} 个空。"] if matched else []) + ai_strengths,
+        "strengths": (
+            [f"命中 {full_matches} 个空。"] if full_matches else []
+        ) + ai_strengths,
         "deductions": missing_points,
         "suggestions": ["复查拼写、术语与顺序。"] if not correct else [],
     }
-    _set_cached_fill_in_grading(
-        answer_content,
-        signature=signature,
-        score_awarded=actual_score,
-        is_correct=correct,
-        feedback=feedback,
-    )
+    if model_evaluation:
+        feedback["model_evaluation"] = model_evaluation
+    if ai_attempted and not ai_succeeded:
+        # Don't poison the cache with a likely-low score from a failed AI call —
+        # the next attempt (or a manual regrade) should retry the LLM.
+        feedback["grading_warning"] = "AI 等价判定调用失败，本次评分基于精确匹配，未缓存。"
+    else:
+        _set_cached_fill_in_grading(
+            answer_content,
+            signature=signature,
+            score_awarded=actual_score,
+            is_correct=correct,
+            feedback=feedback,
+        )
     return actual_score, correct, feedback
 
 
@@ -948,10 +1346,14 @@ async def _grade_question_with_ai(
     question: Question,
     answer_content: dict[str, Any],
     score: float,
+    *,
+    force_recompute: bool = False,
 ) -> tuple[float, bool, dict[str, Any]]:
     question_type = question.type.value if isinstance(question.type, QuestionType) else str(question.type)
     if question_type == QuestionType.FILL_IN.value:
-        return await _grade_fill_in_question_with_ai(question, answer_content, score)
+        return await _grade_fill_in_question_with_ai(
+            question, answer_content, score, force_recompute=force_recompute
+        )
     return _grade_question(question, answer_content, score)
 
 
@@ -999,6 +1401,17 @@ def _grade_question(question: Question, answer_content: dict[str, Any], score: f
         expected_list = _get_fill_in_expected_answers(standard_answer)
         provided = answer_content.get("blanks", [])
         provided_list = [str(item) for item in provided] if isinstance(provided, list) else [str(provided)]
+        if expected_list and _try_joined_fill_in_match(provided_list, expected_list):
+            return (
+                score,
+                True,
+                {
+                    "dimensions": [{"name": "填空准确率", "score": score, "max_score": score, "comment": f"共命中 {len(expected_list)}/{len(expected_list)} 个空（合并比对）。"}],
+                    "strengths": ["答案内容与标准答案等价（合并比对判定正确）。"],
+                    "deductions": [],
+                    "suggestions": [],
+                },
+            )
         total = max(len(expected_list), 1)
         matched = 0
         missing_points: list[str] = []
@@ -1142,18 +1555,34 @@ def _ensure_exam_open(exam: Exam) -> None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exam has ended")
 
 
-def _ensure_exam_attempt_in_progress(exam_student: ExamStudent) -> None:
-    if exam_student.started_at is None:
+def _lazy_expire_attempt(exam: Exam, exam_student: ExamStudent) -> None:
+    """Transition in_progress → expired when the exam window has closed."""
+    if exam_student.attempt_state == ExamAttemptState.IN_PROGRESS.value:
+        end_time = _as_utc(exam.end_time)
+        if end_time is not None and end_time < _utcnow():
+            exam_student.attempt_state = ExamAttemptState.EXPIRED.value
+
+
+def _ensure_exam_attempt_in_progress(exam: Exam, exam_student: ExamStudent) -> None:
+    _lazy_expire_attempt(exam, exam_student)
+    state = exam_student.attempt_state
+    if state == ExamAttemptState.CREATED.value:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exam not started")
-    if exam_student.submitted_at is not None:
+    if state == ExamAttemptState.SUBMITTED.value or state == ExamAttemptState.GRADED.value:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exam already submitted")
+    if state == ExamAttemptState.EXPIRED.value:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Exam window closed")
 
 
-def _ensure_exam_attempt_in_progress_for_websocket(exam_student: ExamStudent) -> None:
-    if exam_student.started_at is None:
+def _ensure_exam_attempt_in_progress_for_websocket(exam: Exam, exam_student: ExamStudent) -> None:
+    _lazy_expire_attempt(exam, exam_student)
+    state = exam_student.attempt_state
+    if state == ExamAttemptState.CREATED.value:
         raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Exam not started")
-    if exam_student.submitted_at is not None:
+    if state in (ExamAttemptState.SUBMITTED.value, ExamAttemptState.GRADED.value):
         raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Exam already submitted")
+    if state == ExamAttemptState.EXPIRED.value:
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Exam window closed")
 
 
 def _can_start_retake(exam: Exam, exam_student: ExamStudent) -> bool:
@@ -1175,6 +1604,7 @@ def _can_start_retake(exam: Exam, exam_student: ExamStudent) -> bool:
 
 def _reset_exam_student_for_retake(exam_student: ExamStudent) -> None:
     exam_student.started_at = _utcnow()
+    exam_student.attempt_state = ExamAttemptState.IN_PROGRESS.value
     exam_student.saved_answers = {}
     exam_student.submitted_at = None
     exam_student.switch_count = 0
@@ -1217,10 +1647,12 @@ async def start_exam(
     exam_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
     user: ExamActor,
+    request: Request,
     payload: StartExamRequest | None = None,
 ) -> StudentExamStartResponse:
     exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)
     _ensure_exam_open(exam)
+    was_retake = False
     if exam_student.submitted_at is not None:
         wants_retake = bool(payload and payload.retake)
         if not wants_retake:
@@ -1228,6 +1660,7 @@ async def start_exam(
         if not _can_start_retake(exam, exam_student):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Retake is not allowed")
 
+        was_retake = True
         _reset_exam_student_for_retake(exam_student)
         await db.execute(
             delete(StudentExamAnswer).where(
@@ -1239,8 +1672,20 @@ async def start_exam(
         await db.refresh(exam)
         exam_student = next(item for item in exam.exam_students if item.student_id == user.id)
 
+    started_fresh = False
     if exam_student.started_at is None:
         exam_student.started_at = _utcnow()
+        exam_student.attempt_state = ExamAttemptState.IN_PROGRESS.value
+        await db.commit()
+        await db.refresh(exam)
+        exam_student = next(item for item in exam.exam_students if item.student_id == user.id)
+        started_fresh = True
+    elif exam_student.attempt_state == ExamAttemptState.CREATED.value:
+        # Self-heal: migration server_default filled existing started rows as "created".
+        # Correct to in_progress so save/submit calls don't 400.
+        _lazy_expire_attempt(exam, exam_student)
+        if exam_student.attempt_state == ExamAttemptState.CREATED.value:
+            exam_student.attempt_state = ExamAttemptState.IN_PROGRESS.value
         await db.commit()
         await db.refresh(exam)
         exam_student = next(item for item in exam.exam_students if item.student_id == user.id)
@@ -1253,10 +1698,27 @@ async def start_exam(
             type=eq.question.type.value,
             title=eq.question.title,
             content=_build_student_question_content(eq.question),
-            options=eq.question.options,
+            options=(
+                sanitize_question_options(eq.question.options)
+                if isinstance(eq.question.options, list)
+                else eq.question.options
+            ),
         )
         for eq in sorted(exam.exam_questions, key=lambda item: item.order)
     ]
+
+    if started_fresh or was_retake:
+        await log_event(
+            db,
+            event_category=CATEGORY_EXAM,
+            event_type="exam_retake" if was_retake else "exam_start",
+            user=user,
+            target_type="exam",
+            target_id=exam.id,
+            metadata={"title": exam.title, "category": exam.category},
+            request=request,
+        )
+        await db.commit()
 
     return StudentExamStartResponse(
         exam_id=exam.id,
@@ -1282,7 +1744,7 @@ async def run_exam_question_code(
 ) -> StudentCodeRunResponse:
     exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)
     _ensure_exam_open(exam)
-    _ensure_exam_attempt_in_progress(exam_student)
+    _ensure_exam_attempt_in_progress(exam, exam_student)
     question = await _get_exam_question_for_student(db, exam, question_id)
 
     sample_tests: list[dict[str, Any]] = []
@@ -1310,7 +1772,7 @@ async def stream_exam_question_lsp(
         try:
             exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)
             _ensure_exam_open(exam)
-            _ensure_exam_attempt_in_progress_for_websocket(exam_student)
+            _ensure_exam_attempt_in_progress_for_websocket(exam, exam_student)
             await _get_exam_question_for_student(db, exam, question_id)
             parsed_language = _parse_lsp_language(language)
         except HTTPException as exc:
@@ -1341,9 +1803,15 @@ async def save_answers(
     user: ExamActor,
 ) -> dict[str, Any]:
     exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)
-    _ensure_exam_open(exam)
-    if exam_student.submitted_at is not None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exam already submitted")
+    _ensure_exam_attempt_in_progress(exam, exam_student)
+    if exam_student.attempt_state == ExamAttemptState.EXPIRED.value:
+        await db.commit()
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Exam window closed")
+    end_time = _as_utc(exam.end_time)
+    if end_time is not None and end_time < _utcnow():
+        exam_student.attempt_state = ExamAttemptState.EXPIRED.value
+        await db.commit()
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Exam window closed")
 
     saved_answers = dict(exam_student.saved_answers or {})
     exam_questions_by_id = {item.question_id: item for item in exam.exam_questions}
@@ -1374,13 +1842,65 @@ async def report_switch(
     user: ExamActor,
 ) -> dict[str, Any]:
     exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)
-    exam_student.switch_count = payload.switch_count
-    await db.commit()
+    logger.info(
+        "switch endpoint called with client count=%s (deprecated; server now authoritative via /visibility-events)",
+        payload.switch_count,
+    )
     return {
         "switch_count": exam_student.switch_count,
         "max_switch_count": exam.max_switch_count,
         "force_submit": exam.max_switch_count > 0 and exam_student.switch_count >= exam.max_switch_count,
     }
+
+
+@router.get("/exams/{exam_id}/attempt-status", response_model=AttemptStatusResponse)
+async def get_attempt_status(
+    exam_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: ExamActor,
+) -> AttemptStatusResponse:
+    exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)
+    _lazy_expire_attempt(exam, exam_student)
+    await db.commit()
+    return AttemptStatusResponse(
+        state=exam_student.attempt_state,
+        submitted_at=exam_student.submitted_at,
+        latest_submission_id=exam_student.latest_submission_id,
+        switch_count=exam_student.switch_count,
+        deadline_at=exam.end_time,
+    )
+
+
+@router.post("/exams/{exam_id}/visibility-events", response_model=VisibilityEventsResponse)
+async def report_visibility_events(
+    exam_id: uuid.UUID,
+    payload: VisibilityEventsRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: ExamActor,
+) -> VisibilityEventsResponse:
+    exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)
+
+    if payload.events and exam.max_switch_count >= 0:
+        events_sorted = sorted(payload.events, key=lambda e: e.at_ms)
+        hide_start: int | None = None
+        increments = 0
+        for event in events_sorted:
+            if event.hidden and hide_start is None:
+                hide_start = event.at_ms
+            elif not event.hidden and hide_start is not None:
+                duration_ms = event.at_ms - hide_start
+                if duration_ms >= 3000:
+                    increments += 1
+                hide_start = None
+
+        if increments > 0:
+            exam_student.switch_count += increments
+            await db.commit()
+
+    return VisibilityEventsResponse(
+        switch_count=exam_student.switch_count,
+        max_switch_count=exam.max_switch_count,
+    )
 
 
 @router.post("/exams/{exam_id}/submit", response_model=SubmitExamResponse)
@@ -1389,11 +1909,19 @@ async def submit_exam(
     background_tasks: BackgroundTasks,
     db: Annotated[AsyncSession, Depends(get_db)],
     user: ExamActor,
+    request: Request,
     payload: SubmitExamRequest | None = None,
 ) -> SubmitExamResponse:
     exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)
-    if exam_student.submitted_at is not None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exam already submitted")
+    state = exam_student.attempt_state
+    if state in (ExamAttemptState.SUBMITTED.value, ExamAttemptState.GRADED.value):
+        return SubmitExamResponse(
+            submitted=True,
+            score=exam_student.score,
+            grading_status=exam_student.grading_status,
+        )
+    if state == ExamAttemptState.EXPIRED.value:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Exam window closed")
 
     answers_map = dict(exam_student.saved_answers or {})
     for item in payload.answers if payload else []:
@@ -1512,11 +2040,13 @@ async def submit_exam(
     exam_student.score = round(objective_score, 2)
     if has_subjective:
         exam_student.grading_status = GradingStatus.PENDING_AI.value
+        exam_student.attempt_state = ExamAttemptState.SUBMITTED.value
         exam_student.ai_scored_at = None
         exam_student.reviewed_at = None
         exam_student.graded_at = None
     else:
         exam_student.grading_status = GradingStatus.REVIEWED.value
+        exam_student.attempt_state = ExamAttemptState.GRADED.value
         exam_student.ai_scored_at = now
         exam_student.reviewed_at = now
         exam_student.graded_at = now
@@ -1538,6 +2068,23 @@ async def submit_exam(
         task_ids=task_ids,
         now=now,
     )
+
+    await log_event(
+        db,
+        event_category=CATEGORY_EXAM,
+        event_type="exam_submit",
+        user=user,
+        target_type="exam",
+        target_id=exam.id,
+        metadata={
+            "title": exam.title,
+            "category": exam.category,
+            "attempt_no": next_attempt_no,
+            "score": exam_student.score,
+        },
+        request=request,
+    )
+    await db.commit()
 
     return SubmitExamResponse(
         submitted=True,

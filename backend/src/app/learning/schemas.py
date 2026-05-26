@@ -44,10 +44,17 @@ class DirectionResponse(BaseModel):
 class RootKnowledgePointOptionResponse(BaseModel):
     id: uuid.UUID
     name: str
+    description: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    difficulty: str | None = None
+    parent_id: uuid.UUID | None = None
     direction_id: uuid.UUID
     direction_name: str
     major_id: uuid.UUID
     major_name: str
+    owner_id: uuid.UUID | None = None
+    visibility: VisibilityScope = VisibilityScope.PRIVATE
+    question_count: int = 0
 
 
 CourseOptionResponse = RootKnowledgePointOptionResponse

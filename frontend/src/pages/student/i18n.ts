@@ -152,7 +152,28 @@ type StudentMessageKey =
   | "wrong_detail_recent_wrong"
   | "wrong_detail_your_answer"
   | "wrong_detail_standard_answer"
-  | "wrong_detail_feedback";
+  | "wrong_detail_feedback"
+  | "mobile_tab_home"
+  | "mobile_tab_exams"
+  | "mobile_tab_me"
+  | "mobile_draft_saved"
+  | "mobile_draft_syncing"
+  | "mobile_draft_synced"
+  | "mobile_draft_pending"
+  | "mobile_offline_banner"
+  | "mobile_offline_submit_blocked"
+  | "mobile_exam_confirm_title"
+  | "mobile_exam_confirm_unanswered"
+  | "mobile_exam_confirm_pending"
+  | "mobile_exam_recovery_title"
+  | "mobile_exam_recovery_message"
+  | "mobile_exam_recovery_apply_all"
+  | "mobile_exam_back_confirm"
+  | "mobile_empty_exams"
+  | "mobile_empty_wrong_answers"
+  | "mobile_empty_notifications"
+  | "mobile_install_cta"
+  | "mobile_install_ios_instructions";
 
 const STUDENT_DICTIONARY: Record<StudentLocale, Record<StudentMessageKey, string>> = {
   zh: {
@@ -308,6 +329,27 @@ const STUDENT_DICTIONARY: Record<StudentLocale, Record<StudentMessageKey, string
     wrong_detail_your_answer: "你的答案",
     wrong_detail_standard_answer: "正确答案",
     wrong_detail_feedback: "评分反馈",
+    mobile_tab_home: "工作台",
+    mobile_tab_exams: "我的考试",
+    mobile_tab_me: "我的",
+    mobile_draft_saved: "已本地保存",
+    mobile_draft_syncing: "同步中...",
+    mobile_draft_synced: "已同步",
+    mobile_draft_pending: "{count} 题待同步",
+    mobile_offline_banner: "当前离线",
+    mobile_offline_submit_blocked: "当前处于离线状态，请在网络恢复后再提交",
+    mobile_exam_confirm_title: "确认提交考试",
+    mobile_exam_confirm_unanswered: "还有 {count} 道题未作答",
+    mobile_exam_confirm_pending: "提交后将无法修改答案",
+    mobile_exam_recovery_title: "发现本地草稿",
+    mobile_exam_recovery_message: "在此设备上找到 {count} 道题的本地草稿未同步",
+    mobile_exam_recovery_apply_all: "全部恢复",
+    mobile_exam_back_confirm: "离开将暂停答题，草稿已本地保存",
+    mobile_empty_exams: "暂无考试",
+    mobile_empty_wrong_answers: "暂无错题",
+    mobile_empty_notifications: "暂无通知",
+    mobile_install_cta: "安装到桌面",
+    mobile_install_ios_instructions: "点击分享按钮，选择「添加到主屏幕」",
   },
   en: {
     load_exam_failed: "Unable to load exam data",
@@ -462,6 +504,27 @@ const STUDENT_DICTIONARY: Record<StudentLocale, Record<StudentMessageKey, string
     wrong_detail_your_answer: "Your Answer",
     wrong_detail_standard_answer: "Correct Answer",
     wrong_detail_feedback: "Feedback",
+    mobile_tab_home: "Home",
+    mobile_tab_exams: "My Exams",
+    mobile_tab_me: "Me",
+    mobile_draft_saved: "Saved locally",
+    mobile_draft_syncing: "Syncing...",
+    mobile_draft_synced: "Synced",
+    mobile_draft_pending: "{count} answers pending sync",
+    mobile_offline_banner: "Offline",
+    mobile_offline_submit_blocked: "You're offline. Please reconnect before submitting.",
+    mobile_exam_confirm_title: "Submit Exam",
+    mobile_exam_confirm_unanswered: "{count} questions unanswered",
+    mobile_exam_confirm_pending: "You cannot change answers after submission.",
+    mobile_exam_recovery_title: "Local draft found",
+    mobile_exam_recovery_message: "{count} answers on this device haven't synced yet",
+    mobile_exam_recovery_apply_all: "Apply all",
+    mobile_exam_back_confirm: "Leaving will pause the exam. Your draft is saved locally.",
+    mobile_empty_exams: "No exams yet",
+    mobile_empty_wrong_answers: "No wrong answers yet",
+    mobile_empty_notifications: "No notifications",
+    mobile_install_cta: "Install app",
+    mobile_install_ios_instructions: "Tap Share, then choose 'Add to Home Screen'",
   },
 };
 
