@@ -35,6 +35,10 @@ export interface CreateFromSelectionDialogProps {
   selected: SelectedQuestionSummary[];
   /** 成功创建后的回调，通常由宿主页做跳转（如 navigate("/exams")）。 */
   onPublished?: (examId: string, category: CreateFromSelectionCategory) => void;
+  /** 从课程工作台发起时，把考试/作业直接归属到当前课程。 */
+  courseKpId?: string | null;
+  /** 从课程某个学期发起时，创建后直接归档到该学期。 */
+  courseSemesterId?: string | null;
   /** 默认类型，默认为作业/练习（老师日常场景更常见）。 */
   defaultCategory?: CreateFromSelectionCategory;
   /** 名称的默认值，通常由宿主生成，例如 "2026-05-11 练习"。 */
@@ -89,6 +93,8 @@ export function CreateFromSelectionDialog({
   onOpenChange,
   selected,
   onPublished,
+  courseKpId,
+  courseSemesterId,
   defaultCategory = "practice",
   defaultTitle = "",
 }: CreateFromSelectionDialogProps) {
@@ -146,6 +152,8 @@ export function CreateFromSelectionDialog({
         })),
         question_ids: selected.map((q) => q.id),
         student_ids: studentIds,
+        course_kp_id: courseKpId ?? undefined,
+        course_semester_id: courseSemesterId ?? undefined,
       };
 
       const response = await apiClient.post<{ id: string }>("/api/exams", payload);

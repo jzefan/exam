@@ -22,14 +22,14 @@ type KnowledgeImportDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onImport: (paths: KnowledgeImportPath[]) => Promise<void>;
-  selectedDirectionName: string | null;
+  selectedTargetName: string | null;
 };
 
 export function KnowledgeImportDialog({
   open,
   onOpenChange,
   onImport,
-  selectedDirectionName,
+  selectedTargetName,
 }: KnowledgeImportDialogProps) {
   const { toast } = useToast();
   const [fileName, setFileName] = useState<string | null>(null);
@@ -107,19 +107,19 @@ export function KnowledgeImportDialog({
         <DialogHeader>
           <DialogTitle>导入知识库</DialogTitle>
           <DialogDescription className="flex flex-wrap items-center gap-1.5 leading-6">
-            {selectedDirectionName ? (
+            {selectedTargetName ? (
               <>
                 <span>将知识点导入到</span>
                 <Badge
                   className="h-6 rounded-full border-none bg-primary/10 px-2.5 text-[11px] font-semibold text-primary"
                   variant="secondary"
                 >
-                  {selectedDirectionName}
+                  {selectedTargetName}
                 </Badge>
-                <span>方向。</span>
+                <span>。</span>
               </>
             ) : (
-              <span>先选择方向，再导入知识点。</span>
+              <span>先选择专业或方向，再导入知识点。</span>
             )}
             <span>Excel 每一行表示一条知识路径，列从左到右表示层级；也支持单列用</span>
             <span className="px-1 font-medium">{">"}</span>

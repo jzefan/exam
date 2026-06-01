@@ -100,6 +100,8 @@ function renderSidebar(
       onDeleteDirection={vi.fn()}
       onEditRootKnowledge={vi.fn()}
       onDeleteRootKnowledge={vi.fn()}
+      onMoveRootKnowledge={vi.fn()}
+      onSelectMajor={vi.fn()}
       {...overrides}
     />,
   );
@@ -121,6 +123,55 @@ describe("MajorDirectionSidebar", () => {
     renderSidebar();
 
     expect(screen.getByPlaceholderText("搜索专业、方向或知识点")).toBeInTheDocument();
+  });
+
+  it("moves a root knowledge point when dropped onto another root knowledge point", () => {
+    const onMoveRootKnowledge = vi.fn();
+    renderSidebar({ onMoveRootKnowledge });
+    const dataTransfer = {
+      effectAllowed: "",
+      data: new Map<string, string>(),
+      setData(type: string, value: string) {
+        this.data.set(type, value);
+      },
+      getData(type: string) {
+        return this.data.get(type) ?? "";
+      },
+    };
+
+    fireEvent.dragStart(screen.getByRole("button", { name: /软件设计/ }), {
+      dataTransfer,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "人工智能" }));
+    fireEvent.dragOver(screen.getByRole("button", { name: /机器学习基础/ }), {
+      dataTransfer,
+    });
+    fireEvent.drop(screen.getByRole("button", { name: /机器学习基础/ }), {
+      dataTransfer,
+    });
+
+    expect(onMoveRootKnowledge).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "knowledge-1" }),
+      expect.objectContaining({ id: "knowledge-2" }),
+    );
+  });
+
+  it("displays the system default major with a friendly name", () => {
+    renderSidebar({
+      majors: [
+        {
+          id: "major-default",
+          name: "default-prof",
+          description: null,
+          created_at: "2026-04-18T00:00:00Z",
+        },
+      ],
+      getDirections: () => [],
+      getMajorRootKnowledgePoints: () => [],
+    });
+
+    expect(screen.getByRole("button", { name: "默认专业" })).toBeInTheDocument();
+    expect(screen.queryByText("default-prof")).not.toBeInTheDocument();
   });
 
   it("shows major-level root knowledge by default and keeps directions collapsed", () => {
@@ -149,6 +200,16 @@ describe("MajorDirectionSidebar", () => {
 
     expect(screen.getByText("软件设计")).toBeInTheDocument();
     expect(screen.getByText("机器学习基础")).toBeInTheDocument();
+  });
+
+  it("selects a major when its row is clicked even before it has root knowledge", () => {
+    const onSelectMajor = vi.fn();
+
+    renderSidebar({ onSelectMajor });
+
+    fireEvent.click(screen.getByRole("button", { name: "人工智能" }));
+
+    expect(onSelectMajor).toHaveBeenCalledWith(majors[1]);
   });
 
   it("collapses an expanded major when clicked again", () => {

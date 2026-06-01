@@ -20,6 +20,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { formatMajorName } from "@/lib/knowledge-display";
 import { ResourcePreview } from "@/pages/job-models/editor/resource-preview";
 import { VideoSearchDialog } from "@/pages/job-models/editor/video-search";
 import type { IQuestion } from "@/types";
@@ -89,6 +90,11 @@ function getMaterialSubtitle(material: LearningMaterial) {
   return material.url ?? "";
 }
 
+function getRootKnowledgeQuestionBankName(rootKnowledge: IKnowledgePointDetail | null) {
+  if (!rootKnowledge?.name.trim()) return undefined;
+  return `${rootKnowledge.name.trim().slice(0, 197)}-题库`;
+}
+
 export function RelatedResourcesDialog({
   open,
   node,
@@ -129,6 +135,7 @@ export function RelatedResourcesDialog({
     knowledgePathParts.push(node.name);
   }
   const knowledgePathLabel = knowledgePathParts.filter(Boolean).join(" / ");
+  const targetQuestionBankName = getRootKnowledgeQuestionBankName(rootKnowledge);
 
   const handleGenerateQuestionsClick = (material: LearningMaterial) => {
     const extracted = onGenerateQuestionsFromMaterial(material);
@@ -367,7 +374,7 @@ export function RelatedResourcesDialog({
 
               <Card>
                 <CardContent className="grid gap-2 py-4 text-sm text-muted-foreground">
-                  <p>专业：{major?.name ?? "未找到"}</p>
+                  <p>专业：{major ? formatMajorName(major.name) : "未找到"}</p>
                   <p>方向：{direction?.name ?? "未找到"}</p>
                   <p>主知识点：{rootKnowledge?.name ?? "未选择"}</p>
                   <p>本知识点：{node?.name ?? "未选择"}</p>
@@ -447,6 +454,7 @@ export function RelatedResourcesDialog({
             materialTitle={aiGenerateState.materialTitle}
             materialSourceText={aiGenerateState.sourceText}
             materialImages={aiGenerateState.images}
+            targetQuestionBankName={targetQuestionBankName}
             onSaved={onQuestionsSaved}
           />
         )}

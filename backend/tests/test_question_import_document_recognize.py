@@ -134,7 +134,7 @@ D. 深圳
 题目内容：请简述数据库事务的 ACID 特性。
 [答案] 原子性、一致性、隔离性、持久性。
 [解析] ACID 是数据库事务的四个核心特性。
-[难度] 一般
+[难度] 中等
 """
 
     assert detect_import_template_mode(raw_text) == "template"
@@ -146,12 +146,13 @@ D. 深圳
     assert drafts[0].options == {"A": "北京", "B": "上海", "C": "广州", "D": "深圳"}
     assert drafts[0].answer_text == "A"
     assert drafts[0].analysis == "北京是中国首都。"
-    assert drafts[0].difficulty == 2
+    assert drafts[0].difficulty == 1
     assert drafts[0].issues == []
     assert drafts[0].content_text == "我国首都是哪里？"
     assert drafts[1].type == "short_answer"
     assert drafts[1].answer_text == "原子性、一致性、隔离性、持久性。"
     assert drafts[1].content_text == "请简述数据库事务的 ACID 特性。"
+    assert drafts[1].difficulty == 3
 
 
 def test_segments_questions_by_numbering_and_type_keywords() -> None:

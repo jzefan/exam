@@ -45,6 +45,15 @@ export const questionTypeChar: Record<QuestionType, string> = {
   code: "编",
 };
 
+export const questionTypeFullLabel: Record<QuestionType, string> = {
+  choice: "选择题",
+  true_false: "判断题",
+  fill_in: "填空题",
+  short_answer: "简答题",
+  essay: "论述题",
+  code: "编程题",
+};
+
 export const questionTypeColorClass: Record<QuestionType, string> = {
   choice: "bg-blue-500 text-white",
   true_false: "bg-teal-500 text-white",
@@ -57,8 +66,8 @@ export const questionTypeColorClass: Record<QuestionType, string> = {
 export const questionDifficultyConfig: Record<number, { label: string; variant: BadgeProps["variant"] }> = {
   1: { label: "容易", variant: "success" },
   2: { label: "较易", variant: "secondary" },
-  3: { label: "一般", variant: "outline" },
-  4: { label: "难", variant: "warning" },
+  3: { label: "中等", variant: "outline" },
+  4: { label: "较难", variant: "warning" },
   5: { label: "很难", variant: "destructive" },
 };
 

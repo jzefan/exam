@@ -1,8 +1,8 @@
 import { useList, useCreate, useDelete, useGetIdentity, useInvalidate, useNavigation, useUpdate } from "@refinedev/core";
 import type { CrudFilter } from "@refinedev/core";
 import type { IQuestion, IQuestionBank, ITag, QuestionType } from "../../types";
-import { Search, BookOpen, Pencil, Trash2, Plus, ChevronDown, ChevronUp, Library, Check, PackageOpen, GraduationCap, SlidersHorizontal, ChevronsDownUp, ChevronsUpDown, Link2, Save, ChevronRight, Lock, Upload, Sparkles, Loader2, Eraser, AlertTriangle, FolderInput, FilePlus2 } from "lucide-react";
-import { useState, useCallback, useRef, useEffect, type ReactNode } from "react";
+import { Search, BookOpen, Pencil, Trash2, Plus, ChevronDown, ChevronUp, Library, Check, PackageOpen, GraduationCap, SlidersHorizontal, Link2, Save, ChevronRight, Lock, Upload, Sparkles, Loader2, Eraser, AlertTriangle, FolderInput, FilePlus2 } from "lucide-react";
+import { useState, useCallback, useEffect, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { getUserRole } from "@/types/rbac";
 import { Button } from "@/components/ui/button";
@@ -64,6 +64,7 @@ import {
 } from "./components/create-from-selection-dialog";
 import type { QuestionImportJobResponse } from "./import-types";
 import { getQuestionDeleteDescription } from "@/lib/deletion-copy";
+import { formatMajorName } from "@/lib/knowledge-display";
 import { getQuestionBankOwnerLabel } from "@/lib/question-banks";
 
 const difficultyConfig: Record<
@@ -72,8 +73,8 @@ const difficultyConfig: Record<
 > = {
   1: { label: "容易", variant: "success" },
   2: { label: "较易", variant: "secondary" },
-  3: { label: "一般", variant: "outline" },
-  4: { label: "难", variant: "warning" },
+  3: { label: "中等", variant: "outline" },
+  4: { label: "较难", variant: "warning" },
   5: { label: "很难", variant: "destructive" },
 };
 
@@ -213,8 +214,6 @@ async function questionApiFetch<T>(url: string, options?: RequestInit): Promise<
 }
 
 export function QuestionList() {
-  const CARD_EXPAND_DELAY_MS = 720;
-  const CARD_COLLAPSE_DELAY_MS = 320;
   const { toast } = useToast();
   const { data: identity } = useGetIdentity<{ id?: string; primary_org?: { role_name?: string } | null }>();
   const navigate = useNavigate();
@@ -248,11 +247,6 @@ export function QuestionList() {
   const [typesExpanded, setTypesExpanded] = useState(false);
   const [difficultyExpanded, setDifficultyExpanded] = useState(false);
 
-  // 卡片展开/收缩（hover 延时更长一些，避免内容闪现）
-  const [hoveredCard, setHoveredCard] = useState<string | null>(null);
-  const [manuallyExpandedCards, setManuallyExpandedCards] = useState<Set<string>>(new Set());
-  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [allExpanded, setAllExpanded] = useState(false);
   // 移动端筛选面板
   const [mobileFilterOpen, setMobileFilterOpen] = useState(false);
 
@@ -526,7 +520,12 @@ export function QuestionList() {
   const hasMajorMatch = useCallback(
     (majorId: string): boolean => {
       const major = knowledgeMajors.find((item) => item.id === majorId);
-      if (major && (matchKnowledgeText(major.name) || matchKnowledgeText(major.description))) {
+      if (
+        major &&
+        (matchKnowledgeText(major.name) ||
+          matchKnowledgeText(formatMajorName(major.name)) ||
+          matchKnowledgeText(major.description))
+      ) {
         return true;
       }
       return knowledgeDirections
@@ -535,20 +534,6 @@ export function QuestionList() {
     },
     [hasDirectionMatch, knowledgeDirections, knowledgeMajors, matchKnowledgeText],
   );
-
-  const isCardExpanded = (id: string) => allExpanded || hoveredCard === id || manuallyExpandedCards.has(id);
-
-  const toggleCardExpanded = (id: string) => {
-    setManuallyExpandedCards((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  };
 
   const handleSearch = (value: string) => {
     setSearch(value);
@@ -564,6 +549,12 @@ export function QuestionList() {
     setActiveTagIds(new Set());
     setAllTagsSelected(true);
     rebuildFilters(search, bankId, activeKnowledgePointId, new Set(ALL_FILTER_TYPE_KEYS), new Set(ALL_DIFFICULTY_SET), new Set(), true);
+  };
+
+  const openCreateBankDialog = () => {
+    setNewBankName("");
+    setNewBankDesc("");
+    setCreateBankOpen(true);
   };
 
   // --- Type multi-select ---
@@ -1028,47 +1019,37 @@ export function QuestionList() {
 
   /* Filter sidebar content — shared between desktop aside & mobile dialog */
   const filterContent = (
-    <div className="space-y-3">
+    <div className="flex h-full min-h-0 flex-col space-y-3">
       {/* 题库 */}
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <p className="text-sm font-medium text-foreground flex items-center gap-1.5">
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="mb-3 flex items-center justify-between">
+          <p className="flex items-center gap-1.5 text-sm font-medium text-foreground">
             <Library size={14} />
             题库
           </p>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={() => {
-                  setNewBankName("");
-                  setNewBankDesc("");
-                  setCreateBankOpen(true);
-                }}
-                className="p-0.5 rounded text-muted-foreground hover:text-primary transition-colors"
-              >
-                <Plus size={14} />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top">
-              <p>新建题库</p>
-            </TooltipContent>
-          </Tooltip>
+          <button
+            type="button"
+            onClick={openCreateBankDialog}
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/10"
+          >
+            <Plus size={14} />
+            新建
+          </button>
         </div>
-        <div className="max-h-60 overflow-y-hidden hover:overflow-y-auto -mx-1">
+        <div className="-mx-1 min-h-0 flex-1 space-y-1.5 overflow-y-hidden hover:overflow-y-auto">
           <button
             type="button"
             onClick={() => handleBankFilter(null)}
-            className={`flex items-center gap-2 w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
+            className={`flex w-full items-center gap-2 rounded-md px-3 py-2.5 text-left text-sm transition-colors ${
               activeQuestionBankId === null
                 ? "bg-primary/10 text-primary font-medium"
-                : "hover:bg-muted text-muted-foreground"
+                : "text-muted-foreground hover:bg-muted"
             }`}
           >
             <Library size={14} className="shrink-0" />
-            <span className="flex-1 min-w-0 flex items-center gap-1.5">
+            <span className="flex min-w-0 flex-1 items-center gap-1.5">
               全部题库
-              <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4 shrink-0">
+              <Badge variant="secondary" className="h-4 shrink-0 px-1.5 py-0 text-[10px]">
                 {noBankCount + banks.reduce((s, b) => s + b.question_count, 0)}
               </Badge>
             </span>
@@ -1076,22 +1057,22 @@ export function QuestionList() {
           <button
             type="button"
             onClick={() => handleBankFilter("__none__")}
-            className={`group flex items-center gap-2 w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
+            className={`group flex w-full items-center gap-2 rounded-md px-3 py-2.5 text-left text-sm transition-colors ${
               activeQuestionBankId === "__none__"
                 ? "bg-primary/10 text-primary"
-                : "hover:bg-muted text-muted-foreground"
+                : "text-muted-foreground hover:bg-muted"
             }`}
           >
             <PackageOpen size={14} className="shrink-0" />
-            <span className="flex-1 min-w-0 flex items-center gap-1.5">
+            <span className="flex min-w-0 flex-1 items-center gap-1.5">
               未在题库
-              <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4 shrink-0">
+              <Badge variant="secondary" className="h-4 shrink-0 px-1.5 py-0 text-[10px]">
                 {noBankCount}
               </Badge>
             </span>
           </button>
           {banks.length === 0 ? (
-            <p className="text-xs text-muted-foreground px-3 py-2">暂无题库</p>
+            <p className="px-3 py-2 text-xs text-muted-foreground">暂无题库</p>
           ) : (
             banks.map((bank) => {
               const isActive = activeQuestionBankId === bank.id;
@@ -1099,7 +1080,6 @@ export function QuestionList() {
                 bank.visibility === "platform" &&
                 bank.owner_id !== identity?.id &&
                 !canManageSharedResources;
-              const canClearBank = !isReadOnlyShared && bank.question_count > 0;
               const ownerLabel = showBankOwner ? getQuestionBankOwnerLabel(bank) : null;
               return (
                 <div
@@ -1108,13 +1088,13 @@ export function QuestionList() {
                   tabIndex={0}
                   onClick={() => handleBankFilter(bank.id)}
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") handleBankFilter(bank.id); }}
-                  className={`group flex items-center w-full text-left px-3 py-2 rounded-md cursor-pointer transition-colors ${
+                  className={`group flex w-full cursor-pointer items-center rounded-md px-3 py-3 text-left transition-colors ${
                     isActive
                       ? "bg-primary/10"
                       : "hover:bg-muted"
                   }`}
                 >
-                  <div className={`flex-1 min-w-0 ${bank.description ? "" : "flex items-center"}`}>
+                  <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 items-center gap-1.5">
                       <Tooltip>
                         <TooltipTrigger asChild>
@@ -1127,7 +1107,7 @@ export function QuestionList() {
                           {ownerLabel ? <p className="text-xs text-muted-foreground">所有者：{ownerLabel}</p> : null}
                         </TooltipContent>
                       </Tooltip>
-                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4 shrink-0">
+                      <Badge variant="secondary" className="h-4 shrink-0 px-1.5 py-0 text-[10px]">
                         {bank.question_count}
                       </Badge>
                       {isReadOnlyShared && (
@@ -1138,12 +1118,12 @@ export function QuestionList() {
                       )}
                     </div>
                     {bank.description && (
-                      <p className="text-xs text-muted-foreground truncate mt-0.5">
+                      <p className="mt-1 truncate text-xs text-muted-foreground">
                         {bank.description}
                       </p>
                     )}
                     {ownerLabel ? (
-                      <p className="text-xs text-muted-foreground truncate mt-0.5">
+                      <p className="mt-1 truncate text-xs text-muted-foreground">
                         所有者：{ownerLabel}
                       </p>
                     ) : null}
@@ -1156,10 +1136,11 @@ export function QuestionList() {
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
+                              const canClearBank = !isReadOnlyShared && bank.question_count > 0;
                               if (!canClearBank) return;
                               setClearBankTarget(bank);
                             }}
-                            disabled={!canClearBank}
+                            disabled={isReadOnlyShared || bank.question_count <= 0}
                             className="rounded p-0.5 text-muted-foreground transition-colors hover:text-amber-600 disabled:cursor-not-allowed disabled:hover:text-muted-foreground"
                           >
                             <Eraser size={13} />
@@ -1196,6 +1177,14 @@ export function QuestionList() {
               );
             })
           )}
+          <button
+            type="button"
+            onClick={openCreateBankDialog}
+            className="mt-2 flex h-10 w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-primary/30 bg-primary/[0.02] text-sm font-medium text-primary transition-colors hover:bg-primary/5"
+          >
+            <Plus size={15} />
+            新建题库
+          </button>
         </div>
       </div>
 
@@ -1441,9 +1430,9 @@ export function QuestionList() {
       {/* Two-column layout: sidebar left, list right */}
       <div className="flex gap-6">
         {/* Left: sidebar filters (desktop only) */}
-        <aside className="hidden w-80 shrink-0 self-start lg:sticky lg:top-6 lg:block">
-          <Card>
-            <CardContent className="max-h-[calc(100vh-8rem)] overflow-y-hidden p-4 hover:overflow-y-auto">
+        <aside className="hidden w-80 shrink-0 self-start lg:sticky lg:top-6 lg:block lg:h-[calc(100vh-8rem-20px)]">
+          <Card className="h-full">
+            <CardContent className="h-full overflow-y-hidden p-4 hover:overflow-y-auto">
               <TooltipProvider>
                 {filterContent}
               </TooltipProvider>
@@ -1508,15 +1497,6 @@ export function QuestionList() {
               <span className="text-xs text-muted-foreground">
                 共 {total} 道题目
               </span>
-              <button
-                type="button"
-                onClick={() => setAllExpanded((v) => !v)}
-                className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted transition-colors"
-                title={allExpanded ? "收缩全部" : "展开全部"}
-              >
-                {allExpanded ? <ChevronsDownUp size={13} /> : <ChevronsUpDown size={13} />}
-                <span className="hidden sm:inline">{allExpanded ? "收缩" : "展开"}</span>
-              </button>
             </div>
           </div>
 
@@ -1541,15 +1521,9 @@ export function QuestionList() {
                     question={question}
                     index={globalIndex}
                     className="cursor-pointer transition-all hover:border-primary hover:shadow-md"
-                    expanded={isCardExpanded(question.id)}
+                    expandOnHover
+                    hideAnswer
                     highlightKeyword={search}
-                    onClick={(event) => {
-                      const target = event.target as HTMLElement | null;
-                      if (target?.closest("button, input, textarea, a, [role='dialog']")) {
-                        return;
-                      }
-                      toggleCardExpanded(question.id);
-                    }}
                     trailing={
                       <Checkbox
                         checked={selected.has(question.id)}
@@ -1596,17 +1570,6 @@ export function QuestionList() {
                         </Button>
                       </>
                     }
-                    onMouseEnter={() => {
-                      if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
-                      hoverTimerRef.current = setTimeout(() => setHoveredCard(question.id), CARD_EXPAND_DELAY_MS);
-                    }}
-                    onMouseLeave={() => {
-                      if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
-                      hoverTimerRef.current = setTimeout(() => {
-                        setHoveredCard(null);
-                        hoverTimerRef.current = null;
-                      }, CARD_COLLAPSE_DELAY_MS);
-                    }}
                     knowledgeRecognitionStatus={getQuestionKnowledgeRecognitionStatus(question.id, activeImportJob) ?? undefined}
                   />
                 );
@@ -1777,7 +1740,7 @@ export function QuestionList() {
                                 <ChevronRight size={14} className="text-muted-foreground" />
                               )}
                               <div className="min-w-0 flex-1">
-                                <p className="text-sm font-semibold text-foreground">{major.name}</p>
+                                <p className="text-sm font-semibold text-foreground">{formatMajorName(major.name)}</p>
                               </div>
                             </button>
 

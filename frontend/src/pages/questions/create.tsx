@@ -1,5 +1,5 @@
 import { useCreate, useGetIdentity, useList } from "@refinedev/core";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { useState } from "react";
 import { Plus, X, ChevronsUpDown, Check } from "lucide-react";
 import type { IQuestionBank, ITag, QuestionType } from "../../types";
@@ -50,7 +50,7 @@ function toBackendType(uiType: UIQuestionType): QuestionType {
 const difficulties = [
   { value: "1", label: "容易" },
   { value: "2", label: "较易" },
-  { value: "3", label: "一般" },
+  { value: "3", label: "中等" },
   { value: "4", label: "较难" },
   { value: "5", label: "很难" },
 ];
@@ -62,6 +62,13 @@ interface OptionItem {
 
 export function QuestionCreate() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navState = (location.state ?? {}) as {
+    backTo?: string;
+    backLabel?: string;
+    successTo?: string;
+    courseKpId?: string;
+  };
   const { mutate, mutation } = useCreate();
   const isPending = mutation.isPending;
   const { data: identity } = useGetIdentity<{ primary_org?: { role_name?: string } | null }>();
@@ -186,10 +193,10 @@ export function QuestionCreate() {
           score: Number(form.score),
           question_bank_id: questionBankId || null,
           tag_ids: selectedTagIds,
-          knowledge_point_ids: [],
+          knowledge_point_ids: navState.courseKpId ? [navState.courseKpId] : [],
         },
       },
-      { onSuccess: () => navigate("/questions") },
+      { onSuccess: () => navigate(navState.successTo ?? "/questions") },
     );
   };
 
@@ -198,8 +205,8 @@ export function QuestionCreate() {
       <PageIntroHeader
         title="创建题目"
         description="录入题干、答案、解析与标签，快速沉淀高质量题库资源。"
-        onBack={() => navigate(-1)}
-        backLabel="返回题目列表"
+        onBack={() => navState.backTo ? navigate(navState.backTo) : navigate(-1)}
+        backLabel={navState.backLabel ?? "返回题目列表"}
         fullBleed
         className="mb-6"
       />
@@ -744,7 +751,7 @@ export function QuestionCreate() {
                   "创建题目"
                 )}
               </Button>
-              <Button type="button" variant="outline" onClick={() => navigate(-1)}>
+              <Button type="button" variant="outline" onClick={() => navState.backTo ? navigate(navState.backTo) : navigate(-1)}>
                 取消
               </Button>
             </div>

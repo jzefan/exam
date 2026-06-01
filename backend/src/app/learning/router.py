@@ -264,7 +264,9 @@ async def update_kp(kp_id: uuid.UUID, data: KnowledgePointUpdate, db: DB, user: 
     _ensure_can_write_kp(kp, user, is_admin)
     if data.name is not None:
         data = data.model_copy(update={"name": data.name.strip()})
-    if data.name is not None and kp.parent_id is None and kp.direction_id is not None:
+    next_parent_id = data.parent_id if "parent_id" in data.model_fields_set else kp.parent_id
+    if (data.name is not None or "parent_id" in data.model_fields_set) and next_parent_id is None and kp.direction_id is not None:
+        next_name = data.name.strip() if data.name is not None else kp.name
         direction = await service.get_direction(db, kp.direction_id, user=user, is_platform_admin=is_admin)
         if not direction:
             raise HTTPException(status_code=404, detail="Direction not found")
@@ -272,10 +274,19 @@ async def update_kp(kp_id: uuid.UUID, data: KnowledgePointUpdate, db: DB, user: 
             db,
             owner_id=kp.owner_id,
             major_id=direction.major_id,
-            name=data.name.strip(),
+            name=next_name,
             exclude_id=kp_id,
         ):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该专业下已存在同名主知识点")
+    if "parent_id" in data.model_fields_set:
+        parent = None
+        if data.parent_id is not None:
+            if data.parent_id == kp.id:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="不能移动到自身下")
+            parent = await _get_visible_kp_or_404(db, data.parent_id, user, is_admin)
+            if await service.is_descendant_knowledge_point(db, ancestor_id=kp.id, node_id=parent.id):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="不能移动到自己的下级知识点下")
+        kp = await service.reparent_knowledge_point(db, kp, parent)
     kp = await service.update_knowledge_point(db, kp, data)
     return {"id": str(kp.id), "name": kp.name, "owner_id": str(kp.owner_id), "visibility": kp.visibility.value}
 

@@ -481,7 +481,62 @@ async def update_knowledge_point(
     db: AsyncSession, kp: KnowledgePoint, data: KnowledgePointUpdate
 ) -> KnowledgePoint:
     for key, value in data.model_dump(exclude_unset=True).items():
+        if key == "parent_id":
+            continue
         setattr(kp, key, value)
+    await db.commit()
+    await db.refresh(kp)
+    return kp
+
+
+async def is_descendant_knowledge_point(
+    db: AsyncSession, *, ancestor_id: uuid.UUID, node_id: uuid.UUID
+) -> bool:
+    """Return true when node_id is inside ancestor_id's descendant subtree."""
+
+    frontier = [ancestor_id]
+    visited: set[uuid.UUID] = set()
+    while frontier:
+        current_id = frontier.pop()
+        if current_id in visited:
+            continue
+        visited.add(current_id)
+        result = await db.execute(
+            select(KnowledgePoint.id).where(
+                KnowledgePoint.parent_id == current_id,
+                KnowledgePoint.deleted_at.is_(None),
+            )
+        )
+        child_ids = list(result.scalars().all())
+        if node_id in child_ids:
+            return True
+        frontier.extend(child_ids)
+    return False
+
+
+async def reparent_knowledge_point(
+    db: AsyncSession, kp: KnowledgePoint, parent: KnowledgePoint | None
+) -> KnowledgePoint:
+    """Move a knowledge point under a new parent and keep its subtree in one direction."""
+
+    kp.parent_id = parent.id if parent else None
+    if parent is not None:
+        target_direction_id = parent.direction_id
+        kp.direction_id = target_direction_id
+
+        async def _update_descendant_directions(node_id: uuid.UUID) -> None:
+            result = await db.execute(
+                select(KnowledgePoint).where(
+                    KnowledgePoint.parent_id == node_id,
+                    KnowledgePoint.deleted_at.is_(None),
+                )
+            )
+            for child in result.scalars().all():
+                child.direction_id = target_direction_id
+                await _update_descendant_directions(child.id)
+
+        await _update_descendant_directions(kp.id)
+
     await db.commit()
     await db.refresh(kp)
     return kp
@@ -742,7 +797,7 @@ _CATALOG_VL_PROMPT = """你是图书目录结构化助手。请仔细阅读用�
 5. 同一目录条目跨页出现时仅输出一次，不要重复。
 6. 不要编造目录中不存在的内容。
 7. 必须尽量完整提取当前图片中所有可见目录行，不要只输出每章前几个条目，也不要只输出示例或摘要。"""
-_CATALOG_SINGLE_IMAGE_TIMEOUT_SECONDS = 30.0
+_CATALOG_SINGLE_IMAGE_TIMEOUT_SECONDS = 75.0
 _CATALOG_VISION_MAX_CONCURRENCY = 4
 
 
@@ -753,6 +808,7 @@ async def _recognize_catalog_with_qwen_vl(images: list[str]) -> list[list[str]]:
 
     base_url = settings.qwen_base_url.rstrip("/")
     model_name = settings.qwen_vl_model_name
+    logger.info("Recognizing catalog image(s) with Qwen VL model=%s count=%s", model_name, len(images))
 
     content: list[dict[str, Any]] = [{"type": "text", "text": _CATALOG_VL_PROMPT}]
     for image in images:
@@ -820,6 +876,11 @@ async def _recognize_catalog_with_deepseek_vl(images: list[str]) -> list[list[st
 
     base_url = settings.deepseek_base_url.rstrip("/")
     model_name = settings.deepseek_model_name
+    if "vl" not in model_name.lower() and "vision" not in model_name.lower():
+        raise RuntimeError(
+            f"DeepSeek 视觉模型未配置，当前模型 {model_name} 不适合处理图片。"
+        )
+    logger.info("Recognizing catalog image(s) with DeepSeek VL model=%s count=%s", model_name, len(images))
 
     content: list[dict[str, Any]] = [{"type": "text", "text": _CATALOG_VL_PROMPT}]
     for image in images:
@@ -882,7 +943,7 @@ async def _recognize_catalog_with_deepseek_vl(images: list[str]) -> list[list[st
 
 def _is_provider_unavailable_error(exc: Exception) -> bool:
     message = str(exc)
-    return "API Key" in message or "暂不可用" in message
+    return "API Key" in message or "暂不可用" in message or "视觉模型未配置" in message
 
 
 def _is_catalog_excluded_segment(segment: str) -> bool:

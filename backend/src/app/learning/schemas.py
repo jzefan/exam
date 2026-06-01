@@ -70,6 +70,7 @@ class KnowledgePointCreate(BaseModel):
 
 
 class KnowledgePointUpdate(BaseModel):
+    parent_id: uuid.UUID | None = None
     name: str | None = Field(None, max_length=200)
     description: str | None = None
     tags: list[str] | None = None

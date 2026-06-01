@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { IUser } from "@/types";
+import { notifyAuthChanged } from "@/lib/active-user";
 import { AuthHeader, AuthShell } from "./auth-shell";
 
 interface ForceChangePasswordResponse {
@@ -129,6 +130,7 @@ export function StudentForceChangePasswordPage() {
           onClick={() => {
             localStorage.removeItem("access_token");
             localStorage.removeItem("user");
+            notifyAuthChanged();
             navigate("/login", { replace: true });
           }}
         >

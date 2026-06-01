@@ -41,7 +41,7 @@ describe("KnowledgeCatalogPhotoDialog", () => {
         onImport={onImport}
         onOpenChange={vi.fn()}
         onRecognize={onRecognize}
-        selectedDirectionName="数据结构"
+        selectedTargetName="数据结构"
       />,
     );
 
@@ -91,7 +91,7 @@ describe("KnowledgeCatalogPhotoDialog", () => {
         onImport={onImport}
         onOpenChange={vi.fn()}
         onRecognize={onRecognize}
-        selectedDirectionName="网络工程"
+        selectedTargetName="网络工程"
       />,
     );
 
@@ -110,5 +110,43 @@ describe("KnowledgeCatalogPhotoDialog", () => {
     expect(screen.getByText("当前方向下已存在同名主知识点，请换一个名称。")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "确认导入" })).toBeDisabled();
     expect(onImport).not.toHaveBeenCalled();
+  });
+
+  it("shows a readable timeout message for a single uploaded catalog image", async () => {
+    const user = userEvent.setup();
+    const onRecognize = vi
+      .fn()
+      .mockRejectedValue(new Error('{"detail":"第 1 张图片识别超时，请减少单次上传数量，或更换更清晰的图片后重试。"}'));
+    const onImport = vi.fn().mockResolvedValue(undefined);
+
+    extractCatalogPhotoImagesMock.mockResolvedValue([
+      {
+        id: "img-1",
+        name: "catalog.png",
+        src: "data:image/png;base64,ZmFrZQ==",
+      },
+    ]);
+
+    render(
+      <KnowledgeCatalogPhotoDialog
+        existingRootNames={[]}
+        open
+        onImport={onImport}
+        onOpenChange={vi.fn()}
+        onRecognize={onRecognize}
+        selectedTargetName="数据结构"
+      />,
+    );
+
+    const fileInput = document.querySelector('input[type="file"]');
+    expect(fileInput).not.toBeNull();
+
+    await user.upload(fileInput as HTMLInputElement, new File(["fake"], "catalog.png", { type: "image/png" }));
+    await user.click(screen.getByRole("button", { name: "开始识别" }));
+
+    expect(await screen.findByText("识别未完成")).toBeInTheDocument();
+    expect(screen.getByText("第 1 张图片识别超时，请更换更清晰的图片后重试。")).toBeInTheDocument();
+    expect(screen.queryByText(/减少单次上传数量/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/"detail"/)).not.toBeInTheDocument();
   });
 });

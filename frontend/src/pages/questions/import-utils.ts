@@ -38,10 +38,10 @@ export function buildStandardImportTemplate(): string {
 请严格按照以下格式填写题目，题目之间保留一个空行。
 
 难度映射：
-- 很容易 = 1
-- 容易 = 2
-- 一般 = 3
-- 困难 = 4
+- 容易 = 1
+- 较易 = 2
+- 中等 = 3
+- 较难 = 4
 - 很难 = 5
 
 [题型] 选择题
@@ -58,7 +58,7 @@ D. 深圳
 题目内容：请简述数据库事务的 ACID 特性。
 [答案] 原子性、一致性、隔离性、持久性。
 [解析] ACID 是数据库事务的四个核心特性。
-[难度] 一般
+[难度] 中等
 `;
 }
 
@@ -713,7 +713,8 @@ export const RAW_TEXT_MAX_CHARS = 1_000_000;
 export const IMAGES_MAX_COUNT = 500;
 
 const DIFFICULTY_MAP: Record<string, number> = {
-  "很容易": 1, "容易": 2, "一般": 3, "困难": 4, "很难": 5,
+  "容易": 1, "较易": 2, "中等": 3, "较难": 4, "很难": 5,
+  "很容易": 1, "一般": 3, "困难": 4,
   "1": 1, "2": 2, "3": 3, "4": 4, "5": 5,
 };
 
@@ -735,7 +736,7 @@ function normalizeChineseLabel(line: string, label: string): string | null {
 }
 
 function parseDifficulty(text: string): number {
-  return DIFFICULTY_MAP[text] ?? 3; // default 一般
+  return DIFFICULTY_MAP[text] ?? 3; // default 中等
 }
 
 function parseType(text: string): QuestionType {

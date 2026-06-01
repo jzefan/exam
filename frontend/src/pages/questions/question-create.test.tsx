@@ -1,4 +1,5 @@
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 import { render, screen } from "@/test/test-utils";
@@ -14,6 +15,7 @@ const { mutateMock, navigateMock, useCreateMock, useListMock } = vi.hoisted(() =
 
 vi.mock("@refinedev/core", () => ({
   useCreate: () => useCreateMock(),
+  useGetIdentity: () => ({ data: null }),
   useList: (...args: unknown[]) => useListMock(...args),
 }));
 
@@ -110,7 +112,11 @@ describe("QuestionCreate", () => {
 
   it("defaults code questions to program mode and submits program content", async () => {
     const user = userEvent.setup();
-    render(<QuestionCreate />);
+    render(
+      <MemoryRouter>
+        <QuestionCreate />
+      </MemoryRouter>,
+    );
 
     const selects = screen.getAllByLabelText("select");
     await user.selectOptions(selects[0], "code");
@@ -143,6 +149,44 @@ describe("QuestionCreate", () => {
         }),
       }),
       expect.any(Object),
+    );
+  });
+
+  it("keeps the originating course knowledge node as create context", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: "/questions/create",
+            state: {
+              courseKpId: "node-1",
+              successTo: "/courses/course-1?tab=knowledge&node_id=node-1",
+            },
+          },
+        ]}
+      >
+        <QuestionCreate />
+      </MemoryRouter>,
+    );
+
+    await user.selectOptions(screen.getAllByLabelText("select")[0], "code");
+    await user.type(screen.getByLabelText("输入题目内容..."), "测试题目");
+    await user.click(screen.getByRole("button", { name: "创建题目" }));
+
+    expect(mutateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        values: expect.objectContaining({
+          knowledge_point_ids: ["node-1"],
+        }),
+      }),
+      expect.any(Object),
+    );
+
+    const [, options] = mutateMock.mock.calls[0];
+    (options as { onSuccess: () => void }).onSuccess();
+    expect(navigateMock).toHaveBeenCalledWith(
+      "/courses/course-1?tab=knowledge&node_id=node-1",
     );
   });
 });

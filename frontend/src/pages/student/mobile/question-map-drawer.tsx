@@ -42,13 +42,13 @@ export function QuestionMapDrawer({
     <Drawer.Root open={open} onOpenChange={onOpenChange} dismissible>
       <Drawer.Portal>
         <Drawer.Overlay className="fixed inset-0 z-40 bg-black/40" />
-        <Drawer.Content className="fixed bottom-0 left-0 right-0 z-50 flex max-h-[70vh] flex-col rounded-t-2xl bg-background outline-none">
+        <Drawer.Content className="fixed bottom-0 left-0 right-0 z-50 flex max-h-[70vh] w-screen max-w-[100vw] flex-col overflow-hidden rounded-t-2xl bg-background outline-none">
           <div className="mx-auto mt-3 h-1 w-12 shrink-0 rounded-full bg-muted" />
-          <div className="flex items-center justify-between px-4 py-3 border-b border-border/50">
-            <Drawer.Title className="text-sm font-semibold">题目导航</Drawer.Title>
+          <div className="flex min-w-0 items-center justify-between gap-3 border-b border-border/50 px-4 py-3">
+            <Drawer.Title className="min-w-0 text-sm font-semibold">题目导航</Drawer.Title>
             {firstUnanswered >= 0 && (
               <button
-                className="text-xs text-primary hover:underline"
+                className="shrink-0 text-xs text-primary hover:underline"
                 onClick={() => {
                   onSelectQuestion(firstUnanswered);
                   onOpenChange(false);
@@ -58,8 +58,8 @@ export function QuestionMapDrawer({
               </button>
             )}
           </div>
-          <div className="overflow-y-auto p-4" style={{ overscrollBehavior: "contain" }}>
-            <div className="grid grid-cols-5 gap-2">
+          <div className="min-w-0 overflow-y-auto overflow-x-hidden p-4" style={{ overscrollBehavior: "contain" }}>
+            <div className="grid min-w-0 grid-cols-4 gap-2 min-[430px]:grid-cols-5">
               {questions.map((q, index) => {
                 const answered = isAnswered(answers[q.question_id]);
                 const isCurrent = index === currentIndex;
@@ -67,7 +67,7 @@ export function QuestionMapDrawer({
                   <button
                     key={q.question_id}
                     className={cn(
-                      "flex flex-col items-center gap-0.5 rounded-lg border p-1.5 text-center transition-colors",
+                      "flex min-w-0 flex-col items-center gap-0.5 rounded-lg border p-1.5 text-center transition-colors",
                       isCurrent && "border-primary bg-primary/10",
                       !isCurrent && answered && "border-emerald-300 bg-emerald-50 dark:border-emerald-700 dark:bg-emerald-950",
                       !isCurrent && !answered && "border-border bg-muted/30",

@@ -5,6 +5,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Sun, Moon, Monitor, Settings2, RotateCcw, Maximize, AlignCenter } from "lucide-react";
 import { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
+import { AUTH_CHANGED_EVENT, getActiveUserId } from "@/lib/active-user";
 
 /* ------------------------------------------------------------------ */
 /*  Color theme definitions                                            */
@@ -21,7 +22,11 @@ interface ColorTheme {
 }
 
 const colorThemes: ColorTheme[] = [
-  { name: "zinc", label: "锌灰", activeColor: "hsl(240 5.9% 10%)", cssVars: { 
+  { name: "beige", label: "暖米", activeColor: "hsl(28 28% 32%)", cssVars: {
+    light: { "--primary": "28 28% 32%", "--primary-foreground": "40 33% 96%", "--ring": "28 28% 32%", "--accent": "40 30% 93%", "--accent-foreground": "28 28% 32%" },
+    dark: { "--primary": "40 33% 90%", "--primary-foreground": "28 28% 16%", "--ring": "40 25% 72%", "--accent": "30 18% 18%", "--accent-foreground": "40 33% 90%" }
+  }},
+  { name: "zinc", label: "锌灰", activeColor: "hsl(240 5.9% 10%)", cssVars: {
     light: { "--primary": "240 5.9% 10%", "--primary-foreground": "0 0% 98%", "--ring": "240 5.9% 10%", "--accent": "240 4.8% 95.9%", "--accent-foreground": "240 5.9% 10%" },
     dark: { "--primary": "0 0% 98%", "--primary-foreground": "240 5.9% 10%", "--ring": "240 4.9% 83.9%", "--accent": "240 3.7% 15.9%", "--accent-foreground": "0 0% 98%" }
   }},
@@ -77,6 +82,43 @@ interface ThemeConfigContextValue {
 
 const defaultConfig: ThemeConfig = { color: "blue", radius: 0.5, layout: "full" };
 
+// Per-user storage so a new user on a shared browser starts on the default
+// (blue) theme instead of inheriting whoever customized it last.
+const CONFIG_KEY_PREFIX = "theme-config:";
+const LEGACY_CONFIG_KEY = "theme-config";
+
+function configKey(userId: string): string {
+  return `${CONFIG_KEY_PREFIX}${userId}`;
+}
+
+function loadConfig(userId: string): ThemeConfig {
+  const keyed = localStorage.getItem(configKey(userId));
+  if (keyed) {
+    try {
+      return { ...defaultConfig, ...JSON.parse(keyed) };
+    } catch {
+      return defaultConfig;
+    }
+  }
+  // One-time migration: a logged-in user who customized before per-user scoping
+  // keeps that choice under their own key. Removing the shared legacy key means
+  // the next different user on this browser starts on the default.
+  if (userId !== "guest") {
+    const legacy = localStorage.getItem(LEGACY_CONFIG_KEY);
+    if (legacy) {
+      try {
+        const migrated = { ...defaultConfig, ...JSON.parse(legacy) };
+        localStorage.removeItem(LEGACY_CONFIG_KEY);
+        localStorage.setItem(configKey(userId), JSON.stringify(migrated));
+        return migrated;
+      } catch {
+        // Ignore a corrupt legacy value and fall through to the default.
+      }
+    }
+  }
+  return defaultConfig;
+}
+
 const ThemeConfigContext = createContext<ThemeConfigContextValue>({
   config: defaultConfig,
   setColor: () => {},
@@ -91,25 +133,37 @@ export function useThemeConfig() {
 
 export function ThemeConfigProvider({ children }: { children: React.ReactNode }) {
   const { resolved } = useTheme();
-  const [config, setConfig] = useState<ThemeConfig>(() => {
-    const saved = localStorage.getItem("theme-config");
-    if (saved) {
-      try {
-        return { ...defaultConfig, ...JSON.parse(saved) };
-      } catch {
-        return defaultConfig;
-      }
-    }
-    return defaultConfig;
-  });
+  const [userId, setUserId] = useState<string>(() => getActiveUserId());
+  const [config, setConfig] = useState<ThemeConfig>(() => loadConfig(getActiveUserId()));
+
+  // Reload this browser's preference for whoever just logged in / out.
+  useEffect(() => {
+    const onAuthChanged = () => {
+      const nextUserId = getActiveUserId();
+      setUserId(nextUserId);
+      setConfig(loadConfig(nextUserId));
+    };
+    window.addEventListener(AUTH_CHANGED_EVENT, onAuthChanged);
+    return () => window.removeEventListener(AUTH_CHANGED_EVENT, onAuthChanged);
+  }, []);
 
   const applyConfig = useCallback((cfg: ThemeConfig, mode: "light" | "dark") => {
     const root = document.documentElement;
-    
+
     // 1. Apply Radius
     root.style.setProperty("--radius", `${cfg.radius}rem`);
 
-    // 2. Apply Theme Colors
+    // 2. Clear any vars set by a previous theme so palettes don't leak when switching.
+    const knownKeys = new Set<string>();
+    for (const t of colorThemes) {
+      for (const key of Object.keys(t.cssVars.light)) knownKeys.add(key);
+      for (const key of Object.keys(t.cssVars.dark)) knownKeys.add(key);
+    }
+    for (const key of knownKeys) {
+      root.style.removeProperty(key);
+    }
+
+    // 3. Apply Theme Colors
     const theme = colorThemes.find((t) => t.name === cfg.color);
     if (theme) {
       const vars = mode === "dark" ? theme.cssVars.dark : theme.cssVars.light;
@@ -121,8 +175,8 @@ export function ThemeConfigProvider({ children }: { children: React.ReactNode })
 
   useEffect(() => {
     applyConfig(config, resolved);
-    localStorage.setItem("theme-config", JSON.stringify(config));
-  }, [config, resolved, applyConfig]);
+    localStorage.setItem(configKey(userId), JSON.stringify(config));
+  }, [config, userId, resolved, applyConfig]);
 
   const setColor = (color: string) => setConfig((prev) => ({ ...prev, color }));
   const setRadius = (radius: number) => setConfig((prev) => ({ ...prev, radius }));

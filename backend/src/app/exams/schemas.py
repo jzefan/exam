@@ -87,6 +87,8 @@ class ExamCreate(BaseModel):
     show_result: bool = True
     notes_template: str | None = None
     question_mode: ExamQuestionMode | None = None
+    course_kp_id: uuid.UUID | None = None
+    course_semester_id: uuid.UUID | None = None
     question_ids: list[uuid.UUID] = Field(default_factory=list)
     question_items: list[ExamQuestionItem] = Field(default_factory=list)
     student_ids: list[uuid.UUID] = Field(default_factory=list)

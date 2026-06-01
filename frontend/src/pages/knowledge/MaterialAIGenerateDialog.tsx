@@ -38,7 +38,7 @@ import { validateTypeAllocation } from "@/pages/questions/ai-generate-utils";
 import { useToast } from "@/hooks/use-toast";
 import type { QuestionType } from "@/types";
 
-const COURSE_QUESTION_BANK_NAME = "课程题库";
+const DEFAULT_TARGET_QUESTION_BANK_NAME = "主知识对应题库";
 
 type TypeAllocation = Record<QuestionType, number>;
 
@@ -101,6 +101,7 @@ export interface MaterialAIGenerateDialogProps {
   materialTitle: string;
   materialSourceText: string;
   materialImages: string[];
+  targetQuestionBankName?: string;
   /** 触发刷新相关题目列表 */
   onSaved?: () => void;
 }
@@ -114,6 +115,7 @@ export function MaterialAIGenerateDialog({
   materialTitle,
   materialSourceText,
   materialImages,
+  targetQuestionBankName = DEFAULT_TARGET_QUESTION_BANK_NAME,
   onSaved,
 }: MaterialAIGenerateDialogProps) {
   const navigate = useNavigate();
@@ -348,7 +350,7 @@ export function MaterialAIGenerateDialog({
       const saveOutcome = await buildAndSaveSelectedQuestions("保存失败");
       if (!saveOutcome) return;
 
-      toast({ title: `已保存 ${saveOutcome.selected.length} 道题目到「${COURSE_QUESTION_BANK_NAME}」` });
+      toast({ title: `已保存 ${saveOutcome.selected.length} 道题目到「${targetQuestionBankName}」` });
       onSaved?.();
       onOpenChange(false);
     } catch {
@@ -356,7 +358,7 @@ export function MaterialAIGenerateDialog({
     } finally {
       setIsSaving(false);
     }
-  }, [buildAndSaveSelectedQuestions, onOpenChange, onSaved, toast]);
+  }, [buildAndSaveSelectedQuestions, onOpenChange, onSaved, targetQuestionBankName, toast]);
 
   const handleGeneratedAssignmentSubmit = useCallback(async ({
     title,
@@ -439,7 +441,7 @@ export function MaterialAIGenerateDialog({
         <DialogHeader className="border-b border-border/60 px-6 py-3">
           <DialogTitle className="text-base">基于学习资料智能出题</DialogTitle>
           <DialogDescription className="text-xs">
-            题目将自动归入「{COURSE_QUESTION_BANK_NAME}」，并关联到当前知识点。若资料含图片/版面信息，将优先使用多模态模型理解内容。
+            题目将自动归入「{targetQuestionBankName}」，并关联到当前知识点。若资料含图片/版面信息，将优先使用多模态模型理解内容。
           </DialogDescription>
         </DialogHeader>
 
@@ -664,7 +666,7 @@ export function MaterialAIGenerateDialog({
               disabled={isSaving || isGenerating || selectedCount === 0}
             >
               {isSaving && <Loader2 size={14} className="animate-spin" />}
-              保存到「{COURSE_QUESTION_BANK_NAME}」
+              保存到「{targetQuestionBankName}」
             </Button>
           </div>
         </DialogFooter>

@@ -62,6 +62,8 @@ const QuestionImportPage = lazyNamed(() => import("./pages/questions/import"), "
 const AIGeneratePage = lazyNamed(() => import("./pages/questions/ai-generate"), "AIGeneratePage");
 const Dashboard = lazyNamed(() => import("./pages/dashboard"), "Dashboard");
 const KnowledgeManagementPage = lazyNamed(() => import("./pages/knowledge"), "KnowledgeManagementPage");
+const CourseListPage = lazyNamed(() => import("./pages/courses/list"), "CourseListPage");
+const CourseDetailPage = lazyNamed(() => import("./pages/courses/detail"), "CourseDetailPage");
 const MyExams = lazyNamed(() => import("./pages/student/my-exams"), "MyExams");
 const WrongAnswers = lazyNamed(() => import("./pages/student/wrong-answers"), "WrongAnswers");
 const WrongAnswerDetailPage = lazyNamed(
@@ -192,6 +194,11 @@ function App() {
                 meta: { label: "知识点管理" },
               },
               {
+                name: "courses",
+                list: "/courses",
+                meta: { label: "我的课程" },
+              },
+              {
                 name: "job-models",
                 list: "/gwmx/job-models",
                 meta: { label: "职位模型管理" },
@@ -288,6 +295,10 @@ function App() {
                       <Route index element={<PaperListPage />} />
                       <Route path="import" element={<PaperImportPage />} />
                       <Route path=":id" element={<PaperDetailPage />} />
+                    </Route>
+                    <Route path="/courses">
+                      <Route index element={<CourseListPage />} />
+                      <Route path=":id" element={<CourseDetailPage />} />
                     </Route>
                     <Route path="/tags" element={<TagList />} />
                     <Route path="/knowledge" element={<KnowledgeManagementPage />} />

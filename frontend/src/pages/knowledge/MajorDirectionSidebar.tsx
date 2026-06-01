@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type DragEvent } from "react";
 import {
   ArrowLeftRight,
   ChevronDown,
@@ -26,6 +26,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { formatMajorName } from "@/lib/knowledge-display";
 import { cn } from "@/lib/utils";
 import type { IDirection, IKnowledgePointDetail, IMajor, IRootKnowledgePointOption } from "./types";
 
@@ -48,6 +49,11 @@ interface Props {
   onDeleteDirection: (direction: IDirection) => void;
   onEditRootKnowledge: (knowledge: IKnowledgePointDetail | IRootKnowledgePointOption) => void;
   onDeleteRootKnowledge: (knowledge: IKnowledgePointDetail | IRootKnowledgePointOption) => void;
+  onMoveRootKnowledge: (
+    source: IKnowledgePointDetail | IRootKnowledgePointOption,
+    target: IKnowledgePointDetail | IRootKnowledgePointOption,
+  ) => void;
+  onSelectMajor: (major: IMajor) => void;
 }
 
 const DEFAULT_DIRECTION_NAMES = new Set(["通用", "默认方向"]);
@@ -82,12 +88,16 @@ export function MajorDirectionSidebar({
   onDeleteDirection,
   onEditRootKnowledge,
   onDeleteRootKnowledge,
+  onMoveRootKnowledge,
+  onSelectMajor,
 }: Props) {
   const [expandedMajorIds, setExpandedMajorIds] = useState<Set<string>>(
     () => new Set(majors[0]?.id ? [majors[0].id] : []),
   );
   const [viewMode, setViewMode] = useState<SidebarViewMode>("major");
   const [query, setQuery] = useState("");
+  const [draggingRootKnowledgeId, setDraggingRootKnowledgeId] = useState<string | null>(null);
+  const [dropTargetRootKnowledgeId, setDropTargetRootKnowledgeId] = useState<string | null>(null);
 
   const normalizedQuery = query.trim().toLowerCase();
   const isDirectionMode = viewMode === "direction";
@@ -106,10 +116,32 @@ export function MajorDirectionSidebar({
     return null;
   }, [getDirections, getMajorRootKnowledgePoints, majors, selectedDirectionId, selectedRootKnowledgeId]);
 
+  const majorRootKnowledgeById = useMemo(() => {
+    const map = new Map<string, IRootKnowledgePointOption>();
+    for (const major of majors) {
+      for (const knowledge of getMajorRootKnowledgePoints(major.id)) {
+        map.set(knowledge.id, knowledge);
+      }
+    }
+    return map;
+  }, [getMajorRootKnowledgePoints, majors]);
+
+  const rootKnowledgeById = useMemo(() => {
+    const map = new Map<string, IKnowledgePointDetail>();
+    for (const major of majors) {
+      for (const direction of getDirections(major.id)) {
+        for (const knowledge of getRootKnowledgePoints(direction.id)) {
+          map.set(knowledge.id, knowledge);
+        }
+      }
+    }
+    return map;
+  }, [getDirections, getRootKnowledgePoints, majors]);
+
   const visibleMajors = useMemo(() => {
     if (!normalizedQuery) return majors;
     return majors.filter((major) => {
-      if (matchesQuery(major.name, normalizedQuery)) return true;
+      if (matchesQuery(major.name, normalizedQuery) || matchesQuery(formatMajorName(major.name), normalizedQuery)) return true;
       if (getMajorRootKnowledgePoints(major.id).some((k) => matchesQuery(k.name, normalizedQuery))) return true;
       if (getDirections(major.id).some((d) => matchesQuery(d.name, normalizedQuery))) return true;
       return false;
@@ -126,6 +158,27 @@ export function MajorDirectionSidebar({
       else next.add(id);
       return next;
     });
+  };
+
+  const handleRootKnowledgeDrop = (
+    event: DragEvent,
+    target: IKnowledgePointDetail | IRootKnowledgePointOption,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const sourceId = event.dataTransfer.getData("application/x-knowledge-root-id") || draggingRootKnowledgeId;
+    setDropTargetRootKnowledgeId(null);
+    setDraggingRootKnowledgeId(null);
+    if (!sourceId || sourceId === target.id) {
+      return;
+    }
+    const source =
+      rootKnowledgeById.get(sourceId) ??
+      majorRootKnowledgeById.get(sourceId);
+    if (!source) {
+      return;
+    }
+    onMoveRootKnowledge(source, target);
   };
 
   return (
@@ -194,7 +247,10 @@ export function MajorDirectionSidebar({
 
             const filteredRoots = normalizedQuery
               ? majorRoots.filter(
-                  (k) => matchesQuery(k.name, normalizedQuery) || matchesQuery(major.name, normalizedQuery),
+                  (k) =>
+                    matchesQuery(k.name, normalizedQuery) ||
+                    matchesQuery(major.name, normalizedQuery) ||
+                    matchesQuery(formatMajorName(major.name), normalizedQuery),
                 )
               : majorRoots;
 
@@ -203,6 +259,7 @@ export function MajorDirectionSidebar({
                   (d) =>
                     matchesQuery(d.name, normalizedQuery) ||
                     matchesQuery(major.name, normalizedQuery) ||
+                    matchesQuery(formatMajorName(major.name), normalizedQuery) ||
                     getRootKnowledgePoints(d.id).some((k) => matchesQuery(k.name, normalizedQuery)),
                 )
               : directions;
@@ -215,7 +272,10 @@ export function MajorDirectionSidebar({
                       <button
                         aria-expanded={expanded}
                         className="-mx-2 flex min-w-0 flex-1 items-center gap-1.5 truncate px-2 py-0.5 text-left focus:outline-none"
-                        onClick={() => toggleMajor(major.id)}
+                        onClick={() => {
+                          onSelectMajor(major);
+                          toggleMajor(major.id);
+                        }}
                         type="button"
                       >
                         {expanded ? (
@@ -224,7 +284,7 @@ export function MajorDirectionSidebar({
                           <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                         )}
                         <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-                          {major.name}
+                          {formatMajorName(major.name)}
                         </span>
                       </button>
                       <DropdownMenu>
@@ -286,7 +346,34 @@ export function MajorDirectionSidebar({
                               className={cn(
                                 ROW_BASE,
                                 isSelected ? ROW_SELECTED : cn(ROW_HOVER, "text-foreground/80"),
+                                draggingRootKnowledgeId === knowledge.id && "opacity-50",
+                                dropTargetRootKnowledgeId === knowledge.id &&
+                                  draggingRootKnowledgeId !== knowledge.id &&
+                                  "bg-primary/10 ring-1 ring-primary/40",
                               )}
+                              draggable
+                              onDragEnd={() => {
+                                setDraggingRootKnowledgeId(null);
+                                setDropTargetRootKnowledgeId(null);
+                              }}
+                              onDragOver={(event) => {
+                                if (draggingRootKnowledgeId && draggingRootKnowledgeId !== knowledge.id) {
+                                  event.preventDefault();
+                                  setDropTargetRootKnowledgeId(knowledge.id);
+                                }
+                              }}
+                              onDragLeave={() => {
+                                if (dropTargetRootKnowledgeId === knowledge.id) {
+                                  setDropTargetRootKnowledgeId(null);
+                                }
+                              }}
+                              onDragStart={(event) => {
+                                setDraggingRootKnowledgeId(knowledge.id);
+                                event.dataTransfer.effectAllowed = "move";
+                                event.dataTransfer.setData("application/x-knowledge-root-id", knowledge.id);
+                                event.dataTransfer.setData("text/plain", knowledge.name);
+                              }}
+                              onDrop={(event) => handleRootKnowledgeDrop(event, knowledge)}
                               onClick={() => onSelectRootKnowledge(knowledge.direction_id, knowledge.id)}
                               type="button"
                             >
@@ -427,7 +514,34 @@ export function MajorDirectionSidebar({
                                                 isKSelected
                                                   ? ROW_SELECTED
                                                   : cn(ROW_HOVER, "text-foreground/75"),
+                                                draggingRootKnowledgeId === knowledge.id && "opacity-50",
+                                                dropTargetRootKnowledgeId === knowledge.id &&
+                                                  draggingRootKnowledgeId !== knowledge.id &&
+                                                  "bg-primary/10 ring-1 ring-primary/40",
                                               )}
+                                              draggable
+                                              onDragEnd={() => {
+                                                setDraggingRootKnowledgeId(null);
+                                                setDropTargetRootKnowledgeId(null);
+                                              }}
+                                              onDragOver={(event) => {
+                                                if (draggingRootKnowledgeId && draggingRootKnowledgeId !== knowledge.id) {
+                                                  event.preventDefault();
+                                                  setDropTargetRootKnowledgeId(knowledge.id);
+                                                }
+                                              }}
+                                              onDragLeave={() => {
+                                                if (dropTargetRootKnowledgeId === knowledge.id) {
+                                                  setDropTargetRootKnowledgeId(null);
+                                                }
+                                              }}
+                                              onDragStart={(event) => {
+                                                setDraggingRootKnowledgeId(knowledge.id);
+                                                event.dataTransfer.effectAllowed = "move";
+                                                event.dataTransfer.setData("application/x-knowledge-root-id", knowledge.id);
+                                                event.dataTransfer.setData("text/plain", knowledge.name);
+                                              }}
+                                              onDrop={(event) => handleRootKnowledgeDrop(event, knowledge)}
                                               onClick={() =>
                                                 onSelectRootKnowledge(direction.id, knowledge.id)
                                               }

@@ -1439,16 +1439,19 @@ def _normalize_difficulty(value: str | None) -> int:
         "容易": 1,
         "简单": 1,
         "较易": 2,
-        "一般": 3,
         "中等": 3,
+        "一般": 3,
         "较难": 4,
-        "困难": 5,
+        "困难": 4,
         "很难": 5,
     }
     template_labels = {
         "很容易": 1,
-        "容易": 2,
+        "容易": 1,
+        "较易": 2,
+        "中等": 3,
         "一般": 3,
+        "较难": 4,
         "困难": 4,
         "很难": 5,
     }
@@ -3333,17 +3336,73 @@ async def get_or_create_named_private_question_bank(
     return bank
 
 
+def root_knowledge_question_bank_name(root_name: str) -> str:
+    suffix = "-题库"
+    normalized = root_name.strip() or "主知识"
+    return f"{normalized[: 200 - len(suffix)]}{suffix}"
+
+
+async def get_root_knowledge_point(
+    db: AsyncSession,
+    knowledge_point_id: uuid.UUID,
+) -> KnowledgePoint | None:
+    current = await db.get(KnowledgePoint, knowledge_point_id)
+    if current is None or current.deleted_at is not None:
+        return None
+    while current.parent_id is not None:
+        parent = await db.get(KnowledgePoint, current.parent_id)
+        if parent is None or parent.deleted_at is not None:
+            break
+        current = parent
+    return current
+
+
+async def get_root_knowledge_point_for_questions(
+    db: AsyncSession,
+    questions: list[QuestionCreate],
+) -> KnowledgePoint | None:
+    for question in questions:
+        for knowledge_point_id in question.knowledge_point_ids:
+            root = await get_root_knowledge_point(db, knowledge_point_id)
+            if root is not None:
+                return root
+    return None
+
+
+async def get_or_create_root_knowledge_question_bank(
+    db: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    root_knowledge_point: KnowledgePoint,
+) -> QuestionBank:
+    root_name = root_knowledge_point.name.strip()
+    return await get_or_create_named_private_question_bank(
+        db,
+        user_id=user_id,
+        name=root_knowledge_question_bank_name(root_name),
+        description=f"「{root_name}」主知识关联的智能出题结果",
+    )
+
+
 async def save_generated_questions_to_default_course_bank(
     db: AsyncSession,
     questions: list[QuestionCreate],
     user_id: uuid.UUID,
 ) -> BulkCreateQuestionsResult:
-    bank = await get_or_create_named_private_question_bank(
-        db,
-        user_id=user_id,
-        name="课程题库",
-        description="课程学习资料关联的智能出题结果",
-    )
+    root_knowledge_point = await get_root_knowledge_point_for_questions(db, questions)
+    if root_knowledge_point is None:
+        bank = await get_or_create_named_private_question_bank(
+            db,
+            user_id=user_id,
+            name="课程题库",
+            description="课程学习资料关联的智能出题结果",
+        )
+    else:
+        bank = await get_or_create_root_knowledge_question_bank(
+            db,
+            user_id=user_id,
+            root_knowledge_point=root_knowledge_point,
+        )
     scoped_questions = [
         question.model_copy(update={"question_bank_id": bank.id})
         for question in questions

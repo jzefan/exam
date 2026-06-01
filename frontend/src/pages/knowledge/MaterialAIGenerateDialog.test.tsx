@@ -85,6 +85,13 @@ describe("MaterialAIGenerateDialog", () => {
       </MemoryRouter>,
     );
 
+  it("describes the generated question target as the root knowledge bank", () => {
+    renderDialog();
+
+    expect(screen.getByText(/题目将自动归入「主知识对应题库」/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存到「主知识对应题库」" })).toBeInTheDocument();
+  });
+
   it("enables 生成作业 after generation and creates practice assignment from selected questions", async () => {
     const user = userEvent.setup();
     const onSaved = vi.fn();

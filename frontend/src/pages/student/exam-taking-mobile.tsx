@@ -73,7 +73,7 @@ export function ExamTakingMobile({
 
   return (
     <div
-      className="fixed inset-0 flex flex-col bg-background overflow-hidden"
+      className="fixed inset-0 flex w-screen max-w-[100vw] flex-col overflow-hidden bg-background"
       style={{ touchAction: "pan-y" }}
     >
       {switchWarning && (

@@ -1,6 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useCreate, useGetIdentity, useList, useOne, useUpdate } from "@refinedev/core";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import {
+  useCreate,
+  useGetIdentity,
+  useList,
+  useOne,
+  useUpdate,
+} from "@refinedev/core";
+import {
+  useLocation,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 import {
   ArrowRight,
   BookCopy,
@@ -16,7 +27,10 @@ import {
 import { AIQuestionConfigPanel } from "@/components/questions/ai-question-config-panel";
 import { type AIModelProvider } from "@/components/questions/ai-question-config-constants";
 import { AIGeneratedQuestionCard } from "@/components/questions/ai-generated-question-card";
-import { KnowledgePointSelector, type SelectedKnowledgePoint } from "@/components/questions/knowledge-point-selector";
+import {
+  KnowledgePointSelector,
+  type SelectedKnowledgePoint,
+} from "@/components/questions/knowledge-point-selector";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -38,11 +52,20 @@ import { apiRequest } from "@/pages/grading/api";
 import { getUserRole } from "@/types/rbac";
 import { AIGenerateLoadingOverlay } from "@/pages/questions/components/ai-generate-loading-overlay";
 import { validateTypeAllocation } from "@/pages/questions/ai-generate-utils";
-import type { IExamQuestion, IExamStudent, IQuestion, QuestionType } from "@/types";
+import type {
+  IExamQuestion,
+  IExamStudent,
+  IQuestion,
+  QuestionType,
+} from "@/types";
 
 import { QuestionSelector } from "./components/QuestionSelector";
 import { ClassStudentSelector } from "./components/ClassStudentSelector";
-import { getErrorMessage, getPublishedExamStatus, toSubmitDateTime } from "./components/exam-form-utils";
+import {
+  getErrorMessage,
+  getPublishedExamStatus,
+  toSubmitDateTime,
+} from "./components/exam-form-utils";
 
 type PracticeStepId = "knowledge" | "questions" | "students" | "publish";
 type QuestionMode = "manual" | "ai";
@@ -182,6 +205,14 @@ export function PracticeCreate() {
   const { id } = useParams<{ id?: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const navState = (location.state ?? {}) as {
+    backTo?: string;
+    backLabel?: string;
+    successTo?: string;
+    courseKpId?: string;
+    courseSemesterId?: string;
+  };
   const { toast } = useToast();
   const { mutate: create, mutation } = useCreate();
   const { mutate: update, mutation: updateMutation } = useUpdate();
@@ -193,9 +224,12 @@ export function PracticeCreate() {
   const isEditMode = Boolean(id);
   const seedPaperId = searchParams.get("paper_id");
   const seedKey = searchParams.get("seed_key");
-  const { data: identity } = useGetIdentity<{ primary_org?: { role_name: string } | null }>();
+  const { data: identity } = useGetIdentity<{
+    primary_org?: { role_name: string } | null;
+  }>();
   const role = identity ? getUserRole(identity) : "";
-  const mainKPLabel = role === "evaluator" ? "主技能点（可选）" : "课程（可选）";
+  const mainKPLabel =
+    role === "evaluator" ? "主技能点（可选）" : "课程（可选）";
   const mainKPTrigger = role === "evaluator" ? "选择主技能点" : "选择课程";
 
   const { result: practice, query: practiceQuery } = useOne<PracticeDetail>({
@@ -205,16 +239,26 @@ export function PracticeCreate() {
   });
 
   const [currentStep, setCurrentStep] = useState(0);
-  const [maxVisitedStep, setMaxVisitedStep] = useState(() => isEditMode ? stepItems.length - 1 : 0);
-  const [title, setTitle] = useState(() => (isEditMode ? "" : getDefaultPracticeTitle()));
+  const [maxVisitedStep, setMaxVisitedStep] = useState(() =>
+    isEditMode ? stepItems.length - 1 : 0,
+  );
+  const [title, setTitle] = useState(() =>
+    isEditMode ? "" : getDefaultPracticeTitle(),
+  );
   const [isTitleManuallyEdited, setIsTitleManuallyEdited] = useState(false);
   const [description, setDescription] = useState("");
-  const [mainKnowledgePoint, setMainKnowledgePoint] = useState<SelectedKnowledgePoint | null>(null);
-  const [selectedKnowledgePoints, setSelectedKnowledgePoints] = useState<SelectedKnowledgePoint[]>([]);
+  const [mainKnowledgePoint, setMainKnowledgePoint] =
+    useState<SelectedKnowledgePoint | null>(null);
+  const [selectedKnowledgePoints, setSelectedKnowledgePoints] = useState<
+    SelectedKnowledgePoint[]
+  >([]);
   const [questionMode, setQuestionMode] = useState<QuestionMode>("manual");
   const [questionIds, setQuestionIds] = useState<string[]>([]);
-  const [questionItems, setQuestionItems] = useState<PracticeQuestionItem[]>([]);
-  const [isManualQuestionFullscreen, setIsManualQuestionFullscreen] = useState(false);
+  const [questionItems, setQuestionItems] = useState<PracticeQuestionItem[]>(
+    [],
+  );
+  const [isManualQuestionFullscreen, setIsManualQuestionFullscreen] =
+    useState(false);
   const [studentIds, setStudentIds] = useState<string[]>([]);
   const [publicLinkEnabled, setPublicLinkEnabled] = useState(false);
   const [durationMinutes, setDurationMinutes] = useState(60);
@@ -228,17 +272,22 @@ export function PracticeCreate() {
 
   const [aiQuestionCount, setAIQuestionCount] = useState(10);
   const [aiDifficulty, setAIDifficulty] = useState(3);
-  const [aiTypeAlloc, setAITypeAlloc] = useState<Record<QuestionType, number>>(getDefaultAITypeAlloc);
+  const [aiTypeAlloc, setAITypeAlloc] = useState<Record<QuestionType, number>>(
+    getDefaultAITypeAlloc,
+  );
   const [aiModel, setAIModel] = useState<AIModelProvider>("deepseek");
   const [aiPrompt, setAIPrompt] = useState("");
   const [aiQuestions, setAIQuestions] = useState<GeneratedQuestion[]>([]);
   const [aiGenerating, setAIGenerating] = useState(false);
   const [aiApplying, setAIApplying] = useState(false);
-  const [persistedAIQuestionKeys, setPersistedAIQuestionKeys] = useState<string[]>([]);
+  const [persistedAIQuestionKeys, setPersistedAIQuestionKeys] = useState<
+    string[]
+  >([]);
 
   const currentStepId = stepItems[currentStep].id;
   const currentAIPersistKeys = useMemo(
-    () => aiQuestions.map((question) => getGeneratedQuestionPersistKey(question)),
+    () =>
+      aiQuestions.map((question) => getGeneratedQuestionPersistKey(question)),
     [aiQuestions],
   );
   const hasUnsavedGeneratedQuestions =
@@ -259,14 +308,22 @@ export function PracticeCreate() {
   const selectedQuestionQuery = useList<IQuestion>({
     resource: "questions",
     pagination: { currentPage: 1, pageSize: 500, mode: "server" },
-    filters: questionIds.length > 0 ? [{ field: "id", operator: "in" as const, value: questionIds }] : [],
+    filters:
+      questionIds.length > 0
+        ? [{ field: "id", operator: "in" as const, value: questionIds }]
+        : [],
     queryOptions: { enabled: questionIds.length > 0 },
   });
 
   const selectedQuestions = useMemo(
     () =>
       Array.from(
-        new Map((selectedQuestionQuery.query.data?.data ?? []).map((question) => [question.id, question])).values(),
+        new Map(
+          (selectedQuestionQuery.query.data?.data ?? []).map((question) => [
+            question.id,
+            question,
+          ]),
+        ).values(),
       ),
     [selectedQuestionQuery.query.data?.data],
   );
@@ -280,12 +337,18 @@ export function PracticeCreate() {
     pagination: { currentPage: 1, pageSize: 200, mode: "server" },
     filters: [
       { field: "category", operator: "eq" as const, value: "practice" },
-      { field: "title", operator: "contains" as const, value: todayPracticeTitlePrefix },
+      {
+        field: "title",
+        operator: "contains" as const,
+        value: todayPracticeTitlePrefix,
+      },
     ],
     queryOptions: { enabled: !isEditMode },
   });
   const suggestedPracticeTitle = useMemo(() => {
-    const existingTitles = (practiceTitleSuggestionQuery.query.data?.data ?? []).map((item) => item.title);
+    const existingTitles = (
+      practiceTitleSuggestionQuery.query.data?.data ?? []
+    ).map((item) => item.title);
     return getNextPracticeTitle(existingTitles);
   }, [practiceTitleSuggestionQuery.query.data?.data]);
 
@@ -302,15 +365,24 @@ export function PracticeCreate() {
       .map((question, index) => ({
         question_id: question.question_id,
         order: index,
-        score_override: question.score_override ?? question.question_score ?? null,
+        score_override:
+          question.score_override ?? question.question_score ?? null,
       }));
     setQuestionIds(orderedItems.map((item) => item.question_id));
     setQuestionItems(orderedItems);
     setStudentIds(practice.students.map((student) => student.student_id));
     setPublicLinkEnabled(false);
     setDurationMinutes(practice.duration_minutes ?? 60);
-    setScheduledStartTime(practice.start_time ? toLocalDateTimeValue(new Date(practice.start_time)) : "");
-    setEndTime(practice.end_time ? toLocalDateTimeValue(new Date(practice.end_time)) : "");
+    setScheduledStartTime(
+      practice.start_time
+        ? toLocalDateTimeValue(new Date(practice.start_time))
+        : "",
+    );
+    setEndTime(
+      practice.end_time
+        ? toLocalDateTimeValue(new Date(practice.end_time))
+        : "",
+    );
     setShowResult(practice.show_result ?? true);
     setAllowRetake(practice.allow_retake ?? false);
     setStartImmediately(false);
@@ -318,7 +390,12 @@ export function PracticeCreate() {
   }, [practice]);
 
   useEffect(() => {
-    if (!isEditMode || !hydratedExamRef.current || hydratedQuestionMetaRef.current || selectedQuestions.length === 0) {
+    if (
+      !isEditMode ||
+      !hydratedExamRef.current ||
+      hydratedQuestionMetaRef.current ||
+      selectedQuestions.length === 0
+    ) {
       return;
     }
 
@@ -329,7 +406,11 @@ export function PracticeCreate() {
           .flatMap((question) => question.knowledge_points ?? [])
           .map((knowledgePoint) => [
             knowledgePoint.id,
-            { id: knowledgePoint.id, name: knowledgePoint.name, path: knowledgePoint.name },
+            {
+              id: knowledgePoint.id,
+              name: knowledgePoint.name,
+              path: knowledgePoint.name,
+            },
           ]),
       ).values(),
     );
@@ -337,28 +418,32 @@ export function PracticeCreate() {
 
     if ((practice?.question_mode ?? questionMode) === "ai") {
       const nextAIQuestions = selectedQuestions.map((question, index) => ({
-          index,
-          type: question.type,
-          title: question.title ?? "",
-          content:
-            typeof question.content === "object" && question.content
-              ? (question.content as { text: string })
-              : { text: question.title ?? "" },
-          options:
-            question.options && typeof question.options === "object"
-              ? (question.options as Record<string, string>)
-              : null,
-          answer:
-            question.answer && typeof question.answer === "object"
-              ? (question.answer as { text?: string; correct?: string | boolean })
-              : {},
-          analysis: question.analysis ?? null,
-          difficulty: question.difficulty ?? 3,
-          selected: true,
-          persistedQuestionId: question.id,
-        }));
+        index,
+        type: question.type,
+        title: question.title ?? "",
+        content:
+          typeof question.content === "object" && question.content
+            ? (question.content as { text: string })
+            : { text: question.title ?? "" },
+        options:
+          question.options && typeof question.options === "object"
+            ? (question.options as Record<string, string>)
+            : null,
+        answer:
+          question.answer && typeof question.answer === "object"
+            ? (question.answer as { text?: string; correct?: string | boolean })
+            : {},
+        analysis: question.analysis ?? null,
+        difficulty: question.difficulty ?? 3,
+        selected: true,
+        persistedQuestionId: question.id,
+      }));
       setAIQuestions(nextAIQuestions);
-      setPersistedAIQuestionKeys(nextAIQuestions.map((question) => getGeneratedQuestionPersistKey(question)));
+      setPersistedAIQuestionKeys(
+        nextAIQuestions.map((question) =>
+          getGeneratedQuestionPersistKey(question),
+        ),
+      );
     }
   }, [isEditMode, practice?.question_mode, questionMode, selectedQuestions]);
 
@@ -379,7 +464,11 @@ export function PracticeCreate() {
   }, [questionIds, selectedQuestionMap]);
 
   const totalScore = useMemo(
-    () => questionItems.reduce((sum, item) => sum + (Number(item.score_override) || 0), 0),
+    () =>
+      questionItems.reduce(
+        (sum, item) => sum + (Number(item.score_override) || 0),
+        0,
+      ),
     [questionItems],
   );
 
@@ -486,10 +575,15 @@ export function PracticeCreate() {
       })
       .catch((error) => {
         if (cancelled) return;
-        setSubmitError(getErrorMessage(error, "无法读取试卷题目，请返回试卷列表重试。"));
+        setSubmitError(
+          getErrorMessage(error, "无法读取试卷题目，请返回试卷列表重试。"),
+        );
         toast({
           title: "试卷加载失败",
-          description: getErrorMessage(error, "无法读取试卷题目，请返回试卷列表重试。"),
+          description: getErrorMessage(
+            error,
+            "无法读取试卷题目，请返回试卷列表重试。",
+          ),
           variant: "destructive",
         });
       })
@@ -557,12 +651,15 @@ export function PracticeCreate() {
 
     if (stepId === "questions") {
       if (questionIds.length === 0) {
-        return questionMode === "manual" ? "请先选择题目。" : "请先生成练习题目。";
+        return questionMode === "manual"
+          ? "请先选择题目。"
+          : "请先生成练习题目。";
       }
     }
 
     if (stepId === "students") {
-      if (studentIds.length === 0 && !publicLinkEnabled) return "请选择班级/学生，或开启公开链接。";
+      if (studentIds.length === 0 && !publicLinkEnabled)
+        return "请选择班级/学生，或开启公开链接。";
     }
 
     if (stepId === "publish") {
@@ -637,82 +734,114 @@ export function PracticeCreate() {
     setCurrentStep((prev) => Math.max(prev - 1, 0));
   };
 
-  const persistAIQuestions = useCallback(async (
-    questions: GeneratedQuestion[],
-    options: { append?: boolean; showToast?: boolean } = {},
-  ): Promise<number> => {
-    if (questions.length === 0) {
-      setSubmitError("请至少生成一道 AI 题目。");
-      return 0;
-    }
-
-    setAIApplying(true);
-    setSubmitError(null);
-    try {
-      const banks = await apiRequest<Array<{ id: string; name: string }>>("/question-banks");
-      let bankId = banks.find((bank) => bank.name === "AI题库")?.id;
-      if (!bankId) {
-        const createdBank = await apiRequest<{ id: string }>("/question-banks", {
-          method: "POST",
-          body: JSON.stringify({ name: "AI题库", description: "AI 自动生成的练习题目" }),
-        });
-        bankId = createdBank.id;
+  const persistAIQuestions = useCallback(
+    async (
+      questions: GeneratedQuestion[],
+      options: { append?: boolean; showToast?: boolean } = {},
+    ): Promise<number> => {
+      if (questions.length === 0) {
+        setSubmitError("请至少生成一道 AI 题目。");
+        return 0;
       }
 
-      const createdQuestions = await Promise.all(
-        questions.map((question) =>
-          apiRequest<IQuestion>("/questions", {
-            method: "POST",
-            body: JSON.stringify({
-              type: question.type,
-              title: question.title || question.content.text.slice(0, 120),
-              content: question.content,
-              options: question.options,
-              answer: question.answer,
-              analysis: question.analysis,
-              difficulty: question.difficulty,
-              score: 10,
-              tag_ids: [],
-              knowledge_point_ids: selectedKnowledgePoints.map((item) => item.id),
-              question_bank_id: bankId,
+      setAIApplying(true);
+      setSubmitError(null);
+      try {
+        const banks =
+          await apiRequest<Array<{ id: string; name: string }>>(
+            "/question-banks",
+          );
+        let bankId = banks.find((bank) => bank.name === "AI题库")?.id;
+        if (!bankId) {
+          const createdBank = await apiRequest<{ id: string }>(
+            "/question-banks",
+            {
+              method: "POST",
+              body: JSON.stringify({
+                name: "AI题库",
+                description: "AI 自动生成的练习题目",
+              }),
+            },
+          );
+          bankId = createdBank.id;
+        }
+
+        const createdQuestions = await Promise.all(
+          questions.map((question) =>
+            apiRequest<IQuestion>("/questions", {
+              method: "POST",
+              body: JSON.stringify({
+                type: question.type,
+                title: question.title || question.content.text.slice(0, 120),
+                content: question.content,
+                options: question.options,
+                answer: question.answer,
+                analysis: question.analysis,
+                difficulty: question.difficulty,
+                score: 10,
+                tag_ids: [],
+                knowledge_point_ids: selectedKnowledgePoints.map(
+                  (item) => item.id,
+                ),
+                question_bank_id: bankId,
+              }),
             }),
-          }),
-        ),
-      );
+          ),
+        );
 
-      const nextQuestionIds = createdQuestions.map((question) => question.id);
-      setQuestionIds((prev) =>
-        options.append ? Array.from(new Set([...prev, ...nextQuestionIds])) : nextQuestionIds,
-      );
-      setAIQuestions((prev) =>
-        prev.map((question) => {
-          const createdQuestion = createdQuestions[questions.findIndex((item) => item.index === question.index)];
-          return createdQuestion ? { ...question, persistedQuestionId: createdQuestion.id, selected: true } : question;
-        }),
-      );
-      setPersistedAIQuestionKeys((prev) =>
-        Array.from(new Set([...prev, ...questions.map((question) => getGeneratedQuestionPersistKey(question))])),
-      );
-      if (options.showToast !== false) {
+        const nextQuestionIds = createdQuestions.map((question) => question.id);
+        setQuestionIds((prev) =>
+          options.append
+            ? Array.from(new Set([...prev, ...nextQuestionIds]))
+            : nextQuestionIds,
+        );
+        setAIQuestions((prev) =>
+          prev.map((question) => {
+            const createdQuestion =
+              createdQuestions[
+                questions.findIndex((item) => item.index === question.index)
+              ];
+            return createdQuestion
+              ? {
+                  ...question,
+                  persistedQuestionId: createdQuestion.id,
+                  selected: true,
+                }
+              : question;
+          }),
+        );
+        setPersistedAIQuestionKeys((prev) =>
+          Array.from(
+            new Set([
+              ...prev,
+              ...questions.map((question) =>
+                getGeneratedQuestionPersistKey(question),
+              ),
+            ]),
+          ),
+        );
+        if (options.showToast !== false) {
+          toast({
+            title: "AI 题目已加入练习",
+            description: `已加入 ${createdQuestions.length} 道题目。`,
+          });
+        }
+        return createdQuestions.length;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "加入练习失败";
+        setSubmitError(message);
         toast({
-          title: "AI 题目已加入练习",
-          description: `已加入 ${createdQuestions.length} 道题目。`,
+          title: "加入练习失败",
+          description: message,
+          variant: "destructive",
         });
+        return 0;
+      } finally {
+        setAIApplying(false);
       }
-      return createdQuestions.length;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "加入练习失败";
-      setSubmitError(message);
-      toast({
-        title: "加入练习失败",
-        description: message,
-        variant: "destructive",
-      });
-      return 0;
-    } finally {
-      setAIApplying(false);
-    }
-  }, [selectedKnowledgePoints, toast]);
+    },
+    [selectedKnowledgePoints, toast],
+  );
 
   const handleAIGenerate = useCallback(async () => {
     if (aiAllocationError) {
@@ -746,7 +875,10 @@ export function PracticeCreate() {
         body: JSON.stringify({
           total_count: aiQuestionCount,
           difficulty: aiDifficulty,
-          type_distribution: Object.keys(typeDistribution).length > 0 ? typeDistribution : undefined,
+          type_distribution:
+            Object.keys(typeDistribution).length > 0
+              ? typeDistribution
+              : undefined,
           knowledge_point_ids: selectedKnowledgePoints.map((item) => item.id),
           prompt: aiPrompt.trim() || undefined,
           model: aiModel,
@@ -774,7 +906,9 @@ export function PracticeCreate() {
         buffer = parts.pop() ?? "";
 
         for (const part of parts) {
-          const dataLine = part.split("\n").find((line) => line.startsWith("data:"));
+          const dataLine = part
+            .split("\n")
+            .find((line) => line.startsWith("data:"));
           if (!dataLine) continue;
 
           const event = JSON.parse(dataLine.replace(/^data:\s*/, ""));
@@ -783,7 +917,9 @@ export function PracticeCreate() {
               index: questionIndex++,
               type: event.data.type ?? "choice",
               title: event.data.title ?? "",
-              content: { text: event.data.content?.text ?? event.data.title ?? "" },
+              content: {
+                text: event.data.content?.text ?? event.data.title ?? "",
+              },
               options: event.data.options ?? null,
               answer: event.data.answer ?? {},
               analysis: event.data.analysis ?? null,
@@ -792,14 +928,22 @@ export function PracticeCreate() {
             };
             nextQuestions = [...nextQuestions, nextQuestion];
             setAIQuestions(nextQuestions);
-            persistPromises.push(persistAIQuestions([nextQuestion], { append: true, showToast: false }));
+            persistPromises.push(
+              persistAIQuestions([nextQuestion], {
+                append: true,
+                showToast: false,
+              }),
+            );
           } else if (event.type === "error") {
             throw new Error(event.message ?? "AI 出题失败");
           }
         }
       }
 
-      const persistedCount = (await Promise.all(persistPromises)).reduce((sum, count) => sum + count, 0);
+      const persistedCount = (await Promise.all(persistPromises)).reduce(
+        (sum, count) => sum + count,
+        0,
+      );
       if (persistedCount > 0) {
         toast({
           title: "AI 题目已加入练习",
@@ -820,7 +964,17 @@ export function PracticeCreate() {
       setAIGenerating(false);
       abortRef.current = null;
     }
-  }, [aiAllocationError, aiDifficulty, aiModel, aiPrompt, aiQuestionCount, aiTypeAlloc, persistAIQuestions, selectedKnowledgePoints, toast]);
+  }, [
+    aiAllocationError,
+    aiDifficulty,
+    aiModel,
+    aiPrompt,
+    aiQuestionCount,
+    aiTypeAlloc,
+    persistAIQuestions,
+    selectedKnowledgePoints,
+    toast,
+  ]);
 
   const stopAIGeneration = () => {
     abortRef.current?.abort();
@@ -828,9 +982,13 @@ export function PracticeCreate() {
 
   const removeAIQuestion = (index: number) => {
     const target = aiQuestions.find((question) => question.index === index);
-    setAIQuestions((prev) => prev.filter((question) => question.index !== index));
+    setAIQuestions((prev) =>
+      prev.filter((question) => question.index !== index),
+    );
     if (target?.persistedQuestionId) {
-      setQuestionIds((prev) => prev.filter((questionId) => questionId !== target.persistedQuestionId));
+      setQuestionIds((prev) =>
+        prev.filter((questionId) => questionId !== target.persistedQuestionId),
+      );
     }
   };
 
@@ -874,7 +1032,9 @@ export function PracticeCreate() {
     const onError = (error: unknown) => {
       const message = getErrorMessage(
         error,
-        isEditMode ? "保存练习失败，请稍后重试。" : "发布练习失败，请稍后重试。",
+        isEditMode
+          ? "保存练习失败，请稍后重试。"
+          : "发布练习失败，请稍后重试。",
       );
       setSubmitError(message);
       toast({
@@ -884,11 +1044,18 @@ export function PracticeCreate() {
       });
     };
 
-    const createPublicLink = async (examId: string, fallbackMessage: string) => {
+    const createPublicLink = async (
+      examId: string,
+      fallbackMessage: string,
+    ) => {
       if (!publicLinkEnabled) return;
       try {
-        const link = await apiClient.post<PublicLinkResponse>(`/api/exams/${examId}/public-link`);
-        await navigator.clipboard?.writeText(link.data.public_url).catch(() => undefined);
+        const link = await apiClient.post<PublicLinkResponse>(
+          `/api/exams/${examId}/public-link`,
+        );
+        await navigator.clipboard
+          ?.writeText(link.data.public_url)
+          .catch(() => undefined);
         toast({
           title: "公开链接已生成",
           description: "公开链接已复制，外部考生填写姓名和手机号后即可进入。",
@@ -926,19 +1093,28 @@ export function PracticeCreate() {
     create(
       {
         resource: "exams",
-        values,
+        values: {
+          ...values,
+          ...(navState.courseKpId ? { course_kp_id: navState.courseKpId } : {}),
+          ...(navState.courseSemesterId
+            ? { course_semester_id: navState.courseSemesterId }
+            : {}),
+        },
       },
       {
         onSuccess: async (response) => {
           const createdId = response.data?.id ? String(response.data.id) : "";
           if (createdId) {
-            await createPublicLink(createdId, "练习已发布，但公开链接生成失败。");
+            await createPublicLink(
+              createdId,
+              "练习已发布，但公开链接生成失败。",
+            );
           }
           toast({
             title: "发布成功",
             description: "练习已发布，正在返回列表。",
           });
-          navigate("/exams");
+          navigate(navState.successTo ?? "/exams");
         },
         onError,
       },
@@ -971,8 +1147,8 @@ export function PracticeCreate() {
             ? "调整知识点、题目、发布对象与时间设置，让练习安排更贴合当前教学。"
             : "按步骤选择知识点、题目与学生，快速发布一场可追踪的课堂练习。"
         }
-        onBack={() => navigate("/exams")}
-        backLabel="返回考试与练习"
+        onBack={() => navigate(navState.backTo ?? "/exams")}
+        backLabel={navState.backLabel ?? "返回考试与练习"}
       />
 
       {submitError && (
@@ -1021,7 +1197,11 @@ export function PracticeCreate() {
                               : "border-border text-muted-foreground group-hover:border-primary/40 group-hover:text-foreground",
                         )}
                       >
-                        {isDone ? <CheckCircle2 size={14} /> : <span className="h-2.5 w-2.5 rounded-full bg-current/80" />}
+                        {isDone ? (
+                          <CheckCircle2 size={14} />
+                        ) : (
+                          <span className="h-2.5 w-2.5 rounded-full bg-current/80" />
+                        )}
                       </span>
                       <span className="min-w-0 space-y-1.5 pt-0.5">
                         <span className="block text-sm font-semibold tracking-tight text-foreground">
@@ -1058,7 +1238,9 @@ export function PracticeCreate() {
               <CardContent className="space-y-4">
                 <KnowledgePointSelector
                   fetcher={apiRequest}
-                  selectedKnowledgePoints={mainKnowledgePoint ? [mainKnowledgePoint] : []}
+                  selectedKnowledgePoints={
+                    mainKnowledgePoint ? [mainKnowledgePoint] : []
+                  }
                   onSelectedKnowledgePointsChange={(points) => {
                     const next = points[points.length - 1] ?? null;
                     setMainKnowledgePoint(next);
@@ -1098,7 +1280,9 @@ export function PracticeCreate() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="practice-description">练习说明（可不填）</Label>
+                  <Label htmlFor="practice-description">
+                    练习说明（可不填）
+                  </Label>
                   <Textarea
                     id="practice-description"
                     value={description}
@@ -1118,7 +1302,11 @@ export function PracticeCreate() {
                 {questionMode === "manual" && (
                   <div className="flex items-center gap-3">
                     <p className="text-sm text-muted-foreground">
-                      已选 <span className="font-semibold text-foreground">{questionIds.length}</span> 题
+                      已选{" "}
+                      <span className="font-semibold text-foreground">
+                        {questionIds.length}
+                      </span>{" "}
+                      题
                     </p>
                     <Button
                       type="button"
@@ -1145,8 +1333,17 @@ export function PracticeCreate() {
                     )}
                   >
                     <div className="flex items-center gap-2">
-                      <BookCopy size={16} className={questionMode === "manual" ? "text-primary" : "text-muted-foreground"} />
-                      <p className="text-sm font-semibold text-foreground">手动选题</p>
+                      <BookCopy
+                        size={16}
+                        className={
+                          questionMode === "manual"
+                            ? "text-primary"
+                            : "text-muted-foreground"
+                        }
+                      />
+                      <p className="text-sm font-semibold text-foreground">
+                        手动选题
+                      </p>
                     </div>
                   </button>
                   <button
@@ -1160,8 +1357,17 @@ export function PracticeCreate() {
                     )}
                   >
                     <div className="flex items-center gap-2">
-                      <Wand2 size={16} className={questionMode === "ai" ? "text-primary" : "text-muted-foreground"} />
-                      <p className="text-sm font-semibold text-foreground">AI出题</p>
+                      <Wand2
+                        size={16}
+                        className={
+                          questionMode === "ai"
+                            ? "text-primary"
+                            : "text-muted-foreground"
+                        }
+                      />
+                      <p className="text-sm font-semibold text-foreground">
+                        AI出题
+                      </p>
                     </div>
                   </button>
                 </div>
@@ -1190,19 +1396,31 @@ export function PracticeCreate() {
                       model={aiModel}
                       onModelChange={setAIModel}
                       selectedKnowledgePoints={selectedKnowledgePoints}
-                      onSelectedKnowledgePointsChange={setSelectedKnowledgePoints}
+                      onSelectedKnowledgePointsChange={
+                        setSelectedKnowledgePoints
+                      }
                       filterRootNodeId={mainKnowledgePoint?.id}
                       customPrompt={aiPrompt}
                       onCustomPromptChange={setAIPrompt}
                       allocationError={aiAllocationError}
                       footer={
                         !aiGenerating ? (
-                          <Button type="button" className="w-full" onClick={() => void handleAIGenerate()} disabled={aiApplying || Boolean(aiAllocationError)}>
+                          <Button
+                            type="button"
+                            className="w-full"
+                            onClick={() => void handleAIGenerate()}
+                            disabled={aiApplying || Boolean(aiAllocationError)}
+                          >
                             <Sparkles size={16} className="mr-1" />
                             开始生成
                           </Button>
                         ) : (
-                          <Button type="button" variant="destructive" className="w-full" onClick={stopAIGeneration}>
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            className="w-full"
+                            onClick={stopAIGeneration}
+                          >
                             <StopCircle size={16} className="mr-1" />
                             停止生成
                           </Button>
@@ -1218,13 +1436,19 @@ export function PracticeCreate() {
                         </div>
                       ) : (
                         <div className="flex h-full flex-col">
-                          <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
-                            <p className="text-sm font-semibold text-foreground">
+                          <div className="flex items-center justify-between gap-3 px-4 py-3">
+                            <div className="text-sm font-semibold text-foreground">
                               生成结果
                               <span className="ml-2 text-xs font-normal text-muted-foreground">
-                                已自动加入 {aiQuestions.filter((question) => question.persistedQuestionId).length} 道
+                                已自动加入{" "}
+                                {
+                                  aiQuestions.filter(
+                                    (question) => question.persistedQuestionId,
+                                  ).length
+                                }{" "}
+                                道
                               </span>
-                            </p>
+                            </div>
                             {aiApplying ? (
                               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                                 <Loader2 className="size-3.5 animate-spin" />
@@ -1237,13 +1461,19 @@ export function PracticeCreate() {
                               <AIGeneratedQuestionCard
                                 key={question.index}
                                 question={question}
-                                onRemove={() => removeAIQuestion(question.index)}
+                                onRemove={() =>
+                                  removeAIQuestion(question.index)
+                                }
                               />
                             ))}
                           </div>
                         </div>
                       )}
-                      {aiGenerating && <AIGenerateLoadingOverlay generatedCount={aiQuestions.length} />}
+                      {aiGenerating && (
+                        <AIGenerateLoadingOverlay
+                          generatedCount={aiQuestions.length}
+                        />
+                      )}
                     </div>
                   </div>
                 )}
@@ -1265,7 +1495,9 @@ export function PracticeCreate() {
                 />
                 <div className="mt-4 flex flex-col gap-3 rounded-2xl bg-primary/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="space-y-1">
-                    <p className="text-sm font-semibold text-foreground">公开链接</p>
+                    <p className="text-sm font-semibold text-foreground">
+                      公开链接
+                    </p>
                     <p className="text-xs text-muted-foreground">
                       开启后，发布成功会生成一个公开链接。外部考生填写姓名和手机号后进入。
                     </p>
@@ -1295,7 +1527,11 @@ export function PracticeCreate() {
                         type="number"
                         min={1}
                         value={durationMinutes}
-                        onChange={(event) => setDurationMinutes(parseInt(event.target.value, 10) || 0)}
+                        onChange={(event) =>
+                          setDurationMinutes(
+                            parseInt(event.target.value, 10) || 0,
+                          )
+                        }
                         className="pr-12"
                       />
                       <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground">
@@ -1307,7 +1543,9 @@ export function PracticeCreate() {
                     <Label>结束时间</Label>
                     <DatePicker
                       value={toPickerDate(endTime)}
-                      onChange={(date) => setEndTime(toLocalDateTimeValue(date))}
+                      onChange={(date) =>
+                        setEndTime(toLocalDateTimeValue(date))
+                      }
                       includeTime
                       placeholder="不设置则按发布后长期有效"
                       className="h-9 w-full"
@@ -1317,10 +1555,17 @@ export function PracticeCreate() {
 
                 <div className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-background px-4 py-3">
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-foreground">发布后立即开始</p>
-                    <p className="mt-1 text-xs text-muted-foreground">关闭后可设置未来的开始时间。</p>
+                    <p className="text-sm font-medium text-foreground">
+                      发布后立即开始
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      关闭后可设置未来的开始时间。
+                    </p>
                   </div>
-                  <Switch checked={startImmediately} onCheckedChange={setStartImmediately} />
+                  <Switch
+                    checked={startImmediately}
+                    onCheckedChange={setStartImmediately}
+                  />
                 </div>
 
                 {!startImmediately && (
@@ -1328,7 +1573,9 @@ export function PracticeCreate() {
                     <Label>开始时间</Label>
                     <DatePicker
                       value={toPickerDate(scheduledStartTime)}
-                      onChange={(date) => setScheduledStartTime(toLocalDateTimeValue(date))}
+                      onChange={(date) =>
+                        setScheduledStartTime(toLocalDateTimeValue(date))
+                      }
                       includeTime
                       placeholder="开始时间"
                       className="h-9 w-full"
@@ -1338,18 +1585,32 @@ export function PracticeCreate() {
 
                 <div className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-background px-4 py-3">
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-foreground">允许学生查看结果</p>
-                    <p className="mt-1 text-xs text-muted-foreground">开启后，学生提交后可以直接看到练习结果。</p>
+                    <p className="text-sm font-medium text-foreground">
+                      允许学生查看结果
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      开启后，学生提交后可以直接看到练习结果。
+                    </p>
                   </div>
-                  <Switch checked={showResult} onCheckedChange={setShowResult} />
+                  <Switch
+                    checked={showResult}
+                    onCheckedChange={setShowResult}
+                  />
                 </div>
 
                 <div className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-background px-4 py-3">
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-foreground">允许学生重做</p>
-                    <p className="mt-1 text-xs text-muted-foreground">开启后，学生提交后可以再次开始作答。</p>
+                    <p className="text-sm font-medium text-foreground">
+                      允许学生重做
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      开启后，学生提交后可以再次开始作答。
+                    </p>
                   </div>
-                  <Switch checked={allowRetake} onCheckedChange={setAllowRetake} />
+                  <Switch
+                    checked={allowRetake}
+                    onCheckedChange={setAllowRetake}
+                  />
                 </div>
               </CardContent>
             </Card>
@@ -1357,11 +1618,21 @@ export function PracticeCreate() {
 
           <div className="flex flex-col gap-3 rounded-xl border border-border bg-background p-4 sm:flex-row sm:items-center sm:justify-end">
             <div className="flex w-full flex-col-reverse gap-3 sm:w-auto sm:flex-row">
-              <Button type="button" variant="outline" className="w-full sm:w-auto" onClick={goPrev} disabled={currentStep === 0}>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full sm:w-auto"
+                onClick={goPrev}
+                disabled={currentStep === 0}
+              >
                 上一步
               </Button>
               {currentStep < stepItems.length - 1 ? (
-                <Button type="button" className="w-full sm:w-auto" onClick={goNext}>
+                <Button
+                  type="button"
+                  className="w-full sm:w-auto"
+                  onClick={goNext}
+                >
                   下一步
                   <ArrowRight size={16} className="ml-1" />
                 </Button>
@@ -1370,15 +1641,21 @@ export function PracticeCreate() {
                   type="button"
                   className="w-full sm:w-auto"
                   onClick={handleSubmit}
-                  disabled={Boolean(submitValidation) || mutation.isPending || updateMutation.isPending}
+                  disabled={
+                    Boolean(submitValidation) ||
+                    mutation.isPending ||
+                    updateMutation.isPending
+                  }
                 >
                   {mutation.isPending || updateMutation.isPending ? (
                     <span className="flex items-center gap-2">
                       <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
                       {isEditMode ? "保存中..." : "发布中..."}
                     </span>
+                  ) : isEditMode ? (
+                    "保存修改"
                   ) : (
-                    isEditMode ? "保存修改" : "发布练习"
+                    "发布练习"
                   )}
                 </Button>
               )}
@@ -1391,40 +1668,58 @@ export function PracticeCreate() {
             <CardHeader>
               <CardTitle className="flex items-center justify-between gap-3 text-base">
                 摘要
-                <Badge variant="outline" className={practiceBadgeClass}>练习</Badge>
+                <Badge variant="outline" className={practiceBadgeClass}>
+                  练习
+                </Badge>
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <div>
                 <p className="text-xs text-muted-foreground">练习名称</p>
-                <p className="text-sm font-semibold text-foreground">{title.trim() || "未填写"}</p>
+                <p className="text-sm font-semibold text-foreground">
+                  {title.trim() || "未填写"}
+                </p>
               </div>
               <div className="flex items-center justify-between gap-3 text-sm">
                 <span className="text-muted-foreground">知识点</span>
-                <span className="font-medium text-foreground">{selectedKnowledgePoints.length} 个</span>
+                <span className="font-medium text-foreground">
+                  {selectedKnowledgePoints.length} 个
+                </span>
               </div>
               <div className="flex items-center justify-between gap-3 text-sm">
                 <span className="text-muted-foreground">题目</span>
-                <span className="font-medium text-foreground">{questionIds.length} 题</span>
+                <span className="font-medium text-foreground">
+                  {questionIds.length} 题
+                </span>
               </div>
               <div className="flex items-center justify-between gap-3 text-sm">
                 <span className="text-muted-foreground">学生</span>
-                <span className="font-medium text-foreground">{studentIds.length} 人</span>
+                <span className="font-medium text-foreground">
+                  {studentIds.length} 人
+                </span>
               </div>
               <div className="flex items-center justify-between gap-3 text-sm">
                 <span className="text-muted-foreground">总分</span>
-                <span className="font-medium text-foreground">{totalScore} 分</span>
+                <span className="font-medium text-foreground">
+                  {totalScore} 分
+                </span>
               </div>
               <div className="flex items-center justify-between gap-3 text-sm">
                 <span className="text-muted-foreground">时长</span>
-                <span className="font-medium text-foreground">{durationMinutes} 分钟</span>
+                <span className="font-medium text-foreground">
+                  {durationMinutes} 分钟
+                </span>
               </div>
               <div className="flex items-center justify-between gap-3 text-sm">
                 <span className="text-muted-foreground">开始方式</span>
-                <span className="font-medium text-foreground">{startImmediately ? "立即开始" : "定时开始"}</span>
+                <span className="font-medium text-foreground">
+                  {startImmediately ? "立即开始" : "定时开始"}
+                </span>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Badge variant={questionMode === "manual" ? "secondary" : "outline"}>
+                <Badge
+                  variant={questionMode === "manual" ? "secondary" : "outline"}
+                >
                   {questionMode === "manual" ? "手动选题" : "AI出题"}
                 </Badge>
                 <Badge variant="outline">练习</Badge>

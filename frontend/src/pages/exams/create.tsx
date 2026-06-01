@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useCreate } from "@refinedev/core";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
 import { consumeExamSeed } from "@/lib/exam-seed";
@@ -26,7 +26,7 @@ function createInitialForm(): ExamFormValues {
     allow_retake: false,
     show_result: true,
     notes_template: "",
-    question_mode: "manual",
+    question_mode: "auto",
     question_ids: [],
     question_items: [],
     student_ids: [],
@@ -54,6 +54,12 @@ interface PaperExamSeedResponse {
 
 export function ExamCreate() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navState = (location.state ?? {}) as {
+    successTo?: string;
+    courseKpId?: string;
+    courseSemesterId?: string;
+  };
   const [searchParams] = useSearchParams();
   const { mutate: create, mutation } = useCreate();
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -173,6 +179,10 @@ export function ExamCreate() {
           category: submitValues.category,
           question_mode: submitValues.question_mode,
           question_items: submitValues.question_items,
+          ...(navState.courseKpId ? { course_kp_id: navState.courseKpId } : {}),
+          ...(navState.courseSemesterId
+            ? { course_semester_id: navState.courseSemesterId }
+            : {}),
         },
       },
       {
@@ -197,7 +207,7 @@ export function ExamCreate() {
             title: isDraft ? "草稿已保存" : "创建成功",
             description: isDraft ? "考试已保存到草稿。" : "考试已创建并发布，正在返回考试列表。",
           });
-          navigate("/exams");
+          navigate(navState.successTo ?? "/exams");
         },
         onError: (error) => {
           const message = getErrorMessage(error, isDraft ? "保存草稿失败，请稍后重试。" : "创建考试失败，请稍后重试。");

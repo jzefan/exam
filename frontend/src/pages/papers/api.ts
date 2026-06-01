@@ -49,7 +49,7 @@ export type GeneratePaperFromSourcePayload = {
   difficulty_strategy: PaperDifficultyStrategy;
   question_type_strategy: "inherit";
   prefer_root_knowledge_point: boolean;
-  source_reuse_rate: PaperSourceReuseRate;
+  source_reuse_rate: number;
 };
 
 export type GeneratePaperFromSourceResult = {

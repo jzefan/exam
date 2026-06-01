@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserRouter, Link, MemoryRouter, Outlet, Route, Routes, useNavigate } from "react-router-dom";
@@ -43,15 +44,37 @@ vi.mock("@/components/questions/ai-question-config-panel", () => ({
   AIQuestionConfigPanel: ({
     title,
     footer,
+    typeAlloc,
+    onTypeAllocChange,
+    totalCount,
+    onTotalCountChange,
   }: {
     title: string;
     footer: React.ReactNode;
-  }) => (
-    <section>
-      <h1>{title}</h1>
-      {footer}
-    </section>
-  ),
+    typeAlloc: Record<string, number>;
+    onTypeAllocChange: (value: Record<string, number>) => void;
+    totalCount: number;
+    onTotalCountChange: (value: number) => void;
+  }) => {
+    // 「开始生成」按钮在题型数量为 0 时禁用；模拟一个已配置题型的面板，
+    // 让守卫相关用例能够进入生成流程。
+    useEffect(() => {
+      const total = Object.values(typeAlloc).reduce((sum, value) => sum + value, 0);
+      if (total === 0) onTypeAllocChange({ ...typeAlloc, choice: 1 });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    // 与真实面板一致：总数由各题型数量之和自动同步，保证校验通过。
+    useEffect(() => {
+      const total = Object.values(typeAlloc).reduce((sum, value) => sum + value, 0);
+      if (totalCount !== total) onTotalCountChange(total);
+    }, [typeAlloc, totalCount, onTotalCountChange]);
+    return (
+      <section>
+        <h1>{title}</h1>
+        {footer}
+      </section>
+    );
+  },
 }));
 
 function mockStreamResponse(...events: unknown[]): Response {
@@ -128,7 +151,7 @@ describe("AIGeneratePage unsaved guards", () => {
       </MemoryRouter>,
     );
 
-    await user.click(screen.getByRole("button", { name: "开始生成" }));
+    await user.click(screen.getByRole("button", { name: /开始生成/ }));
 
     await screen.findByText("MySQL 默认端口是？");
 
@@ -136,7 +159,7 @@ describe("AIGeneratePage unsaved guards", () => {
 
     expect(screen.getByText("离开当前页面？")).toBeInTheDocument();
     expect(screen.getByText("当前生成的题目尚未保存到题库，确定离开当前页面吗？")).toBeInTheDocument();
-    expect(screen.getByText("AI 智能出题")).toBeInTheDocument();
+    expect(screen.getAllByText("AI 智能出题").length).toBeGreaterThan(0);
     expect(screen.queryByText("题库列表")).not.toBeInTheDocument();
   });
 
@@ -168,7 +191,7 @@ describe("AIGeneratePage unsaved guards", () => {
       </MemoryRouter>,
     );
 
-    await user.click(screen.getByRole("button", { name: "开始生成" }));
+    await user.click(screen.getByRole("button", { name: /开始生成/ }));
     await screen.findByText("事务隔离级别有哪些？");
 
     const event = new Event("beforeunload", { cancelable: true });
@@ -221,14 +244,14 @@ describe("AIGeneratePage unsaved guards", () => {
       </BrowserRouter>,
     );
 
-    await user.click(screen.getByRole("button", { name: "开始生成" }));
+    await user.click(screen.getByRole("button", { name: /开始生成/ }));
     await screen.findByText("索引的作用是什么？");
 
     await user.click(screen.getByRole("button", { name: "按钮跳转到题库列表" }));
 
     expect(screen.getByText("离开当前页面？")).toBeInTheDocument();
     expect(screen.getByText("当前生成的题目尚未保存到题库，确定离开当前页面吗？")).toBeInTheDocument();
-    expect(screen.getByText("AI 智能出题")).toBeInTheDocument();
+    expect(screen.getAllByText("AI 智能出题").length).toBeGreaterThan(0);
     expect(screen.queryByText("题库列表")).not.toBeInTheDocument();
   });
 
@@ -273,13 +296,84 @@ describe("AIGeneratePage unsaved guards", () => {
       </MemoryRouter>,
     );
 
-    await user.click(screen.getByRole("button", { name: "开始生成" }));
+    await user.click(screen.getByRole("button", { name: /开始生成/ }));
     await screen.findByText("MySQL 默认端口是？");
 
     await user.click(screen.getByRole("button", { name: /保存到题库/ }));
 
     await screen.findByText("题库列表");
     expect(screen.queryByText("离开当前页面？")).not.toBeInTheDocument();
+  });
+
+  it("saves course material prefilled questions to the root knowledge bank endpoint", async () => {
+    const user = userEvent.setup();
+    sessionStorage.setItem(
+      "ai_generate_prefill_v1",
+      JSON.stringify({
+        kind: "course_material",
+        node_id: "kp-child",
+        node_name: "第1章 Python概述",
+        course_name: "Python程序设计",
+      }),
+    );
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/questions/ai-generate/stream")) {
+        return mockStreamResponse({
+          type: "question",
+          data: {
+            type: "choice",
+            title: "Python 的特点是？",
+            content: { text: "Python 的特点是？" },
+            options: { A: "解释型", B: "只能编译运行" },
+            answer: { correct: "A" },
+            analysis: "Python 通常以解释方式运行。",
+            difficulty: 2,
+          },
+        });
+      }
+      if (url.includes("/api/questions/save-generated-to-course-bank")) {
+        return {
+          ok: true,
+          json: async () => ({ created: 1, created_question_ids: ["q-1"] }),
+        } as Response;
+      }
+      return {
+        ok: false,
+        json: async () => ({ detail: `unexpected request: ${url}` }),
+      } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={["/questions/ai-generate"]}>
+        <Routes>
+          <Route path="/" element={<TestLayout />}>
+            <Route path="questions/ai-generate" element={<AIGeneratePage />} />
+            <Route path="questions" element={<div>题库列表</div>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: /开始生成/ }));
+    await screen.findByText("Python 的特点是？");
+    await user.click(screen.getByRole("button", { name: /保存到题库/ }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/questions/save-generated-to-course-bank",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const saveCall = (
+      fetchMock.mock.calls as unknown as Array<[RequestInfo | URL, RequestInit | undefined]>
+    ).find(([url]) => String(url).includes("/api/questions/save-generated-to-course-bank"));
+    const body = JSON.parse(String(saveCall?.[1]?.body));
+    expect(body.questions[0].knowledge_point_ids).toEqual(["kp-child"]);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/question-banks"))).toBe(false);
   });
 
   it("allows editing generated questions before saving", async () => {
@@ -321,7 +415,7 @@ describe("AIGeneratePage unsaved guards", () => {
       </MemoryRouter>,
     );
 
-    await user.click(screen.getByRole("button", { name: "开始生成" }));
+    await user.click(screen.getByRole("button", { name: /开始生成/ }));
     await screen.findByText("MySQL 默认端口是？");
 
     await user.click(screen.getByRole("button", { name: /编辑/ }));

@@ -3,24 +3,12 @@ import { useList, useDelete, useUpdate, useGetIdentity, type CrudFilters } from 
 import { useNavigate } from "react-router-dom";
 import {
   Plus,
-  Trash2,
-  Clock,
-  Users,
-  FileText,
-  ClipboardList,
-  UserCheck,
-  Eye,
-  Pencil,
-  Lock,
   Search,
   Filter,
   Check,
   ChevronsUpDown,
-  PieChart,
-  GraduationCap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -42,16 +30,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import { ExamStatusBadge, examStatusOptions } from "./components/ExamStatusBadge";
-import { getEffectiveExamStatus } from "./utils";
+import { examStatusOptions } from "./components/ExamStatusBadge";
+import { ExamCard, ExamCardEmptyState } from "./components/ExamCard";
 import type { ExamStatus, IExam } from "@/types";
 import { getErrorMessage } from "./components/exam-form-utils";
 import { getExamDeleteDescription } from "@/lib/deletion-copy";
@@ -62,191 +44,6 @@ import { apiRequest } from "@/pages/grading/api";
 
 type FilterKey = "all" | ExamStatus;
 type CategoryKey = "all" | "exam" | "practice";
-
-function formatDateTime(iso: string | null) {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function ExamCard({
-  exam,
-  onView,
-  onEdit,
-  onAnalysis,
-  onClose,
-  onDelete,
-}: {
-  exam: IExam;
-  onView: () => void;
-  onEdit: () => void;
-  onAnalysis: () => void;
-  onClose: () => void;
-  onDelete: () => void;
-}) {
-  const effectiveStatus = getEffectiveExamStatus(exam);
-  const canClose =
-    effectiveStatus !== "ongoing" || exam.submitted_count >= exam.total_students;
-  const canViewAnalysis =
-    effectiveStatus !== "draft" &&
-    effectiveStatus !== "upcoming" &&
-    exam.submitted_count > 0;
-  const categoryLabel = exam.category === "practice" ? "练习" : "考试";
-  const categoryBadgeClass =
-    exam.category === "practice"
-      ? "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300"
-      : "border-blue-500/20 bg-blue-500/10 text-blue-700 dark:text-blue-300";
-  const visibleKnowledgePoints = exam.knowledge_points.slice(0, 4);
-  const hiddenKnowledgePointCount = Math.max(0, exam.knowledge_points.length - visibleKnowledgePoints.length);
-
-  return (
-    <div className="group relative overflow-hidden rounded-xl border border-border/50 bg-card p-0 transition-all hover:border-primary/20 hover:shadow-xl hover:shadow-primary/[0.03]">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 p-5">
-        {/* Main Info */}
-        <div className="min-w-0 flex-1 space-y-3">
-          <div className="flex items-center gap-3">
-            <h3 className="text-base font-bold text-foreground tracking-tight truncate">
-              {exam.title}
-            </h3>
-            <Badge variant="outline" className={categoryBadgeClass}>
-              {categoryLabel}
-            </Badge>
-            <ExamStatusBadge status={effectiveStatus} />
-          </div>
-
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-            <div className="flex items-center gap-2 text-[11px] font-medium text-muted-foreground/80">
-              <Clock size={14} className="text-muted-foreground/40" />
-              <span>{formatDateTime(exam.start_time)} — {formatDateTime(exam.end_time)}</span>
-            </div>
-            
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground/80">
-                <FileText size={14} className="text-muted-foreground/40" />
-                <span>{exam.total_questions} 题目 / {exam.total_score} 分</span>
-              </div>
-              <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground/80">
-                <Users size={14} className="text-muted-foreground/40" />
-                <span>考生 {exam.total_students} 人</span>
-              </div>
-              <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground/80">
-                <UserCheck size={14} className={cn(exam.submitted_count > 0 ? "text-emerald-500/60" : "text-muted-foreground/40")} />
-                <span className={cn(exam.submitted_count > 0 && "text-emerald-600/80")}>已交 {exam.submitted_count} 人</span>
-              </div>
-            </div>
-          </div>
-
-          {exam.category === "practice" && exam.knowledge_points.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground/80">
-                <GraduationCap size={14} className="text-muted-foreground/40" />
-                <span>知识点</span>
-              </div>
-              {visibleKnowledgePoints.map((knowledgePoint) => (
-                <Badge
-                  key={knowledgePoint.id}
-                  variant="outline"
-                  className="max-w-[160px] truncate border-amber-500/15 bg-amber-500/5 text-[11px] text-amber-700 dark:text-amber-300"
-                  title={knowledgePoint.name}
-                >
-                  {knowledgePoint.name}
-                </Badge>
-              ))}
-              {hiddenKnowledgePointCount > 0 && (
-                <Badge variant="outline" className="border-border/70 text-[11px] text-muted-foreground">
-                  +{hiddenKnowledgePointCount}
-                </Badge>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Actions Section */}
-        <div className="flex items-center gap-1 self-end md:self-center">
-          <Button variant="ghost" size="sm" className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold" onClick={onView}>
-            <Eye size={14} />
-            <span>查看</span>
-          </Button>
-
-          {/* 修改 — all statuses */}
-          <Button variant="ghost" size="sm" className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold" onClick={onEdit}>
-            <Pencil size={14} />
-            <span>修改</span>
-          </Button>
-
-          {canViewAnalysis && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold"
-              onClick={onAnalysis}
-            >
-              <PieChart size={14} />
-              <span>结果分析</span>
-            </Button>
-          )}
-
-          {/* 关闭 — draft(no), upcoming, ongoing(conditional), completed */}
-          {(effectiveStatus === "upcoming" || effectiveStatus === "ongoing" || effectiveStatus === "completed") && (
-            <TooltipProvider delayDuration={200}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold text-amber-600 hover:bg-amber-50 hover:text-amber-700"
-                      disabled={!canClose}
-                      onClick={onClose}
-                    >
-                      <Lock size={14} />
-                      <span>关闭</span>
-                    </Button>
-                  </span>
-                </TooltipTrigger>
-                {!canClose && (
-                  <TooltipContent side="bottom">
-                    <p className="text-xs">仍有考生在考试中，无法关闭</p>
-                  </TooltipContent>
-                )}
-              </Tooltip>
-            </TooltipProvider>
-          )}
-
-          {/* 删除 — draft, upcoming, completed, closed; also ongoing if no student history */}
-          {(effectiveStatus === "draft" ||
-            effectiveStatus === "upcoming" ||
-            effectiveStatus === "completed" ||
-            effectiveStatus === "closed" ||
-            (effectiveStatus === "ongoing" && !exam.has_student_history)) && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold text-destructive hover:bg-destructive/5 hover:text-destructive"
-              onClick={onDelete}
-            >
-              <Trash2 size={14} />
-              <span>删除</span>
-            </Button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function EmptyState() {
-  return (
-    <div className="flex flex-col items-center justify-center py-24 rounded-2xl border-2 border-dashed border-border/40 bg-muted/5">
-      <div className="h-16 w-16 rounded-2xl bg-muted/50 flex items-center justify-center mb-4">
-        <ClipboardList size={32} className="text-muted-foreground/30" />
-      </div>
-      <p className="text-sm font-medium text-muted-foreground">暂无考试或练习记录</p>
-      <p className="text-xs text-muted-foreground/60 mt-1">可以先创建考试，或按知识点发布一套练习</p>
-    </div>
-  );
-}
 
 export function ExamList() {
   const navigate = useNavigate();
@@ -388,6 +185,7 @@ export function ExamList() {
           selectionMode="single"
           showUsageShortcuts={false}
           popoverSide="bottom"
+          hideSelectedBadges
           className="w-[140px]"
         />
 
@@ -495,7 +293,7 @@ export function ExamList() {
           ))}
         </div>
       ) : exams.length === 0 ? (
-        <EmptyState />
+        <ExamCardEmptyState />
       ) : (
         <div className="space-y-4">
           {exams.map((exam) => (

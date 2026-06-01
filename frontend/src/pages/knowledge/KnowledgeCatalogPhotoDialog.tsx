@@ -1,5 +1,6 @@
-import { useMemo, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import {
+  AlertCircle,
   Camera,
   FileImage,
   GripVertical,
@@ -40,8 +41,44 @@ type KnowledgeCatalogPhotoDialogProps = {
     images: string[];
   }) => Promise<KnowledgeImportPath[]>;
   onImport: (paths: KnowledgeImportPath[]) => Promise<void>;
-  selectedDirectionName: string | null;
+  selectedTargetName: string | null;
+  /** When set, the rootName field is pre-filled, disabled, and NOT prepended
+   *  to the import paths — the caller's `onImport` is treating that named
+   *  node as the existing parent (e.g. the current course). */
+  lockedRootName?: string | null;
 };
+
+function extractErrorDetail(message: string): string {
+  const trimmed = message.trim();
+  const jsonStart = trimmed.indexOf("{");
+  if (jsonStart >= 0) {
+    try {
+      const parsed = JSON.parse(trimmed.slice(jsonStart)) as { detail?: unknown };
+      if (typeof parsed.detail === "string" && parsed.detail.trim()) {
+        return parsed.detail.trim();
+      }
+    } catch {
+      // Fall back to the original message when it is not a JSON error payload.
+    }
+  }
+  return trimmed;
+}
+
+function normalizeCatalogPhotoError(nextError: unknown, imageCount: number): string {
+  const rawMessage = nextError instanceof Error ? nextError.message : "目录识别失败";
+  const detail = extractErrorDetail(rawMessage);
+  const timeoutMatch = detail.match(/第\s*(\d+)\s*张图片识别超时/);
+
+  if (timeoutMatch) {
+    const imageLabel = `第 ${timeoutMatch[1]} 张图片`;
+    if (imageCount <= 1) {
+      return `${imageLabel}识别超时，请更换更清晰的图片后重试。`;
+    }
+    return `${imageLabel}识别超时，请减少单次上传数量，或更换更清晰的图片后重试。`;
+  }
+
+  return detail || "目录识别失败";
+}
 
 export function KnowledgeCatalogPhotoDialog({
   existingRootNames,
@@ -49,12 +86,21 @@ export function KnowledgeCatalogPhotoDialog({
   onOpenChange,
   onRecognize,
   onImport,
-  selectedDirectionName,
+  selectedTargetName,
+  lockedRootName,
 }: KnowledgeCatalogPhotoDialogProps) {
   const { toast } = useToast();
   const [images, setImages] = useState<CatalogPhotoImage[]>([]);
   const [paths, setPaths] = useState<KnowledgeImportPath[]>([]);
-  const [rootName, setRootName] = useState("");
+  const [rootName, setRootName] = useState(lockedRootName ?? "");
+  const isLocked = Boolean(lockedRootName);
+
+  // Re-seed when caller's locked name changes or the dialog reopens.
+  useEffect(() => {
+    if (lockedRootName !== undefined && lockedRootName !== null) {
+      setRootName(lockedRootName);
+    }
+  }, [lockedRootName, open]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [recognizing, setRecognizing] = useState(false);
@@ -66,23 +112,27 @@ export function KnowledgeCatalogPhotoDialog({
 
   const trimmedRootName = rootName.trim();
   const duplicateRootName = useMemo(
-    () =>
-      Boolean(
+    () => {
+      if (isLocked) return false; // the locked target is by definition an existing parent
+      return Boolean(
         trimmedRootName &&
           existingRootNames.some((name) => name.trim() === trimmedRootName),
-      ),
-    [existingRootNames, trimmedRootName],
+      );
+    },
+    [existingRootNames, isLocked, trimmedRootName],
   );
   const effectivePaths = useMemo<KnowledgeImportPath[]>(
-    () =>
-      trimmedRootName ? paths.map((path) => [trimmedRootName, ...path]) : paths,
-    [paths, trimmedRootName],
+    () => {
+      if (isLocked) return paths; // caller's onImport already nests under the locked node
+      return trimmedRootName ? paths.map((path) => [trimmedRootName, ...path]) : paths;
+    },
+    [isLocked, paths, trimmedRootName],
   );
 
   const reset = () => {
     setImages([]);
     setPaths([]);
-    setRootName("");
+    setRootName(lockedRootName ?? "");
     setError(null);
     setLoading(false);
     setRecognizing(false);
@@ -131,7 +181,7 @@ export function KnowledgeCatalogPhotoDialog({
       );
     } catch (nextError) {
       setPaths([]);
-      setError(nextError instanceof Error ? nextError.message : "目录识别失败");
+      setError(normalizeCatalogPhotoError(nextError, images.length));
     } finally {
       setRecognizing(false);
     }
@@ -139,23 +189,25 @@ export function KnowledgeCatalogPhotoDialog({
 
   const handleImport = async () => {
     if (effectivePaths.length === 0) return;
-    if (!trimmedRootName) {
-      toast({
-        title: "请填写主知识点名称",
-        description: "填写后再导入，识别结果会作为这个主知识点的子节点导入。",
-        position: "top",
-        variant: "destructive",
-      });
-      return;
-    }
-    if (duplicateRootName) {
-      toast({
-        title: "主知识点名称已存在",
-        description: "当前方向下已存在同名主知识点，请换一个名称。",
-        position: "top",
-        variant: "destructive",
-      });
-      return;
+    if (!isLocked) {
+      if (!trimmedRootName) {
+        toast({
+          title: "请填写主知识点名称",
+          description: "填写后再导入，识别结果会作为这个主知识点的子节点导入。",
+          position: "top",
+          variant: "destructive",
+        });
+        return;
+      }
+      if (duplicateRootName) {
+        toast({
+          title: "主知识点名称已存在",
+          description: "当前方向下已存在同名主知识点，请换一个名称。",
+          position: "top",
+          variant: "destructive",
+        });
+        return;
+      }
     }
     setImporting(true);
     setError(null);
@@ -163,7 +215,7 @@ export function KnowledgeCatalogPhotoDialog({
       await onImport(effectivePaths);
       handleOpenChange(false);
     } catch (nextError) {
-      const message = nextError instanceof Error ? nextError.message : "导入失败";
+      const message = normalizeCatalogPhotoError(nextError, images.length);
       setError(message);
       toast({
         title: "目录导入失败",
@@ -197,7 +249,10 @@ export function KnowledgeCatalogPhotoDialog({
   };
 
   const removeTreeNode = (node: KnowledgeImportPreviewNode) => {
-    if (trimmedRootName && node.depth === 0) {
+    // Non-locked mode: depth 0 == the virtual rootName layer (cannot delete it,
+    // it's prepended automatically). Locked mode: depth 0 == real first-level
+    // children of the locked node, so removal IS allowed.
+    if (!isLocked && trimmedRootName && node.depth === 0) {
       return;
     }
     const pathIndexes = new Set(node.pathIndexes);
@@ -215,9 +270,9 @@ export function KnowledgeCatalogPhotoDialog({
         <DialogHeader>
           <DialogTitle>书籍目录拍照导入</DialogTitle>
           <DialogDescription>
-            {selectedDirectionName
-              ? `将目录识别结果导入到“${selectedDirectionName}”方向。`
-              : "请先选择方向。"}
+            {selectedTargetName
+              ? `将目录识别结果导入到“${selectedTargetName}”。`
+              : "请先选择专业或方向。"}
             上传目录照片或扫描版 PDF，系统按章、节识别后以层级树方式显示。
           </DialogDescription>
         </DialogHeader>
@@ -318,7 +373,9 @@ export function KnowledgeCatalogPhotoDialog({
           <div className="flex flex-col gap-3">
             <div className="space-y-2">
               <Label htmlFor="catalog-root-name">
-                主知识点名称 <span className="text-red-500">*</span>
+                {isLocked ? "导入到课程" : (
+                  <>主知识点名称 <span className="text-red-500">*</span></>
+                )}
               </Label>
               <Input
                 aria-describedby={duplicateRootName ? "catalog-root-name-error" : undefined}
@@ -327,6 +384,8 @@ export function KnowledgeCatalogPhotoDialog({
                 onChange={(event) => setRootName(event.target.value)}
                 placeholder="例如：高等数学上册 / 数据结构导论"
                 value={rootName}
+                disabled={isLocked}
+                readOnly={isLocked}
               />
               {duplicateRootName ? (
                 <p
@@ -337,7 +396,9 @@ export function KnowledgeCatalogPhotoDialog({
                 </p>
               ) : (
                 <p className="text-xs text-stone-500 dark:text-stone-400">
-                  识别出的全部章节会作为该主知识点的子节点导入。
+                  {isLocked
+                    ? "识别出的全部章节会作为本课程的子知识点导入。"
+                    : "识别出的全部章节会作为该主知识点的子节点导入。"}
                 </p>
               )}
             </div>
@@ -346,9 +407,13 @@ export function KnowledgeCatalogPhotoDialog({
               <ScrollArea className="h-[420px]">
                 <div className="p-4">
                   {error ? (
-                    <p className="text-sm text-red-600 dark:text-red-400">
-                      {error}
-                    </p>
+                    <div className="flex gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-300">
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <div>
+                        <p className="font-medium">识别未完成</p>
+                        <p className="mt-1 leading-6">{error}</p>
+                      </div>
+                    </div>
                   ) : (
                     <KnowledgeImportTreePreview
                       emptyText={
@@ -376,7 +441,7 @@ export function KnowledgeCatalogPhotoDialog({
                   <p className="text-sm font-medium">正在识别目录，请稍候…</p>
                   <p className="max-w-xs text-center text-xs text-stone-500 dark:text-stone-400">
                     后端会对每张图片进行 OCR 并整理层级，首次识别较慢，通常需要
-                    10 秒至 1 分钟。
+                    10 秒至 1 分钟左右。
                   </p>
                 </div>
               )}

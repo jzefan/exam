@@ -3,7 +3,6 @@
 import importlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -194,12 +193,12 @@ def test_deepseek_response_parses_choice_envelope() -> None:
         ]
     }
 
-    result = parse_deepseek_response(payload, provider_key="deepseek-direct", model_name="deepseek-chat")
+    result = parse_deepseek_response(payload, provider_key="deepseek-direct", model_name="deepseek-v4-flash")
 
     assert result.score_total == 76
     assert result.dimension_scores["reasoning"] == 38
     assert result.provider_key == "deepseek-direct"
-    assert result.model_name == "deepseek-chat"
+    assert result.model_name == "deepseek-v4-flash"
 
 
 @pytest.mark.parametrize(
@@ -507,7 +506,7 @@ def test_provider_adapters_match_protocol_boundary() -> None:
     deepseek = DeepSeekProvider(
         provider_key="deepseek-direct",
         base_url="https://example.invalid",
-        model_name="deepseek-chat",
+        model_name="deepseek-v4-flash",
     )
     openrouter = OpenRouterProvider(
         provider_key="openrouter-arbiter",
@@ -573,7 +572,7 @@ async def test_provider_score_requires_api_key_before_http_request() -> None:
     provider = DeepSeekProvider(
         provider_key="deepseek-direct",
         base_url="https://api.deepseek.com/v1",
-        model_name="deepseek-chat",
+        model_name="deepseek-v4-flash",
         api_key=None,
     )
 

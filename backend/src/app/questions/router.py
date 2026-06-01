@@ -70,6 +70,7 @@ from app.questions.service import (
     get_question_by_id,
     get_tag_by_id,
     get_or_create_named_private_question_bank,
+    get_or_create_root_knowledge_question_bank,
     analyze_imported_question,
     build_import_draft_from_segment,
     complete_import_draft_with_ai,
@@ -670,6 +671,17 @@ async def import_bulk_create_job_endpoint(
         for knowledge_point_id in question.knowledge_point_ids
     )
     await _ensure_can_read_knowledge_points(db, list(knowledge_point_ids), user, is_admin)
+
+    # 题目随课程进入时未显式选题库的，落入该主知识（课程）对应的默认题库。
+    root_kp = await db.get(KnowledgePoint, root_knowledge_point_id)
+    if root_kp is not None and any(q.question_bank_id is None for q in data.questions):
+        default_bank = await get_or_create_root_knowledge_question_bank(
+            db, user_id=user.id, root_knowledge_point=root_kp
+        )
+        data.questions = [
+            q if q.question_bank_id is not None else q.model_copy(update={"question_bank_id": default_bank.id})
+            for q in data.questions
+        ]
 
     result = await bulk_create_questions_fast(db, data.questions, user.id)
     job = await create_question_import_job(db, user_id=user.id, total_count=result.created)

@@ -14,6 +14,30 @@ def test_router_module_no_longer_exposes_project_router() -> None:
 
 
 @pytest.mark.asyncio
+async def test_update_learning_resource_can_reassociate_node(admin_client, db_session) -> None:
+    original_node_id = uuid.uuid4()
+    next_node_id = uuid.uuid4()
+    create_response = await admin_client.post(
+        f"/api/job-models/models/nodes/{original_node_id}/resources?node_type=kp",
+        json={
+            "resource_type": "document",
+            "title": "课程资料.pdf",
+            "source": "upload",
+        },
+    )
+    assert create_response.status_code == 201
+    resource_id = create_response.json()["id"]
+
+    response = await admin_client.patch(
+        f"/api/job-models/models/resources/{resource_id}",
+        json={"node_id": str(next_node_id)},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["node_id"] == str(next_node_id)
+
+
+@pytest.mark.asyncio
 async def test_list_all_models_passes_model_type_filter(monkeypatch) -> None:
     from app.job_models import router as job_model_router
 

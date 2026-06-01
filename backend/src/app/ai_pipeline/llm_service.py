@@ -1,12 +1,11 @@
 import json
-from typing import Any, Optional
+from typing import Optional
 
 import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai_pipeline.models import PromptTemplate
-from app.config import settings
 
 
 class LLMClient:
@@ -16,7 +15,7 @@ class LLMClient:
         self,
         api_key: str,
         base_url: str = "https://api.deepseek.com/v1",
-        model: str = "deepseek-chat",
+        model: str = "deepseek-v4-flash",
         timeout: float = 60.0,
     ):
         self.api_key = api_key

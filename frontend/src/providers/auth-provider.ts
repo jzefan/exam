@@ -1,6 +1,7 @@
 import type { AuthProvider } from "@refinedev/core";
 import axios from "axios";
 import { purgeAll as purgeAllDrafts, purgeAllExcept as purgeOtherDrafts } from "../lib/exam-draft";
+import { notifyAuthChanged } from "../lib/active-user";
 import type { ITokenResponse, IUser } from "../types";
 import { getUserRole } from "../types/rbac";
 
@@ -34,6 +35,7 @@ export const authProvider: AuthProvider = {
       });
       localStorage.setItem("access_token", data.access_token);
       localStorage.setItem("user", JSON.stringify(data.user));
+      notifyAuthChanged();
       purgeOtherDrafts(data.user.id);
       const isStudent = data.user.organizations.some(
         (o) => o.role_name === "student" || o.role_name === "assessee",
@@ -50,6 +52,7 @@ export const authProvider: AuthProvider = {
   logout: async () => {
     localStorage.removeItem("access_token");
     localStorage.removeItem("user");
+    notifyAuthChanged();
     purgeAllDrafts();
     return { success: true, redirectTo: "/login" };
   },

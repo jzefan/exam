@@ -321,6 +321,35 @@ def _build_generation_user_content(
     return text
 
 
+def _extract_stream_delta_text(choice: Any) -> str | None:
+    if not isinstance(choice, dict):
+        return None
+    delta = choice.get("delta")
+    if not isinstance(delta, dict):
+        return None
+
+    content = delta.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        text = content.get("text")
+        return text if isinstance(text, str) and text else None
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            text = item.get("text")
+            if item_type in {None, "text"} and isinstance(text, str) and text:
+                parts.append(text)
+        return "\n".join(parts) if parts else None
+    return None
+
+
 async def generate_questions_stream(
     db: AsyncSession,
     request: AIGenerateRequest,
@@ -427,8 +456,7 @@ async def generate_questions_stream(
                         choices = parsed.get("choices")
                         if not isinstance(choices, list) or not choices:
                             continue
-                        delta = choices[0].get("delta") if isinstance(choices[0], dict) else None
-                        content = delta.get("content") if isinstance(delta, dict) else None
+                        content = _extract_stream_delta_text(choices[0])
                         if not isinstance(content, str) or not content:
                             continue
 

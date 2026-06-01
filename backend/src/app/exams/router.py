@@ -30,6 +30,7 @@ from app.exams.models import (
     StudentExamSubmission,
     StudentExamSubmissionAnswer,
 )
+from app.teacher_courses.models import ExamSemesterAssignment
 from app.exams.schemas import (
     AnalysisOverall,
     AnswerRecord,
@@ -375,11 +376,20 @@ async def create_exam(
         show_result=body.show_result,
         notes_template=body.notes_template,
         question_mode=body.question_mode,
+        course_kp_id=body.course_kp_id,
         created_by=user.id,
         owner_id=user.id,
     )
     db.add(exam)
     await db.flush()
+
+    # 在某个学期下创建考试/作业时，直接归档到该学期，无需再手动归档。
+    if body.course_semester_id is not None:
+        db.add(
+            ExamSemesterAssignment(
+                exam_id=exam.id, course_semester_id=body.course_semester_id
+            )
+        )
 
     question_items = body.question_items or [
         ExamQuestionItem(question_id=qid, order=i, score_override=None)
@@ -464,6 +474,12 @@ async def delete_exam(
 ) -> None:
     exam = await _get_writable_exam_or_404(db, exam_id, user)
     question_ids = [item.question_id for item in exam.exam_questions]
+
+    await db.execute(
+        delete(ExamSemesterAssignment).where(
+            ExamSemesterAssignment.exam_id == exam.id,
+        )
+    )
 
     if await _exam_has_student_history(db, exam.id):
         exam.deleted_at = datetime.now(timezone.utc)

@@ -1,7 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useGetIdentity, useList } from "@refinedev/core";
 import { getUserRole } from "@/types/rbac";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import {
   getGeneratedQuestionPersistKey,
@@ -13,6 +20,7 @@ import {
   ArrowRight,
   BookCopy,
   CheckCircle2,
+  ChevronDown,
   CircleAlert,
   FileText,
   Globe2,
@@ -45,12 +53,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { DatePicker } from "@/components/ui/date-picker";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
@@ -70,7 +73,12 @@ import { QuestionSelector } from "./QuestionSelector";
 import { ClassStudentSelector } from "./ClassStudentSelector";
 import { apiRequest } from "@/pages/grading/api";
 import { validateTypeAllocation } from "@/pages/questions/ai-generate-utils";
-import type { IKnowledgePoint, IQuestion, IQuestionBank, QuestionType } from "@/types";
+import type {
+  IKnowledgePoint,
+  IQuestion,
+  IQuestionBank,
+  QuestionType,
+} from "@/types";
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
 import { AIQuestionConfigPanel } from "@/components/questions/ai-question-config-panel";
 import { AIGeneratedQuestionCard } from "@/components/questions/ai-generated-question-card";
@@ -78,7 +86,10 @@ import {
   AI_MODEL_OPTIONS,
   type AIModelProvider,
 } from "@/components/questions/ai-question-config-constants";
-import { KnowledgePointSelector, type SelectedKnowledgePoint } from "@/components/questions/knowledge-point-selector";
+import {
+  KnowledgePointSelector,
+  type SelectedKnowledgePoint,
+} from "@/components/questions/knowledge-point-selector";
 import { AIGenerateLoadingOverlay } from "@/pages/questions/components/ai-generate-loading-overlay";
 import {
   DEFAULT_NOTES,
@@ -160,7 +171,7 @@ const stepItems: {
 const difficultyOptions = [
   { value: 1, label: "容易" },
   { value: 2, label: "较易" },
-  { value: 3, label: "一般" },
+  { value: 3, label: "中等" },
   { value: 4, label: "较难" },
   { value: 5, label: "很难" },
 ];
@@ -175,6 +186,20 @@ const questionTypeLabels: Record<string, string> = {
 };
 
 const ALL_BANKS = "__all_banks__";
+
+// 题型分布预设：教师可为系统支持的所有题型设定数量与每题分值，系统据此从题库抽题。
+const AUTO_TYPE_DISTRIBUTION_OPTIONS: { type: QuestionType; label: string }[] =
+  [
+    { type: "choice", label: "选择题" },
+    { type: "true_false", label: "判断题" },
+    { type: "fill_in", label: "填空题" },
+    { type: "short_answer", label: "简答题" },
+    { type: "essay", label: "论述题" },
+    { type: "code", label: "编程题" },
+  ];
+type TypeAllocation = { count: number; score: number };
+// 覆盖课程核心知识点的目标比例。
+const KNOWLEDGE_COVERAGE_TARGET = 0.8;
 
 function toPickerDate(value: string): Date | undefined {
   if (!value) return undefined;
@@ -226,7 +251,10 @@ function FieldHint({
   );
 }
 
-function shuffleQuestionIds(questions: IQuestion[], count: number): IQuestion[] {
+function shuffleQuestionIds(
+  questions: IQuestion[],
+  count: number,
+): IQuestion[] {
   const next = [...questions];
   for (let i = next.length - 1; i > 0; i -= 1) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -244,18 +272,33 @@ export function ExamWizardForm({
   banner,
 }: ExamWizardFormProps) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navState = (location.state ?? {}) as {
+    backTo?: string;
+    backLabel?: string;
+  };
   const { toast } = useToast();
 
   const [form, setForm] = useState<ExamForm>(initialValues);
   const [currentStep, setCurrentStep] = useState(0);
   const [maxVisitedStep, setMaxVisitedStep] = useState(0);
-  const [questionMode, setQuestionMode] = useState<QuestionMode>(initialValues.question_mode ?? "manual");
+  const [questionMode, setQuestionMode] = useState<QuestionMode>(
+    initialValues.question_mode ?? "manual",
+  );
   const [flowError, setFlowError] = useState<string | null>(null);
   const [showValidationErrors, setShowValidationErrors] = useState(false);
-  const [autoQuestionBankId, setAutoQuestionBankId] = useState<string | null>(null);
+  const [autoQuestionBankId, setAutoQuestionBankId] = useState<string | null>(
+    null,
+  );
   const [autoQuestionCount, setAutoQuestionCount] = useState(10);
   const [autoDifficulties, setAutoDifficulties] = useState<number[]>([2, 3, 4]);
-  const [autoKnowledgeAllocations, setAutoKnowledgeAllocations] = useState<KnowledgePointAllocation[]>([]);
+  const [autoKnowledgeAllocations, setAutoKnowledgeAllocations] = useState<
+    KnowledgePointAllocation[]
+  >([]);
+  const [autoTypeAllocations, setAutoTypeAllocations] = useState<
+    Partial<Record<QuestionType, TypeAllocation>>
+  >({});
+  const [knowledgeQuotaOpen, setKnowledgeQuotaOpen] = useState(false);
   const [autoGeneratedMeta, setAutoGeneratedMeta] = useState<{
     count: number;
     totalScore: number;
@@ -271,28 +314,41 @@ export function ExamWizardForm({
     code: 0,
   });
   const [aiModel, setAIModel] = useState<AIModelProvider>("deepseek");
-  const [mainKnowledgePoint, setMainKnowledgePoint] = useState<SelectedKnowledgePoint | null>(null);
-  const [aiSelectedKnowledgePoints, setAISelectedKnowledgePoints] = useState<SelectedKnowledgePoint[]>([]);
+  const [mainKnowledgePoint, setMainKnowledgePoint] =
+    useState<SelectedKnowledgePoint | null>(null);
+  const [aiSelectedKnowledgePoints, setAISelectedKnowledgePoints] = useState<
+    SelectedKnowledgePoint[]
+  >([]);
   const [aiPrompt, setAIPrompt] = useState("");
   const [aiQuestions, setAIQuestions] = useState<GeneratedQuestion[]>([]);
   const [aiGenerating, setAIGenerating] = useState(false);
   const [aiApplying, setAIApplying] = useState(false);
-  const [persistedAIQuestionKeys, setPersistedAIQuestionKeys] = useState<string[]>([]);
+  const [persistedAIQuestionKeys, setPersistedAIQuestionKeys] = useState<
+    string[]
+  >([]);
   const [aiGeneratedMeta, setAIGeneratedMeta] = useState<{
     count: number;
     totalScore: number;
   } | null>(null);
   const [aiHydratedFromExisting, setAIHydratedFromExisting] = useState(false);
-  const [pendingQuestionMode, setPendingQuestionMode] = useState<QuestionMode | null>(null);
-  const [questionStepFullscreenOpen, setQuestionStepFullscreenOpen] = useState(false);
+  const [pendingQuestionMode, setPendingQuestionMode] =
+    useState<QuestionMode | null>(null);
+  const [questionStepFullscreenOpen, setQuestionStepFullscreenOpen] =
+    useState(false);
   const [previewFullscreenOpen, setPreviewFullscreenOpen] = useState(false);
   const [previewMode, setPreviewMode] = useState<PreviewMode>("order");
-  const [createSubmitIntent, setCreateSubmitIntent] = useState<CreateSubmitIntent>("publish");
-  const [typeScoreDrafts, setTypeScoreDrafts] = useState<Partial<Record<QuestionType, string>>>({});
-  const typeScoreDraftDefaultsRef = useRef<Partial<Record<QuestionType, string>>>({});
+  const [createSubmitIntent, setCreateSubmitIntent] =
+    useState<CreateSubmitIntent>("publish");
+  const [typeScoreDrafts, setTypeScoreDrafts] = useState<
+    Partial<Record<QuestionType, string>>
+  >({});
+  const typeScoreDraftDefaultsRef = useRef<
+    Partial<Record<QuestionType, string>>
+  >({});
   const aiAbortRef = useRef<AbortController | null>(null);
   const currentAIPersistKeys = useMemo(
-    () => aiQuestions.map((question) => getGeneratedQuestionPersistKey(question)),
+    () =>
+      aiQuestions.map((question) => getGeneratedQuestionPersistKey(question)),
     [aiQuestions],
   );
   const hasUnsavedGeneratedQuestions =
@@ -339,12 +395,18 @@ export function ExamWizardForm({
   const isDirty = JSON.stringify(form) !== JSON.stringify(initialValues);
 
   // Per-user title uniqueness check (create mode only).
-  const { data: identity } = useGetIdentity<{ id?: string; primary_org?: { role_name: string } | null }>();
+  const { data: identity } = useGetIdentity<{
+    id?: string;
+    primary_org?: { role_name: string } | null;
+  }>();
   const role = identity ? getUserRole(identity) : "";
   const mainKPTrigger = role === "evaluator" ? "选择主技能点" : "选择课程";
   const [debouncedTitle, setDebouncedTitle] = useState(form.title.trim());
   useEffect(() => {
-    const t = window.setTimeout(() => setDebouncedTitle(form.title.trim()), 300);
+    const t = window.setTimeout(
+      () => setDebouncedTitle(form.title.trim()),
+      300,
+    );
     return () => window.clearTimeout(t);
   }, [form.title]);
 
@@ -382,10 +444,22 @@ export function ExamWizardForm({
     sorters: [{ field: "created_at", order: "desc" }],
     filters: [
       ...(autoQuestionBankId
-        ? [{ field: "question_bank_id", operator: "eq" as const, value: autoQuestionBankId }]
+        ? [
+            {
+              field: "question_bank_id",
+              operator: "eq" as const,
+              value: autoQuestionBankId,
+            },
+          ]
         : []),
       ...(autoDifficulties.length > 0
-        ? [{ field: "difficulty", operator: "in" as const, value: autoDifficulties }]
+        ? [
+            {
+              field: "difficulty",
+              operator: "in" as const,
+              value: autoDifficulties,
+            },
+          ]
         : []),
     ],
     queryOptions: { enabled: questionMode === "auto" && currentStep === 1 },
@@ -394,15 +468,21 @@ export function ExamWizardForm({
   const { query: selectedQuestionQuery } = useList<IQuestion>({
     resource: "questions",
     pagination: { currentPage: 1, pageSize: 500, mode: "server" },
-    filters: form.question_ids.length > 0
-      ? [{ field: "id", operator: "in" as const, value: form.question_ids }]
-      : [],
+    filters:
+      form.question_ids.length > 0
+        ? [{ field: "id", operator: "in" as const, value: form.question_ids }]
+        : [],
     queryOptions: { enabled: form.question_ids.length > 0 },
   });
   const selectedQuestions = useMemo(
     () =>
       Array.from(
-        new Map((selectedQuestionQuery.data?.data ?? []).map((question) => [question.id, question])).values(),
+        new Map(
+          (selectedQuestionQuery.data?.data ?? []).map((question) => [
+            question.id,
+            question,
+          ]),
+        ).values(),
       ),
     [selectedQuestionQuery.data?.data],
   );
@@ -414,12 +494,23 @@ export function ExamWizardForm({
     if (initialValues.question_mode) {
       return null;
     }
-    if (mode !== "edit" || form.question_ids.length === 0 || selectedQuestions.length !== form.question_ids.length) {
+    if (
+      mode !== "edit" ||
+      form.question_ids.length === 0 ||
+      selectedQuestions.length !== form.question_ids.length
+    ) {
       return null;
     }
-    const allFromAIBank = selectedQuestions.every((question) => question.question_bank_name === "AI题库");
+    const allFromAIBank = selectedQuestions.every(
+      (question) => question.question_bank_name === "AI题库",
+    );
     return allFromAIBank ? "ai" : null;
-  }, [form.question_ids.length, initialValues.question_mode, mode, selectedQuestions]);
+  }, [
+    form.question_ids.length,
+    initialValues.question_mode,
+    mode,
+    selectedQuestions,
+  ]);
 
   useEffect(() => {
     if (!initialValues.question_mode && inferredLegacyQuestionMode === "ai") {
@@ -427,7 +518,10 @@ export function ExamWizardForm({
     }
   }, [inferredLegacyQuestionMode, initialValues.question_mode]);
   const sortedQuestionItems = useMemo(
-    () => form.question_items.slice().sort((left, right) => left.order - right.order),
+    () =>
+      form.question_items
+        .slice()
+        .sort((left, right) => left.order - right.order),
     [form.question_items],
   );
   const existingAIQuestions = useMemo<GeneratedQuestion[]>(() => {
@@ -441,7 +535,9 @@ export function ExamWizardForm({
           type: question.type,
           title: question.title,
           content:
-            typeof question.content === "object" && question.content && "text" in question.content
+            typeof question.content === "object" &&
+            question.content &&
+            "text" in question.content
               ? (question.content as { text: string })
               : { text: question.title ?? "" },
           options:
@@ -450,7 +546,10 @@ export function ExamWizardForm({
               : null,
           answer:
             question.answer && typeof question.answer === "object"
-              ? (question.answer as { text?: string; correct?: string | boolean })
+              ? (question.answer as {
+                  text?: string;
+                  correct?: string | boolean;
+                })
               : {},
           analysis: question.analysis,
           difficulty: question.difficulty,
@@ -461,7 +560,12 @@ export function ExamWizardForm({
       .filter((question): question is GeneratedQuestion => question !== null);
   }, [selectedQuestionMap, sortedQuestionItems]);
   useEffect(() => {
-    if (mode !== "edit" || questionMode !== "ai" || aiHydratedFromExisting || aiGenerating) {
+    if (
+      mode !== "edit" ||
+      questionMode !== "ai" ||
+      aiHydratedFromExisting ||
+      aiGenerating
+    ) {
       return;
     }
     if (existingAIQuestions.length === 0) {
@@ -470,10 +574,17 @@ export function ExamWizardForm({
     }
 
     setAIQuestions(existingAIQuestions);
-    setPersistedAIQuestionKeys(existingAIQuestions.map((question) => getGeneratedQuestionPersistKey(question)));
+    setPersistedAIQuestionKeys(
+      existingAIQuestions.map((question) =>
+        getGeneratedQuestionPersistKey(question),
+      ),
+    );
     setAIGeneratedMeta({
       count: existingAIQuestions.length,
-      totalScore: sortedQuestionItems.reduce((sum, item) => sum + (Number(item.score_override) || 0), 0),
+      totalScore: sortedQuestionItems.reduce(
+        (sum, item) => sum + (Number(item.score_override) || 0),
+        0,
+      ),
     });
     setAIHydratedFromExisting(true);
   }, [
@@ -494,7 +605,9 @@ export function ExamWizardForm({
       const existing = grouped.get(type);
       if (existing) {
         existing.count += 1;
-        existing.totalScore = Number((existing.totalScore + (Number(item.score_override) || 0)).toFixed(2));
+        existing.totalScore = Number(
+          (existing.totalScore + (Number(item.score_override) || 0)).toFixed(2),
+        );
         existing.questionIds.push(item.question_id);
         return;
       }
@@ -513,10 +626,13 @@ export function ExamWizardForm({
   }, [selectedQuestionMap, sortedQuestionItems]);
   const questionTypeDraftDefaults = useMemo(
     () =>
-      questionTypeSummaries.reduce<Partial<Record<QuestionType, string>>>((acc, summary) => {
-        acc[summary.type] = String(summary.totalScore);
-        return acc;
-      }, {}),
+      questionTypeSummaries.reduce<Partial<Record<QuestionType, string>>>(
+        (acc, summary) => {
+          acc[summary.type] = String(summary.totalScore);
+          return acc;
+        },
+        {},
+      ),
     [questionTypeSummaries],
   );
   const questionItemsByType = useMemo(
@@ -531,7 +647,9 @@ export function ExamWizardForm({
     [questionTypeSummaries, selectedQuestionMap, sortedQuestionItems],
   );
 
-  const renderQuestionPreviewList = (variant: "embedded" | "fullscreen" = "embedded") => {
+  const renderQuestionPreviewList = (
+    variant: "embedded" | "fullscreen" = "embedded",
+  ) => {
     if (sortedQuestionItems.length === 0) {
       return (
         <div className="rounded-lg border border-dashed border-border/60 bg-muted/10 p-6 text-center text-sm text-muted-foreground">
@@ -541,24 +659,23 @@ export function ExamWizardForm({
     }
 
     return (
-        <div
-          className={cn(
-            "overflow-hidden rounded-2xl bg-muted/10",
-            variant === "embedded" && "exam-paper-preview-scroll max-h-[42rem] overflow-y-scroll",
-          )}
-        >
+      <div
+        className={cn(
+          "overflow-hidden rounded-2xl bg-muted/10",
+          variant === "embedded" &&
+            "exam-paper-preview-scroll max-h-[42rem] overflow-y-scroll",
+        )}
+      >
         {previewMode === "order"
           ? sortedQuestionItems.map((item, index) => {
               const question = selectedQuestionMap.get(item.question_id);
               const invalidScore =
-                !Number.isFinite(item.score_override) || (item.score_override ?? 0) <= 0;
+                !Number.isFinite(item.score_override) ||
+                (item.score_override ?? 0) <= 0;
               const scoreInputId = `${variant}-exam-question-score-${item.question_id}`;
 
               return (
-                <div
-                  key={item.question_id}
-                  className="px-4 py-2"
-                >
+                <div key={item.question_id} className="px-4 py-2">
                   <div className="space-y-1">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="flex min-w-0 flex-wrap items-center gap-3">
@@ -584,13 +701,21 @@ export function ExamWizardForm({
                           min={0.5}
                           step={0.5}
                           value={item.score_override ?? ""}
-                          onChange={(e) => updateQuestionScore(item.question_id, e.target.value)}
+                          onChange={(e) =>
+                            updateQuestionScore(
+                              item.question_id,
+                              e.target.value,
+                            )
+                          }
                           className={cn(
                             "h-8 w-20 bg-white px-2 text-right text-xs shadow-sm",
-                            invalidScore && "border-destructive/50 text-destructive focus-visible:ring-destructive/30",
+                            invalidScore &&
+                              "border-destructive/50 text-destructive focus-visible:ring-destructive/30",
                           )}
                         />
-                        <span className="text-sm text-muted-foreground">分</span>
+                        <span className="text-sm text-muted-foreground">
+                          分
+                        </span>
                       </div>
                     </div>
 
@@ -600,14 +725,18 @@ export function ExamWizardForm({
                         mode="detailed"
                         hideTypeBadge
                         hideAnswer
-                        defaultExpanded
+                        expandOnHover
                         className="w-full border-0 bg-transparent p-0 shadow-none"
                       />
                     ) : (
-                      <p className="text-sm font-medium text-foreground">题目 {index + 1}</p>
+                      <p className="text-sm font-medium text-foreground">
+                        题目 {index + 1}
+                      </p>
                     )}
                     {invalidScore && (
-                      <p className="text-xs text-destructive">考试分数必须大于 0。</p>
+                      <p className="text-xs text-destructive">
+                        考试分数必须大于 0。
+                      </p>
                     )}
                   </div>
                 </div>
@@ -624,8 +753,12 @@ export function ExamWizardForm({
                 <div className="space-y-2">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex min-w-0 flex-wrap items-center gap-3">
-                      <Badge variant="outline">{questionTypeLabels[summary.type]}</Badge>
-                      <span className="text-xs text-muted-foreground">{summary.count} 题</span>
+                      <Badge variant="outline">
+                        {questionTypeLabels[summary.type]}
+                      </Badge>
+                      <span className="text-xs text-muted-foreground">
+                        {summary.count} 题
+                      </span>
                       <span className="text-xs text-muted-foreground">
                         当前合计 {summary.totalScore} 分
                       </span>
@@ -668,14 +801,21 @@ export function ExamWizardForm({
                   {items.map((item, index) => {
                     const question = selectedQuestionMap.get(item.question_id);
                     const invalidScore =
-                      !Number.isFinite(item.score_override) || (item.score_override ?? 0) <= 0;
+                      !Number.isFinite(item.score_override) ||
+                      (item.score_override ?? 0) <= 0;
                     const scoreInputId = `${variant}-exam-question-score-${item.question_id}`;
 
                     return (
-                      <div key={item.question_id} className="space-y-1 rounded-xl bg-background/70 p-2">
+                      <div
+                        key={item.question_id}
+                        className="space-y-1 rounded-xl bg-background/70 p-2"
+                      >
                         <div className="flex flex-wrap items-center justify-between gap-3">
                           <div className="flex min-w-0 flex-wrap items-center gap-3">
-                            <Badge variant="outline">{questionTypeLabels[summary.type]} 第 {index + 1} 题</Badge>
+                            <Badge variant="outline">
+                              {questionTypeLabels[summary.type]} 第 {index + 1}{" "}
+                              题
+                            </Badge>
                             <span className="text-xs text-muted-foreground">
                               题库原始分数：{question?.score ?? "未设置"} 分
                             </span>
@@ -694,14 +834,21 @@ export function ExamWizardForm({
                               min={0.5}
                               step={0.5}
                               value={item.score_override ?? ""}
-                              onChange={(e) => updateQuestionScore(item.question_id, e.target.value)}
+                              onChange={(e) =>
+                                updateQuestionScore(
+                                  item.question_id,
+                                  e.target.value,
+                                )
+                              }
                               className={cn(
                                 "h-8 w-20 bg-white px-2 text-right text-xs shadow-sm",
                                 invalidScore &&
                                   "border-destructive/50 text-destructive focus-visible:ring-destructive/30",
                               )}
                             />
-                            <span className="text-sm text-muted-foreground">分</span>
+                            <span className="text-sm text-muted-foreground">
+                              分
+                            </span>
                           </div>
                         </div>
 
@@ -715,10 +862,14 @@ export function ExamWizardForm({
                             className="w-full border-0 bg-transparent p-4 shadow-none transition-all"
                           />
                         ) : (
-                          <p className="text-sm font-medium text-foreground">题目 {index + 1}</p>
+                          <p className="text-sm font-medium text-foreground">
+                            题目 {index + 1}
+                          </p>
                         )}
                         {invalidScore && (
-                          <p className="text-xs text-destructive">考试分数必须大于 0。</p>
+                          <p className="text-xs text-destructive">
+                            考试分数必须大于 0。
+                          </p>
                         )}
                       </div>
                     );
@@ -743,37 +894,120 @@ export function ExamWizardForm({
     .filter((knowledgePoint) => knowledgePoint.availableCount > 0);
 
   const allocationMap = new Map(
-    autoKnowledgeAllocations.map((allocation) => [allocation.knowledgePointId, allocation]),
+    autoKnowledgeAllocations.map((allocation) => [
+      allocation.knowledgePointId,
+      allocation,
+    ]),
   );
-  const aiAllocationState = validateTypeAllocation(aiQuestionCount, aiTypeAlloc);
-  const aiAllocMismatch = aiAllocationState.hasCustomAllocation && !aiAllocationState.isValid;
+  const aiAllocationState = validateTypeAllocation(
+    aiQuestionCount,
+    aiTypeAlloc,
+  );
+  const aiAllocMismatch =
+    aiAllocationState.hasCustomAllocation && !aiAllocationState.isValid;
   const requestedKnowledgeQuestionCount = autoKnowledgeAllocations.reduce(
     (sum, allocation) => sum + allocation.count,
     0,
   );
-  const hasKnowledgeAllocationShortage = autoKnowledgeAllocations.some((allocation) => {
-    const knowledgePoint = availableKnowledgePoints.find((item) => item.id === allocation.knowledgePointId);
-    return !knowledgePoint || allocation.count > knowledgePoint.availableCount;
-  });
+  const hasKnowledgeAllocationShortage = autoKnowledgeAllocations.some(
+    (allocation) => {
+      const knowledgePoint = availableKnowledgePoints.find(
+        (item) => item.id === allocation.knowledgePointId,
+      );
+      return (
+        !knowledgePoint || allocation.count > knowledgePoint.availableCount
+      );
+    },
+  );
   const isKnowledgeAllocationMode = autoKnowledgeAllocations.length > 0;
+
+  // 题型分布：统计当前筛选条件下每种题型的可用题量，并校验数量是否充足。
+  const availableTypeCounts = AUTO_TYPE_DISTRIBUTION_OPTIONS.reduce<
+    Partial<Record<QuestionType, number>>
+  >((counts, option) => {
+    counts[option.type] = autoCandidates.filter(
+      (question) => question.type === option.type,
+    ).length;
+    return counts;
+  }, {});
+  const typeAllocationEntries = (
+    Object.entries(autoTypeAllocations) as [QuestionType, TypeAllocation][]
+  ).filter(([, allocation]) => allocation.count > 0);
+  const isTypeAllocationMode = typeAllocationEntries.length > 0;
+  const requestedTypeQuestionCount = typeAllocationEntries.reduce(
+    (sum, [, allocation]) => sum + allocation.count,
+    0,
+  );
+  const hasTypeAllocationShortage = typeAllocationEntries.some(
+    ([type, allocation]) => allocation.count > (availableTypeCounts[type] ?? 0),
+  );
+
+  // 按章节均匀分布：把目标题量轮转分配到各知识点，优先覆盖更多章节（≥80%）。
+  const buildEvenKnowledgeAllocations = (
+    target: number,
+  ): KnowledgePointAllocation[] => {
+    if (availableKnowledgePoints.length === 0) return [];
+    const total =
+      Number.isFinite(target) && target > 0
+        ? target
+        : availableKnowledgePoints.length;
+    const buckets = availableKnowledgePoints.map((point) => ({
+      knowledgePointId: point.id,
+      count: 0,
+      cap: point.availableCount,
+    }));
+    let remaining = total;
+    let progressed = true;
+    while (remaining > 0 && progressed) {
+      progressed = false;
+      for (const bucket of buckets) {
+        if (remaining <= 0) break;
+        if (bucket.count < bucket.cap) {
+          bucket.count += 1;
+          remaining -= 1;
+          progressed = true;
+        }
+      }
+    }
+    return buckets
+      .filter((bucket) => bucket.count > 0)
+      .map(({ knowledgePointId, count }) => ({ knowledgePointId, count }));
+  };
+
+  // 知识点覆盖度：未手动配额时按出题数量自动均匀配额，并统计覆盖比例是否达到 80% 目标。
+  const effectiveKnowledgeAllocations = isKnowledgeAllocationMode
+    ? autoKnowledgeAllocations
+    : buildEvenKnowledgeAllocations(autoQuestionCount);
+  const knowledgeCoverageTotal = availableKnowledgePoints.length;
+  const knowledgeCoverageCovered = effectiveKnowledgeAllocations.filter(
+    (allocation) => allocation.count > 0,
+  ).length;
+  const knowledgeCoveragePercent =
+    knowledgeCoverageTotal > 0
+      ? Math.round((knowledgeCoverageCovered / knowledgeCoverageTotal) * 100)
+      : 0;
+  const knowledgeCoverageMet =
+    knowledgeCoveragePercent >= KNOWLEDGE_COVERAGE_TARGET * 100;
 
   useEffect(() => {
     setForm((prev) => {
-      const existingMap = new Map(prev.question_items.map((item) => [item.question_id, item]));
+      const existingMap = new Map(
+        prev.question_items.map((item) => [item.question_id, item]),
+      );
       const nextQuestionItems = prev.question_ids.map((questionId, index) => {
         const existing = existingMap.get(questionId);
         const question = selectedQuestionMap.get(questionId);
         return {
           question_id: questionId,
           order: index,
-          score_override:
-            existing?.score_override ??
-            question?.score ??
-            null,
+          score_override: existing?.score_override ?? question?.score ?? null,
         };
       });
 
-      if (JSON.stringify(nextQuestionItems) === JSON.stringify(prev.question_items)) {
+      if (
+        JSON.stringify(nextQuestionItems) ===
+        JSON.stringify(prev.question_items)
+      ) {
         return prev;
       }
 
@@ -791,14 +1025,20 @@ export function ExamWizardForm({
         .toFixed(2),
     );
 
-    setForm((prev) => (prev.total_score === computedTotal ? prev : { ...prev, total_score: computedTotal }));
+    setForm((prev) =>
+      prev.total_score === computedTotal
+        ? prev
+        : { ...prev, total_score: computedTotal },
+    );
   }, [form.question_items]);
 
   useEffect(() => {
     const previousDefaults = typeScoreDraftDefaultsRef.current;
 
     setTypeScoreDrafts((prev) => {
-      const next = questionTypeSummaries.reduce<Partial<Record<QuestionType, string>>>((acc, summary) => {
+      const next = questionTypeSummaries.reduce<
+        Partial<Record<QuestionType, string>>
+      >((acc, summary) => {
         const defaultValue = questionTypeDraftDefaults[summary.type] ?? "";
         const previousDefaultValue = previousDefaults[summary.type];
         const currentValue = prev[summary.type];
@@ -816,7 +1056,10 @@ export function ExamWizardForm({
     typeScoreDraftDefaultsRef.current = questionTypeDraftDefaults;
   }, [questionTypeDraftDefaults, questionTypeSummaries]);
 
-  const updateField = <K extends keyof ExamForm>(key: K, value: ExamForm[K]) => {
+  const updateField = <K extends keyof ExamForm>(
+    key: K,
+    value: ExamForm[K],
+  ) => {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
@@ -859,7 +1102,8 @@ export function ExamWizardForm({
             return item;
           }
 
-          const cents = baseCents + (matched === summary.count - 1 ? remainder : 0);
+          const cents =
+            baseCents + (matched === summary.count - 1 ? remainder : 0);
           matched += 1;
           return {
             ...item,
@@ -915,7 +1159,9 @@ export function ExamWizardForm({
   const handleAutoDifficultyChange = (level: number, checked: boolean) => {
     setAutoDifficulties((prev) => {
       if (checked) {
-        return prev.includes(level) ? prev : [...prev, level].sort((a, b) => a - b);
+        return prev.includes(level)
+          ? prev
+          : [...prev, level].sort((a, b) => a - b);
       }
       return prev.filter((item) => item !== level);
     });
@@ -930,6 +1176,7 @@ export function ExamWizardForm({
     setAutoQuestionCount(10);
     setAutoDifficulties([2, 3, 4]);
     setAutoKnowledgeAllocations([]);
+    setAutoTypeAllocations({});
     setAutoGeneratedMeta(null);
     updateField("question_ids", []);
   };
@@ -981,13 +1228,15 @@ export function ExamWizardForm({
       return;
     }
 
-    const hasManualSelection = questionMode === "manual" && form.question_ids.length > 0;
+    const hasManualSelection =
+      questionMode === "manual" && form.question_ids.length > 0;
     const hasAutoSelection =
       questionMode === "auto" &&
       (form.question_ids.length > 0 ||
         autoGeneratedMeta !== null ||
         autoQuestionBankId !== null ||
         autoKnowledgeAllocations.length > 0 ||
+        Object.keys(autoTypeAllocations).length > 0 ||
         autoQuestionCount !== 10 ||
         autoDifficulties.join(",") !== "2,3,4");
     const hasAISelection =
@@ -1010,21 +1259,33 @@ export function ExamWizardForm({
     applyQuestionModeChange(nextMode);
   };
 
-  const handleKnowledgeAllocationToggle = (knowledgePointId: string, checked: boolean) => {
+  const handleKnowledgeAllocationToggle = (
+    knowledgePointId: string,
+    checked: boolean,
+  ) => {
     setAutoGeneratedMeta(null);
     setAutoKnowledgeAllocations((prev) => {
       if (checked) {
-        if (prev.some((allocation) => allocation.knowledgePointId === knowledgePointId)) {
+        if (
+          prev.some(
+            (allocation) => allocation.knowledgePointId === knowledgePointId,
+          )
+        ) {
           return prev;
         }
         return [...prev, { knowledgePointId, count: 1 }];
       }
 
-      return prev.filter((allocation) => allocation.knowledgePointId !== knowledgePointId);
+      return prev.filter(
+        (allocation) => allocation.knowledgePointId !== knowledgePointId,
+      );
     });
   };
 
-  const handleKnowledgeAllocationCountChange = (knowledgePointId: string, value: string) => {
+  const handleKnowledgeAllocationCountChange = (
+    knowledgePointId: string,
+    value: string,
+  ) => {
     const nextCount = Math.max(0, parseInt(value, 10) || 0);
     setAutoGeneratedMeta(null);
     setAutoKnowledgeAllocations((prev) =>
@@ -1038,6 +1299,43 @@ export function ExamWizardForm({
     );
   };
 
+  const handleTypeAllocationCountChange = (
+    type: QuestionType,
+    value: string,
+  ) => {
+    const nextCount = Math.max(0, parseInt(value, 10) || 0);
+    setAutoGeneratedMeta(null);
+    setAutoTypeAllocations((prev) => ({
+      ...prev,
+      [type]: { count: nextCount, score: prev[type]?.score ?? 5 },
+    }));
+  };
+
+  const handleTypeAllocationScoreChange = (
+    type: QuestionType,
+    value: string,
+  ) => {
+    const nextScore = Math.max(0, Number(value) || 0);
+    setAutoGeneratedMeta(null);
+    setAutoTypeAllocations((prev) =>
+      prev[type]
+        ? { ...prev, [type]: { ...prev[type], score: nextScore } }
+        : prev,
+    );
+  };
+
+  // 按章节均匀分布：把出题数量轮转分配到各知识点，优先保证覆盖更多章节（≥80%）。
+  const applyEvenKnowledgeCoverage = () => {
+    setAutoGeneratedMeta(null);
+    const allocations = buildEvenKnowledgeAllocations(autoQuestionCount);
+    if (allocations.length === 0) {
+      setFlowError("当前题库与难度条件下暂无可用知识点，无法均匀覆盖。");
+      return;
+    }
+    setFlowError(null);
+    setAutoKnowledgeAllocations(allocations);
+  };
+
   const handleAutoGenerate = () => {
     setFlowError(null);
     setAutoGeneratedMeta(null);
@@ -1047,7 +1345,72 @@ export function ExamWizardForm({
       return;
     }
 
-    if (!isKnowledgeAllocationMode && (!Number.isFinite(autoQuestionCount) || autoQuestionCount <= 0)) {
+    // 题型分布优先：按预设的题型数量抽题，并使用每种题型的分值。
+    if (isTypeAllocationMode) {
+      if (hasTypeAllocationShortage) {
+        setFlowError("所选题型的可用题量不足，请调整每种题型的题目数量。");
+        return;
+      }
+      if (
+        typeAllocationEntries.some(([, allocation]) => allocation.score <= 0)
+      ) {
+        setFlowError("请为每种已启用的题型设置大于 0 的分值。");
+        return;
+      }
+
+      let typePicked: IQuestion[] = [];
+      const scoreByQuestionId = new Map<string, number>();
+      let remainingTypePool = [...autoCandidates];
+
+      for (const [type, allocation] of typeAllocationEntries) {
+        const candidatesForType = remainingTypePool.filter(
+          (question) => question.type === type,
+        );
+        const selectedForType = shuffleQuestionIds(
+          candidatesForType,
+          allocation.count,
+        );
+        typePicked = [...typePicked, ...selectedForType];
+        selectedForType.forEach((question) =>
+          scoreByQuestionId.set(question.id, allocation.score),
+        );
+        const selectedIds = new Set(
+          selectedForType.map((question) => question.id),
+        );
+        remainingTypePool = remainingTypePool.filter(
+          (question) => !selectedIds.has(question.id),
+        );
+      }
+
+      setForm((prev) => ({
+        ...prev,
+        question_ids: typePicked.map((question) => question.id),
+        question_items: typePicked.map((question, index) => ({
+          question_id: question.id,
+          order: index,
+          score_override:
+            scoreByQuestionId.get(question.id) ?? question.score ?? null,
+        })),
+      }));
+      setAutoGeneratedMeta({
+        count: typePicked.length,
+        totalScore: Number(
+          typePicked
+            .reduce(
+              (sum, question) =>
+                sum + (scoreByQuestionId.get(question.id) ?? question.score),
+              0,
+            )
+            .toFixed(2),
+        ),
+      });
+      return;
+    }
+
+    if (
+      !isKnowledgeAllocationMode &&
+      (!Number.isFinite(autoQuestionCount) || autoQuestionCount <= 0)
+    ) {
       setFlowError("请填写有效的出题数量。");
       return;
     }
@@ -1062,26 +1425,48 @@ export function ExamWizardForm({
       return;
     }
 
-    if (!isKnowledgeAllocationMode && autoCandidates.length < autoQuestionCount) {
-      setFlowError(`当前条件下只有 ${autoCandidates.length} 道题，无法生成 ${autoQuestionCount} 道试题。`);
+    if (
+      !isKnowledgeAllocationMode &&
+      autoCandidates.length < autoQuestionCount
+    ) {
+      setFlowError(
+        `当前条件下只有 ${autoCandidates.length} 道题，无法生成 ${autoQuestionCount} 道试题。`,
+      );
       return;
     }
 
     let picked: IQuestion[] = [];
-    if (isKnowledgeAllocationMode) {
-      let remainingPool = [...autoCandidates];
+    let remainingPool = [...autoCandidates];
+    // 手动配额优先；未手动设置时按出题数量自动均匀覆盖更多章节。
+    const allocations = isKnowledgeAllocationMode
+      ? autoKnowledgeAllocations
+      : buildEvenKnowledgeAllocations(autoQuestionCount);
 
-      for (const allocation of autoKnowledgeAllocations) {
-        const candidatesForKnowledge = remainingPool.filter((question) =>
-          question.knowledge_points.some((knowledgePoint) => knowledgePoint.id === allocation.knowledgePointId),
-        );
-        const selectedForKnowledge = shuffleQuestionIds(candidatesForKnowledge, allocation.count);
-        picked = [...picked, ...selectedForKnowledge];
-        const selectedIds = new Set(selectedForKnowledge.map((question) => question.id));
-        remainingPool = remainingPool.filter((question) => !selectedIds.has(question.id));
-      }
-    } else {
-      picked = shuffleQuestionIds(autoCandidates, autoQuestionCount);
+    for (const allocation of allocations) {
+      const candidatesForKnowledge = remainingPool.filter((question) =>
+        question.knowledge_points.some(
+          (knowledgePoint) => knowledgePoint.id === allocation.knowledgePointId,
+        ),
+      );
+      const selectedForKnowledge = shuffleQuestionIds(
+        candidatesForKnowledge,
+        allocation.count,
+      );
+      picked = [...picked, ...selectedForKnowledge];
+      const selectedIds = new Set(
+        selectedForKnowledge.map((question) => question.id),
+      );
+      remainingPool = remainingPool.filter(
+        (question) => !selectedIds.has(question.id),
+      );
+    }
+
+    // 自动配额下补足到目标数量（覆盖无知识点或章节题量不足的情况）。
+    if (!isKnowledgeAllocationMode && picked.length < autoQuestionCount) {
+      picked = [
+        ...picked,
+        ...shuffleQuestionIds(remainingPool, autoQuestionCount - picked.length),
+      ];
     }
 
     updateField(
@@ -1094,94 +1479,128 @@ export function ExamWizardForm({
     });
   };
 
-  const persistAIQuestions = useCallback(async (
-    questions: GeneratedQuestion[],
-    options: { append?: boolean; showToast?: boolean } = {},
-  ): Promise<number> => {
-    if (questions.length === 0) {
-      toast({
-        title: "请选择题目",
-        description: "请至少生成一道 AI 题目。",
-        variant: "destructive",
-      });
-      return 0;
-    }
-
-    setAIApplying(true);
-    setFlowError(null);
-    try {
-      const banks = await apiRequest<Array<{ id: string; name: string }>>("/question-banks");
-      let bankId = banks.find((bank) => bank.name === "AI题库")?.id;
-      if (!bankId) {
-        const createdBank = await apiRequest<{ id: string }>("/question-banks", {
-          method: "POST",
-          body: JSON.stringify({ name: "AI题库", description: "AI 自动生成的考试题目" }),
-        });
-        bankId = createdBank.id;
-      }
-
-      const createdQuestions = await Promise.all(
-        questions.map((question) =>
-          apiRequest<IQuestion>("/questions", {
-            method: "POST",
-            body: JSON.stringify({
-              type: question.type,
-              title: question.title || question.content.text.slice(0, 120),
-              content: question.content,
-              options: question.options,
-              answer: question.answer,
-              analysis: question.analysis,
-              difficulty: question.difficulty,
-              score: 10,
-              tag_ids: [],
-              knowledge_point_ids: aiSelectedKnowledgePoints.map((item) => item.id),
-              question_bank_id: bankId,
-            }),
-          }),
-        ),
-      );
-
-      const nextQuestionIds = createdQuestions.map((question) => question.id);
-      setForm((prev) => ({
-        ...prev,
-        question_ids: options.append
-          ? Array.from(new Set([...prev.question_ids, ...nextQuestionIds]))
-          : nextQuestionIds,
-      }));
-      setAIQuestions((prev) =>
-        prev.map((question) => {
-          const createdQuestion = createdQuestions[questions.findIndex((item) => item.index === question.index)];
-          return createdQuestion ? { ...question, persistedQuestionId: createdQuestion.id, selected: true } : question;
-        }),
-      );
-      setPersistedAIQuestionKeys((prev) =>
-        Array.from(new Set([...prev, ...questions.map((question) => getGeneratedQuestionPersistKey(question))])),
-      );
-      setAutoGeneratedMeta(null);
-      setAIGeneratedMeta({
-        count: createdQuestions.length,
-        totalScore: createdQuestions.reduce((sum, question) => sum + question.score, 0),
-      });
-      if (options.showToast !== false) {
+  const persistAIQuestions = useCallback(
+    async (
+      questions: GeneratedQuestion[],
+      options: { append?: boolean; showToast?: boolean } = {},
+    ): Promise<number> => {
+      if (questions.length === 0) {
         toast({
-          title: "AI 题目已加入考试",
-          description: `已将 ${createdQuestions.length} 道 AI 题目加入当前考试。`,
+          title: "请选择题目",
+          description: "请至少生成一道 AI 题目。",
+          variant: "destructive",
         });
+        return 0;
       }
-      return createdQuestions.length;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "AI 题目加入考试失败";
-      setFlowError(message);
-      toast({
-        title: "AI 题目加入考试失败",
-        description: message,
-        variant: "destructive",
-      });
-      return 0;
-    } finally {
-      setAIApplying(false);
-    }
-  }, [aiSelectedKnowledgePoints, toast]);
+
+      setAIApplying(true);
+      setFlowError(null);
+      try {
+        const banks =
+          await apiRequest<Array<{ id: string; name: string }>>(
+            "/question-banks",
+          );
+        let bankId = banks.find((bank) => bank.name === "AI题库")?.id;
+        if (!bankId) {
+          const createdBank = await apiRequest<{ id: string }>(
+            "/question-banks",
+            {
+              method: "POST",
+              body: JSON.stringify({
+                name: "AI题库",
+                description: "AI 自动生成的考试题目",
+              }),
+            },
+          );
+          bankId = createdBank.id;
+        }
+
+        const createdQuestions = await Promise.all(
+          questions.map((question) =>
+            apiRequest<IQuestion>("/questions", {
+              method: "POST",
+              body: JSON.stringify({
+                type: question.type,
+                title: question.title || question.content.text.slice(0, 120),
+                content: question.content,
+                options: question.options,
+                answer: question.answer,
+                analysis: question.analysis,
+                difficulty: question.difficulty,
+                score: 10,
+                tag_ids: [],
+                knowledge_point_ids: aiSelectedKnowledgePoints.map(
+                  (item) => item.id,
+                ),
+                question_bank_id: bankId,
+              }),
+            }),
+          ),
+        );
+
+        const nextQuestionIds = createdQuestions.map((question) => question.id);
+        setForm((prev) => ({
+          ...prev,
+          question_ids: options.append
+            ? Array.from(new Set([...prev.question_ids, ...nextQuestionIds]))
+            : nextQuestionIds,
+        }));
+        setAIQuestions((prev) =>
+          prev.map((question) => {
+            const createdQuestion =
+              createdQuestions[
+                questions.findIndex((item) => item.index === question.index)
+              ];
+            return createdQuestion
+              ? {
+                  ...question,
+                  persistedQuestionId: createdQuestion.id,
+                  selected: true,
+                }
+              : question;
+          }),
+        );
+        setPersistedAIQuestionKeys((prev) =>
+          Array.from(
+            new Set([
+              ...prev,
+              ...questions.map((question) =>
+                getGeneratedQuestionPersistKey(question),
+              ),
+            ]),
+          ),
+        );
+        setAutoGeneratedMeta(null);
+        setAIGeneratedMeta({
+          count: createdQuestions.length,
+          totalScore: createdQuestions.reduce(
+            (sum, question) => sum + question.score,
+            0,
+          ),
+        });
+        if (options.showToast !== false) {
+          toast({
+            title: "AI 题目已加入考试",
+            description: `已将 ${createdQuestions.length} 道 AI 题目加入当前考试。`,
+          });
+        }
+        return createdQuestions.length;
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "AI 题目加入考试失败";
+        setFlowError(message);
+        toast({
+          title: "AI 题目加入考试失败",
+          description: message,
+          variant: "destructive",
+        });
+        return 0;
+      } finally {
+        setAIApplying(false);
+      }
+    },
+    [aiSelectedKnowledgePoints, toast],
+  );
 
   const handleAIGenerate = useCallback(async () => {
     if (aiAllocMismatch) {
@@ -1218,7 +1637,10 @@ export function ExamWizardForm({
         body: JSON.stringify({
           total_count: aiQuestionCount,
           difficulty: aiDifficulty,
-          type_distribution: Object.keys(typeDistribution).length > 0 ? typeDistribution : undefined,
+          type_distribution:
+            Object.keys(typeDistribution).length > 0
+              ? typeDistribution
+              : undefined,
           knowledge_point_ids:
             aiSelectedKnowledgePoints.length > 0
               ? aiSelectedKnowledgePoints.map((item) => item.id)
@@ -1249,7 +1671,9 @@ export function ExamWizardForm({
         buffer = parts.pop() ?? "";
 
         for (const part of parts) {
-          const dataLine = part.split("\n").find((line) => line.startsWith("data:"));
+          const dataLine = part
+            .split("\n")
+            .find((line) => line.startsWith("data:"));
           if (!dataLine) continue;
 
           const event = JSON.parse(dataLine.replace(/^data:\s*/, ""));
@@ -1258,7 +1682,9 @@ export function ExamWizardForm({
               index: questionIndex++,
               type: event.data.type ?? "choice",
               title: event.data.title ?? "",
-              content: { text: event.data.content?.text ?? event.data.title ?? "" },
+              content: {
+                text: event.data.content?.text ?? event.data.title ?? "",
+              },
               options: event.data.options ?? null,
               answer: event.data.answer ?? {},
               analysis: event.data.analysis ?? null,
@@ -1267,14 +1693,22 @@ export function ExamWizardForm({
             };
             nextQuestions = [...nextQuestions, nextQuestion];
             setAIQuestions(nextQuestions);
-            persistPromises.push(persistAIQuestions([nextQuestion], { append: true, showToast: false }));
+            persistPromises.push(
+              persistAIQuestions([nextQuestion], {
+                append: true,
+                showToast: false,
+              }),
+            );
           } else if (event.type === "error") {
             throw new Error(event.message ?? "AI 生成失败");
           }
         }
       }
 
-      const persistedCount = (await Promise.all(persistPromises)).reduce((sum, count) => sum + count, 0);
+      const persistedCount = (await Promise.all(persistPromises)).reduce(
+        (sum, count) => sum + count,
+        0,
+      );
       setAIGeneratedMeta({
         count: persistedCount,
         totalScore: persistedCount * 10,
@@ -1318,11 +1752,15 @@ export function ExamWizardForm({
 
   const removeAIQuestion = (index: number) => {
     const target = aiQuestions.find((question) => question.index === index);
-    setAIQuestions((prev) => prev.filter((question) => question.index !== index));
+    setAIQuestions((prev) =>
+      prev.filter((question) => question.index !== index),
+    );
     if (target?.persistedQuestionId) {
       updateField(
         "question_ids",
-        form.question_ids.filter((questionId) => questionId !== target.persistedQuestionId),
+        form.question_ids.filter(
+          (questionId) => questionId !== target.persistedQuestionId,
+        ),
       );
     }
   };
@@ -1366,7 +1804,9 @@ export function ExamWizardForm({
     if (form.question_ids.length === 0) {
       setCurrentStep(1);
       const message =
-        mode === "create" ? "创建考试前必须先选择题目。" : "考试必须包含至少一道题目。";
+        mode === "create"
+          ? "创建考试前必须先选择题目。"
+          : "考试必须包含至少一道题目。";
       setFlowError(message);
       toast({
         title: mode === "create" ? "创建失败" : "保存失败",
@@ -1378,7 +1818,11 @@ export function ExamWizardForm({
 
     if (
       form.question_items.length !== form.question_ids.length ||
-      form.question_items.some((item) => !Number.isFinite(item.score_override) || (item.score_override ?? 0) <= 0)
+      form.question_items.some(
+        (item) =>
+          !Number.isFinite(item.score_override) ||
+          (item.score_override ?? 0) <= 0,
+      )
     ) {
       setCurrentStep(3);
       const message = "请先在试卷预览中为每道题设置有效的考试分数。";
@@ -1394,7 +1838,8 @@ export function ExamWizardForm({
     setCreateSubmitIntent("publish");
     onSubmit({
       ...form,
-      status: mode === "create" ? getPublishedExamStatus(form, now) : form.status,
+      status:
+        mode === "create" ? getPublishedExamStatus(form, now) : form.status,
       question_mode: questionMode,
     });
   };
@@ -1454,31 +1899,11 @@ export function ExamWizardForm({
     </div>
   );
 
-  const renderQuestionStepContent = (variant: "embedded" | "fullscreen" = "embedded") => (
+  const renderQuestionStepContent = (
+    variant: "embedded" | "fullscreen" = "embedded",
+  ) => (
     <div className="space-y-5">
       <div className="grid gap-3 md:grid-cols-3">
-        <button
-          type="button"
-          onClick={() => {
-            requestQuestionModeChange("manual");
-          }}
-          className={`rounded-lg border px-3 py-2 text-left transition-colors ${
-            questionMode === "manual"
-              ? "exam-primary-soft-active shadow-sm"
-              : "border-border bg-background hover:border-primary/40"
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            <BookCopy
-              size={14}
-              className={questionMode === "manual" ? "text-primary" : "text-muted-foreground"}
-            />
-            <p className={cn("text-sm font-semibold", questionMode === "manual" ? "text-primary" : "text-foreground")}>手动选题</p>
-            <span className={cn("ml-auto text-xs line-clamp-1", questionMode === "manual" ? "text-primary/70" : "text-muted-foreground")}>
-              精确控制题目内容、题型和顺序
-            </span>
-          </div>
-        </button>
         <button
           type="button"
           onClick={() => {
@@ -1486,19 +1911,40 @@ export function ExamWizardForm({
           }}
           className={`rounded-lg border px-3 py-2 text-left transition-colors ${
             questionMode === "auto"
-              ? "exam-primary-soft-active shadow-sm"
+              ? "exam-primary-soft-active border-primary shadow-sm"
               : "border-border bg-background hover:border-primary/40"
           }`}
         >
-          <div className="flex items-center gap-2">
+          <div className="flex items-start gap-3">
             <Wand2
               size={14}
-              className={questionMode === "auto" ? "text-primary" : "text-muted-foreground"}
+              className={cn(
+                "mt-0.5 shrink-0",
+                questionMode === "auto"
+                  ? "text-primary"
+                  : "text-muted-foreground",
+              )}
             />
-            <p className={cn("text-sm font-semibold", questionMode === "auto" ? "text-primary" : "text-foreground")}>自动出卷</p>
-            <span className={cn("ml-auto text-xs line-clamp-1", questionMode === "auto" ? "text-primary/70" : "text-muted-foreground")}>
-              按题库与难度随机抽题
-            </span>
+            <div className="min-w-0">
+              <p
+                className={cn(
+                  "text-sm font-semibold",
+                  questionMode === "auto" ? "text-primary" : "text-foreground",
+                )}
+              >
+                自动出卷
+              </p>
+              <p
+                className={cn(
+                  "mt-0.5 text-xs line-clamp-1",
+                  questionMode === "auto"
+                    ? "text-primary/70"
+                    : "text-muted-foreground",
+                )}
+              >
+                按题库与难度随机抽题
+              </p>
+            </div>
           </div>
         </button>
         <button
@@ -1508,19 +1954,85 @@ export function ExamWizardForm({
           }}
           className={`rounded-lg border px-3 py-2 text-left transition-colors ${
             questionMode === "ai"
-              ? "exam-primary-soft-active shadow-sm"
+              ? "exam-primary-soft-active border-primary shadow-sm"
               : "border-border bg-background hover:border-primary/40"
           }`}
         >
-          <div className="flex items-center gap-2">
+          <div className="flex items-start gap-3">
             <Sparkles
               size={14}
-              className={questionMode === "ai" ? "text-primary" : "text-muted-foreground"}
+              className={cn(
+                "mt-0.5 shrink-0",
+                questionMode === "ai"
+                  ? "text-primary"
+                  : "text-muted-foreground",
+              )}
             />
-            <p className={cn("text-sm font-semibold", questionMode === "ai" ? "text-primary" : "text-foreground")}>AI出题</p>
-            <span className={cn("ml-auto text-xs line-clamp-1", questionMode === "ai" ? "text-primary/70" : "text-muted-foreground")}>
-              按配置生成新题并直接加入考试
-            </span>
+            <div className="min-w-0">
+              <p
+                className={cn(
+                  "text-sm font-semibold",
+                  questionMode === "ai" ? "text-primary" : "text-foreground",
+                )}
+              >
+                AI出题
+              </p>
+              <p
+                className={cn(
+                  "mt-0.5 text-xs line-clamp-1",
+                  questionMode === "ai"
+                    ? "text-primary/70"
+                    : "text-muted-foreground",
+                )}
+              >
+                按配置生成新题并直接加入考试
+              </p>
+            </div>
+          </div>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            requestQuestionModeChange("manual");
+          }}
+          className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+            questionMode === "manual"
+              ? "exam-primary-soft-active border-primary shadow-sm"
+              : "border-border bg-background hover:border-primary/40"
+          }`}
+        >
+          <div className="flex items-start gap-3">
+            <BookCopy
+              size={14}
+              className={cn(
+                "mt-0.5 shrink-0",
+                questionMode === "manual"
+                  ? "text-primary"
+                  : "text-muted-foreground",
+              )}
+            />
+            <div className="min-w-0">
+              <p
+                className={cn(
+                  "text-sm font-semibold",
+                  questionMode === "manual"
+                    ? "text-primary"
+                    : "text-foreground",
+                )}
+              >
+                手动选题
+              </p>
+              <p
+                className={cn(
+                  "mt-0.5 text-xs line-clamp-1",
+                  questionMode === "manual"
+                    ? "text-primary/70"
+                    : "text-muted-foreground",
+                )}
+              >
+                精确控制题目内容、题型和顺序
+              </p>
+            </div>
           </div>
         </button>
       </div>
@@ -1536,11 +2048,13 @@ export function ExamWizardForm({
         />
       ) : questionMode === "auto" ? (
         <div className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_140px]">
+          <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_180px]">
             <div className="space-y-1.5">
               <FieldHint
                 label="题库范围"
-                enabled={Boolean(autoQuestionBankId && autoQuestionBankId !== ALL_BANKS)}
+                enabled={Boolean(
+                  autoQuestionBankId && autoQuestionBankId !== ALL_BANKS,
+                )}
               >
                 <div>
                   <Select
@@ -1556,7 +2070,9 @@ export function ExamWizardForm({
                       <SelectItem value={ALL_BANKS}>全部题库</SelectItem>
                       {questionBanks.map((bank) => (
                         <SelectItem key={bank.id} value={bank.id}>
-                          {formatQuestionBankLabel(bank, { showOwner: role === "platform_admin" })}
+                          {formatQuestionBankLabel(bank, {
+                            showOwner: role === "platform_admin",
+                          })}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -1566,16 +2082,33 @@ export function ExamWizardForm({
             </div>
             <div className="space-y-1.5">
               <FieldHint label="出题数量" enabled={Boolean(autoQuestionCount)}>
-                <Input
-                  id="auto-question-count"
-                  type="number"
-                  min={1}
-                  placeholder="出题数量"
-                  aria-label="出题数量"
-                  value={isKnowledgeAllocationMode ? requestedKnowledgeQuestionCount : autoQuestionCount}
-                  onChange={(e) => setAutoQuestionCount(parseInt(e.target.value, 10) || 0)}
-                  disabled={isKnowledgeAllocationMode}
-                />
+                <div className="relative">
+                  <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
+                    抽取
+                  </span>
+                  <Input
+                    id="auto-question-count"
+                    type="number"
+                    min={1}
+                    placeholder="出题数量"
+                    aria-label="出题数量"
+                    value={
+                      isTypeAllocationMode
+                        ? requestedTypeQuestionCount
+                        : isKnowledgeAllocationMode
+                          ? requestedKnowledgeQuestionCount
+                          : autoQuestionCount
+                    }
+                    onChange={(e) =>
+                      setAutoQuestionCount(parseInt(e.target.value, 10) || 0)
+                    }
+                    disabled={isTypeAllocationMode || isKnowledgeAllocationMode}
+                    className="px-11 text-center"
+                  />
+                  <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground">
+                    题
+                  </span>
+                </div>
               </FieldHint>
             </div>
           </div>
@@ -1609,74 +2142,268 @@ export function ExamWizardForm({
           <div className="space-y-3 rounded-xl border border-border/80 bg-muted/20 p-4">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-sm font-semibold text-foreground">技能知识点配额</p>
+                <p className="text-sm font-semibold text-foreground">
+                  题型分布
+                </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  为每个知识点单独设置抽题数量。系统会显示当前筛选条件下的可用题量，不足时不可生成。
+                  预设各题型的数量与每题分值，系统据此从题库自动抽题。设置任一题型数量后将优先按题型分布出题。
                 </p>
               </div>
-              {isKnowledgeAllocationMode && (
-                <Badge variant="secondary">合计 {requestedKnowledgeQuestionCount} 题</Badge>
+              {isTypeAllocationMode && (
+                <Badge variant="secondary">
+                  合计 {requestedTypeQuestionCount} 题
+                </Badge>
               )}
             </div>
 
-            {knowledgePointQuery.isLoading ? (
-              <div className="text-sm text-muted-foreground">知识点加载中...</div>
-            ) : availableKnowledgePoints.length === 0 ? (
-              <div className="text-sm text-muted-foreground">
-                当前题库与难度条件下暂无可用于自动出卷的知识点。
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {availableKnowledgePoints.map((knowledgePoint) => {
-                  const allocation = allocationMap.get(knowledgePoint.id);
-                  const shortage = allocation ? allocation.count > knowledgePoint.availableCount : false;
+            <div className="space-y-2">
+              {AUTO_TYPE_DISTRIBUTION_OPTIONS.map(({ type, label }) => {
+                const allocation = autoTypeAllocations[type];
+                const available = availableTypeCounts[type] ?? 0;
+                const disabled = available <= 0;
+                const shortage = allocation
+                  ? allocation.count > available
+                  : false;
 
-                  return (
-                    <div
-                      key={knowledgePoint.id}
-                      className={`grid gap-3 rounded-lg border p-3 md:grid-cols-[minmax(0,1fr)_120px] ${
-                        allocation ? "border-primary/40 bg-background" : "border-border bg-background/70"
-                      }`}
-                    >
-                      <label className="flex items-start gap-3">
-                        <Checkbox
-                          checked={Boolean(allocation)}
-                          onCheckedChange={(value) =>
-                            handleKnowledgeAllocationToggle(knowledgePoint.id, value === true)
-                          }
-                        />
-                        <span className="min-w-0">
-                          <span className="block text-sm font-medium text-foreground">
-                            {knowledgePoint.name}
-                          </span>
-                          <span className="mt-1 block text-xs text-muted-foreground">
-                            当前可用 {knowledgePoint.availableCount} 题
-                          </span>
-                          {shortage && (
-                            <span className="mt-1 flex items-center gap-1 text-xs text-destructive">
-                              <CircleAlert size={12} />
-                              数量不足，最多可选 {knowledgePoint.availableCount} 题
-                            </span>
-                          )}
+                return (
+                  <div
+                    key={type}
+                    className={cn(
+                      "grid gap-3 rounded-lg border p-3 sm:grid-cols-[minmax(0,1fr)_110px_120px]",
+                      allocation && allocation.count > 0
+                        ? "border-primary/40 bg-background"
+                        : "border-border bg-background/70",
+                      disabled && "opacity-60",
+                    )}
+                  >
+                    <div className="min-w-0">
+                      <span className="block text-sm font-medium text-foreground">
+                        {label}
+                      </span>
+                      <span className="mt-1 block text-xs text-muted-foreground">
+                        {disabled
+                          ? "当前无可用题目"
+                          : `当前可用 ${available} 题`}
+                      </span>
+                      {shortage && (
+                        <span className="mt-1 flex items-center gap-1 text-xs text-destructive">
+                          <CircleAlert size={12} />
+                          数量不足，最多可选 {available} 题
                         </span>
-                      </label>
+                      )}
+                    </div>
 
+                    <Input
+                      type="number"
+                      min={0}
+                      max={available}
+                      aria-label={`${label}数量`}
+                      placeholder="数量"
+                      value={allocation?.count ?? ""}
+                      disabled={disabled}
+                      onChange={(e) =>
+                        handleTypeAllocationCountChange(type, e.target.value)
+                      }
+                    />
+
+                    <div className="relative">
                       <Input
                         type="number"
-                        min={1}
-                        max={knowledgePoint.availableCount}
-                        aria-label={`${knowledgePoint.name}题目数量`}
-                        value={allocation?.count ?? ""}
-                        placeholder="题目数"
-                        disabled={!allocation}
-                        onChange={(e) =>
-                          handleKnowledgeAllocationCountChange(knowledgePoint.id, e.target.value)
+                        min={0.5}
+                        step={0.5}
+                        aria-label={`${label}每题分值`}
+                        placeholder="每题分值"
+                        value={allocation?.score ?? ""}
+                        disabled={
+                          disabled || !allocation || allocation.count <= 0
                         }
+                        onChange={(e) =>
+                          handleTypeAllocationScoreChange(type, e.target.value)
+                        }
+                        className="pr-8"
                       />
+                      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
+                        分
+                      </span>
                     </div>
-                  );
-                })}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="space-y-3 rounded-xl border border-border/80 bg-muted/20 p-4">
+            <button
+              type="button"
+              className="flex w-full items-start justify-between gap-3 text-left"
+              onClick={() => setKnowledgeQuotaOpen((prev) => !prev)}
+              aria-expanded={knowledgeQuotaOpen}
+            >
+              <div>
+                <p className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+                  技能知识点配额
+                  <Badge variant="outline" className="font-normal">
+                    高级
+                  </Badge>
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  默认由系统按出题数量自动均匀配额覆盖更多章节；展开可手动设置每个知识点的抽题数量。
+                </p>
               </div>
+              <span className="flex shrink-0 items-center gap-2">
+                {isKnowledgeAllocationMode && (
+                  <Badge variant="secondary">
+                    合计 {requestedKnowledgeQuestionCount} 题
+                  </Badge>
+                )}
+                <ChevronDown
+                  size={16}
+                  className={cn(
+                    "text-muted-foreground transition-transform",
+                    knowledgeQuotaOpen && "rotate-180",
+                  )}
+                />
+              </span>
+            </button>
+
+            {!knowledgeQuotaOpen && availableKnowledgePoints.length > 0 && (
+              <span
+                className={cn(
+                  "flex items-center gap-1 text-xs font-medium",
+                  knowledgeCoverageMet ? "text-emerald-600" : "text-amber-600",
+                )}
+              >
+                {knowledgeCoverageMet ? (
+                  <CheckCircle2 size={12} />
+                ) : (
+                  <CircleAlert size={12} />
+                )}
+                {isKnowledgeAllocationMode ? "已" : "将自动"}覆盖{" "}
+                {knowledgeCoverageCovered}/{knowledgeCoverageTotal} 个知识点（
+                {knowledgeCoveragePercent}%
+                {knowledgeCoverageMet
+                  ? "，已达 80% 目标"
+                  : "，建议提高出题数量以覆盖 80%"}
+                ）
+              </span>
+            )}
+
+            {knowledgeQuotaOpen && (
+              <>
+                {availableKnowledgePoints.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 text-xs"
+                      onClick={applyEvenKnowledgeCoverage}
+                      disabled={knowledgePointQuery.isLoading}
+                    >
+                      <Wand2 size={14} className="mr-1" />
+                      按章节均匀覆盖
+                    </Button>
+                    <span className="text-xs text-muted-foreground">
+                      依据出题数量在各章节均匀分布，优先覆盖更多核心知识点。
+                    </span>
+                    {isKnowledgeAllocationMode && (
+                      <span
+                        className={cn(
+                          "flex items-center gap-1 text-xs font-medium",
+                          knowledgeCoverageMet
+                            ? "text-emerald-600"
+                            : "text-amber-600",
+                        )}
+                      >
+                        {knowledgeCoverageMet ? (
+                          <CheckCircle2 size={12} />
+                        ) : (
+                          <CircleAlert size={12} />
+                        )}
+                        已覆盖 {knowledgeCoverageCovered}/
+                        {knowledgeCoverageTotal} 个知识点（
+                        {knowledgeCoveragePercent}%
+                        {knowledgeCoverageMet
+                          ? "，已达 80% 目标"
+                          : "，建议提高出题数量以覆盖 80%"}
+                        ）
+                      </span>
+                    )}
+                  </div>
+                )}
+                {knowledgePointQuery.isLoading ? (
+                  <div className="text-sm text-muted-foreground">
+                    知识点加载中...
+                  </div>
+                ) : availableKnowledgePoints.length === 0 ? (
+                  <div className="text-sm text-muted-foreground">
+                    当前题库与难度条件下暂无可用于自动出卷的知识点。
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {availableKnowledgePoints.map((knowledgePoint) => {
+                      const allocation = allocationMap.get(knowledgePoint.id);
+                      const shortage = allocation
+                        ? allocation.count > knowledgePoint.availableCount
+                        : false;
+
+                      return (
+                        <div
+                          key={knowledgePoint.id}
+                          className={`grid gap-3 rounded-lg border p-3 md:grid-cols-[minmax(0,1fr)_120px] ${
+                            allocation
+                              ? "border-primary/40 bg-background"
+                              : "border-border bg-background/70"
+                          }`}
+                        >
+                          <label className="flex items-start gap-3">
+                            <Checkbox
+                              checked={Boolean(allocation)}
+                              onCheckedChange={(value) =>
+                                handleKnowledgeAllocationToggle(
+                                  knowledgePoint.id,
+                                  value === true,
+                                )
+                              }
+                            />
+                            <span className="min-w-0">
+                              <span className="block text-sm font-medium text-foreground">
+                                {knowledgePoint.name}
+                              </span>
+                              <span className="mt-1 block text-xs text-muted-foreground">
+                                当前可用 {knowledgePoint.availableCount} 题
+                              </span>
+                              {shortage && (
+                                <span className="mt-1 flex items-center gap-1 text-xs text-destructive">
+                                  <CircleAlert size={12} />
+                                  数量不足，最多可选{" "}
+                                  {knowledgePoint.availableCount} 题
+                                </span>
+                              )}
+                            </span>
+                          </label>
+
+                          <Input
+                            type="number"
+                            min={1}
+                            max={knowledgePoint.availableCount}
+                            aria-label={`${knowledgePoint.name}题目数量`}
+                            value={allocation?.count ?? ""}
+                            placeholder="题目数"
+                            disabled={!allocation}
+                            onChange={(e) =>
+                              handleKnowledgeAllocationCountChange(
+                                knowledgePoint.id,
+                                e.target.value,
+                              )
+                            }
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
             )}
           </div>
 
@@ -1688,13 +2415,14 @@ export function ExamWizardForm({
                   已选 {form.question_ids.length} 题
                   {autoGeneratedMeta && (
                     <span className="ml-2">
-                      · 最近生成 {autoGeneratedMeta.count} 题 / {autoGeneratedMeta.totalScore} 分
+                      · 最近生成 {autoGeneratedMeta.count} 题 /{" "}
+                      {autoGeneratedMeta.totalScore} 分
                     </span>
                   )}
                 </span>
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
-                满足条件后会随机抽题，并直接覆盖当前已选题目。
+                在出题数量范围内尽量覆盖更多知识点抽题，并直接覆盖当前已选题目。
               </p>
             </div>
             <Button
@@ -1703,9 +2431,12 @@ export function ExamWizardForm({
               disabled={
                 autoQuestionQuery.isLoading ||
                 knowledgePointQuery.isLoading ||
-                (isKnowledgeAllocationMode
-                  ? requestedKnowledgeQuestionCount <= 0 || hasKnowledgeAllocationShortage
-                  : autoQuestionCount <= 0)
+                (isTypeAllocationMode
+                  ? hasTypeAllocationShortage
+                  : isKnowledgeAllocationMode
+                    ? requestedKnowledgeQuestionCount <= 0 ||
+                      hasKnowledgeAllocationShortage
+                    : autoQuestionCount <= 0)
               }
             >
               <Sparkles size={16} className="mr-1" />
@@ -1714,7 +2445,9 @@ export function ExamWizardForm({
           </div>
         </div>
       ) : (
-        <div className={`grid items-start gap-5 xl:grid-cols-[360px_minmax(0,1fr)] xl:[&>*]:self-stretch ${variant === "fullscreen" ? "2xl:grid-cols-[400px_minmax(0,1fr)]" : ""}`}>
+        <div
+          className={`grid items-start gap-5 xl:grid-cols-[360px_minmax(0,1fr)] xl:[&>*]:self-stretch ${variant === "fullscreen" ? "2xl:grid-cols-[400px_minmax(0,1fr)]" : ""}`}
+        >
           <AIQuestionConfigPanel
             title="AI出题设置"
             fetcher={apiRequest}
@@ -1742,12 +2475,22 @@ export function ExamWizardForm({
               <>
                 <div className="flex gap-2">
                   {!aiGenerating ? (
-                    <Button type="button" className="flex-1" onClick={() => void handleAIGenerate()} disabled={aiApplying || aiAllocMismatch}>
+                    <Button
+                      type="button"
+                      className="flex-1"
+                      onClick={() => void handleAIGenerate()}
+                      disabled={aiApplying || aiAllocMismatch}
+                    >
                       <Sparkles size={16} className="mr-1" />
                       开始生成
                     </Button>
                   ) : (
-                    <Button type="button" variant="destructive" className="flex-1" onClick={stopAIGeneration}>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      className="flex-1"
+                      onClick={stopAIGeneration}
+                    >
                       <StopCircle size={16} className="mr-1" />
                       停止生成
                     </Button>
@@ -1772,14 +2515,25 @@ export function ExamWizardForm({
               </div>
             ) : (
               <div className="flex min-h-full max-h-[72vh] flex-1 flex-col overflow-hidden rounded-xl border border-border/80 bg-background">
-                <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border/80 bg-background px-4 py-3">
-                  <p className="text-sm font-semibold text-foreground">
+                <div className="flex flex-wrap items-center gap-3 rounded-xl bg-background px-4 py-3">
+                  <div className="text-sm font-semibold text-foreground">
                     生成结果
                     <span className="ml-2 text-xs font-normal text-muted-foreground">
-                      已自动加入 {aiQuestions.filter((question) => question.persistedQuestionId).length} 道题目
-                      {aiGeneratedMeta && <span className="ml-2">· 最近生成 {aiGeneratedMeta.count} 题 / {aiGeneratedMeta.totalScore} 分</span>}
+                      已自动加入{" "}
+                      {
+                        aiQuestions.filter(
+                          (question) => question.persistedQuestionId,
+                        ).length
+                      }{" "}
+                      道题目
+                      {aiGeneratedMeta && (
+                        <span className="ml-2">
+                          · 最近生成 {aiGeneratedMeta.count} 题 /{" "}
+                          {aiGeneratedMeta.totalScore} 分
+                        </span>
+                      )}
                     </span>
-                  </p>
+                  </div>
                   {aiApplying ? (
                     <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
                       <Loader2 className="size-3.5 animate-spin" />
@@ -1799,7 +2553,9 @@ export function ExamWizardForm({
                 </div>
               </div>
             )}
-            {aiGenerating && <AIGenerateLoadingOverlay generatedCount={aiQuestions.length} />}
+            {aiGenerating && (
+              <AIGenerateLoadingOverlay generatedCount={aiQuestions.length} />
+            )}
           </div>
         </div>
       )}
@@ -1816,8 +2572,8 @@ export function ExamWizardForm({
             ? "按步骤完成基本信息、组卷、选人和设置，最后一次性生成考试。"
             : "按步骤修改考试信息、题目、考生与考试设置。"
         }
-        onBack={() => navigate("/exams")}
-        backLabel="返回考试列表"
+        onBack={() => navigate(navState.backTo ?? "/exams")}
+        backLabel={navState.backLabel ?? "返回考试列表"}
         fullBleed
       />
 
@@ -1843,7 +2599,8 @@ export function ExamWizardForm({
                   const isDone = index < currentStep;
                   // Edit mode lets users jump to any step freely; create mode
                   // still gates forward navigation behind validation.
-                  const isClickable = mode === "edit" || index <= maxVisitedStep;
+                  const isClickable =
+                    mode === "edit" || index <= maxVisitedStep;
 
                   return (
                     <button
@@ -1919,12 +2676,17 @@ export function ExamWizardForm({
                       value={form.title}
                       onChange={(e) => updateField("title", e.target.value)}
                       aria-invalid={Boolean(fieldErrors.title)}
-                      aria-describedby={fieldErrors.title ? "exam-title-error" : undefined}
+                      aria-describedby={
+                        fieldErrors.title ? "exam-title-error" : undefined
+                      }
                       autoFocus
                     />
                   </FieldHint>
                   {fieldErrors.title && (
-                    <p id="exam-title-error" className="text-xs text-destructive">
+                    <p
+                      id="exam-title-error"
+                      className="text-xs text-destructive"
+                    >
                       {fieldErrors.title}
                     </p>
                   )}
@@ -1936,13 +2698,18 @@ export function ExamWizardForm({
                 </div>
 
                 <div className="space-y-1.5">
-                  <FieldHint label="考试描述" enabled={Boolean(form.description)}>
+                  <FieldHint
+                    label="考试描述"
+                    enabled={Boolean(form.description)}
+                  >
                     <Textarea
                       id="exam-description"
                       placeholder="考试描述，给教师或考生补充一些背景说明（可选）"
                       aria-label="考试描述"
                       value={form.description}
-                      onChange={(e) => updateField("description", e.target.value)}
+                      onChange={(e) =>
+                        updateField("description", e.target.value)
+                      }
                       rows={3}
                     />
                   </FieldHint>
@@ -1950,7 +2717,9 @@ export function ExamWizardForm({
 
                 <KnowledgePointSelector
                   fetcher={apiRequest}
-                  selectedKnowledgePoints={mainKnowledgePoint ? [mainKnowledgePoint] : []}
+                  selectedKnowledgePoints={
+                    mainKnowledgePoint ? [mainKnowledgePoint] : []
+                  }
                   onSelectedKnowledgePointsChange={(points) => {
                     const next = points[points.length - 1] ?? null;
                     setMainKnowledgePoint(next);
@@ -1981,11 +2750,19 @@ export function ExamWizardForm({
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div className="space-y-1.5">
-                    <FieldHint label="开始时间" enabled={Boolean(form.start_time)}>
+                    <FieldHint
+                      label="开始时间"
+                      enabled={Boolean(form.start_time)}
+                    >
                       <div>
                         <DatePicker
                           value={startTimeValue}
-                          onChange={(date) => updateField("start_time", toLocalDateTimeValue(date))}
+                          onChange={(date) =>
+                            updateField(
+                              "start_time",
+                              toLocalDateTimeValue(date),
+                            )
+                          }
                           placeholder="开始时间"
                           includeTime
                           minDateTime={mode === "create" ? now : undefined}
@@ -1994,26 +2771,40 @@ export function ExamWizardForm({
                       </div>
                     </FieldHint>
                     {fieldErrors.start_time && (
-                      <p id="exam-start-time-error" className="text-xs text-destructive">
+                      <p
+                        id="exam-start-time-error"
+                        className="text-xs text-destructive"
+                      >
                         {fieldErrors.start_time}
                       </p>
                     )}
                   </div>
                   <div className="space-y-1.5">
-                    <FieldHint label="结束时间" enabled={Boolean(form.end_time)}>
+                    <FieldHint
+                      label="结束时间"
+                      enabled={Boolean(form.end_time)}
+                    >
                       <div>
                         <DatePicker
                           value={endTimeValue}
-                          onChange={(date) => updateField("end_time", toLocalDateTimeValue(date))}
+                          onChange={(date) =>
+                            updateField("end_time", toLocalDateTimeValue(date))
+                          }
                           placeholder="结束时间"
                           includeTime
-                          minDateTime={startTimeValue ?? (mode === "create" ? now : undefined)}
+                          minDateTime={
+                            startTimeValue ??
+                            (mode === "create" ? now : undefined)
+                          }
                           className="h-9 w-full"
                         />
                       </div>
                     </FieldHint>
                     {fieldErrors.end_time && (
-                      <p id="exam-end-time-error" className="text-xs text-destructive">
+                      <p
+                        id="exam-end-time-error"
+                        className="text-xs text-destructive"
+                      >
                         {fieldErrors.end_time}
                       </p>
                     )}
@@ -2022,7 +2813,10 @@ export function ExamWizardForm({
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div className="space-y-1.5">
-                    <FieldHint label="考试时长" enabled={Boolean(form.duration_minutes)}>
+                    <FieldHint
+                      label="考试时长"
+                      enabled={Boolean(form.duration_minutes)}
+                    >
                       <div className="relative">
                         <Input
                           id="exam-duration"
@@ -2032,10 +2826,17 @@ export function ExamWizardForm({
                           aria-label="考试时长（分钟）"
                           value={form.duration_minutes}
                           onChange={(e) =>
-                            updateField("duration_minutes", parseInt(e.target.value, 10) || 60)
+                            updateField(
+                              "duration_minutes",
+                              parseInt(e.target.value, 10) || 60,
+                            )
                           }
                           aria-invalid={Boolean(fieldErrors.duration_minutes)}
-                          aria-describedby={fieldErrors.duration_minutes ? "exam-duration-error" : undefined}
+                          aria-describedby={
+                            fieldErrors.duration_minutes
+                              ? "exam-duration-error"
+                              : undefined
+                          }
                           className="pr-12"
                         />
                         <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground">
@@ -2044,7 +2845,10 @@ export function ExamWizardForm({
                       </div>
                     </FieldHint>
                     {fieldErrors.duration_minutes && (
-                      <p id="exam-duration-error" className="text-xs text-destructive">
+                      <p
+                        id="exam-duration-error"
+                        className="text-xs text-destructive"
+                      >
                         {fieldErrors.duration_minutes}
                       </p>
                     )}
@@ -2060,7 +2864,11 @@ export function ExamWizardForm({
                           aria-label="总分"
                           value={form.total_score}
                           aria-invalid={Boolean(fieldErrors.total_score)}
-                          aria-describedby={fieldErrors.total_score ? "exam-total-score-error" : undefined}
+                          aria-describedby={
+                            fieldErrors.total_score
+                              ? "exam-total-score-error"
+                              : undefined
+                          }
                           className="pr-8"
                         />
                         <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground">
@@ -2069,7 +2877,10 @@ export function ExamWizardForm({
                       </div>
                     </FieldHint>
                     {fieldErrors.total_score && (
-                      <p id="exam-total-score-error" className="text-xs text-destructive">
+                      <p
+                        id="exam-total-score-error"
+                        className="text-xs text-destructive"
+                      >
                         {fieldErrors.total_score}
                       </p>
                     )}
@@ -2105,10 +2916,10 @@ export function ExamWizardForm({
             <Card className="overflow-hidden">
               <CardHeader className="border-b border-border/70">
                 <div className="flex flex-row items-center justify-between gap-3">
-                <CardTitle>第 3 步：选择考试考生</CardTitle>
-                <p className="text-sm font-normal text-muted-foreground">
-                  如果暂时不选，后续在编辑考试时仍可继续添加。
-                </p>
+                  <CardTitle>第 3 步：选择考试考生</CardTitle>
+                  <p className="text-sm font-normal text-muted-foreground">
+                    如果暂时不选，后续在编辑考试时仍可继续添加。
+                  </p>
                 </div>
               </CardHeader>
               <CardContent className="flex flex-col gap-6 p-6">
@@ -2163,13 +2974,17 @@ export function ExamWizardForm({
                             <span
                               className={cn(
                                 "text-sm font-semibold",
-                                option.active ? "text-primary" : "text-foreground",
+                                option.active
+                                  ? "text-primary"
+                                  : "text-foreground",
                               )}
                             >
                               {option.title}
                             </span>
                           </span>
-                          <span className="mt-1 block text-xs leading-5 text-muted-foreground">{option.desc}</span>
+                          <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                            {option.desc}
+                          </span>
                         </span>
                       </button>
                     );
@@ -2189,8 +3004,12 @@ export function ExamWizardForm({
                     <div className="overflow-hidden rounded-xl border border-border">
                       <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-4 py-3">
                         <Link2 className="size-4 text-muted-foreground" />
-                        <span className="text-sm font-semibold text-foreground">考试链接</span>
-                        <span className="ml-auto text-xs text-muted-foreground">发布后自动生成</span>
+                        <span className="text-sm font-semibold text-foreground">
+                          考试链接
+                        </span>
+                        <span className="ml-auto text-xs text-muted-foreground">
+                          发布后自动生成
+                        </span>
                       </div>
                       <div className="flex flex-col gap-4 p-5 md:flex-row md:items-center">
                         <div className="grid size-24 shrink-0 grid-cols-3 gap-1 rounded-xl border border-border bg-muted/30 p-3">
@@ -2199,7 +3018,9 @@ export function ExamWizardForm({
                               key={index}
                               className={cn(
                                 "rounded-sm",
-                                index % 2 === 0 ? "bg-muted-foreground/35" : "bg-background",
+                                index % 2 === 0
+                                  ? "bg-muted-foreground/35"
+                                  : "bg-background",
                               )}
                             />
                           ))}
@@ -2230,6 +3051,7 @@ export function ExamWizardForm({
                   <ClassStudentSelector
                     selectedIds={form.student_ids}
                     onChange={(ids) => updateField("student_ids", ids)}
+                    defaultSupplementCollapsed
                   />
                 )}
               </CardContent>
@@ -2244,19 +3066,30 @@ export function ExamWizardForm({
               <CardContent className="space-y-5">
                 <div className="space-y-4">
                   <div className="space-y-1">
-                    <p className="text-sm font-semibold text-foreground">其它设置</p>
-                    <p className="text-xs text-muted-foreground">先设置考试规则，再继续核对试卷内容与分数。</p>
+                    <p className="text-sm font-semibold text-foreground">
+                      其它设置
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      先设置考试规则，再继续核对试卷内容与分数。
+                    </p>
                   </div>
 
                   <div className="rounded-xl border border-border/60 bg-background/40 px-4">
                     <div className="flex flex-col gap-3 py-3 md:flex-row md:items-center md:justify-between">
                       <div className="min-w-0 space-y-0.5">
-                        <p className="text-sm font-medium text-foreground">允许切屏次数</p>
-                        <p id="exam-max-switch-count-help" className="text-xs text-muted-foreground">
+                        <p className="text-sm font-medium text-foreground">
+                          允许切屏次数
+                        </p>
+                        <p
+                          id="exam-max-switch-count-help"
+                          className="text-xs text-muted-foreground"
+                        >
                           设为 0 表示不限制切屏次数。
                         </p>
                         {fieldErrors.max_switch_count && (
-                          <p className="text-xs text-destructive">{fieldErrors.max_switch_count}</p>
+                          <p className="text-xs text-destructive">
+                            {fieldErrors.max_switch_count}
+                          </p>
                         )}
                       </div>
                       <Input
@@ -2267,7 +3100,10 @@ export function ExamWizardForm({
                         aria-label="允许切屏次数"
                         value={form.max_switch_count}
                         onChange={(e) =>
-                          updateField("max_switch_count", parseInt(e.target.value, 10) || 0)
+                          updateField(
+                            "max_switch_count",
+                            parseInt(e.target.value, 10) || 0,
+                          )
                         }
                         aria-invalid={Boolean(fieldErrors.max_switch_count)}
                         aria-describedby="exam-max-switch-count-help"
@@ -2279,7 +3115,9 @@ export function ExamWizardForm({
 
                     <div className="flex flex-col gap-3 py-3 md:flex-row md:items-center md:justify-between">
                       <div className="min-w-0 space-y-0.5">
-                        <p className="text-sm font-medium text-foreground">允许已提交学生在考试期间重考</p>
+                        <p className="text-sm font-medium text-foreground">
+                          允许已提交学生在考试期间重考
+                        </p>
                         <p className="text-xs text-muted-foreground">
                           开启后，学生提交后只要考试未结束，仍可重新开始一次新的作答。
                         </p>
@@ -2287,7 +3125,9 @@ export function ExamWizardForm({
                       <Switch
                         id="exam-allow-retake"
                         checked={form.allow_retake}
-                        onCheckedChange={(checked) => updateField("allow_retake", checked)}
+                        onCheckedChange={(checked) =>
+                          updateField("allow_retake", checked)
+                        }
                       />
                     </div>
 
@@ -2295,7 +3135,9 @@ export function ExamWizardForm({
 
                     <div className="flex flex-col gap-3 py-3 md:flex-row md:items-center md:justify-between">
                       <div className="min-w-0 space-y-0.5">
-                        <p className="text-sm font-medium text-foreground">允许查看考试结果</p>
+                        <p className="text-sm font-medium text-foreground">
+                          允许查看考试结果
+                        </p>
                         <p className="text-xs text-muted-foreground">
                           考生提交后是否可以查看批改结果详情。
                         </p>
@@ -2303,7 +3145,9 @@ export function ExamWizardForm({
                       <Switch
                         id="exam-show-result"
                         checked={form.show_result}
-                        onCheckedChange={(checked) => updateField("show_result", checked)}
+                        onCheckedChange={(checked) =>
+                          updateField("show_result", checked)
+                        }
                       />
                     </div>
                   </div>
@@ -2313,7 +3157,9 @@ export function ExamWizardForm({
                   <div className="space-y-2 border-t border-border/70 pt-7">
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="text-sm font-semibold text-foreground">试卷预览与考试分数</p>
+                        <p className="text-sm font-semibold text-foreground">
+                          试卷预览与考试分数
+                        </p>
                         <p className="text-xs text-muted-foreground">
                           点击查看试卷完整内容，并为每道题设置考试分数。
                         </p>
@@ -2337,18 +3183,25 @@ export function ExamWizardForm({
                       variant="ghost"
                       size="sm"
                       className="h-8 text-xs"
-                      onClick={() => updateField("notes_template", DEFAULT_NOTES)}
+                      onClick={() =>
+                        updateField("notes_template", DEFAULT_NOTES)
+                      }
                     >
                       使用默认模板
                     </Button>
                   </div>
-                  <FieldHint label="考试注意事项" enabled={Boolean(form.notes_template)}>
+                  <FieldHint
+                    label="考试注意事项"
+                    enabled={Boolean(form.notes_template)}
+                  >
                     <Textarea
                       id="exam-notes"
                       placeholder="考试注意事项，例如：请在规定时间内独立完成，不得切屏或复制外部内容"
                       aria-label="考试注意事项"
                       value={form.notes_template}
-                      onChange={(e) => updateField("notes_template", e.target.value)}
+                      onChange={(e) =>
+                        updateField("notes_template", e.target.value)
+                      }
                       rows={8}
                     />
                   </FieldHint>
@@ -2387,8 +3240,14 @@ export function ExamWizardForm({
               )}
 
               {currentStep < stepItems.length - 1 ? (
-                <Button type="button" className="w-full sm:w-auto" onClick={handleNextStepClick}>
-                  {currentStepId === "students" && form.student_ids.length === 0 ? "跳过并继续" : "下一步"}
+                <Button
+                  type="button"
+                  className="w-full sm:w-auto"
+                  onClick={handleNextStepClick}
+                >
+                  {currentStepId === "students" && form.student_ids.length === 0
+                    ? "跳过并继续"
+                    : "下一步"}
                   <ArrowRight size={16} className="ml-1" />
                 </Button>
               ) : mode === "create" ? (
@@ -2424,8 +3283,7 @@ export function ExamWizardForm({
                     )}
                   </Button>
                 </>
-              ) : null
-              }
+              ) : null}
             </div>
           </div>
         </div>
@@ -2447,9 +3305,14 @@ export function ExamWizardForm({
 
               <div className="space-y-3">
                 {summaryItems.map((item) => (
-                  <div key={item.label} className="flex items-center justify-between gap-3 text-sm">
+                  <div
+                    key={item.label}
+                    className="flex items-center justify-between gap-3 text-sm"
+                  >
                     <span className="text-muted-foreground">{item.label}</span>
-                    <span className="font-medium text-foreground">{item.value}</span>
+                    <span className="font-medium text-foreground">
+                      {item.value}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -2459,8 +3322,16 @@ export function ExamWizardForm({
               <div className="space-y-2">
                 <p className="text-xs text-muted-foreground">组卷方式</p>
                 <div className="flex flex-wrap gap-2">
-                  <Badge variant={questionMode === "manual" ? "secondary" : "outline"}>
-                    {questionMode === "manual" ? "手动选题" : questionMode === "auto" ? "自动出卷" : "AI出题"}
+                  <Badge
+                    variant={
+                      questionMode === "manual" ? "secondary" : "outline"
+                    }
+                  >
+                    {questionMode === "manual"
+                      ? "手动选题"
+                      : questionMode === "auto"
+                        ? "自动出卷"
+                        : "AI出题"}
                   </Badge>
                   {questionMode === "auto" && autoGeneratedMeta && (
                     <Badge variant="outline">
@@ -2479,18 +3350,49 @@ export function ExamWizardForm({
                 <>
                   <Separator />
                   <div className="space-y-2">
-                    <p className="text-xs text-muted-foreground">自动出卷条件</p>
-                    <p className="text-sm text-foreground">
-                      题库：{
-                        autoQuestionBankId
-                          ? questionBanks.find((bank) => bank.id === autoQuestionBankId)?.name ?? "已选题库"
-                          : "全部题库"
-                      }
+                    <p className="text-xs text-muted-foreground">
+                      自动出卷条件
                     </p>
-                    <p className="text-sm text-foreground">数量：{autoQuestionCount} 题</p>
                     <p className="text-sm text-foreground">
-                      难度：{selectedDifficultyLabels.length > 0 ? selectedDifficultyLabels.join(" / ") : "未选择"}
+                      题库：
+                      {autoQuestionBankId
+                        ? (questionBanks.find(
+                            (bank) => bank.id === autoQuestionBankId,
+                          )?.name ?? "已选题库")
+                        : "全部题库"}
                     </p>
+                    <p className="text-sm text-foreground">
+                      数量：
+                      {isTypeAllocationMode
+                        ? requestedTypeQuestionCount
+                        : isKnowledgeAllocationMode
+                          ? requestedKnowledgeQuestionCount
+                          : autoQuestionCount}{" "}
+                      题
+                    </p>
+                    <p className="text-sm text-foreground">
+                      难度：
+                      {selectedDifficultyLabels.length > 0
+                        ? selectedDifficultyLabels.join(" / ")
+                        : "未选择"}
+                    </p>
+                    {isTypeAllocationMode && (
+                      <p className="text-sm text-foreground">
+                        题型分布：
+                        {typeAllocationEntries
+                          .map(
+                            ([type, allocation]) =>
+                              `${questionTypeLabels[type]} ${allocation.count}题×${allocation.score}分`,
+                          )
+                          .join("，")}
+                      </p>
+                    )}
+                    {isKnowledgeAllocationMode && (
+                      <p className="text-sm text-foreground">
+                        知识点覆盖：{knowledgeCoverageCovered}/
+                        {knowledgeCoverageTotal}（{knowledgeCoveragePercent}%）
+                      </p>
+                    )}
                   </div>
                 </>
               )}
@@ -2499,15 +3401,25 @@ export function ExamWizardForm({
                   <Separator />
                   <div className="space-y-2">
                     <p className="text-xs text-muted-foreground">AI出题条件</p>
-                    <p className="text-sm text-foreground">数量：{aiQuestionCount} 题</p>
                     <p className="text-sm text-foreground">
-                      难度：{difficultyOptions.find((item) => item.value === aiDifficulty)?.label ?? aiDifficulty}
+                      数量：{aiQuestionCount} 题
                     </p>
                     <p className="text-sm text-foreground">
-                      模型：{AI_MODEL_OPTIONS.find((item) => item.value === aiModel)?.label ?? aiModel}
+                      难度：
+                      {difficultyOptions.find(
+                        (item) => item.value === aiDifficulty,
+                      )?.label ?? aiDifficulty}
                     </p>
                     <p className="text-sm text-foreground">
-                      知识点：{aiSelectedKnowledgePoints.length > 0 ? `${aiSelectedKnowledgePoints.length} 个` : "未限制"}
+                      模型：
+                      {AI_MODEL_OPTIONS.find((item) => item.value === aiModel)
+                        ?.label ?? aiModel}
+                    </p>
+                    <p className="text-sm text-foreground">
+                      知识点：
+                      {aiSelectedKnowledgePoints.length > 0
+                        ? `${aiSelectedKnowledgePoints.length} 个`
+                        : "未限制"}
                     </p>
                   </div>
                 </>
@@ -2529,7 +3441,9 @@ export function ExamWizardForm({
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
-                  <Badge variant="secondary">卷面总分 {form.total_score} 分</Badge>
+                  <Badge variant="secondary">
+                    卷面总分 {form.total_score} 分
+                  </Badge>
                   {previewModeToggleGroup}
                   <Button
                     type="button"
@@ -2557,8 +3471,12 @@ export function ExamWizardForm({
             <div className="border-b bg-background px-6 py-4">
               <div className="mx-auto flex w-full max-w-[1440px] items-center justify-between gap-3">
                 <div>
-                  <h2 className="text-base font-semibold text-foreground">第 2 步：选择题目 / 自动出卷</h2>
-                  <p className="text-sm text-muted-foreground">全屏查看和操作当前选题内容</p>
+                  <h2 className="text-base font-semibold text-foreground">
+                    第 2 步：选择题目 / 自动出卷
+                  </h2>
+                  <p className="text-sm text-muted-foreground">
+                    全屏查看和操作当前选题内容
+                  </p>
                 </div>
                 <Button
                   type="button"
@@ -2579,7 +3497,10 @@ export function ExamWizardForm({
         </div>
       )}
 
-      <AlertDialog open={pendingQuestionMode !== null} onOpenChange={(open) => !open && setPendingQuestionMode(null)}>
+      <AlertDialog
+        open={pendingQuestionMode !== null}
+        onOpenChange={(open) => !open && setPendingQuestionMode(null)}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>切换选题方式</AlertDialogTitle>

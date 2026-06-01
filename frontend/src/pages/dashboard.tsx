@@ -11,7 +11,7 @@ import {
   FilePlus,
   Briefcase,
   UserCog,
-  Network,
+  LibraryBig,
   Send,
   Upload,
 } from "lucide-react";
@@ -268,10 +268,10 @@ export function Dashboard() {
                 onClick={() => navigate("/students")}
               />
               <QuickAction
-                title="知识点管理"
-                description="维护专业方向、主知识/技能与子知识点"
-                icon={<Network size={18} />}
-                onClick={() => navigate("/knowledge")}
+                title="我的课程"
+                description="维护课程知识点、资料、考试与作业"
+                icon={<LibraryBig size={18} />}
+                onClick={() => navigate("/courses")}
               />
               <QuickAction
                 title="导入题目"

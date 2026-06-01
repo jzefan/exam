@@ -271,11 +271,14 @@ describe("question import helpers", () => {
   it("builds a standard markdown template with difficulty mapping guidance", () => {
     const template = buildStandardImportTemplate();
 
-    expect(template).toContain("很容易 = 1");
+    expect(template).toContain("容易 = 1");
+    expect(template).toContain("较易 = 2");
+    expect(template).toContain("中等 = 3");
+    expect(template).toContain("较难 = 4");
     expect(template).toContain("[题型] 选择题");
     expect(template).toContain("[答案] A");
     expect(template).toContain("[解析] 北京是中国首都。");
-    expect(template).toContain("[难度] 一般");
+    expect(template).toContain("[难度] 中等");
   });
 
   it("extracts markdown image metadata for ai-full analysis payloads", async () => {

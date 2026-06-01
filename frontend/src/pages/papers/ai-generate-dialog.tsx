@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Loader2, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
@@ -12,7 +13,6 @@ import {
   getDifficultyStrategyLabel,
   PAPER_SOURCE_REUSE_RATE_OPTIONS,
   type PaperDifficultyStrategy,
-  type PaperSourceReuseRate,
 } from "./api";
 import {
   Dialog,
@@ -44,7 +44,7 @@ export function PaperAIGenerateDialog({
   const { toast } = useToast();
   const [difficultyStrategy, setDifficultyStrategy] = useState<PaperDifficultyStrategy>("similar");
   const [preferRootKnowledgePoint, setPreferRootKnowledgePoint] = useState(true);
-  const [sourceReuseRate, setSourceReuseRate] = useState<PaperSourceReuseRate>(0);
+  const [sourceReuseRate, setSourceReuseRate] = useState<number>(0);
   const [submitting, setSubmitting] = useState(false);
   const hasRootKnowledgePoint = Boolean(rootKnowledgePointName);
 
@@ -122,22 +122,43 @@ export function PaperAIGenerateDialog({
 
           <div className="space-y-2">
             <Label>题目重复率</Label>
-            <div className="inline-flex w-full rounded-md border border-border p-1">
-              {PAPER_SOURCE_REUSE_RATE_OPTIONS.map((option) => (
-                <button
-                  key={option}
-                  type="button"
+            <div className="flex w-full items-center gap-2">
+              <div className="inline-flex flex-1 rounded-md border border-border p-1">
+                {PAPER_SOURCE_REUSE_RATE_OPTIONS.map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    disabled={submitting}
+                    onClick={() => setSourceReuseRate(option)}
+                    className={`h-9 flex-1 rounded text-sm ${
+                      sourceReuseRate === option
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {option === 0 ? "不重复" : `≤ ${option}%`}
+                  </button>
+                ))}
+              </div>
+              <div className="relative shrink-0">
+                <Input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={sourceReuseRate}
                   disabled={submitting}
-                  onClick={() => setSourceReuseRate(option)}
-                  className={`h-9 flex-1 rounded text-sm ${
-                    sourceReuseRate === option
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {option === 0 ? "不重复" : `≤ ${option}%`}
-                </button>
-              ))}
+                  aria-label="自定义题目重复率"
+                  onChange={(e) => {
+                    const next = Number(e.target.value);
+                    setSourceReuseRate(Number.isFinite(next) ? Math.min(100, Math.max(0, next)) : 0);
+                  }}
+                  className="h-9 w-28 pr-8"
+                  placeholder="自定义"
+                />
+                <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground">
+                  %
+                </span>
+              </div>
             </div>
             <p className="text-xs text-muted-foreground">
               新试卷中最多复用源试卷题目的占比，其余由 AI 生成。

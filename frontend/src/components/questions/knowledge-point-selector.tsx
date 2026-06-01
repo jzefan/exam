@@ -12,6 +12,7 @@ import {
   getTopRecentKeywords,
   type RecentKeywordState,
 } from "@/pages/questions/ai-generate-utils";
+import { formatMajorName } from "@/lib/knowledge-display";
 import { cn } from "@/lib/utils";
 
 export type SelectedKnowledgePoint = {
@@ -135,7 +136,7 @@ function KnowledgeTreeNodeList({
   nodes: KnowledgeTreeNode[];
   parentId: string | null;
   depth: number;
-  selectionTarget: "root" | "child";
+  selectionTarget: "root" | "child" | "any";
   selectedIds: Set<string>;
   expandedNodes: Set<string>;
   visibleNodeIds: Set<string>;
@@ -157,11 +158,12 @@ function KnowledgeTreeNodeList({
       style={{ paddingLeft: `${depth > 0 ? 20 : 10}px` }}
     >
       {children.map((node) => {
-        const shouldRenderChildren = selectionTarget === "child" || depth > 0;
+        const shouldRenderChildren = selectionTarget !== "root" || depth > 0;
         const hasChildren = shouldRenderChildren && nodes.some((item) => item.parent_id === node.id);
         const isExpanded = expandedNodes.has(node.id);
         const isSelected = selectedIds.has(node.id);
-        const isSelectable = selectionTarget === "root" ? depth === 0 : depth > 0;
+        const isSelectable =
+          selectionTarget === "root" ? depth === 0 : selectionTarget === "any" ? true : depth > 0;
 
         return (
           <div key={node.id} className="space-y-0.5">
@@ -212,6 +214,7 @@ export function KnowledgePointSelector({
   showUsageShortcuts = true,
   onOpenChange,
   filterRootNodeId,
+  hideSelectedBadges = false,
 }: {
   fetcher: KnowledgePointSelectorFetcher;
   selectedKnowledgePoints: SelectedKnowledgePoint[];
@@ -222,17 +225,18 @@ export function KnowledgePointSelector({
   className?: string;
   popoverSide?: "top" | "right" | "bottom" | "left";
   popoverContentStyle?: React.CSSProperties;
-  selectionTarget?: "root" | "child";
+  selectionTarget?: "root" | "child" | "any";
   selectionMode?: "single" | "multiple";
   showUsageShortcuts?: boolean;
   onOpenChange?: (open: boolean) => void;
   filterRootNodeId?: string;
+  /** Hide the chips rendered above the trigger; show selection inside the box with an inline clear button instead. */
+  hideSelectedBadges?: boolean;
 }) {
   const [majors, setMajors] = useState<KnowledgeMajor[]>([]);
   const [directions, setDirections] = useState<Record<string, KnowledgeDirection[]>>({});
   const [treeNodes, setTreeNodes] = useState<Record<string, KnowledgeTreeNode[]>>({});
   const [expandedMajors, setExpandedMajors] = useState<Set<string>>(new Set());
-  const [expandedDirections, setExpandedDirections] = useState<Set<string>>(new Set());
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [keyword, setKeyword] = useState("");
@@ -275,27 +279,27 @@ export function KnowledgePointSelector({
     localStorage.setItem(storageKey, JSON.stringify(recentKeywords));
   }, [recentKeywords, storageKey]);
 
-  const loadDirections = useCallback(
+  // 专业下直接展开主知识（合并该专业所有方向的根节点），方向层不再展示。
+  const loadMajorKnowledge = useCallback(
     async (majorId: string) => {
-      if (directions[majorId]) return;
-      const nextDirections = await fetcher<KnowledgeDirection[]>(`/knowledge/majors/${majorId}/directions`);
-      setDirections((prev) => ({ ...prev, [majorId]: nextDirections }));
-    },
-    [directions, fetcher],
-  );
+      const nextDirections =
+        directions[majorId] ??
+        (await fetcher<KnowledgeDirection[]>(`/knowledge/majors/${majorId}/directions`));
+      setDirections((prev) => (prev[majorId] ? prev : { ...prev, [majorId]: nextDirections }));
 
-  const loadTree = useCallback(
-    async (directionId: string) => {
-      if (treeNodes[directionId]) return;
-      const data = await fetcher<{ nodes: Array<{ id: string; data: KnowledgeTreeNode }> }>(
-        `/knowledge/directions/${directionId}/tree`,
-      );
-      setTreeNodes((prev) => ({
-        ...prev,
-        [directionId]: data.nodes.map((node) => ({ ...node.data, id: node.id })),
-      }));
+      const nextTrees: Record<string, KnowledgeTreeNode[]> = {};
+      for (const direction of nextDirections) {
+        if (treeNodes[direction.id]) continue;
+        const data = await fetcher<{ nodes: Array<{ id: string; data: KnowledgeTreeNode }> }>(
+          `/knowledge/directions/${direction.id}/tree`,
+        );
+        nextTrees[direction.id] = data.nodes.map((node) => ({ ...node.data, id: node.id }));
+      }
+      if (Object.keys(nextTrees).length > 0) {
+        setTreeNodes((prev) => ({ ...prev, ...nextTrees }));
+      }
     },
-    [fetcher, treeNodes],
+    [directions, fetcher, treeNodes],
   );
 
   const ensureKnowledgeTreeReady = useCallback(async () => {
@@ -329,9 +333,9 @@ export function KnowledgePointSelector({
   }, [directions, fetcher, majors, treeNodes]);
 
   const toggleKnowledgePoint = useCallback(
-    (node: KnowledgeTreeNode, majorName: string, directionName: string) => {
+    (node: KnowledgeTreeNode, majorName: string) => {
       const selected = selectedKnowledgePoints.some((item) => item.id === node.id);
-      const nextItem = { id: node.id, name: node.name, path: `${majorName} > ${directionName} > ${node.name}` };
+      const nextItem = { id: node.id, name: node.name, path: `${majorName} > ${node.name}` };
       onSelectedKnowledgePointsChange(
         selected
           ? selectedKnowledgePoints.filter((item) => item.id !== node.id)
@@ -350,7 +354,7 @@ export function KnowledgePointSelector({
   return (
     <div className={cn("space-y-1.5", className)}>
       {label ? <Label>{label}</Label> : null}
-      {selectedKnowledgePoints.length > 0 ? (
+      {selectedKnowledgePoints.length > 0 && !hideSelectedBadges ? (
         <div className="flex flex-wrap gap-1">
           {selectedKnowledgePoints.map((knowledgePoint) => (
             <Badge key={knowledgePoint.id} variant="secondary" className="gap-1 pr-1">
@@ -391,14 +395,40 @@ export function KnowledgePointSelector({
             type="button"
             className="w-full justify-between font-normal"
           >
-            <span className={selectedKnowledgePoints.length === 0 ? "text-muted-foreground" : undefined}>
+            <span
+              className={cn(
+                "min-w-0 truncate",
+                selectedKnowledgePoints.length === 0 && "text-muted-foreground",
+              )}
+            >
               {selectedKnowledgePoints.length > 0
                 ? selectionMode === "single"
                   ? selectedKnowledgePoints[0]?.name
                   : `已选 ${selectedKnowledgePoints.length} 个知识点`
                 : triggerLabel}
             </span>
-            <ChevronDown size={14} className="text-muted-foreground" />
+            <span className="ml-2 flex shrink-0 items-center">
+              {hideSelectedBadges && selectedKnowledgePoints.length > 0 ? (
+                <span
+                  role="button"
+                  tabIndex={0}
+                  aria-label="清除选择"
+                  className="mr-1 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onSelectedKnowledgePointsChange([]);
+                  }}
+                >
+                  <X size={14} />
+                </span>
+              ) : null}
+              <ChevronDown size={14} className="text-muted-foreground" />
+            </span>
           </Button>
         </PopoverTrigger>
         <PopoverContent
@@ -419,7 +449,7 @@ export function KnowledgePointSelector({
                 value={keyword}
                 onChange={(e) => setKeyword(e.target.value)}
                 className="border-0 px-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-                placeholder="搜索专业、方向或知识点..."
+                placeholder="搜索专业或知识点..."
               />
             </div>
             {topRecentKeywords.length > 0 ? (
@@ -523,7 +553,11 @@ export function KnowledgePointSelector({
               majors.map((major) => {
                 const normalizedKeyword = keyword.trim().toLowerCase();
                 const hasKeyword = normalizedKeyword.length > 0;
-                const majorKeywordMatched = hasKeyword && major.name.toLowerCase().includes(normalizedKeyword);
+                const displayMajorName = formatMajorName(major.name);
+                const majorKeywordMatched =
+                  hasKeyword &&
+                  (major.name.toLowerCase().includes(normalizedKeyword) ||
+                    displayMajorName.toLowerCase().includes(normalizedKeyword));
                 const majorExpanded = hasKeyword ? true : expandedMajors.has(major.id);
                 const majorDirections = directions[major.id] ?? [];
                 let visibleDirections = hasKeyword
@@ -547,7 +581,7 @@ export function KnowledgePointSelector({
                 return (
                   <div key={major.id}>
                     <KnowledgeTreeRow
-                      label={major.name}
+                      label={displayMajorName}
                       expanded={majorExpanded}
                       hasChildren
                       onExpand={() => {
@@ -555,7 +589,7 @@ export function KnowledgePointSelector({
                         if (next.has(major.id)) next.delete(major.id);
                         else {
                           next.add(major.id);
-                          void loadDirections(major.id);
+                          void loadMajorKnowledge(major.id);
                         }
                         setExpandedMajors(next);
                       }}
@@ -564,7 +598,7 @@ export function KnowledgePointSelector({
                         if (next.has(major.id)) next.delete(major.id);
                         else {
                           next.add(major.id);
-                          void loadDirections(major.id);
+                          void loadMajorKnowledge(major.id);
                         }
                         setExpandedMajors(next);
                       }}
@@ -575,58 +609,31 @@ export function KnowledgePointSelector({
                     {majorExpanded && visibleDirections.map((direction) => {
                       const nodesForDirection = treeNodes[direction.id] ?? [];
                       const visibility = buildKnowledgeTreeVisibility(nodesForDirection, keyword);
-                      const directionExpanded = hasKeyword ? true : expandedDirections.has(direction.id);
 
+                      // 方向层不再展示，直接把该方向下的主知识合并显示在专业下。
                       return (
                         <div key={direction.id} className="pl-4">
-                          <KnowledgeTreeRow
-                            label={direction.name}
-                            expanded={directionExpanded}
-                            hasChildren
-                            onExpand={() => {
-                              const next = new Set(expandedDirections);
-                              if (next.has(direction.id)) next.delete(direction.id);
-                              else {
-                                next.add(direction.id);
-                                void loadTree(direction.id);
-                              }
-                              setExpandedDirections(next);
+                          <KnowledgeTreeNodeList
+                            nodes={nodesForDirection}
+                            parentId={null}
+                            depth={0}
+                            selectionTarget={selectionTarget}
+                            selectedIds={new Set(selectedKnowledgePoints.map((item) => item.id))}
+                            expandedNodes={
+                              hasKeyword
+                                ? new Set([...expandedNodes, ...visibility.autoExpandedNodeIds])
+                                : expandedNodes
+                            }
+                            visibleNodeIds={visibility.visibleNodeIds}
+                            onToggleExpand={(id) => {
+                              const next = new Set(expandedNodes);
+                              if (next.has(id)) next.delete(id);
+                              else next.add(id);
+                              setExpandedNodes(next);
                             }}
-                            onClick={() => {
-                              const next = new Set(expandedDirections);
-                              if (next.has(direction.id)) next.delete(direction.id);
-                              else {
-                                next.add(direction.id);
-                                void loadTree(direction.id);
-                              }
-                              setExpandedDirections(next);
-                            }}
-                            icon={<KnowledgeIcon className="h-[13px] w-[13px]" />}
-                            tag="方向"
+                            onToggleSelect={(node) => toggleKnowledgePoint(node, displayMajorName)}
+                            filteredRootId={filterRootNodeId}
                           />
-                          {directionExpanded ? (
-                            <KnowledgeTreeNodeList
-                              nodes={nodesForDirection}
-                              parentId={null}
-                              depth={0}
-                              selectionTarget={selectionTarget}
-                              selectedIds={new Set(selectedKnowledgePoints.map((item) => item.id))}
-                              expandedNodes={
-                                hasKeyword
-                                  ? new Set([...expandedNodes, ...visibility.autoExpandedNodeIds])
-                                  : expandedNodes
-                              }
-                              visibleNodeIds={visibility.visibleNodeIds}
-                              onToggleExpand={(id) => {
-                                const next = new Set(expandedNodes);
-                                if (next.has(id)) next.delete(id);
-                                else next.add(id);
-                                setExpandedNodes(next);
-                              }}
-                              onToggleSelect={(node) => toggleKnowledgePoint(node, major.name, direction.name)}
-                              filteredRootId={filterRootNodeId}
-                            />
-                          ) : null}
                         </div>
                       );
                     })}

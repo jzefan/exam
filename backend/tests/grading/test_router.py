@@ -48,7 +48,7 @@ async def _seed_role_binding_v1(db_session: AsyncSession) -> None:
     deepseek_model = ModelConfig(
         key="deepseek-review-v1",
         display_name="DeepSeek Reviewer",
-        model_name="deepseek-chat",
+        model_name="deepseek-v4-flash",
         provider_id=deepseek_provider.id,
         temperature=0.1,
         is_active=True,
@@ -520,7 +520,7 @@ async def test_run_grading_task_endpoint_executes_three_role_flow(
     deepseek_model = ModelConfig(
         key="deepseek-review-v1",
         display_name="DeepSeek Reviewer",
-        model_name="deepseek-chat",
+        model_name="deepseek-v4-flash",
         provider_id=deepseek_provider.id,
         temperature=0.1,
         is_active=True,
@@ -641,7 +641,7 @@ async def test_get_grading_report_returns_rich_code_task_details(
     deepseek_model = ModelConfig(
         key="deepseek-review-v1",
         display_name="DeepSeek Reviewer",
-        model_name="deepseek-chat",
+        model_name="deepseek-v4-flash",
         provider_id=deepseek_provider.id,
         temperature=0.1,
         is_active=True,

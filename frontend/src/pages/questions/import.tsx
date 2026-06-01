@@ -1,6 +1,6 @@
 import { useGetIdentity, useList } from "@refinedev/core";
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   AlertCircle,
   ArrowLeft,
@@ -152,6 +152,13 @@ type AiRecognizeOverlayState =
 
 export function QuestionImportPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navState = (location.state ?? {}) as {
+    backTo?: string;
+    successTo?: string;
+    courseKpId?: string;
+    courseName?: string;
+  };
   const { data: identity } = useGetIdentity<{ primary_org?: { role_name?: string } | null }>();
   const showBankOwner = identity ? getUserRole(identity) === "platform_admin" : false;
   const { toast } = useToast();
@@ -191,7 +198,17 @@ export function QuestionImportPage() {
   const [rootKnowledgePointDialogOpen, setRootKnowledgePointDialogOpen] =
     useState(false);
   const [selectedRootKnowledgePoints, setSelectedRootKnowledgePoints] =
-    useState<SelectedKnowledgePoint[]>([]);
+    useState<SelectedKnowledgePoint[]>(
+      navState.courseKpId
+        ? [
+            {
+              id: navState.courseKpId,
+              name: navState.courseName ?? "课程",
+              path: navState.courseName ?? "",
+            },
+          ]
+        : [],
+    );
   const [activeImportJobId, setActiveImportJobId] = useState<string | null>(
     null,
   );
@@ -832,6 +849,11 @@ export function QuestionImportPage() {
           });
         }
       }
+      // 从课程详情等来源进入时，导入成功后回到来源页（如课程的题目 tab）。
+      const returnTo = navState.successTo ?? navState.backTo;
+      if (returnTo && failedCount === 0 && importedCount > 0) {
+        navigate(returnTo);
+      }
     } catch (error) {
       setParseError(error instanceof Error ? error.message : "导入失败");
     } finally {
@@ -1040,6 +1062,10 @@ export function QuestionImportPage() {
                   setSourceEdits({});
                   setSelectedDraftId(null);
                   setSourceFileName("");
+                  return;
+                }
+                if (navState.backTo) {
+                  navigate(navState.backTo);
                   return;
                 }
                 navigate(

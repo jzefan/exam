@@ -136,5 +136,9 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
     throw new Error(text || `请求失败: ${response.status}`);
   }
 
+  if (response.status === 204 || response.headers.get("content-length") === "0") {
+    return undefined as T;
+  }
+
   return (await response.json()) as T;
 }

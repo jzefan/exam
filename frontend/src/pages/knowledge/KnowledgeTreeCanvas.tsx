@@ -17,6 +17,7 @@ import { KnowledgeNode } from "./KnowledgeNode";
 import { PrerequisiteEdge } from "./PrerequisiteEdge";
 import {
   buildKnowledgeChildCountMap,
+  buildDefaultCollapsedKnowledgeNodeIds,
   getAnchoredViewport,
   layoutVisibleKnowledgeTree,
   toggleKnowledgeNodeCollapse,
@@ -96,10 +97,12 @@ export function KnowledgeTreeCanvas({
   onRenameSubmit,
   onRenameCancel,
 }: Props) {
-  const [collapsedNodeIds, setCollapsedNodeIds] = useState<Set<string>>(new Set());
   const rootNodeId = useMemo(
     () => initialNodes.find((node) => !(node.data as IKnowledgePointDetail).parent_id)?.id ?? null,
     [initialNodes],
+  );
+  const [collapsedNodeIds, setCollapsedNodeIds] = useState<Set<string>>(() =>
+    buildDefaultCollapsedKnowledgeNodeIds(initialNodes, rootNodeId),
   );
   const childCountById = useMemo(() => buildKnowledgeChildCountMap(initialNodes), [initialNodes]);
   const resourceEligibleNodeIds = useMemo(() => {
@@ -124,6 +127,7 @@ export function KnowledgeTreeCanvas({
   const [edges, setEdges, onEdgesChange] = useEdgesState(visibleGraph.edges);
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance | null>(null);
   const pendingViewportRef = useRef<ReturnType<typeof getAnchoredViewport> | null>(null);
+  const collapsedRootNodeIdRef = useRef(rootNodeId);
 
   useLayoutEffect(() => {
     const incomingTargets = new Set(visibleGraph.edges.map((edge) => edge.target));
@@ -181,12 +185,18 @@ export function KnowledgeTreeCanvas({
   ]);
 
   useEffect(() => {
+    if (collapsedRootNodeIdRef.current !== rootNodeId) {
+      collapsedRootNodeIdRef.current = rootNodeId;
+      setCollapsedNodeIds(buildDefaultCollapsedKnowledgeNodeIds(initialNodes, rootNodeId));
+      return;
+    }
+
     const visibleNodeIds = new Set(initialNodes.map((node) => node.id));
     setCollapsedNodeIds((current) => {
       const next = new Set([...current].filter((nodeId) => visibleNodeIds.has(nodeId)));
       return next.size === current.size ? current : next;
     });
-  }, [initialNodes]);
+  }, [initialNodes, rootNodeId]);
 
   useEffect(() => {
     if (!flowInstance || initialNodes.length === 0) {

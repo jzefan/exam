@@ -16,6 +16,7 @@ import {
   Network,
   FileText,
   Wrench,
+  LibraryBig,
 } from "lucide-react";
 import {
   NavigationMenu,
@@ -112,12 +113,15 @@ export function Layout() {
   const isActive = (prefix: string) => location.pathname.startsWith(prefix);
   const role = identity ? getUserRole(identity) : "";
   const isTeacher = role === "teacher" || role === "evaluator";
+  // 我的课程是教师视角入口；evaluator 仍走题库 → 知识点管理。
+  const canUseCourses = role === "teacher";
   const isEnterprise = canAccessJobModels(role) && role !== "platform_admin";
   const isAdmin = role === "platform_admin";
   const isKnowledgePage = location.pathname.startsWith("/knowledge");
   const isGradingPage = location.pathname.startsWith("/grading");
   const isQuestionImportPage = location.pathname === "/questions/import";
   const isPaperImportPage = location.pathname === "/papers/import";
+  const isCoursesPage = location.pathname.startsWith("/courses");
   const isExamWorkflowPage =
     location.pathname === "/exams/practice/create" ||
     location.pathname.startsWith("/exams/practice/edit/") ||
@@ -174,6 +178,25 @@ export function Layout() {
                     >
                       <LayoutDashboard size={16} className="mr-1.5" />
                       工作台
+                    </NavigationMenuLink>
+                  </NavigationMenuItem>
+                )}
+
+                {/* ---- 我的课程 (教师、管理员)；evaluator 不显示 ---- */}
+                {(canUseCourses || isAdmin) && (
+                  <NavigationMenuItem>
+                    <NavigationMenuLink
+                      className={cn(
+                        navigationMenuTriggerStyle(),
+                        isCoursesPage ? "bg-accent/50 text-accent-foreground" : "",
+                      )}
+                      onClick={(e: React.MouseEvent) => {
+                        e.preventDefault();
+                        navigate("/courses");
+                      }}
+                    >
+                      <LibraryBig size={16} className="mr-1.5" />
+                      我的课程
                     </NavigationMenuLink>
                   </NavigationMenuItem>
                 )}
@@ -331,7 +354,7 @@ export function Layout() {
                             为题目打标签，方便筛选检索
                           </NavItem>
                           <NavItem href="/knowledge" title="知识点管理" icon={<Network size={14} />} onNavigate={() => setQuestionMenuOpen(false)}>
-                            可视化知识树，前置依赖管理
+                            管理专业 / 方向 / 主知识点的层级与前置依赖
                           </NavItem>
                         </ul>
                       </DropdownMenuContent>

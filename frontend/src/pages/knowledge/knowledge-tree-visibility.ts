@@ -48,6 +48,39 @@ export function buildKnowledgeChildCountMap(nodes: Node[]): Map<string, number> 
   return counts;
 }
 
+export function buildDefaultCollapsedKnowledgeNodeIds(
+  nodes: Node[],
+  rootId: string | null,
+): Set<string> {
+  const collapsedNodeIds = new Set<string>();
+  if (!rootId) {
+    return collapsedNodeIds;
+  }
+
+  const childIdsByParent = buildKnowledgeChildMap(nodes);
+  const queue: Array<{ id: string; depth: number }> = [{ id: rootId, depth: 0 }];
+  const visitedIds = new Set<string>();
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || visitedIds.has(current.id)) {
+      continue;
+    }
+    visitedIds.add(current.id);
+
+    const childIds = childIdsByParent.get(current.id) ?? [];
+    if (current.depth >= 1 && childIds.length > 0) {
+      collapsedNodeIds.add(current.id);
+    }
+
+    for (const childId of childIds) {
+      queue.push({ id: childId, depth: current.depth + 1 });
+    }
+  }
+
+  return collapsedNodeIds;
+}
+
 export function getVisibleKnowledgeSubtree(
   nodes: Node[],
   edges: Edge[],

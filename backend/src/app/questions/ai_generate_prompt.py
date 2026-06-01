@@ -17,6 +17,7 @@ class KnowledgePointPromptContext(TypedDict):
     course_name: str
     ancestor_names: list[str]
     child_names: list[str]
+    is_course: bool
 
 
 DIFFICULTY_LABELS = {1: "容易", 2: "较易", 3: "中等", 4: "较难", 5: "很难"}
@@ -95,6 +96,37 @@ async def load_knowledge_point_prompt_contexts(
             continue
         child_map.setdefault(child.parent_id, []).append(child.name)
 
+    # 选择了主知识（课程根节点）时，收集其下各级全部子知识点，供 AI 尽量覆盖。
+    descendant_map: dict[uuid.UUID, list[str]] = {}
+    root_direction_ids = {
+        direction.id for kp, direction, _ in selected_rows if kp.parent_id is None
+    }
+    if root_direction_ids:
+        direction_nodes = (
+            await db.execute(
+                select(KnowledgePoint)
+                .where(
+                    KnowledgePoint.direction_id.in_(root_direction_ids),
+                    KnowledgePoint.deleted_at.is_(None),
+                )
+                .order_by(KnowledgePoint.name)
+            )
+        ).scalars().all()
+        children_by_parent: dict[uuid.UUID, list[KnowledgePoint]] = {}
+        for node in direction_nodes:
+            if node.parent_id is not None:
+                children_by_parent.setdefault(node.parent_id, []).append(node)
+        for kp, _, _ in selected_rows:
+            if kp.parent_id is not None:
+                continue
+            names: list[str] = []
+            stack = list(children_by_parent.get(kp.id, []))
+            while stack:
+                current_node = stack.pop(0)
+                names.append(current_node.name)
+                stack.extend(children_by_parent.get(current_node.id, []))
+            descendant_map[kp.id] = names
+
     contexts: list[KnowledgePointPromptContext] = []
     for kp_id in ordered_ids:
         row = selected_map.get(kp_id)
@@ -102,6 +134,7 @@ async def load_knowledge_point_prompt_contexts(
             continue
 
         selected_kp, direction, major = row
+        is_course = selected_kp.parent_id is None
         lineage: list[KnowledgePoint] = []
         current: KnowledgePoint | None = selected_kp
         while current is not None:
@@ -117,7 +150,8 @@ async def load_knowledge_point_prompt_contexts(
                 "direction_name": direction.name,
                 "course_name": lineage[0].name if lineage else selected_kp.name,
                 "ancestor_names": [node.name for node in lineage[:-1]],
-                "child_names": child_map.get(selected_kp.id, []),
+                "child_names": descendant_map.get(selected_kp.id, []) if is_course else child_map.get(selected_kp.id, []),
+                "is_course": is_course,
             }
         )
 
@@ -157,8 +191,22 @@ def build_ai_generate_system_prompt(
                 ]
             )
             if context["child_names"]:
-                context_lines.append(f"   可参考的下级知识点：{'、'.join(context['child_names'])}")
+                shown = "、".join(context["child_names"][:80])
+                suffix = "等" if len(context["child_names"]) > 80 else ""
+                if context.get("is_course"):
+                    context_lines.append(f"   该主知识下需尽量覆盖的各级子知识点：{shown}{suffix}")
+                else:
+                    context_lines.append(f"   可参考的下级知识点：{shown}{suffix}")
         knowledge_context_instruction = "\n".join(context_lines)
+
+    coverage_instruction = ""
+    if any(context.get("is_course") for context in knowledge_contexts):
+        coverage_instruction = (
+            f"本次选择了主知识（课程）整体，请结合题目总数（{total_count} 道）尽量均匀覆盖上述主知识下的各级子知识点，"
+            "扩大知识点覆盖面，避免集中堆叠在少数知识点。"
+        )
+        if user_prompt.strip():
+            coverage_instruction += "若与下方“额外要求”冲突，则以额外要求为主，并在其约束下尽量覆盖更多知识点。"
 
     keyword_instruction = ""
     keywords = _extract_keywords(knowledge_keywords)
@@ -187,6 +235,7 @@ def build_ai_generate_system_prompt(
 - 难度级别：{difficulty_label}（{difficulty}/5）
 - {type_instruction}
 - {knowledge_context_instruction}
+- {coverage_instruction}
 - {keyword_instruction}
 - {extra_instruction}{material_section}
 

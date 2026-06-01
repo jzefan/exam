@@ -113,6 +113,59 @@ async def test_root_knowledge_point_options_include_major_aggregated_details(adm
 
 
 @pytest.mark.asyncio
+async def test_update_knowledge_point_can_move_root_under_another_root(admin_client: AsyncClient):
+    major = (await admin_client.post("/api/knowledge/majors", json={"name": "Move Root Major"})).json()
+    direction_a = (
+        await admin_client.post(
+            "/api/knowledge/directions",
+            json={"major_id": major["id"], "name": "方向A"},
+        )
+    ).json()
+    direction_b = (
+        await admin_client.post(
+            "/api/knowledge/directions",
+            json={"major_id": major["id"], "name": "方向B"},
+        )
+    ).json()
+    source = (
+        await admin_client.post(
+            "/api/knowledge/knowledge-points",
+            json={"direction_id": direction_a["id"], "name": "Python 数据分析"},
+        )
+    ).json()
+    child = (
+        await admin_client.post(
+            "/api/knowledge/knowledge-points",
+            json={
+                "direction_id": direction_a["id"],
+                "parent_id": source["id"],
+                "name": "NumPy 基础",
+            },
+        )
+    ).json()
+    target = (
+        await admin_client.post(
+            "/api/knowledge/knowledge-points",
+            json={"direction_id": direction_b["id"], "name": "卫生信息管理"},
+        )
+    ).json()
+
+    response = await admin_client.put(
+        f"/api/knowledge/knowledge-points/{source['id']}",
+        json={"parent_id": target["id"]},
+    )
+
+    assert response.status_code == 200
+    old_tree = (await admin_client.get(f"/api/knowledge/directions/{direction_a['id']}/tree")).json()
+    assert old_tree["nodes"] == []
+    new_tree = (await admin_client.get(f"/api/knowledge/directions/{direction_b['id']}/tree")).json()
+    by_id = {node["id"]: node["data"] for node in new_tree["nodes"]}
+    assert by_id[source["id"]]["parent_id"] == target["id"]
+    assert by_id[source["id"]]["direction_id"] == direction_b["id"]
+    assert by_id[child["id"]]["direction_id"] == direction_b["id"]
+
+
+@pytest.mark.asyncio
 async def test_admin_lists_new_direction_before_knowledge_points_exist(admin_client: AsyncClient):
     major = (await admin_client.post("/api/knowledge/majors", json={"name": "Physics"})).json()
 
@@ -343,6 +396,47 @@ async def test_catalog_photo_falls_back_to_qwen_vl_when_deepseek_unavailable(mon
         fake_recognize_catalog_with_deepseek_vl,
     )
     monkeypatch.setattr("app.learning.service._recognize_catalog_with_qwen_vl", fake_recognize_catalog_with_qwen_vl)
+
+    response = await recognize_catalog_structure_from_images(
+        CatalogPhotoRecognizeRequest(file_name="catalog.png", images=["data:image/png;base64,ZmFrZQ=="])
+    )
+
+    assert response.paths == [["第1章 数据库系统概述", "1.1 数据模型"]]
+
+
+@pytest.mark.asyncio
+async def test_catalog_photo_treats_text_only_deepseek_model_as_unavailable(monkeypatch):
+    from app.config import settings
+    from app.learning.service import _is_provider_unavailable_error, _recognize_catalog_with_deepseek_vl
+
+    monkeypatch.setattr(settings, "deepseek_api_key", "fake-key")
+    monkeypatch.setattr(settings, "deepseek_model_name", "deepseek-v4-flash")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await _recognize_catalog_with_deepseek_vl(["data:image/png;base64,ZmFrZQ=="])
+
+    assert "视觉模型未配置" in str(exc_info.value)
+    assert _is_provider_unavailable_error(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_catalog_photo_falls_back_to_qwen_vl_when_deepseek_times_out(monkeypatch):
+    from app.learning.schemas import CatalogPhotoRecognizeRequest
+    from app.learning.service import recognize_catalog_structure_from_images
+
+    async def fake_recognize_catalog_with_deepseek_vl(_images: list[str]) -> list[list[str]]:
+        await asyncio.sleep(0.05)
+        return [["不应该使用这个结果"]]
+
+    async def fake_recognize_catalog_with_qwen_vl(_images: list[str]) -> list[list[str]]:
+        return [["第1章 数据库系统概述", "1.1 数据模型"]]
+
+    monkeypatch.setattr(
+        "app.learning.service._recognize_catalog_with_deepseek_vl",
+        fake_recognize_catalog_with_deepseek_vl,
+    )
+    monkeypatch.setattr("app.learning.service._recognize_catalog_with_qwen_vl", fake_recognize_catalog_with_qwen_vl)
+    monkeypatch.setattr("app.learning.service._CATALOG_SINGLE_IMAGE_TIMEOUT_SECONDS", 0.01)
 
     response = await recognize_catalog_structure_from_images(
         CatalogPhotoRecognizeRequest(file_name="catalog.png", images=["data:image/png;base64,ZmFrZQ=="])

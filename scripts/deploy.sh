@@ -361,6 +361,12 @@ if target_includes_backend; then
   log "Building target backend image"
   docker compose build "backend_${TARGET_BACKEND_SLOT}"
 
+  if [[ -n "${ACTIVE_BACKEND_SLOT}" && "${ACTIVE_BACKEND_SLOT}" != "${TARGET_BACKEND_SLOT}" ]]; then
+    log "Ensuring inactive backend slot ${TARGET_BACKEND_SLOT} is stopped before migrations"
+    docker compose stop "backend_${TARGET_BACKEND_SLOT}" || true
+    docker compose rm -f "backend_${TARGET_BACKEND_SLOT}" || true
+  fi
+
   log "Preparing Alembic version table"
   docker compose exec -T db psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" <<'SQL'
 CREATE TABLE IF NOT EXISTS alembic_version (

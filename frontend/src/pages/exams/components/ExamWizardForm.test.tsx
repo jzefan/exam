@@ -13,8 +13,15 @@ const { apiRequestMock } = vi.hoisted(() => ({
 const useGetIdentityMock = vi.fn();
 const useListMock = vi.fn();
 const navigateMock = vi.fn();
-const FUTURE_START_TIME = "2026-05-20T10:00";
-const FUTURE_END_TIME = "2026-05-20T12:00";
+// 始终相对当前时间生成，避免测试依赖具体日期（固定日期会随时间流逝变成过去而导致校验失败）。
+function futureLocalDateTime(offsetMs: number): string {
+  const date = new Date(Date.now() + offsetMs);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+const DAY_MS = 24 * 60 * 60 * 1000;
+const FUTURE_START_TIME = futureLocalDateTime(7 * DAY_MS);
+const FUTURE_END_TIME = futureLocalDateTime(7 * DAY_MS + 2 * 60 * 60 * 1000);
 
 const QUESTION_FIXTURES = [
   {
@@ -276,7 +283,7 @@ describe("ExamWizardForm", () => {
 
     await user.click(screen.getByRole("button", { name: "下一步" }));
 
-    expect(screen.getByText("AI 生成选择题")).toBeInTheDocument();
+    // 预览卡片展示题干（content.text）与解析，而非内部 title 字段。
     expect(screen.getByText("下面哪个选项正确？")).toBeInTheDocument();
     expect(screen.getByText("解析内容")).toBeInTheDocument();
   });
@@ -512,9 +519,10 @@ describe("ExamWizardForm", () => {
     await user.click(screen.getByRole("button", { name: /AI出题/i }));
     expect(screen.getByText("AI出题设置")).toBeInTheDocument();
 
-    const totalCountInput = screen.getByLabelText("题目总数");
-    await user.clear(totalCountInput);
-    await user.type(totalCountInput, "2");
+    // 题目总数由题型分配自动得出：设置 2 道选择题即总数 2。
+    const choiceCountInput = screen.getByLabelText("选择题数量");
+    await user.clear(choiceCountInput);
+    await user.type(choiceCountInput, "2");
 
     await user.click(screen.getByRole("button", { name: "开始生成" }));
     expect(await screen.findByText("下面哪个选项正确？")).toBeInTheDocument();
@@ -563,6 +571,7 @@ describe("ExamWizardForm", () => {
     await user.click(screen.getByRole("button", { name: "下一步" }));
     await user.click(screen.getByRole("button", { name: "下一步" }));
 
+    await user.click(screen.getByRole("button", { name: "预览与设置分数" }));
     await user.click(screen.getByRole("button", { name: "按题型展示" }));
 
     const choiceTotalInput = screen.getByLabelText("题型总分", { selector: "#type-total-score-choice" });
@@ -572,13 +581,13 @@ describe("ExamWizardForm", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByLabelText("考试分数", { selector: "#embedded-exam-question-score-question-1" }),
+        screen.getByLabelText("考试分数", { selector: "#fullscreen-exam-question-score-question-1" }),
       ).toHaveValue(6);
       expect(
-        screen.getByLabelText("考试分数", { selector: "#embedded-exam-question-score-question-2" }),
+        screen.getByLabelText("考试分数", { selector: "#fullscreen-exam-question-score-question-2" }),
       ).toHaveValue(6);
       expect(
-        screen.getByLabelText("考试分数", { selector: "#embedded-exam-question-score-question-3" }),
+        screen.getByLabelText("考试分数", { selector: "#fullscreen-exam-question-score-question-3" }),
       ).toHaveValue(20);
     });
   });

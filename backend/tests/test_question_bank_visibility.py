@@ -7,6 +7,7 @@ from app.auth.models import User
 from app.auth.security import create_access_token
 from app.auth.service import create_user
 from app.common.data_visibility import VisibilityScope
+from app.job_models.models import LearningResource
 from app.learning.models import Direction, KnowledgePoint, Major
 from app.questions.models import Question, QuestionBank, QuestionType
 from app.rbac.models import Organization, Role
@@ -657,7 +658,7 @@ async def test_teacher_bulk_create_reports_existing_duplicate_questions(
 
 
 @pytest.mark.asyncio
-async def test_student_can_save_generated_questions_to_own_course_bank(
+async def test_student_can_save_generated_questions_to_root_knowledge_bank(
     client: AsyncClient,
     db_session,
 ) -> None:
@@ -681,8 +682,17 @@ async def test_student_can_save_generated_questions_to_own_course_bank(
     direction = Direction(name="AI应用", major_id=major.id)
     db_session.add(direction)
     await db_session.flush()
+    root_knowledge = KnowledgePoint(
+        name="Python程序设计",
+        direction_id=direction.id,
+        visibility=VisibilityScope.PLATFORM,
+        owner_id=student_id,
+    )
+    db_session.add(root_knowledge)
+    await db_session.flush()
     knowledge = KnowledgePoint(
         name="计算机视觉",
+        parent_id=root_knowledge.id,
         direction_id=direction.id,
         visibility=VisibilityScope.PLATFORM,
         owner_id=student_id,
@@ -721,7 +731,7 @@ async def test_student_can_save_generated_questions_to_own_course_bank(
 
     bank = await db_session.scalar(
         select(QuestionBank).where(
-            QuestionBank.name == "课程题库",
+            QuestionBank.name == "Python程序设计-题库",
             QuestionBank.owner_id == student_id,
         )
     )
@@ -733,6 +743,41 @@ async def test_student_can_save_generated_questions_to_own_course_bank(
     assert payload["created_question_ids"] == [str(question.id)]
     assert question.question_bank_id == bank.id
     assert question.owner_id == student_id
+
+
+@pytest.mark.asyncio
+async def test_teacher_course_creation_ensures_root_knowledge_bank(
+    client: AsyncClient,
+    db_session,
+) -> None:
+    org = Organization(name="Teacher Course Bank School", type="school", is_active=True)
+    teacher_role = Role(name="teacher", display_name="Teacher", is_system=True)
+    db_session.add_all([org, teacher_role])
+    await db_session.flush()
+
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-course-root-bank",
+        email="teacher-course-root-bank@example.com",
+        full_name="Teacher Course Root Bank",
+    )
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    response = await client.post(
+        "/api/teacher/courses",
+        json={"name": "Python程序设计", "description": "Python 基础课程"},
+    )
+
+    assert response.status_code == 201
+    bank = await db_session.scalar(
+        select(QuestionBank).where(
+            QuestionBank.name == "Python程序设计-题库",
+            QuestionBank.owner_id == teacher.id,
+        )
+    )
+    assert bank is not None
+    assert bank.visibility == VisibilityScope.PRIVATE
 
 
 @pytest.mark.asyncio
@@ -932,3 +977,71 @@ async def test_admin_can_see_all_question_banks_and_questions(admin_client, db_s
     assert payload[0]["owner_id"] == str(teacher.id)
     assert payload[0]["created_by"] == str(teacher.id)
     assert str(admin_user.id) != payload[0]["owner_id"]
+
+
+@pytest.mark.asyncio
+async def test_course_knowledge_tree_returns_nested_rollup_counts(
+    client: AsyncClient,
+    db_session,
+) -> None:
+    org = await _create_org_with_question_roles(db_session)
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-course-tree",
+        email="teacher-course-tree@example.com",
+        full_name="Teacher Course Tree",
+    )
+
+    course = KnowledgePoint(name="大数据分析技术", owner_id=teacher.id, visibility=VisibilityScope.PRIVATE)
+    db_session.add(course)
+    await db_session.flush()
+    intro = KnowledgePoint(name="课程导论", parent_id=course.id, owner_id=teacher.id, visibility=VisibilityScope.PRIVATE)
+    db_session.add(intro)
+    await db_session.flush()
+    leaf_a = KnowledgePoint(name="大数据4V特征", parent_id=intro.id, owner_id=teacher.id, visibility=VisibilityScope.PRIVATE)
+    leaf_b = KnowledgePoint(name="大数据生态", parent_id=intro.id, owner_id=teacher.id, visibility=VisibilityScope.PRIVATE)
+    db_session.add_all([leaf_a, leaf_b])
+    await db_session.flush()
+
+    def _q(title: str, kp: KnowledgePoint) -> Question:
+        return Question(
+            type=QuestionType.SHORT_ANSWER,
+            title=title,
+            content={"text": title},
+            options=None,
+            answer={"points": ["x"]},
+            analysis=None,
+            difficulty=2,
+            score=5,
+            created_by=teacher.id,
+            owner_id=teacher.id,
+            knowledge_points=[kp],
+        )
+
+    db_session.add_all([_q("Q1", leaf_a), _q("Q2", leaf_a), _q("Q3", leaf_b)])
+    db_session.add_all(
+        [
+            LearningResource(node_id=leaf_a.id, node_type="kp", resource_type="link", title="资料A"),
+            LearningResource(node_id=leaf_b.id, node_type="kp", resource_type="link", title="资料B"),
+        ]
+    )
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    response = await client.get(f"/api/teacher/courses/{course.id}/knowledge-tree")
+
+    assert response.status_code == 200
+    root = response.json()
+    assert root["name"] == "大数据分析技术"
+    assert root["question_count"] == 3
+    assert root["material_count"] == 2
+
+    intro_node = root["children"][0]
+    assert intro_node["name"] == "课程导论"
+    assert intro_node["question_count"] == 3
+    assert intro_node["material_count"] == 2
+    assert {child["name"]: child["question_count"] for child in intro_node["children"]} == {
+        "大数据4V特征": 2,
+        "大数据生态": 1,
+    }

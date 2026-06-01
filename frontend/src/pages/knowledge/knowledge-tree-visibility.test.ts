@@ -3,6 +3,7 @@ import type { Edge, Node } from "@xyflow/react";
 
 import type { IKnowledgePointDetail } from "./types";
 import {
+  buildDefaultCollapsedKnowledgeNodeIds,
   buildKnowledgeChildCountMap,
   getAnchoredViewport,
   layoutVisibleKnowledgeTree,
@@ -61,6 +62,22 @@ describe("knowledge tree visibility", () => {
       "chapter-1->lesson-2",
       "root->chapter-2",
       "lesson-1->chapter-2",
+    ]);
+  });
+
+  it("defaults to a course-chapter graph with lower knowledge levels collapsed", () => {
+    const defaultCollapsed = buildDefaultCollapsedKnowledgeNodeIds(nodes, "root");
+    const visible = getVisibleKnowledgeSubtree(nodes, edges, "root", defaultCollapsed);
+
+    expect([...defaultCollapsed]).toEqual(["chapter-1"]);
+    expect(visible.nodes.map((node) => node.id)).toEqual([
+      "root",
+      "chapter-1",
+      "chapter-2",
+    ]);
+    expect(visible.edges.map((edge) => edge.id)).toEqual([
+      "root->chapter-1",
+      "root->chapter-2",
     ]);
   });
 

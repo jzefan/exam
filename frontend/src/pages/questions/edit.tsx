@@ -36,7 +36,7 @@ import {
 const difficulties = [
   { value: "1", label: "容易" },
   { value: "2", label: "较易" },
-  { value: "3", label: "一般" },
+  { value: "3", label: "中等" },
   { value: "4", label: "较难" },
   { value: "5", label: "很难" },
 ];

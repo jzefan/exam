@@ -91,7 +91,7 @@ class Settings(BaseSettings):
     debug: bool = False
     deepseek_api_key: str | None = None
     deepseek_base_url: str = "https://api.deepseek.com/v1"
-    deepseek_model_name: str = "deepseek-chat"
+    deepseek_model_name: str = "deepseek-v4-flash"
     qwen_api_key: str | None = None
     qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     qwen_model_name: str = "qwen-plus"
@@ -1195,4 +1195,3 @@ The plan uses the same object names consistently across tasks:
 7. `build_code_rubric_context`
 8. `build_short_answer_rubric_context`
 9. `should_trigger_arbitration`
-

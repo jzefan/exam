@@ -87,7 +87,7 @@ describe("Dashboard", () => {
 
     const actions = [
       ["学生管理", "/students"],
-      ["知识点管理", "/knowledge"],
+      ["我的课程", "/courses"],
       ["导入题目", "/questions/import"],
       ["创建考试", "/exams/create"],
       ["发布作业", "/exams/practice/create"],

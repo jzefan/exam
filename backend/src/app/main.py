@@ -29,6 +29,7 @@ from app.uploads.router import router as uploads_router
 from app.notifications.router import router as notifications_router
 from app.operations.router import router as operations_router
 from app.papers.router import router as papers_router
+from app.teacher_courses.router import router as teacher_courses_router
 from app.activity_logs.middleware import ActivityContextMiddleware
 from app.activity_logs.router import router as activity_logs_router
 
@@ -40,7 +41,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     import logging
 
     from app.ai_pipeline.models import seed_prompt_templates
-    from app.database import async_session, engine
+    from app.database import async_session, engine, warm_pool
     from app.exams.student_router import _run_subjective_grading_tasks
     from app.grading.seed import seed_grading_defaults
     from app.grading.service import recover_pending_exam_submission_tasks
@@ -53,6 +54,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.auth.user_settings import UserSettings  # noqa: F401
     from app.exams.invitation_models import ExamInvitation, ExamPublicLink  # noqa: F401
     from app.papers.models import Paper, PaperImportSession, PaperQuestion  # noqa: F401
+    from app.teacher_courses.models import CourseSemester, ExamSemesterAssignment  # noqa: F401
     from app.models import Base
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -78,6 +80,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "recovering %d interrupted grading task(s) on startup", len(stuck_task_ids)
         )
         asyncio.create_task(_run_subjective_grading_tasks(stuck_task_ids))
+
+    # Prime the connection pool so the first page-load doesn't pay per-connect
+    # latency on a cold pool (the dominant cause of multi-second request stalls).
+    await warm_pool()
 
     yield
 
@@ -127,6 +133,7 @@ app.include_router(ai_pipeline_router, prefix="/api/ai-pipeline", tags=["ai-pipe
 app.include_router(ai_generate_router, prefix="/api/questions/ai-generate", tags=["ai-generate"])
 app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"])
 app.include_router(papers_router, prefix="/api/papers", tags=["papers"])
+app.include_router(teacher_courses_router, prefix="/api/teacher/courses", tags=["teacher-courses"])
 app.include_router(operations_router, prefix="/api/operations", tags=["operations"])
 app.include_router(activity_logs_router, prefix="/api/operations/activity-logs", tags=["activity-logs"])
 

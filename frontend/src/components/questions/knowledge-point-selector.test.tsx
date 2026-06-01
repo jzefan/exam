@@ -84,7 +84,7 @@ describe("KnowledgePointSelector", () => {
     await waitFor(() => {
       expect(fetcher).toHaveBeenCalledWith("/knowledge/majors/major-1/directions");
     });
-    fireEvent.click(await screen.findByText("应用方向"));
+    // 方向层已隐藏：主知识直接显示在专业下，路径不再包含方向。
     fireEvent.click(await screen.findByText("数据库技术"));
 
     await waitFor(() => {
@@ -92,7 +92,7 @@ describe("KnowledgePointSelector", () => {
         {
           id: "root-1",
           name: "数据库技术",
-          path: "计算机科学与技术 > 应用方向 > 数据库技术",
+          path: "计算机科学与技术 > 数据库技术",
         },
       ]);
     });

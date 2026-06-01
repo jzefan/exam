@@ -1,6 +1,14 @@
-import type { ExamStatus, IExam } from "@/types";
+import type { ExamStatus } from "@/types";
 
-type ExamStatusLike = Pick<IExam, "status" | "start_time" | "end_time">;
+type ExamStatusLike = {
+  status: string;
+  start_time: string | null;
+  end_time: string | null;
+};
+
+function isExamStatus(status: string): status is ExamStatus {
+  return ["draft", "upcoming", "ongoing", "completed", "closed"].includes(status);
+}
 
 export function getEffectiveExamStatus(
   exam: ExamStatusLike,
@@ -26,5 +34,5 @@ export function getEffectiveExamStatus(
     return "ongoing";
   }
 
-  return exam.status;
+  return isExamStatus(exam.status) ? exam.status : "draft";
 }

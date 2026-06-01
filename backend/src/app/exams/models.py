@@ -260,6 +260,9 @@ class Exam(OwnerMixin, BaseModel):
     show_result: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     notes_template: Mapped[str | None] = mapped_column(Text, nullable=True)
     question_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    course_kp_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("knowledge_points.id", ondelete="SET NULL"), nullable=True
+    )
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False)
 
     creator: Mapped["app.auth.models.User"] = relationship(  # type: ignore[name-defined]

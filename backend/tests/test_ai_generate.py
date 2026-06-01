@@ -6,6 +6,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 
 from app.auth.models import User
+from app.config import settings
 from app.learning.models import KnowledgePoint
 from app.questions.ai_generate import (
     AIGenerateRequest,
@@ -215,6 +216,32 @@ async def test_generate_questions_stream_expands_questions_envelope(
 
 
 @pytest.mark.asyncio
+async def test_generate_questions_stream_accepts_openrouter_content_blocks(
+    db_session,
+    admin_token: str,
+) -> None:
+    stream_lines = [
+        'data: {"choices":[{"delta":{"content":[{"type":"text","text":"{\\"type\\":\\"choice\\",\\"title\\":\\"Claude Q1\\",\\"content\\":{\\"text\\":\\"C1\\"},\\"options\\":null,\\"answer\\":{\\"text\\":\\"A1\\"},\\"analysis\\":\\"解析1\\",\\"difficulty\\":3}"}]}}]}',
+        "data: [DONE]",
+    ]
+    admin = (await db_session.execute(select(User).where(User.username == "admin"))).scalar_one()
+
+    with patch("app.questions.ai_generate._get_model_config", return_value=("claude", "test-key", "https://openrouter.ai/api/v1", "anthropic/claude-3.5-sonnet")):
+        with patch("httpx.AsyncClient", side_effect=lambda *args, **kwargs: _FakeAsyncClient(stream_lines, *args, **kwargs)):
+            events = [
+                event
+                async for event in generate_questions_stream(
+                    db_session,
+                    AIGenerateRequest(total_count=1, difficulty=3, model="claude"),
+                    user_id=admin.id,
+                )
+            ]
+
+    assert [event["type"] for event in events] == ["question", "done"]
+    assert events[0]["data"]["title"] == "Claude Q1"
+
+
+@pytest.mark.asyncio
 async def test_ai_generate_frequent_knowledge_points_returns_recent_and_frequent(
     admin_client: AsyncClient,
     db_session,
@@ -304,7 +331,7 @@ async def test_generate_questions_stream_uses_supported_qwen_vision_model_for_ma
 
     assert [event["type"] for event in events] == ["question", "done"]
     assert capture["url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-    assert capture["payload"]["model"] == "qwen3.5-plus"
+    assert capture["payload"]["model"] == settings.qwen_vl_model_name
     assert capture["payload"]["messages"][1]["content"][1] == {
         "type": "image_url",
         "image_url": {"url": "data:image/png;base64,abc"},
@@ -469,3 +496,29 @@ def test_build_system_prompt_forbids_material_source_prefixes() -> None:
 
     assert "题干和标题必须直接写题目内容" in prompt
     assert "不要以“依据教材第X页”" in prompt
+
+
+def test_build_system_prompt_adds_coverage_instruction_for_course_selection() -> None:
+    prompt = build_ai_generate_system_prompt(
+        total_count=8,
+        difficulty=3,
+        type_distribution={},
+        knowledge_keywords="",
+        user_prompt="多出案例分析题",
+        knowledge_contexts=[
+            {
+                "selected_name": "数据库技术",
+                "selected_path": "数据库技术",
+                "major_name": "软件工程",
+                "direction_name": "软件开发",
+                "course_name": "数据库技术",
+                "ancestor_names": [],
+                "child_names": ["事务管理", "事务隔离级别", "索引"],
+                "is_course": True,
+            }
+        ],
+    )
+
+    assert "该主知识下需尽量覆盖的各级子知识点：事务管理、事务隔离级别、索引" in prompt
+    assert "尽量均匀覆盖上述主知识下的各级子知识点" in prompt
+    assert "以额外要求为主" in prompt

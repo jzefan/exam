@@ -589,7 +589,8 @@ describe("ExamTaking", () => {
     await user.click(await screen.findAllByRole("button", { name: /交卷/i }).then((buttons) => buttons[1]));
     await user.click(await screen.findByRole("button", { name: "确认交卷" }));
 
-    expect(screen.getAllByRole("button", { name: /正在交卷/i }).every((button) => button.hasAttribute("disabled"))).toBe(true);
+    expect(screen.getByText("正在提交考试...")).toBeInTheDocument();
+    expect(screen.getByText("请稍候，请勿关闭页面")).toBeInTheDocument();
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
 
     deferred.resolve();

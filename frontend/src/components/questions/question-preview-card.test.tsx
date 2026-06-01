@@ -1,6 +1,7 @@
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
-import { render, screen } from "@/test/test-utils";
+import { render, screen, waitFor } from "@/test/test-utils";
 import type { IQuestion } from "@/types";
 
 import { QuestionPreviewCard } from "./question-preview-card";
@@ -46,23 +47,30 @@ const sampleQuestion: IQuestion = {
 };
 
 describe("QuestionPreviewCard", () => {
-  it("renders the full question preview content in detailed mode", () => {
-    render(<QuestionPreviewCard question={sampleQuestion} defaultExpanded />);
+  it("renders the full question preview content when expanded", () => {
+    render(<QuestionPreviewCard question={sampleQuestion} index={8} defaultExpanded />);
 
     expect(screen.getByText("下面关于 TCP 三次握手的说法，正确的是？")).toBeInTheDocument();
     expect(screen.getByText((_, node) => node?.textContent === "A. 客户端发送 SYN")).toBeInTheDocument();
-    expect(screen.getByText((_, node) => node?.textContent === "答案：A")).toBeInTheDocument();
-    expect(screen.getByText(/解析：/)).toBeInTheDocument();
+    expect(screen.getByText("参考答案")).toBeInTheDocument();
+    expect(screen.getByText("解析")).toBeInTheDocument();
     expect(screen.getByText("TCP")).toBeInTheDocument();
-    expect(screen.getByText("三次握手")).toBeInTheDocument();
-    expect(screen.getByText("5 分")).toBeInTheDocument();
+    expect(screen.getAllByText("三次握手").length).toBeGreaterThan(0);
+    expect(screen.getByText((_, node) => node?.textContent === "5分")).toBeInTheDocument();
+  });
+
+  it("shows the simple inline answer when collapsed", () => {
+    render(<QuestionPreviewCard question={sampleQuestion} />);
+
+    expect(screen.getByText("下面关于 TCP 三次握手的说法，正确的是？")).toBeInTheDocument();
+    expect(screen.getByText("答案")).toBeInTheDocument();
   });
 
   it("supports compact mode while keeping the question stem visible", () => {
     render(<QuestionPreviewCard question={sampleQuestion} mode="compact" />);
 
     expect(screen.getByText("下面关于 TCP 三次握手的说法，正确的是？")).toBeInTheDocument();
-    expect(screen.queryByText(/解析：/)).not.toBeInTheDocument();
+    expect(screen.queryByText("解析")).not.toBeInTheDocument();
   });
 
   it("renders shorthand badge for legacy true false type values", () => {
@@ -77,7 +85,7 @@ describe("QuestionPreviewCard", () => {
 
     render(<QuestionPreviewCard question={legacyTrueFalseQuestion} mode="compact" />);
 
-    expect(screen.getByText("判")).toBeInTheDocument();
+    expect(screen.getByText("判断题")).toBeInTheDocument();
   });
 
   it("renders shorthand badge for legacy fill in type values", () => {
@@ -92,7 +100,7 @@ describe("QuestionPreviewCard", () => {
 
     render(<QuestionPreviewCard question={legacyFillInQuestion} mode="compact" />);
 
-    expect(screen.getByText("填")).toBeInTheDocument();
+    expect(screen.getByText("填空题")).toBeInTheDocument();
   });
 
   it("renders knowledge recognition status badges when provided", () => {
@@ -105,5 +113,45 @@ describe("QuestionPreviewCard", () => {
     );
 
     expect(screen.getByText("AI 识别中")).toBeInTheDocument();
+  });
+
+  it("expands on hover and collapses on click in hover mode", async () => {
+    const user = userEvent.setup();
+    render(
+      <QuestionPreviewCard
+        question={sampleQuestion}
+        expandOnHover
+        hoverDetailDelay={0}
+      />,
+    );
+
+    const card = screen.getByText("下面关于 TCP 三次握手的说法，正确的是？")
+      .closest(".group");
+    expect(card).not.toBeNull();
+    expect(screen.getByTestId("question-preview-details")).toHaveClass(
+      "grid-rows-[0fr]",
+    );
+
+    await user.hover(card as HTMLElement);
+    await waitFor(() =>
+      expect(screen.getByTestId("question-preview-details")).toHaveClass(
+        "grid-rows-[1fr]",
+      ),
+    );
+
+    await user.click(card as HTMLElement);
+    await waitFor(() =>
+      expect(screen.getByTestId("question-preview-details")).toHaveClass(
+        "grid-rows-[0fr]",
+      ),
+    );
+
+    await user.unhover(card as HTMLElement);
+    await user.hover(card as HTMLElement);
+    await waitFor(() =>
+      expect(screen.getByTestId("question-preview-details")).toHaveClass(
+        "grid-rows-[1fr]",
+      ),
+    );
   });
 });

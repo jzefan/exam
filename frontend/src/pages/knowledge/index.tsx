@@ -26,6 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { formatMajorName } from "@/lib/knowledge-display";
 import type { IQuestion } from "@/types";
 import {
   extractMaterialContent,
@@ -152,6 +153,7 @@ export function KnowledgeManagementPage() {
   const [majors, setMajors] = useState<IMajor[]>([]);
   const [directions, setDirections] = useState<IDirection[]>([]);
   const [rootKnowledgeOptions, setRootKnowledgeOptions] = useState<IRootKnowledgePointOption[]>([]);
+  const [selectedMajorId, setSelectedMajorId] = useState<string | null>(null);
   const [selectedDirectionId, setSelectedDirectionId] = useState<string | null>(null);
   const [selectedRootKnowledgeId, setSelectedRootKnowledgeId] = useState<string | null>(null);
   const [nodes, setNodes] = useState<Node[]>([]);
@@ -237,6 +239,15 @@ export function KnowledgeManagementPage() {
     () => directions.find((direction) => direction.id === selectedDirectionId) ?? null,
     [directions, selectedDirectionId],
   );
+  const selectedMajor = useMemo(
+    () => majors.find((major) => major.id === selectedMajorId) ?? null,
+    [majors, selectedMajorId],
+  );
+  const selectedMajorRootOptions = useMemo(
+    () => (selectedMajor ? getMajorRootKnowledgePoints(selectedMajor.id) : []),
+    [getMajorRootKnowledgePoints, selectedMajor],
+  );
+  const importTargetName = selectedMajor ? formatMajorName(selectedMajor.name) : selectedDirection?.name ?? null;
 
   const rootKnowledgePoints = useMemo(
     () =>
@@ -249,10 +260,12 @@ export function KnowledgeManagementPage() {
 
   const catalogExistingRootNames = useMemo(
     () =>
-      treeLoading || treeError
+      selectedMajor
+        ? selectedMajorRootOptions.map((point) => point.name)
+        : treeLoading || treeError
         ? []
         : rootKnowledgePoints.map((point) => point.name),
-    [rootKnowledgePoints, treeError, treeLoading],
+    [rootKnowledgePoints, selectedMajor, selectedMajorRootOptions, treeError, treeLoading],
   );
 
   const visibleFlow = useMemo(
@@ -290,6 +303,12 @@ export function KnowledgeManagementPage() {
       }
       return current;
     });
+    setSelectedMajorId((current) => {
+      if (current && !nextMajors.some((major) => major.id === current)) {
+        return null;
+      }
+      return current;
+    });
   }, []);
 
   useEffect(() => {
@@ -320,17 +339,21 @@ export function KnowledgeManagementPage() {
 
   const handleSelectDirection = useCallback(
     (directionId: string) => {
+      const direction = directions.find((item) => item.id === directionId);
+      setSelectedMajorId(direction?.major_id ?? null);
       setSelectedDirectionId(directionId);
       setSelectedRootKnowledgeId(null);
       setSelectedNodeId(null);
       setEditingNodeId(null);
       void loadTree(directionId);
     },
-    [loadTree],
+    [directions, loadTree],
   );
 
   const handleSelectRootKnowledge = useCallback(
     (directionId: string, knowledgeId: string) => {
+      const direction = directions.find((item) => item.id === directionId);
+      setSelectedMajorId(direction?.major_id ?? null);
       if (selectedDirectionId !== directionId) {
         setSelectedDirectionId(directionId);
         void loadTree(directionId);
@@ -339,10 +362,22 @@ export function KnowledgeManagementPage() {
       setSelectedNodeId(knowledgeId);
       setEditingNodeId(null);
     },
-    [loadTree, selectedDirectionId],
+    [directions, loadTree, selectedDirectionId],
   );
 
+  const handleSelectMajor = useCallback((major: IMajor) => {
+    setSelectedMajorId(major.id);
+    setSelectedDirectionId(null);
+    setSelectedRootKnowledgeId(null);
+    setSelectedNodeId(null);
+    setEditingNodeId(null);
+    setNodes([]);
+    setEdges([]);
+    setTreeError(null);
+  }, []);
+
   const handleCreateRootKnowledge = useCallback((direction: IDirection) => {
+    setSelectedMajorId(direction.major_id);
     setSelectedDirectionId(direction.id);
     setSelectedRootKnowledgeId(null);
     setSelectedNodeId(null);
@@ -394,6 +429,7 @@ export function KnowledgeManagementPage() {
     async (major: IMajor) => {
       try {
         const direction = await ensureDefaultDirection(major);
+        setSelectedMajorId(major.id);
         setSelectedDirectionId(direction.id);
         setSelectedRootKnowledgeId(null);
         setSelectedNodeId(null);
@@ -412,11 +448,70 @@ export function KnowledgeManagementPage() {
     [ensureDefaultDirection, loadTree, toast],
   );
 
+  const resolveImportDirection = useCallback(async () => {
+    if (selectedDirectionId) {
+      return selectedDirectionId;
+    }
+    if (!selectedMajor) {
+      throw new Error("请先选择专业。");
+    }
+
+    const direction = await ensureDefaultDirection(selectedMajor);
+    setSelectedMajorId(selectedMajor.id);
+    setSelectedDirectionId(direction.id);
+    setSelectedRootKnowledgeId(null);
+    setSelectedNodeId(null);
+    setEditingNodeId(null);
+    await loadTree(direction.id);
+    return direction.id;
+  }, [ensureDefaultDirection, loadTree, selectedDirectionId, selectedMajor]);
+
+  const openImportDialog = useCallback(async () => {
+    try {
+      await resolveImportDirection();
+      setImportDialogOpen(true);
+    } catch (error) {
+      toast({
+        title: "无法导入知识点",
+        description: error instanceof Error ? error.message : "请先选择专业或方向。",
+        variant: "destructive",
+      });
+    }
+  }, [resolveImportDirection, toast]);
+
+  const openCatalogPhotoDialog = useCallback(async () => {
+    try {
+      await resolveImportDirection();
+      setCatalogPhotoDialogOpen(true);
+    } catch (error) {
+      toast({
+        title: "无法导入目录",
+        description: error instanceof Error ? error.message : "请先选择专业或方向。",
+        variant: "destructive",
+      });
+    }
+  }, [resolveImportDirection, toast]);
+
+  const handleAddRootFromCurrentContext = useCallback(async () => {
+    try {
+      const directionId = await resolveImportDirection();
+      setPanelInitial({
+        directionId,
+        parent_id: selectedDirectionId ? selectedRootKnowledgeId : null,
+      });
+      setPanelOpen(true);
+    } catch (error) {
+      toast({
+        title: "无法添加主知识/技能",
+        description: error instanceof Error ? error.message : "请先选择专业或方向。",
+        variant: "destructive",
+      });
+    }
+  }, [resolveImportDirection, selectedDirectionId, selectedRootKnowledgeId, toast]);
+
   const handleImportKnowledgePaths = useCallback(
     async (paths: KnowledgeImportPath[]) => {
-      if (!selectedDirectionId) {
-        throw new Error("请先选择方向。");
-      }
+      const directionId = selectedDirectionId ?? (await resolveImportDirection());
 
       const existingNodes = nodes.map((node) => node.data as IKnowledgePointDetail);
       const nodeIdByKey = new Map<string, string>();
@@ -444,7 +539,7 @@ export function KnowledgeManagementPage() {
           const created: { id: string; name: string } = await apiFetch(`${API}/knowledge-points`, {
             method: "POST",
             body: JSON.stringify({
-              direction_id: selectedDirectionId,
+              direction_id: directionId,
               parent_id: parentId,
               name,
             }),
@@ -458,7 +553,7 @@ export function KnowledgeManagementPage() {
       const focusRootName = getFirstKnowledgeImportRootName(paths);
       const focusRootId = focusRootName ? nodeIdByKey.get(`root::${focusRootName}`) ?? null : null;
 
-      await loadTree(selectedDirectionId);
+      await loadTree(directionId);
       await refreshRootKnowledgeOptions();
       if (focusRootId) {
         setSelectedRootKnowledgeId(focusRootId);
@@ -470,7 +565,7 @@ export function KnowledgeManagementPage() {
         description: createdCount > 0 ? `新增 ${createdCount} 个知识点。` : "导入内容已存在，没有重复创建。",
       });
     },
-    [loadTree, nodes, refreshRootKnowledgeOptions, selectedDirectionId, toast],
+    [loadTree, nodes, refreshRootKnowledgeOptions, resolveImportDirection, selectedDirectionId, toast],
   );
 
   const handleRecognizeCatalogPhoto = useCallback(
@@ -662,6 +757,8 @@ export function KnowledgeManagementPage() {
       if (!knowledge.direction_id) {
         return;
       }
+      const direction = directions.find((item) => item.id === knowledge.direction_id);
+      setSelectedMajorId(direction?.major_id ?? null);
       setSelectedDirectionId(knowledge.direction_id);
       setSelectedRootKnowledgeId(knowledge.id);
       setSelectedNodeId(knowledge.id);
@@ -674,7 +771,7 @@ export function KnowledgeManagementPage() {
       setPanelOpen(true);
       void loadTree(knowledge.direction_id);
     },
-    [isReadOnlySharedNode, loadTree, notifyReadOnly],
+    [directions, isReadOnlySharedNode, loadTree, notifyReadOnly],
   );
 
   const handleDeleteRootKnowledge = useCallback(
@@ -684,6 +781,8 @@ export function KnowledgeManagementPage() {
         return;
       }
       if (knowledge.direction_id) {
+        const direction = directions.find((item) => item.id === knowledge.direction_id);
+        setSelectedMajorId(direction?.major_id ?? null);
         setSelectedDirectionId(knowledge.direction_id);
         setSelectedRootKnowledgeId(knowledge.id);
         setSelectedNodeId(knowledge.id);
@@ -696,7 +795,48 @@ export function KnowledgeManagementPage() {
         description: "删除后会同时移除该主知识/技能下的子知识点。",
       });
     },
-    [isReadOnlySharedNode, notifyReadOnly],
+    [directions, isReadOnlySharedNode, notifyReadOnly],
+  );
+
+  const handleMoveRootKnowledge = useCallback(
+    async (
+      source: IKnowledgePointDetail | IRootKnowledgePointOption,
+      target: IKnowledgePointDetail | IRootKnowledgePointOption,
+    ) => {
+      if (source.id === target.id) {
+        return;
+      }
+      if (isReadOnlySharedNode(source as IKnowledgePointDetail)) {
+        notifyReadOnly(getReadOnlyKnowledgeFeedback(source as IKnowledgePointDetail));
+        return;
+      }
+      try {
+        await apiFetch(`${API}/knowledge-points/${source.id}`, {
+          method: "PUT",
+          body: JSON.stringify({ parent_id: target.id }),
+        });
+        toast({
+          title: "已移动主知识",
+          description: `「${source.name}」已移动到「${target.name}」下。`,
+        });
+        await refreshStructure();
+        if (target.direction_id) {
+          const direction = directions.find((item) => item.id === target.direction_id);
+          setSelectedMajorId(direction?.major_id ?? null);
+          setSelectedDirectionId(target.direction_id);
+          setSelectedRootKnowledgeId(target.id);
+          setSelectedNodeId(source.id);
+          await loadTree(target.direction_id);
+        }
+      } catch (error) {
+        toast({
+          title: "移动失败",
+          description: error instanceof Error ? error.message : "请稍后重试",
+          variant: "destructive",
+        });
+      }
+    },
+    [directions, isReadOnlySharedNode, loadTree, notifyReadOnly, refreshStructure, toast],
   );
 
   const getKnowledgeNode = useCallback(
@@ -1090,6 +1230,7 @@ export function KnowledgeManagementPage() {
           }),
         });
         await refreshStructure();
+        setSelectedMajorId(created.major_id);
         setSelectedDirectionId(created.id);
         setSelectedRootKnowledgeId(null);
         await loadTree(created.id);
@@ -1198,6 +1339,8 @@ export function KnowledgeManagementPage() {
         onEditDirection={handleEditDirection}
         onEditMajor={handleEditMajor}
         onEditRootKnowledge={handleEditRootKnowledge}
+        onMoveRootKnowledge={handleMoveRootKnowledge}
+        onSelectMajor={handleSelectMajor}
         onSelect={handleSelectDirection}
         onSelectRootKnowledge={handleSelectRootKnowledge}
         selectedDirectionId={selectedDirectionId}
@@ -1212,23 +1355,17 @@ export function KnowledgeManagementPage() {
             </p>
             <h1 className="mt-1 text-base font-semibold text-stone-900 dark:text-stone-100">知识点管理</h1>
           </div>
-          {selectedDirectionId && (
+          {(selectedDirectionId || selectedMajor) && (
             <div className="flex items-center gap-2">
-              <Button onClick={() => setImportDialogOpen(true)} size="sm" type="button" variant="outline">
+              <Button onClick={() => void openImportDialog()} size="sm" type="button" variant="outline">
                 导入知识库
               </Button>
-              <Button onClick={() => setCatalogPhotoDialogOpen(true)} size="sm" type="button" variant="outline">
+              <Button onClick={() => void openCatalogPhotoDialog()} size="sm" type="button" variant="outline">
                 书籍目录拍照导入
               </Button>
               <Button
                 className="rounded-full"
-                onClick={() => {
-                  setPanelInitial({
-                    directionId: selectedDirectionId,
-                    parent_id: selectedRootKnowledgeId,
-                  });
-                  setPanelOpen(true);
-                }}
+                onClick={() => void handleAddRootFromCurrentContext()}
                 size="sm"
                 type="button"
               >
@@ -1239,13 +1376,55 @@ export function KnowledgeManagementPage() {
         </div>
 
         <div className="flex flex-1 flex-col overflow-hidden">
-        {!selectedDirectionId && (
+        {!selectedDirectionId && !selectedMajor && (
           <div className="flex flex-1 items-center justify-center px-6">
             <div className="max-w-sm text-center">
               <p className="text-xs uppercase tracking-[0.22em] text-stone-400 dark:text-stone-500">等待选择</p>
               <p className="mt-3 text-sm text-stone-600 dark:text-stone-400">
-                先在左侧选中一个方向，再开始绘制它的知识结构和前置依赖。
+                先在左侧选中一个专业或主知识点，再开始维护知识结构。
               </p>
+            </div>
+          </div>
+        )}
+
+        {!selectedDirectionId && selectedMajor && (
+          <div className="flex flex-1 items-center justify-center px-6">
+            <div className="max-w-md text-center">
+              <p className="text-xs uppercase tracking-[0.22em] text-stone-400 dark:text-stone-500">
+                {formatMajorName(selectedMajor.name)}
+              </p>
+              <p className="mt-3 text-sm text-stone-600 dark:text-stone-400">
+                {selectedMajorRootOptions.length > 0
+                  ? "在左侧选择一个主知识/技能后，右侧会展示它下面的子知识结构。"
+                  : "当前专业还没有主知识/技能，可以直接添加，也可以通过 Excel 或书籍目录识别批量生成。"}
+              </p>
+              <p className="mt-3 flex flex-wrap items-center justify-center gap-1 text-xs text-stone-500 dark:text-stone-400">
+                <span>你可以</span>
+                <button
+                  type="button"
+                  className="font-medium text-primary transition-colors hover:underline"
+                  onClick={() => void openImportDialog()}
+                >
+                  导入知识点
+                </button>
+                <span>或使用</span>
+                <button
+                  type="button"
+                  className="font-medium text-primary transition-colors hover:underline"
+                  onClick={() => void openCatalogPhotoDialog()}
+                >
+                  目录拍照导入
+                </button>
+                <span>。</span>
+              </p>
+              <Button
+                className="mt-5 rounded-full"
+                onClick={() => void handleAddRootFromCurrentContext()}
+                size="sm"
+                type="button"
+              >
+                + 添加主知识/技能
+              </Button>
             </div>
           </div>
         )}
@@ -1284,7 +1463,7 @@ export function KnowledgeManagementPage() {
                 <button
                   type="button"
                   className="font-medium text-primary transition-colors hover:underline"
-                  onClick={() => setImportDialogOpen(true)}
+                  onClick={() => void openImportDialog()}
                 >
                   导入知识点
                 </button>
@@ -1292,7 +1471,7 @@ export function KnowledgeManagementPage() {
                 <button
                   type="button"
                   className="font-medium text-primary transition-colors hover:underline"
-                  onClick={() => setCatalogPhotoDialogOpen(true)}
+                  onClick={() => void openCatalogPhotoDialog()}
                 >
                   目录拍照导入
                 </button>
@@ -1368,7 +1547,7 @@ export function KnowledgeManagementPage() {
         onImport={handleImportKnowledgePaths}
         onOpenChange={setImportDialogOpen}
         open={importDialogOpen}
-        selectedDirectionName={selectedDirection?.name ?? null}
+        selectedTargetName={importTargetName}
       />
 
       <KnowledgeCatalogPhotoDialog
@@ -1377,7 +1556,7 @@ export function KnowledgeManagementPage() {
         onOpenChange={setCatalogPhotoDialogOpen}
         onRecognize={handleRecognizeCatalogPhoto}
         open={catalogPhotoDialogOpen}
-        selectedDirectionName={selectedDirection?.name ?? null}
+        selectedTargetName={importTargetName}
       />
 
       <PrerequisiteSelectModal
