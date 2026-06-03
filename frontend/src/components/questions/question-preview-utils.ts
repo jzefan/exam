@@ -133,6 +133,13 @@ export function getQuestionAnswerText(question: IQuestion): string {
     return "-";
   }
 
+  if (normalizedType === "code") {
+    if (typeof answer.code === "string") return answer.code;
+    if (typeof answer.text === "string") return answer.text;
+    if (answer.correct != null) return String(answer.correct);
+    return "-";
+  }
+
   if (typeof answer.text === "string") return answer.text;
   if (answer.correct != null) return String(answer.correct);
   return "-";

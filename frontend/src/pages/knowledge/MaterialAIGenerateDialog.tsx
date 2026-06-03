@@ -1,13 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { CheckCircle2, FileText, Loader2, Sparkles, StopCircle, Trash2 } from "lucide-react";
+import {
+  CheckCircle2,
+  ClipboardList,
+  FileText,
+  Info,
+  Loader2,
+  Minus,
+  Pencil,
+  Plus,
+  Save,
+  Sparkles,
+  StopCircle,
+  Trash2,
+} from "lucide-react";
 
 import {
   GeneratedAssignmentDialog,
   type GeneratedAssignmentDialogSubmitPayload,
 } from "@/pages/knowledge/GeneratedAssignmentDialog";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -18,7 +30,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { LatexText } from "@/components/ui/latex-text";
 import {
   Select,
@@ -34,7 +45,6 @@ import {
   AI_TYPE_LABELS,
   type AIModelProvider,
 } from "@/components/questions/ai-question-config-constants";
-import { validateTypeAllocation } from "@/pages/questions/ai-generate-utils";
 import { useToast } from "@/hooks/use-toast";
 import type { QuestionType } from "@/types";
 
@@ -53,15 +63,6 @@ interface GeneratedQuestion {
   difficulty: number;
   selected: boolean;
 }
-
-const TYPE_COLORS: Record<keyof TypeAllocation, string> = {
-  choice: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
-  true_false: "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
-  fill_in: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
-  short_answer: "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
-  essay: "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300",
-  code: "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300",
-};
 
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const token = localStorage.getItem("access_token");
@@ -84,11 +85,18 @@ function difficultyDots(level: number) {
   return Array.from({ length: 5 }, (_, i) => (
     <span
       key={i}
-      className={`inline-block h-1.5 w-1.5 rounded-full ${
-        i < level ? "bg-primary" : "bg-muted"
+      className={`inline-block h-[9px] w-1 rounded-[1px] ${
+        i < level ? "bg-amber-400" : "bg-border"
       }`}
     />
   ));
+}
+
+function getAnswerText(answer: GeneratedQuestion["answer"] | null | undefined) {
+  if (!answer) return "";
+  if (typeof answer.text === "string") return answer.text.trim();
+  if (typeof answer.correct === "string") return answer.correct.trim();
+  return "";
 }
 
 export interface MaterialAIGenerateDialogProps {
@@ -99,11 +107,91 @@ export interface MaterialAIGenerateDialogProps {
   /** 完整路径，例如 "计算机科学 / 后端 / 数据结构 / 二叉树" */
   knowledgePointPath: string;
   materialTitle: string;
+  sourceMaterialId?: string;
   materialSourceText: string;
   materialImages: string[];
   targetQuestionBankName?: string;
   /** 触发刷新相关题目列表 */
   onSaved?: () => void;
+}
+
+/** Inline stepper chip for type allocation — +/- buttons with editable count */
+function TypeChip({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  const active = value > 0;
+  const [draft, setDraft] = useState<string | null>(null);
+  const focused = draft !== null;
+  const display = focused ? draft : String(value);
+
+  const commit = (raw: string) => {
+    const n = Math.max(0, Math.min(50, parseInt(raw, 10) || 0));
+    onChange(n);
+    setDraft(null);
+  };
+
+  const set = (v: number) => {
+    const clamped = Math.max(0, Math.min(50, v));
+    onChange(clamped);
+  };
+
+  return (
+    <div
+      className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 ${
+        active
+          ? "border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30"
+          : "border-border bg-muted/30"
+      }`}
+    >
+      <span
+        className={`text-[13px] font-medium whitespace-nowrap ${
+          active ? "text-blue-700 dark:text-blue-300" : "text-muted-foreground"
+        }`}
+      >
+        {label}
+      </span>
+      <div className="flex items-center gap-px">
+        <button
+          type="button"
+          onClick={() => set(value - 1)}
+          disabled={value === 0}
+          className="flex size-[22px] items-center justify-center rounded-md border border-border bg-background text-foreground hover:bg-muted disabled:cursor-default disabled:text-muted-foreground/30"
+        >
+          <Minus size={12} />
+        </button>
+        <input
+          type="number"
+          min={0}
+          max={50}
+          className={`w-7 bg-transparent text-center text-[14px] font-bold tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${
+            active ? "text-blue-600 dark:text-blue-400" : ""
+          }`}
+          value={display}
+          onFocus={() => setDraft(String(value))}
+          onBlur={() => commit(draft ?? String(value))}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              (e.target as HTMLInputElement).blur();
+            }
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => set(value + 1)}
+          className="flex size-[22px] items-center justify-center rounded-md border border-border bg-background text-foreground hover:bg-muted"
+        >
+          <Plus size={12} />
+        </button>
+      </div>
+    </div>
+  );
 }
 
 export function MaterialAIGenerateDialog({
@@ -113,6 +201,7 @@ export function MaterialAIGenerateDialog({
   knowledgePointName,
   knowledgePointPath,
   materialTitle,
+  sourceMaterialId,
   materialSourceText,
   materialImages,
   targetQuestionBankName = DEFAULT_TARGET_QUESTION_BANK_NAME,
@@ -122,7 +211,6 @@ export function MaterialAIGenerateDialog({
   const { toast } = useToast();
   const abortRef = useRef<AbortController | null>(null);
 
-  const [totalCount, setTotalCount] = useState(10);
   const [difficulty, setDifficulty] = useState(3);
   const [typeAlloc, setTypeAlloc] = useState<TypeAllocation>({
     choice: 10,
@@ -138,15 +226,15 @@ export function MaterialAIGenerateDialog({
   const [questions, setQuestions] = useState<GeneratedQuestion[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [showMaterialPreview, setShowMaterialPreview] = useState(false);
-  const [showGeneratedAssignmentDialog, setShowGeneratedAssignmentDialog] = useState(false);
+  const [showGeneratedAssignmentDialog, setShowGeneratedAssignmentDialog] =
+    useState(false);
   const [createdAssignment, setCreatedAssignment] = useState<{
     id: string;
     title: string;
     questionCount: number;
   } | null>(null);
 
-  const allocationState = validateTypeAllocation(totalCount, typeAlloc);
+  const totalCount = Object.values(typeAlloc).reduce((a, b) => a + b, 0);
 
   useEffect(() => {
     if (open) {
@@ -158,19 +246,24 @@ export function MaterialAIGenerateDialog({
     } else {
       abortRef.current?.abort();
       abortRef.current = null;
-      setShowMaterialPreview(false);
     }
   }, [open, knowledgePointName, materialTitle]);
 
   const startGeneration = useCallback(async () => {
-    if (!allocationState.isValid) {
+    if (totalCount === 0) {
       toast({
-        title: "题型数量不一致",
-        description: `当前题型数量之和为 ${allocationState.allocated}，必须与题目总数 ${totalCount} 一致。`,
+        title: "请分配题型数量",
+        description: "至少为一种题型设置数量。",
         variant: "destructive",
       });
       return;
     }
+
+    const codeCount = typeAlloc.code ?? 0;
+    const codePrompt =
+      codeCount > 0
+        ? " 特别注意：本次包含代码题，所有代码题必须提供 answer.text，内容需包含参考实现或关键解法步骤，不能为空。"
+        : "";
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -181,13 +274,17 @@ export function MaterialAIGenerateDialog({
     for (const [k, v] of Object.entries(typeAlloc)) {
       if (v > 0) typeDistribution[k] = v;
     }
+    const expectedTypes = Object.entries(typeAlloc).flatMap(([type, count]) =>
+      Array.from({ length: count }, () => type as QuestionType),
+    );
 
     const requestBody = {
       total_count: totalCount,
       difficulty,
-      type_distribution: Object.keys(typeDistribution).length > 0 ? typeDistribution : undefined,
+      type_distribution:
+        Object.keys(typeDistribution).length > 0 ? typeDistribution : undefined,
       knowledge_point_ids: [knowledgePointId],
-      prompt: customPrompt.trim() || undefined,
+      prompt: `${customPrompt.trim()}${codePrompt}`.trim() || undefined,
       material_text: materialSourceText,
       material_images: materialImages,
       model,
@@ -217,17 +314,43 @@ export function MaterialAIGenerateDialog({
       let streamFailed = false;
 
       const processEventPart = async (part: string) => {
-        const dataLine = part.split("\n").find((line) => line.startsWith("data:"));
+        const dataLine = part
+          .split("\n")
+          .find((line) => line.startsWith("data:"));
         if (!dataLine) return;
         try {
           const event = JSON.parse(dataLine.replace(/^data:\s*/, ""));
           if (event.type === "question") {
             if (questionIndex >= totalCount) return;
+            const expectedType = expectedTypes[questionIndex];
+            const generatedType = event.data.type ?? "choice";
+            if (expectedType && generatedType !== expectedType) {
+              toast({
+                title: "生成题型不符合要求",
+                description: `第 ${questionIndex + 1} 题要求生成「${AI_TYPE_LABELS[expectedType]}」，但 AI 返回了「${AI_TYPE_LABELS[generatedType as QuestionType] ?? generatedType}」。请重新生成。`,
+                variant: "destructive",
+              });
+              streamFailed = true;
+              await reader.cancel();
+              return;
+            }
+            if (generatedType === "code" && !getAnswerText(event.data.answer)) {
+              toast({
+                title: "代码题缺少答案",
+                description: `第 ${questionIndex + 1} 题是代码题，但 AI 没有返回参考答案。请重新生成。`,
+                variant: "destructive",
+              });
+              streamFailed = true;
+              await reader.cancel();
+              return;
+            }
             const q: GeneratedQuestion = {
               index: questionIndex++,
-              type: event.data.type ?? "choice",
+              type: generatedType as QuestionType,
               title: event.data.title ?? "",
-              content: { text: event.data.content?.text ?? event.data.title ?? "" },
+              content: {
+                text: event.data.content?.text ?? event.data.title ?? "",
+              },
               options: event.data.options ?? null,
               answer: event.data.answer ?? {},
               analysis: event.data.analysis ?? null,
@@ -236,7 +359,11 @@ export function MaterialAIGenerateDialog({
             };
             setQuestions((prev) => [...prev, q]);
           } else if (event.type === "error") {
-            toast({ title: "生成出错", description: event.message ?? "未知错误", variant: "destructive" });
+            toast({
+              title: "生成出错",
+              description: event.message ?? "未知错误",
+              variant: "destructive",
+            });
             streamFailed = true;
             await reader.cancel();
           }
@@ -264,14 +391,17 @@ export function MaterialAIGenerateDialog({
       }
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
-        toast({ title: "生成失败", description: (err as Error).message, variant: "destructive" });
+        toast({
+          title: "生成失败",
+          description: (err as Error).message,
+          variant: "destructive",
+        });
       }
     } finally {
       setIsGenerating(false);
       abortRef.current = null;
     }
   }, [
-    allocationState,
     totalCount,
     difficulty,
     typeAlloc,
@@ -288,11 +418,16 @@ export function MaterialAIGenerateDialog({
   }, []);
 
   const toggleSelect = (index: number) => {
-    setQuestions((prev) => prev.map((q) => (q.index === index ? { ...q, selected: !q.selected } : q)));
+    setQuestions((prev) =>
+      prev.map((q) =>
+        q.index === index ? { ...q, selected: !q.selected } : q,
+      ),
+    );
   };
 
   const toggleSelectAll = () => {
-    const allSelected = questions.every((q) => q.selected);
+    const allSelected =
+      questions.length > 0 && questions.every((q) => q.selected);
     setQuestions((prev) => prev.map((q) => ({ ...q, selected: !allSelected })));
   };
 
@@ -303,46 +438,72 @@ export function MaterialAIGenerateDialog({
   const getSavePermissionErrorDescription = () =>
     "请确认当前知识点对你的账号可见，且未引用其它无权限访问的私有知识点。";
 
-  const buildAndSaveSelectedQuestions = useCallback(async (failureTitle: string) => {
-    const selected = questions.filter((q) => q.selected);
-    if (selected.length === 0) {
-      toast({ title: "请至少选择一道题目", variant: "destructive" });
-      return null;
-    }
-
-    const payload = selected.map((q) => ({
-      type: q.type,
-      title: q.title,
-      content: q.content,
-      options: q.options,
-      answer: q.answer,
-      analysis: q.analysis,
-      difficulty: q.difficulty,
-      score: 10,
-      tag_ids: [],
-      knowledge_point_ids: [knowledgePointId],
-    }));
-
-    try {
-      const saveResult = await apiFetch<{ created: number; created_question_ids?: string[] }>(
-        "/api/questions/save-generated-to-course-bank",
-        {
-          method: "POST",
-          body: JSON.stringify({ questions: payload }),
-        },
+  const buildAndSaveSelectedQuestions = useCallback(
+    async (failureTitle: string) => {
+      const selected = questions.filter((q) => q.selected);
+      if (selected.length === 0) {
+        toast({ title: "请至少选择一道题目", variant: "destructive" });
+        return null;
+      }
+      const codeWithoutAnswer = selected.find(
+        (q) => q.type === "code" && !getAnswerText(q.answer),
       );
-      return { selected, saveResult };
-    } catch (err) {
-      const message = (err as Error).message;
-      const isPermissionError = /403|forbidden|权限|permission/i.test(message);
-      toast({
-        title: isPermissionError ? "当前知识点暂不允许保存题目" : failureTitle,
-        description: isPermissionError ? getSavePermissionErrorDescription() : message,
-        variant: "destructive",
-      });
-      throw err;
-    }
-  }, [knowledgePointId, questions, toast]);
+      if (codeWithoutAnswer) {
+        toast({
+          title: "代码题必须带答案",
+          description: `第 ${codeWithoutAnswer.index + 1} 题是代码题，请先补充参考答案后再保存或发布。`,
+          variant: "destructive",
+        });
+        return null;
+      }
+
+      const payload = selected.map((q) => ({
+        type: q.type,
+        title: q.title,
+        content: q.content,
+        options: q.options,
+        answer:
+          q.type === "code"
+            ? { ...q.answer, code: getAnswerText(q.answer) }
+            : q.answer,
+        analysis: q.analysis,
+        difficulty: q.difficulty,
+        score: 10,
+        tag_ids: [],
+        knowledge_point_ids: [knowledgePointId],
+      }));
+
+      try {
+        const saveResult = await apiFetch<{
+          created: number;
+          created_question_ids?: string[];
+        }>("/api/questions/save-generated-to-course-bank", {
+          method: "POST",
+          body: JSON.stringify({
+            questions: payload,
+            source_material_id: sourceMaterialId,
+          }),
+        });
+        return { selected, saveResult };
+      } catch (err) {
+        const message = (err as Error).message;
+        const isPermissionError = /403|forbidden|权限|permission/i.test(
+          message,
+        );
+        toast({
+          title: isPermissionError
+            ? "当前知识点暂不允许保存题目"
+            : failureTitle,
+          description: isPermissionError
+            ? getSavePermissionErrorDescription()
+            : message,
+          variant: "destructive",
+        });
+        throw err;
+      }
+    },
+    [knowledgePointId, questions, sourceMaterialId, toast],
+  );
 
   const saveToCourseBank = useCallback(async () => {
     setIsSaving(true);
@@ -350,7 +511,9 @@ export function MaterialAIGenerateDialog({
       const saveOutcome = await buildAndSaveSelectedQuestions("保存失败");
       if (!saveOutcome) return;
 
-      toast({ title: `已保存 ${saveOutcome.selected.length} 道题目到「${targetQuestionBankName}」` });
+      toast({
+        title: `已保存 ${saveOutcome.selected.length} 道题目到「${targetQuestionBankName}」`,
+      });
       onSaved?.();
       onOpenChange(false);
     } catch {
@@ -358,58 +521,73 @@ export function MaterialAIGenerateDialog({
     } finally {
       setIsSaving(false);
     }
-  }, [buildAndSaveSelectedQuestions, onOpenChange, onSaved, targetQuestionBankName, toast]);
+  }, [
+    buildAndSaveSelectedQuestions,
+    onOpenChange,
+    onSaved,
+    targetQuestionBankName,
+    toast,
+  ]);
 
-  const handleGeneratedAssignmentSubmit = useCallback(async ({
-    title,
-    studentIds,
-  }: GeneratedAssignmentDialogSubmitPayload) => {
-    setIsSaving(true);
-    try {
-      const saveOutcome = await buildAndSaveSelectedQuestions("发布作业失败");
-      if (!saveOutcome) return;
+  const handleGeneratedAssignmentSubmit = useCallback(
+    async ({ title, studentIds }: GeneratedAssignmentDialogSubmitPayload) => {
+      setIsSaving(true);
+      try {
+        const saveOutcome = await buildAndSaveSelectedQuestions("发布作业失败");
+        if (!saveOutcome) return;
 
-      const createdQuestionIds = saveOutcome.saveResult.created_question_ids ?? [];
-      if (createdQuestionIds.length === 0) {
-        throw new Error("保存题目成功但未返回可用于组卷的题目 ID");
-      }
+        const createdQuestionIds =
+          saveOutcome.saveResult.created_question_ids ?? [];
+        if (createdQuestionIds.length === 0) {
+          throw new Error("保存题目成功但未返回可用于组卷的题目 ID");
+        }
 
-      const startDate = new Date();
-      const endDate = new Date(startDate.getTime() + 14 * 24 * 60 * 60 * 1000);
+        const startDate = new Date();
+        const endDate = new Date(
+          startDate.getTime() + 14 * 24 * 60 * 60 * 1000,
+        );
 
-      const createdExam = await apiFetch<{ id: string }>("/api/exams", {
-        method: "POST",
-        body: JSON.stringify({
-          category: "practice",
+        const createdExam = await apiFetch<{ id: string }>("/api/exams", {
+          method: "POST",
+          body: JSON.stringify({
+            category: "practice",
+            title,
+            description: null,
+            start_time: startDate.toISOString(),
+            end_time: endDate.toISOString(),
+            duration_minutes: 60,
+            question_mode: "manual",
+            question_ids: createdQuestionIds,
+            student_ids: studentIds,
+          }),
+        });
+
+        setCreatedAssignment({
+          id: createdExam.id,
           title,
-          description: null,
-          start_time: startDate.toISOString(),
-          end_time: endDate.toISOString(),
-          duration_minutes: 60,
-          question_mode: "manual",
-          question_ids: createdQuestionIds,
-          student_ids: studentIds,
-        }),
-      });
-
-      setCreatedAssignment({
-        id: createdExam.id,
-        title,
-        questionCount: saveOutcome.selected.length,
-      });
-      setShowGeneratedAssignmentDialog(false);
-    } catch (err) {
-      const message = (err as Error).message;
-      const isPermissionError = /403|forbidden|权限|permission/i.test(message);
-      toast({
-        title: isPermissionError ? "当前知识点暂不允许保存题目" : "发布作业失败",
-        description: isPermissionError ? getSavePermissionErrorDescription() : message,
-        variant: "destructive",
-      });
-    } finally {
-      setIsSaving(false);
-    }
-  }, [buildAndSaveSelectedQuestions, toast]);
+          questionCount: saveOutcome.selected.length,
+        });
+        setShowGeneratedAssignmentDialog(false);
+      } catch (err) {
+        const message = (err as Error).message;
+        const isPermissionError = /403|forbidden|权限|permission/i.test(
+          message,
+        );
+        toast({
+          title: isPermissionError
+            ? "当前知识点暂不允许保存题目"
+            : "发布作业失败",
+          description: isPermissionError
+            ? getSavePermissionErrorDescription()
+            : message,
+          variant: "destructive",
+        });
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [buildAndSaveSelectedQuestions, toast],
+  );
 
   const closeCreatedAssignmentDialog = useCallback(() => {
     setCreatedAssignment(null);
@@ -427,231 +605,386 @@ export function MaterialAIGenerateDialog({
   }, [closeCreatedAssignmentDialog, createdAssignment, navigate]);
 
   const selectedCount = questions.filter((q) => q.selected).length;
-  const allocSum = allocationState.allocated;
-  const allocMismatch = !allocationState.isValid;
   const canCreateAssignment = !isGenerating && !isSaving && selectedCount > 0;
   const generatedAssignmentDefaultTitle = `${knowledgePointName} - ${selectedCount}题练习`;
+  const allQuestionsSelected =
+    questions.length > 0 && questions.every((q) => q.selected);
+  const generationProgress =
+    totalCount > 0
+      ? Math.min(100, Math.round((questions.length / totalCount) * 100))
+      : 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="flex max-h-[90vh] w-[95vw] max-w-[900px] flex-col p-0"
+        className="flex max-h-[92vh] w-[96vw] max-w-[960px] flex-col overflow-hidden border-border/70 bg-background p-0 shadow-2xl"
         onPointerDownOutside={(e) => e.preventDefault()}
       >
-        <DialogHeader className="border-b border-border/60 px-6 py-3">
-          <DialogTitle className="text-base">基于学习资料智能出题</DialogTitle>
-          <DialogDescription className="text-xs">
-            题目将自动归入「{targetQuestionBankName}」，并关联到当前知识点。若资料含图片/版面信息，将优先使用多模态模型理解内容。
-          </DialogDescription>
+        {/* ── header ── */}
+        <DialogHeader className="flex-shrink-0 border-b border-border/70 px-6 py-5">
+          <div className="flex items-start gap-4">
+            <span className="flex size-[38px] shrink-0 items-center justify-center rounded-[10px] bg-primary/10 text-primary">
+              <Sparkles size={17} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <DialogTitle className="text-lg font-bold">
+                基于学习资料智能出题
+              </DialogTitle>
+              <DialogDescription className="mt-1 text-xs leading-relaxed">
+                题目将自动归入「{targetQuestionBankName}
+                」，并关联到当前知识点。若资料含图片/版面信息，将优先使用多模态模型理解内容。
+              </DialogDescription>
+            </div>
+          </div>
         </DialogHeader>
 
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          {/* 紧凑表单 */}
-          <div className="shrink-0 space-y-3 border-b border-border/60 bg-muted/20 px-6 pb-3 pt-1.5">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span className="shrink-0 font-medium text-foreground">知识点</span>
-              <span className="min-w-0 flex-1 truncate" title={knowledgePointPath}>
-                {knowledgePointPath}
-              </span>
-              {!isGenerating ? (
-                <Button
-                  size="sm"
-                  onClick={startGeneration}
-                  disabled={isGenerating || allocMismatch}
-                >
-                  <Sparkles size={14} />
-                  开始生成
-                </Button>
-              ) : (
-                <Button size="sm" variant="destructive" onClick={stopGeneration}>
-                  <StopCircle size={14} />
-                  停止
-                </Button>
-              )}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <Select
-                value={String(difficulty)}
-                onValueChange={(value) => setDifficulty(Number(value))}
+        {/* ── settings strip ── */}
+        <div className="flex-shrink-0 space-y-3 border-b border-border/70 bg-muted/20 px-6 pt-4 pb-5">
+          {/* row 1: knowledge point + diff + model + generate */}
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-xs font-semibold text-muted-foreground whitespace-nowrap">
+              知识点
+            </span>
+            <span
+              className="inline-flex max-w-[280px] items-center gap-1.5 truncate rounded-lg border border-border bg-background px-3 py-1.5 text-[13px] font-semibold text-foreground"
+              title={knowledgePointPath}
+            >
+              {knowledgePointPath}
+            </span>
+            <div className="flex-1" />
+            <Select
+              value={String(difficulty)}
+              onValueChange={(value) => setDifficulty(Number(value))}
+            >
+              <SelectTrigger className="h-9 w-[104px]">
+                <SelectValue placeholder="难度" />
+              </SelectTrigger>
+              <SelectContent>
+                {[1, 2, 3, 4, 5].map((level) => (
+                  <SelectItem key={level} value={String(level)}>
+                    {AI_DIFFICULTY_LABELS[level]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select
+              value={model}
+              onValueChange={(value) => setModel(value as AIModelProvider)}
+            >
+              <SelectTrigger className="h-9 w-[132px]">
+                <SelectValue placeholder="模型" />
+              </SelectTrigger>
+              <SelectContent>
+                {AI_MODEL_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {!isGenerating ? (
+              <Button
+                className="h-9 gap-1.5"
+                onClick={startGeneration}
+                disabled={totalCount === 0}
               >
-                <SelectTrigger className="h-8 w-28">
-                  <SelectValue placeholder="难度" />
-                </SelectTrigger>
-                <SelectContent>
-                  {[1, 2, 3, 4, 5].map((level) => (
-                    <SelectItem key={level} value={String(level)}>
-                      {AI_DIFFICULTY_LABELS[level]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select value={model} onValueChange={(value) => setModel(value as AIModelProvider)}>
-                <SelectTrigger className="h-8 w-32">
-                  <SelectValue placeholder="模型" />
-                </SelectTrigger>
-                <SelectContent>
-                  {AI_MODEL_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+                <Sparkles size={15} />
+                {questions.length > 0 ? "重新生成" : "开始生成"}
+              </Button>
+            ) : (
+              <Button
+                className="h-9 gap-1.5"
+                variant="destructive"
+                onClick={stopGeneration}
+              >
+                <StopCircle size={15} />
+                停止生成
+              </Button>
+            )}
+          </div>
 
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-              <label className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-                <span>题目总数</span>
-                <Input
-                  type="number"
-                  min={1}
-                  max={50}
-                  className="h-7 w-16 px-2 text-center text-xs"
-                  value={totalCount}
-                  onChange={(e) =>
-                    setTotalCount(Math.max(1, Math.min(50, Number(e.target.value) || 1)))
+          {/* row 2: type allocation — left 40%: label + total; right 60%: 2-row grid of chips */}
+          <div className="flex items-start gap-4">
+            <div className="flex w-1/4 shrink-0 items-center gap-3">
+              <span className="text-xs font-semibold text-muted-foreground whitespace-nowrap">
+                题型分配
+              </span>
+              <span className="inline-flex items-baseline gap-1 rounded-lg border border-border bg-background px-2.5 py-1">
+                <span className="text-xs text-muted-foreground">共</span>
+                <span className="text-[17px] font-bold tabular-nums text-primary">
+                  {totalCount}
+                </span>
+                <span className="text-xs text-muted-foreground">题</span>
+              </span>
+            </div>
+            <div className="grid w-3/4 grid-cols-3 gap-2">
+              {(Object.keys(AI_TYPE_LABELS) as QuestionType[]).map((type) => (
+                <TypeChip
+                  key={type}
+                  label={AI_TYPE_LABELS[type]}
+                  value={typeAlloc[type]}
+                  onChange={(v) =>
+                    setTypeAlloc((prev) => ({ ...prev, [type]: v }))
                   }
                 />
-              </label>
-              <span className="text-xs text-muted-foreground">＝</span>
-              {(Object.keys(AI_TYPE_LABELS) as QuestionType[]).map((type) => (
-                <label key={type} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <span>{AI_TYPE_LABELS[type]}</span>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={50}
-                    className="h-7 w-14 px-2 text-center text-xs"
-                    placeholder="0"
-                    value={typeAlloc[type] || ""}
-                    onChange={(e) =>
-                      setTypeAlloc({
-                        ...typeAlloc,
-                        [type]: Math.max(0, Number(e.target.value) || 0),
-                      })
-                    }
-                  />
-                </label>
               ))}
-              {allocMismatch ? (
-                <span className="text-xs text-destructive">
-                  题型之和 {allocSum} ≠ 总数 {totalCount}
-                </span>
-              ) : null}
-            </div>
-
-            <div className="flex items-start gap-2">
-              <Textarea
-                placeholder="自定义提示（资料正文已自动附加，无需粘贴）"
-                rows={2}
-                className="flex-1 text-xs"
-                value={customPrompt}
-                onChange={(e) => setCustomPrompt(e.target.value)}
-              />
-              <button
-                type="button"
-                onClick={() => setShowMaterialPreview(true)}
-                title="点击查看学习资料原文"
-                className="flex h-[60px] max-w-[180px] shrink-0 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-xs hover:bg-muted/50"
-              >
-                <FileText size={14} className="shrink-0 text-primary" />
-                <span className="truncate text-foreground">{materialTitle}</span>
-              </button>
             </div>
           </div>
 
-          {/* 题目列表 */}
-          <div className="flex-1 space-y-3 overflow-y-auto px-6 py-3">
-            {questions.length === 0 && !isGenerating ? (
-              <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 text-muted-foreground">
-                <Sparkles size={32} strokeWidth={1.5} />
-                <p className="text-sm">配置参数后点击「开始生成」</p>
+          {/* row 3: custom prompt + material card */}
+          <div className="flex gap-3">
+            <Textarea
+              placeholder="自定义提示（资料正文已自动附加，无需粘贴）"
+              rows={3}
+              className="min-h-0 flex-1 resize-none text-sm leading-relaxed"
+              value={customPrompt}
+              onChange={(e) => setCustomPrompt(e.target.value)}
+            />
+            <div className="flex w-[220px] shrink-0 items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5">
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <FileText size={16} />
+              </span>
+              <div className="min-w-0">
+                <div
+                  className="truncate text-[13px] font-semibold text-foreground"
+                  title={materialTitle}
+                >
+                  {materialTitle}
+                </div>
+                <div className="text-[11px] text-muted-foreground">
+                  学习资料
+                  {materialImages.length > 0
+                    ? ` · ${materialImages.length} 张图片`
+                    : ""}
+                </div>
               </div>
-            ) : (
-              questions.map((q) => (
-                  <div
-                    key={q.index}
-                    className="rounded-lg border border-border/35 bg-card/95 p-3"
-                  >
-                    <div className="mb-2 flex items-center gap-2">
-                      <Checkbox checked={q.selected} onCheckedChange={() => toggleSelect(q.index)} />
-                      <span className="text-xs font-medium text-muted-foreground">#{q.index + 1}</span>
-                      <Badge
-                        variant="secondary"
-                        className={TYPE_COLORS[q.type as keyof TypeAllocation] ?? ""}
-                      >
-                        {AI_TYPE_LABELS[q.type as keyof TypeAllocation] ?? q.type}
-                      </Badge>
-                      <div className="flex items-center gap-0.5">{difficultyDots(q.difficulty)}</div>
-                      <div className="flex-1" />
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-                        onClick={() => removeQuestion(q.index)}
-                      >
-                        <Trash2 size={14} />
-                      </Button>
-                    </div>
-                    <p className="mb-1 text-sm font-medium">
-                      <LatexText>{q.title}</LatexText>
-                    </p>
-                    {q.content.text && q.content.text !== q.title && (
-                      <p className="mb-2 whitespace-pre-wrap text-sm text-muted-foreground">
-                        <LatexText>{q.content.text}</LatexText>
-                      </p>
-                    )}
-                    {q.options && Object.keys(q.options).length > 0 && (
-                      <div className="mb-2 space-y-0.5 pl-2">
-                        {Object.entries(q.options).map(([key, value]) => (
-                          <p key={key} className="text-sm">
-                            <span className="mr-1 font-medium">{key}.</span>
-                            <LatexText>{value}</LatexText>
-                          </p>
-                        ))}
-                      </div>
-                    )}
-                    <div className="mt-2 rounded bg-muted/30 p-2 text-sm">
-                      <span className="font-medium text-primary">答案：</span>
-                      <LatexText>
-                        {q.answer.correct ?? q.answer.text ?? JSON.stringify(q.answer)}
-                      </LatexText>
-                    </div>
-                    {q.analysis && (
-                      <div className="mt-1 rounded bg-muted/15 p-2 text-sm text-muted-foreground">
-                        <span className="font-medium">解析：</span>
-                        <LatexText>{q.analysis}</LatexText>
-                      </div>
-                    )}
-                  </div>
-                ))
-              )}
-
-            {isGenerating && (
-              <div className="flex items-center gap-2 rounded-md bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-                <Loader2 size={14} className="animate-spin" />
-                生成中... 已生成 {questions.length} 道
-              </div>
-            )}
+            </div>
           </div>
         </div>
 
-        <DialogFooter className="flex items-center gap-3 border-t border-border/60 px-6 py-3 sm:justify-between">
-          <div className="flex items-center gap-3">
-            {questions.length > 0 && (
-              <>
-                <Button variant="outline" size="sm" onClick={toggleSelectAll}>
-                  {questions.every((q) => q.selected) ? "取消全选" : "全选"}
-                </Button>
-                <span className="text-sm text-muted-foreground">
-                  已选择 {selectedCount}/{questions.length} 道
-                </span>
-              </>
-            )}
-          </div>
+        {/* ── results header ── */}
+        <div className="flex-shrink-0 flex items-center gap-3 border-border/50 px-6 py-1">
+          <span className="text-sm font-bold text-foreground whitespace-nowrap">
+            生成结果
+          </span>
+          {questions.length > 0 && (
+            <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold tabular-nums text-primary">
+              {questions.length} 题
+            </span>
+          )}
+          {isGenerating && (
+            <div className="flex min-w-[190px] items-center gap-2 rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
+              <Loader2 size={13} className="animate-spin" />
+              <span className="tabular-nums">{generationProgress}%</span>
+              <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-primary/15">
+                <span
+                  className="block h-full rounded-full bg-primary transition-all"
+                  style={{ width: `${generationProgress}%` }}
+                />
+              </span>
+            </div>
+          )}
+          <div className="flex-1" />
+          {questions.length > 0 && (
+            <Button variant="outline" size="sm" onClick={toggleSelectAll}>
+              {allQuestionsSelected ? "取消全选" : "全选"}
+            </Button>
+          )}
+        </div>
+
+        {/* ── results (scroll) ── */}
+        <div className="flex-1 space-y-2 overflow-y-auto px-6 py-4">
+          {questions.length === 0 && !isGenerating ? (
+            <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-muted/20 text-muted-foreground">
+              <div className="flex size-14 items-center justify-center rounded-full bg-primary/10 text-primary">
+                <Sparkles size={28} strokeWidth={1.6} />
+              </div>
+              <div className="text-center">
+                <p className="text-sm font-medium text-foreground">
+                  配置题型数量后点击「开始生成」
+                </p>
+                <p className="mt-1 text-xs">
+                  生成的题目会先作为草稿展示，可勾选后保存或发布作业。
+                </p>
+              </div>
+            </div>
+          ) : (
+            questions.map((q) => {
+              const correctKey = q.answer?.correct?.trim().toUpperCase();
+
+              return (
+                <article
+                  key={q.index}
+                  className={`overflow-hidden rounded-[14px] border bg-background shadow-sm ${
+                    q.selected
+                      ? "border-blue-200 ring-1 ring-blue-200 dark:border-blue-800"
+                      : "border-border"
+                  }`}
+                >
+                  {/* card head */}
+                  <div className="flex items-center gap-3 border-b border-border/40 bg-muted/20 px-4 py-3">
+                    <Checkbox
+                      checked={q.selected}
+                      onCheckedChange={() => toggleSelect(q.index)}
+                    />
+                    <span className="text-[15px] font-bold tabular-nums text-foreground">
+                      #{q.index + 1}
+                    </span>
+                    <span className="rounded-[7px] bg-primary/10 px-[9px] py-[2px] text-[12.5px] font-semibold text-primary">
+                      {AI_TYPE_LABELS[q.type as keyof TypeAllocation] ?? q.type}
+                    </span>
+                    <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <span className="inline-flex gap-[3px]">
+                        {difficultyDots(q.difficulty)}
+                      </span>
+                      {AI_DIFFICULTY_LABELS[q.difficulty] ?? q.difficulty}
+                    </span>
+                    <div className="flex-1" />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-[30px] w-[30px] border border-border p-0 text-muted-foreground hover:text-foreground"
+                      onClick={() => {
+                        /* TODO: inline edit */
+                      }}
+                    >
+                      <Pencil size={13} />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-[30px] w-[30px] border border-border p-0 text-muted-foreground hover:text-destructive"
+                      onClick={() => removeQuestion(q.index)}
+                    >
+                      <Trash2 size={14} />
+                    </Button>
+                  </div>
+
+                  {/* card body */}
+                  <div className="px-[18px] py-4">
+                    <p className="mb-2 text-[15px] font-semibold text-foreground">
+                      <LatexText>{q.title}</LatexText>
+                    </p>
+                    {q.content.text && q.content.text !== q.title && (
+                      <p className="mb-3 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
+                        <LatexText>{q.content.text}</LatexText>
+                      </p>
+                    )}
+
+                    {/* options with correct answer highlight */}
+                    {q.options && Object.keys(q.options).length > 0 && (
+                      <div className="mb-4 flex flex-col gap-2">
+                        {Object.entries(q.options).map(([key, value]) => {
+                          const isCorrect = correctKey === key.toUpperCase();
+                          return (
+                            <div
+                              key={key}
+                              className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${
+                                isCorrect
+                                  ? "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/20"
+                                  : "border-border/60 bg-muted/10"
+                              }`}
+                            >
+                              <span
+                                className={`flex size-[22px] shrink-0 items-center justify-center rounded-md text-[12px] font-bold ${
+                                  isCorrect
+                                    ? "bg-emerald-500 text-white"
+                                    : "bg-muted text-muted-foreground"
+                                }`}
+                              >
+                                {isCorrect ? (
+                                  <svg
+                                    width="12"
+                                    height="12"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="2.8"
+                                    viewBox="0 0 24 24"
+                                  >
+                                    <polyline points="20 6 9 17 4 12" />
+                                  </svg>
+                                ) : (
+                                  key
+                                )}
+                              </span>
+                              <span
+                                className={`text-sm ${
+                                  isCorrect
+                                    ? "font-semibold text-emerald-700 dark:text-emerald-300"
+                                    : "text-foreground"
+                                }`}
+                              >
+                                <LatexText>{value}</LatexText>
+                              </span>
+                              {isCorrect && (
+                                <span className="ml-auto text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                                  正确答案
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* answer (for non-option types) */}
+                    {(!q.options || Object.keys(q.options).length === 0) && (
+                      <div className="mb-3 rounded-lg bg-muted/20 p-3 text-sm">
+                        <span className="font-semibold text-primary">
+                          答案：
+                        </span>
+                        <LatexText>
+                          {q.answer.correct ??
+                            q.answer.text ??
+                            JSON.stringify(q.answer)}
+                        </LatexText>
+                      </div>
+                    )}
+
+                    {/* analysis */}
+                    {q.analysis && (
+                      <div className="flex gap-2.5 rounded-lg border border-border/60 bg-muted/10 p-3">
+                        <Info
+                          size={14}
+                          className="mt-0.5 shrink-0 text-muted-foreground"
+                        />
+                        <div>
+                          <span className="text-[12px] font-bold text-muted-foreground">
+                            解析{" "}
+                          </span>
+                          <span className="text-[13px] leading-relaxed text-muted-foreground">
+                            <LatexText>{q.analysis}</LatexText>
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </article>
+              );
+            })
+          )}
+
+          {isGenerating && (
+            <div className="flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary">
+              <Loader2 size={14} className="animate-spin" />
+              生成中... 已生成 {questions.length} 道
+            </div>
+          )}
+        </div>
+
+        {/* ── footer ── */}
+        <DialogFooter className="flex-shrink-0 flex items-center gap-3 border-t border-border/60 px-6 py-3 sm:justify-between">
+          <span className="text-[13px] text-muted-foreground whitespace-nowrap">
+            已选择{" "}
+            <b className="tabular-nums text-foreground">{selectedCount}</b> /{" "}
+            {questions.length} 道
+          </span>
           <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSaving}>
+            <Button
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={isSaving}
+            >
               关闭
             </Button>
             <Button
@@ -659,6 +992,7 @@ export function MaterialAIGenerateDialog({
               onClick={() => setShowGeneratedAssignmentDialog(true)}
               disabled={!canCreateAssignment}
             >
+              <ClipboardList size={14} className="mr-1.5" />
               生成作业
             </Button>
             <Button
@@ -666,30 +1000,13 @@ export function MaterialAIGenerateDialog({
               disabled={isSaving || isGenerating || selectedCount === 0}
             >
               {isSaving && <Loader2 size={14} className="animate-spin" />}
-              保存到「{targetQuestionBankName}」
+              {!isSaving && <Save size={14} className="mr-1.5" />}
+              保存 {selectedCount > 0 ? selectedCount : ""} 题到「
+              {targetQuestionBankName}」
             </Button>
           </div>
         </DialogFooter>
       </DialogContent>
-
-      <Dialog open={showMaterialPreview} onOpenChange={setShowMaterialPreview}>
-        <DialogContent className="flex max-h-[80vh] w-[95vw] max-w-[800px] flex-col p-0">
-          <DialogHeader className="border-b border-border/60 px-5 py-3">
-            <DialogTitle className="flex items-center gap-2 text-base">
-              <FileText size={16} className="text-primary" />
-              <span className="truncate">{materialTitle}</span>
-            </DialogTitle>
-            <DialogDescription className="text-xs">
-              资料正文已抽取的纯文本，将自动附加到提示词发送给模型。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex-1 overflow-y-auto px-5 py-3">
-            <pre className="whitespace-pre-wrap break-words text-xs leading-relaxed text-foreground">
-              {materialSourceText}
-            </pre>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       <GeneratedAssignmentDialog
         open={showGeneratedAssignmentDialog}
@@ -714,7 +1031,8 @@ export function MaterialAIGenerateDialog({
             </div>
             <DialogTitle>作业已发布</DialogTitle>
             <DialogDescription>
-              已发布 {createdAssignment?.questionCount ?? 0} 道题的练习作业，可以立即进入作业详情查看。
+              已发布 {createdAssignment?.questionCount ?? 0}{" "}
+              道题的练习作业，可以立即进入作业详情查看。
             </DialogDescription>
           </DialogHeader>
 

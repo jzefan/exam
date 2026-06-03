@@ -60,6 +60,7 @@ export interface TeacherCourseMaterial {
   description: string | null;
   source: string | null;
   file_path: string | null;
+  question_count: number;
   created_at: string;
   updated_at: string;
 }
@@ -91,11 +92,60 @@ export interface TeacherCourseExam {
   updated_at: string;
 }
 
+export interface CourseAssignmentScoreColumn {
+  id: string;
+  title: string;
+  total_score: number;
+  submitted_count: number;
+  total_students: number;
+  semester_id: string | null;
+  semester_name: string | null;
+  start_time: string | null;
+  end_time: string | null;
+}
+
+export interface CourseAssignmentScoreCell {
+  assignment_id: string;
+  assigned: boolean;
+  score: number | null;
+  percent: number | null;
+  submitted_at: string | null;
+  grading_status: string | null;
+}
+
+export interface CourseAssignmentScoreStudent {
+  student_id: string;
+  student_no: string | null;
+  full_name: string | null;
+  username: string | null;
+  phone: string | null;
+  submitted_count: number;
+  assignment_count: number;
+  total_score: number;
+  max_score: number;
+  average_percent: number | null;
+  cells: CourseAssignmentScoreCell[];
+}
+
+export interface CourseAssignmentScoreSummary {
+  course_id: string;
+  semester_id: string | null;
+  assignment_count: number;
+  student_count: number;
+  class_average_percent: number | null;
+  assignments: CourseAssignmentScoreColumn[];
+  students: CourseAssignmentScoreStudent[];
+  generated_at: string;
+}
+
 export interface CourseSemester {
   id: string;
   course_id: string;
   name: string;
   description: string | null;
+  semester_major_label: string | null;
+  semester_major_description: string | null;
+  class_ids: string[];
   start_date: string | null;
   end_date: string | null;
   exam_count: number;
@@ -107,6 +157,9 @@ export interface CourseSemester {
 export interface CreateSemesterPayload {
   name: string;
   description?: string | null;
+  semester_major_label?: string | null;
+  semester_major_description?: string | null;
+  class_ids?: string[];
   start_date?: string | null;
   end_date?: string | null;
 }
@@ -161,6 +214,12 @@ export function listCourseAssignments(courseId: string, semesterId?: string | nu
   );
 }
 
+export function getCourseAssignmentScoreSummary(courseId: string, semesterId?: string | null) {
+  return dedupedGet<CourseAssignmentScoreSummary>(
+    `/teacher/courses/${courseId}/assignment-score-summary${semesterQuery(semesterId)}`,
+  );
+}
+
 export function listCourseSemesters(courseId: string) {
   return dedupedGet<CourseSemester[]>(`/teacher/courses/${courseId}/semesters`);
 }
@@ -172,6 +231,9 @@ export function createCourseSemester(courseId: string, payload: CreateSemesterPa
     body: JSON.stringify({
       name: payload.name,
       description: payload.description ?? null,
+      semester_major_label: payload.semester_major_label ?? null,
+      semester_major_description: payload.semester_major_description ?? null,
+      class_ids: payload.class_ids ?? [],
       start_date: payload.start_date ?? null,
       end_date: payload.end_date ?? null,
     }),
@@ -269,6 +331,30 @@ export function archiveExamToSemester(
 
 export function listCourseQuestions(courseId: string) {
   return dedupedGet<IQuestion[]>(`/teacher/courses/${courseId}/questions`);
+}
+
+export function listCourseMaterialQuestions(courseId: string, resourceId: string) {
+  return dedupedGet<IQuestion[]>(
+    `/teacher/courses/${courseId}/materials/${resourceId}/questions`,
+  );
+}
+
+export function clearCourseQuestions(courseId: string) {
+  return apiRequest<{
+    deleted: number;
+    hard_deleted: number;
+    soft_deleted: number;
+  }>(`/teacher/courses/${courseId}/questions`, { method: "DELETE" });
+}
+
+export function clearCourseMaterialQuestions(courseId: string, resourceId: string) {
+  return apiRequest<{
+    deleted: number;
+    hard_deleted: number;
+    soft_deleted: number;
+  }>(`/teacher/courses/${courseId}/materials/${resourceId}/questions`, {
+    method: "DELETE",
+  });
 }
 
 export interface CourseKnowledgeNode {

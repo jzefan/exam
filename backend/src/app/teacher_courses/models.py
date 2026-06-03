@@ -12,7 +12,7 @@ table is created automatically by ``Base.metadata.create_all`` on startup.
 import uuid
 from datetime import date
 
-from sqlalchemy import Date, ForeignKey, Index, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import JSON, Date, ForeignKey, Index, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.common.data_visibility import OwnerMixin
@@ -27,6 +27,9 @@ class CourseSemester(OwnerMixin, BaseModel):
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    semester_major_label: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    semester_major_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    class_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 

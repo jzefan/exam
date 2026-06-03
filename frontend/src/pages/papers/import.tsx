@@ -337,6 +337,7 @@ export function PaperImportPage() {
       content_text: d.content_text,
       options: d.options,
       answer_text: d.answer_text,
+      analysis: d.analysis,
     }));
 
     let answersCompleted = 0;
@@ -387,6 +388,7 @@ export function PaperImportPage() {
             total?: number;
             draft_id?: string;
             answer_text?: string | null;
+            analysis?: string | null;
             doubt?: boolean;
             doubt_reason?: string | null;
             suggested_knowledge_points?: Array<{ id: string; name: string }>;
@@ -401,6 +403,9 @@ export function PaperImportPage() {
             if (event.answer_text) {
               patch.answer_text = event.answer_text;
               answersCompleted++;
+            }
+            if (event.analysis) {
+              patch.analysis = event.analysis;
             }
             if (event.doubt) {
               patch.doubt = event.doubt;

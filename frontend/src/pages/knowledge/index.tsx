@@ -31,6 +31,7 @@ import type { IQuestion } from "@/types";
 import {
   extractMaterialContent,
   MATERIAL_PAGE_LIMIT,
+  MATERIAL_TEXT_LIMIT,
   UnsupportedMaterialFormatError,
 } from "./extract-material-content";
 import {
@@ -1064,14 +1065,14 @@ export function KnowledgeManagementPage() {
         setResourceContentById((current) => ({
           ...current,
           [created.id]: {
-            sourceText: extracted.text.trim().slice(0, 120000),
+            sourceText: extracted.text.trim().slice(0, MATERIAL_TEXT_LIMIT),
             images: extracted.images,
           },
         }));
-        if (extracted.pageCount > 30) {
+        if (extracted.pageCount > MATERIAL_PAGE_LIMIT) {
           toast({
             title: "资料页数较多",
-            description: `当前共 ${extracted.pageCount} 页/张。建议尽量控制在 30 页以内；系统最多处理 ${MATERIAL_PAGE_LIMIT} 页/张。`,
+            description: `当前共 ${extracted.pageCount} 页/张。系统最多处理 ${MATERIAL_PAGE_LIMIT} 页/张。`,
           });
         }
         if (extracted.truncated) {

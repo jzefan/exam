@@ -132,6 +132,11 @@ class Skill(BaseModel):
         cascade="all, delete-orphan",
         order_by="SkillKnowledgePoint.sort_order",
     )
+    course_mappings: Mapped[list["SkillCourseMapping"]] = relationship(
+        "SkillCourseMapping",
+        back_populates="skill",
+        cascade="all, delete-orphan",
+    )
 
 
 class SkillKnowledgePoint(BaseModel):
@@ -184,10 +189,52 @@ class SkillKpMapping(Base, TimestampMixin):
         Uuid, ForeignKey("knowledge_points.id", ondelete="CASCADE"), primary_key=True
     )
     match_type: Mapped[str] = mapped_column(String(10), default="manual", nullable=False)
+    relation_type: Mapped[str] = mapped_column(String(20), default="required", nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="confirmed", nullable=False)
     confidence: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
 
     skill_kp: Mapped[SkillKnowledgePoint] = relationship(
         "SkillKnowledgePoint", back_populates="kp_mappings"
+    )
+
+
+class SkillCourseMapping(BaseModel):
+    """Graph edge connecting a job skill to a root knowledge point course."""
+
+    __tablename__ = "skill_course_mappings"
+
+    skill_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("skills.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    course_root_knowledge_point_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("knowledge_points.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    relation_type: Mapped[str] = mapped_column(String(20), default="required", nullable=False)
+    match_type: Mapped[str] = mapped_column(String(20), default="manual", nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="confirmed", nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    skill: Mapped[Skill] = relationship("Skill", back_populates="course_mappings")
+
+
+class JobModelGraphLayout(BaseModel):
+    """Shared graph layout persisted for an organization or a job model version."""
+
+    __tablename__ = "job_model_graph_layouts"
+
+    scope_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    scope_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False, index=True)
+    layout_json: Mapped[dict] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
+    )
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
 

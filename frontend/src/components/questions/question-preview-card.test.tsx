@@ -66,6 +66,19 @@ describe("QuestionPreviewCard", () => {
     expect(screen.getByText("答案")).toBeInTheDocument();
   });
 
+  it("shows the reference answer in expanded details even when collapsed answers are hidden", () => {
+    render(
+      <QuestionPreviewCard
+        question={sampleQuestion}
+        defaultExpanded
+        hideAnswer
+      />,
+    );
+
+    expect(screen.getByText("参考答案")).toBeInTheDocument();
+    expect(screen.getByText("A")).toBeInTheDocument();
+  });
+
   it("supports compact mode while keeping the question stem visible", () => {
     render(<QuestionPreviewCard question={sampleQuestion} mode="compact" />);
 

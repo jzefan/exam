@@ -172,7 +172,10 @@ def build_ai_generate_system_prompt(
 
     if type_distribution:
         parts = [f"{qtype} {count}题" for qtype, count in type_distribution.items()]
-        type_instruction = f"题型分布要求：{', '.join(parts)}。"
+        type_instruction = (
+            f"题型分布要求：{', '.join(parts)}。必须严格满足该分布，"
+            "不得擅自替换题型；例如要求 code 时，不能生成 choice/选择题。"
+        )
     else:
         type_instruction = f"共生成 {total_count} 道题目，题型自行合理分配。"
 
@@ -252,6 +255,7 @@ def build_ai_generate_system_prompt(
 输出格式要求：
 - 每道题目输出为一个独立的 JSON 对象，题目之间用换行分隔
 - 不要输出 JSON 数组，不要添加 ```json 等标记
+- type 字段必须严格使用本次题型分布要求中的题型代码，不得把代码题、简答题等改成选择题结构
 - 支持 LaTeX 公式：行内公式用 $...$，块级公式用 $$...$$
 - 所有内容使用中文
 - 题干和标题必须直接写题目内容，不要以“依据教材第X页”“根据资料第X页”“教材第X页”“参考课件第X页”等来源说明开头
@@ -271,5 +275,7 @@ def build_ai_generate_system_prompt(
 - 选择题(choice)的 answer 使用 {{"correct": "A"}} 格式，options 为选项字典
 - 判断题(true_false)的 answer 使用 {{"correct": "true"}} 或 {{"correct": "false"}}，options 设为 null
 - 其他题型的 answer 使用 {{"text": "答案内容"}} 格式，options 设为 null
+- 代码题(code)必须使用 {{"text": "参考答案"}} 格式，answer.text 不能为空；参考答案必须包含可执行/可判分的参考实现、关键代码或明确解法步骤
+- 代码题(code)的 options 必须为 null，content.text 必须是编程任务描述，不能出现 A/B/C/D 选项
 
 请现在开始生成题目。"""

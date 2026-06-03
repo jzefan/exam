@@ -52,6 +52,13 @@ question_knowledge_points = Table(
     Column("weight", Float, default=1.0),
 )
 
+question_learning_resources = Table(
+    "question_learning_resources",
+    Base.metadata,
+    Column("question_id", Uuid, ForeignKey("questions.id", ondelete="CASCADE"), primary_key=True),
+    Column("resource_id", Uuid, ForeignKey("learning_resources.id", ondelete="CASCADE"), primary_key=True),
+)
+
 
 class Tag(BaseModel):
     __tablename__ = "tags"

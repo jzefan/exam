@@ -24,6 +24,7 @@ import { formatMajorName } from "@/lib/knowledge-display";
 import { ResourcePreview } from "@/pages/job-models/editor/resource-preview";
 import { VideoSearchDialog } from "@/pages/job-models/editor/video-search";
 import type { IQuestion } from "@/types";
+import { MATERIAL_PAGE_LIMIT } from "./extract-material-content";
 import { MaterialAIGenerateDialog } from "./MaterialAIGenerateDialog";
 import type { IDirection, IKnowledgePointDetail, IMajor } from "./types";
 
@@ -276,7 +277,7 @@ export function RelatedResourcesDialog({
                   <input ref={fileInputRef} className="hidden" type="file" onChange={uploadMaterial} />
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  文件智能出题支持 PDF / DOCX / PPTX；建议控制在 30 页以内，系统最多处理前 50 页/张。
+                  文件智能出题支持 PDF / DOCX / PPTX；系统最多处理前 {MATERIAL_PAGE_LIMIT} 页/张。
                 </p>
               </div>
 

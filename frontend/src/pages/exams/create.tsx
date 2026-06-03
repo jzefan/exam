@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useCreate } from "@refinedev/core";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
@@ -65,14 +65,21 @@ export function ExamCreate() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [initialValues, setInitialValues] = useState<ExamFormValues>(() => createInitialForm());
   const [seedLoading, setSeedLoading] = useState(false);
+  const [wizardInitialStep, setWizardInitialStep] = useState(0);
+  const [wizardDefaultBankName, setWizardDefaultBankName] = useState<string | undefined>(undefined);
   const { toast } = useToast();
   const seedPaperId = searchParams.get("paper_id");
   const seedKey = searchParams.get("seed_key");
+
+  const seedConsumedRef = useRef(false);
 
   // 从题目列表跳转过来的 seed_key 分支：一次性从 sessionStorage 取出预填数据。
   // 注意：seed_key 必须优先于 paper_id 处理，因为前者是更明确的用户意图。
   useEffect(() => {
     if (!seedKey) return;
+    // Strict Mode 下 effect 会执行两次，用 ref 防止第一次就 consume 掉 seed。
+    if (seedConsumedRef.current) return;
+    seedConsumedRef.current = true;
     const payload = consumeExamSeed(seedKey);
     if (!payload) {
       toast({
@@ -89,15 +96,23 @@ export function ExamCreate() {
       category: "exam",
       title: payload.title ?? "",
       description: payload.description ?? "",
-      question_mode: "manual",
+      question_mode: "auto",
       question_ids: payload.question_items.map((item) => item.question_id),
       question_items: payload.question_items.map((item, index) => ({
         question_id: item.question_id,
         order: index,
         score_override: item.score_override,
       })),
+      student_ids: payload.student_ids ?? [],
     });
     setSubmitError(null);
+
+    // 从课程详情跳转过来：自动跳到选题步骤，并默认选中课程题库。
+    setWizardInitialStep(1);
+    const courseNameMatch = (payload.description ?? "").match(/「(.+?)」/);
+    if (courseNameMatch?.[1]) {
+      setWizardDefaultBankName(`${courseNameMatch[1]}-题库`);
+    }
   }, [seedKey, toast]);
 
   useEffect(() => {
@@ -237,6 +252,8 @@ export function ExamCreate() {
       isPending={mutation.isPending || seedLoading}
       submitError={submitError}
       onSubmit={handleSubmit}
+      initialStep={wizardInitialStep}
+      defaultAutoBankName={wizardDefaultBankName}
     />
   );
 }

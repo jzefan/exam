@@ -28,6 +28,8 @@ export interface ExamSeedPayload {
   description?: string;
   /** 题目列表，顺序以 order 为准。 */
   question_items: ExamSeedQuestionItem[];
+  /** 预选考生，课程学期已绑定班级时可直接带入。 */
+  student_ids?: string[];
 }
 
 interface StoredEnvelope extends ExamSeedPayload {

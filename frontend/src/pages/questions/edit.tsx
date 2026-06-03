@@ -1,5 +1,5 @@
 import { useGetIdentity, useOne, useUpdate, useList } from "@refinedev/core";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useState } from "react";
 import { ArrowLeft, Plus, X, ChevronsUpDown, Check, AlertTriangle } from "lucide-react";
 import type { IKnowledgePoint, IQuestion, IQuestionBank, ITag, QuestionType } from "../../types";
@@ -76,7 +76,9 @@ function extractNonChoiceAnswer(question: IQuestion): string {
     if (typeof a.correct === "string") return a.correct;
     return "";
   }
-  if (question.type === "code") return String(a.code ?? "");
+  if (question.type === "code") {
+    return String(a.code ?? a.text ?? a.correct ?? "");
+  }
   return "";
 }
 
@@ -925,12 +927,20 @@ interface QuestionEditFormProps {
   allTags: ITag[];
   knowledgePoints: IKnowledgePoint[];
   id: string;
+  backTo?: string;
 }
 
-function QuestionEditForm({ question, banks, allTags, knowledgePoints, id }: QuestionEditFormProps) {
+function QuestionEditForm({ question, banks, allTags, knowledgePoints, id, backTo }: QuestionEditFormProps) {
   const navigate = useNavigate();
   const { mutate, mutation } = useUpdate();
   const { toast } = useToast();
+  const goBack = () => {
+    if (backTo) {
+      navigate(backTo);
+      return;
+    }
+    navigate(-1);
+  };
 
   return (
     <QuestionEditFormContent
@@ -939,7 +949,7 @@ function QuestionEditForm({ question, banks, allTags, knowledgePoints, id }: Que
       allTags={allTags}
       knowledgePoints={knowledgePoints}
       isSubmitting={mutation.isPending}
-      onCancel={() => navigate(-1)}
+      onCancel={goBack}
       onSubmit={(values) => {
         const originalCodeDetails = question.type === "code" ? extractCodeQuestionDetails(question.content) : null;
         const nextCodeDetails = question.type === "code" ? extractCodeQuestionDetails(values.content) : null;
@@ -969,7 +979,7 @@ function QuestionEditForm({ question, banks, allTags, knowledgePoints, id }: Que
                   description: "系统正在重新评分受影响的已提交答卷。",
                 });
               }
-              navigate("/questions");
+              navigate(backTo ?? "/questions");
             },
           },
         );
@@ -981,6 +991,9 @@ function QuestionEditForm({ question, banks, allTags, knowledgePoints, id }: Que
 export function QuestionEdit() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const navState = location.state as { backTo?: string } | null;
+  const backTo = navState?.backTo;
 
   const { query: oneQuery } = useOne<IQuestion>({
     resource: "questions",
@@ -1032,6 +1045,7 @@ export function QuestionEdit() {
       allTags={allTags}
       knowledgePoints={knowledgePoints}
       id={id!}
+      backTo={backTo}
     />
   );
 }

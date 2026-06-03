@@ -99,11 +99,13 @@ export interface EnhanceDraftInput {
   content_text: string;
   options: Record<string, string> | null;
   answer_text: string | null;
+  analysis: string | null;
 }
 
 export interface EnhancedDraft {
   draft_id: string;
   answer_text: string | null;
+  analysis: string | null;
   doubt: boolean;
   doubt_reason: string | null;
   suggested_knowledge_points: Array<{ id: string; name: string }>;

@@ -86,7 +86,10 @@ const PaperDetailPage = lazyNamed(() => import("./pages/papers/detail"), "PaperD
 const PaperImportPage = lazyNamed(() => import("./pages/papers/import"), "PaperImportPage");
 const ExamTaking = lazyNamed(() => import("./pages/student/exam-taking"), "ExamTaking");
 const EditorPage = lazyNamed(() => import("./pages/job-models/editor"), "EditorPage");
-const JobModelList = lazyNamed(() => import("./pages/job-models/list"), "JobModelList");
+const JobModelGraphWorkspace = lazyNamed(
+  () => import("./pages/job-models/graph-workspace"),
+  "JobModelGraphWorkspace",
+);
 const JobModelCreate = lazyNamed(() => import("./pages/job-models/create"), "JobModelCreate");
 const JobModelFastCreate = lazyNamed(() => import("./pages/job-models/fast-create"), "JobModelFastCreate");
 const StandardLibraryPage = lazyNamed(
@@ -326,7 +329,7 @@ function App() {
                 >
                   <Route element={<Layout />}>
                     <Route path="/gwmx/workbench" element={<GwmxWorkbench />} />
-                    <Route path="/gwmx/job-models" element={<JobModelList />} />
+                    <Route path="/gwmx/job-models" element={<JobModelGraphWorkspace />} />
                     <Route path="/gwmx/job-models/standard-library" element={<StandardLibraryPage />} />
                     <Route path="/gwmx/job-models/create" element={<JobModelCreate />} />
                     <Route path="/gwmx/job-models/fast-create" element={<JobModelFastCreate />} />

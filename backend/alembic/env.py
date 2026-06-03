@@ -14,6 +14,7 @@ from app.notifications.models import Notification  # noqa: F401
 from app.papers.models import Paper, PaperImportSession, PaperQuestion  # noqa: F401
 from app.questions.models import KnowledgePoint, Question, QuestionBank, Tag  # noqa: F401
 from app.exams.models import Exam  # noqa: F401
+from app.job_models.models import JobModel, SkillCourseMapping, JobModelGraphLayout  # noqa: F401
 from app.rbac.models import Organization, Role, Permission  # noqa: F401
 
 config = context.config

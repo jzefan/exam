@@ -9,7 +9,8 @@
  * 旧二进制 .doc / .ppt 不支持，抛出明确错误引导用户转换。
  */
 
-const MAX_PAGES = 50;
+const MAX_PAGES = 120;
+const MAX_MATERIAL_TEXT_CHARS = 200_000;
 const MAX_IMAGE_EDGE = 1280;
 const JPEG_QUALITY = 0.7;
 
@@ -198,3 +199,4 @@ export async function extractMaterialContent(file: File): Promise<ExtractedMater
 }
 
 export const MATERIAL_PAGE_LIMIT = MAX_PAGES;
+export const MATERIAL_TEXT_LIMIT = MAX_MATERIAL_TEXT_CHARS;

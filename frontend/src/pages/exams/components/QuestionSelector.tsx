@@ -43,6 +43,9 @@ export function QuestionSelector({
   showSummary = true,
   isFullscreen: controlledIsFullscreen,
   onFullscreenChange,
+  initialBankName,
+  initialKnowledgePointId,
+  autoSelectAll = false,
 }: {
   selectedIds: string[];
   onChange: (ids: string[]) => void;
@@ -50,12 +53,17 @@ export function QuestionSelector({
   showSummary?: boolean;
   isFullscreen?: boolean;
   onFullscreenChange?: (next: boolean) => void;
+  initialBankName?: string;
+  initialKnowledgePointId?: string;
+  /** 进入时默认全选当前题库 + 知识点过滤下的全部题目（一次性）。 */
+  autoSelectAll?: boolean;
 }) {
   const { data: identity } = useGetIdentity<{ primary_org?: { role_name?: string } | null }>();
   const showBankOwner = identity ? getUserRole(identity) === "platform_admin" : false;
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [bankFilter, setBankFilter] = useState<string | null>(null);
+  const [bankNameInitialised, setBankNameInitialised] = useState(false);
   const [typeFilter, setTypeFilter] = useState<QuestionType | null>(null);
   const [knowledgePointFilter, setKnowledgePointFilter] = useState<string | null>(null);
   const [page, setPage] = useState(1);
@@ -112,6 +120,22 @@ export function QuestionSelector({
   });
   const banks = bankQuery.data?.data ?? [];
 
+  useEffect(() => {
+    if (!initialBankName || bankNameInitialised || banks.length === 0) return;
+    const match = banks.find((b) => b.name === initialBankName);
+    if (match) {
+      setBankFilter(match.id);
+      setBankNameInitialised(true);
+    }
+  }, [initialBankName, bankNameInitialised, banks]);
+
+  const kpFilterSetRef = useRef(false);
+  useEffect(() => {
+    if (!initialKnowledgePointId || kpFilterSetRef.current) return;
+    kpFilterSetRef.current = true;
+    setKnowledgePointFilter(initialKnowledgePointId);
+  }, [initialKnowledgePointId]);
+
   // Load questions
   const { query: questionQuery } = useList<IQuestion>({
     resource: "questions",
@@ -137,6 +161,36 @@ export function QuestionSelector({
   const previewQuestion = previewTooltip
     ? questions.find((question) => question.id === previewTooltip.questionId) ?? null
     : null;
+
+  // 从课程详情跳转过来时，默认全选「课程题库 + 知识点」过滤下的全部题目。
+  // 等过滤条件（题库名解析、知识点）就绪后再拉全量，避免误选到未过滤的题目。
+  const [autoSelectDone, setAutoSelectDone] = useState(false);
+  const autoSelectFiltersReady =
+    (!initialBankName || bankFilter !== null) &&
+    (!initialKnowledgePointId || knowledgePointFilter !== null);
+  const { query: autoSelectQuery } = useList<IQuestion>({
+    resource: "questions",
+    pagination: { currentPage: 1, pageSize: 500, mode: "server" },
+    filters: [
+      ...(bankFilter ? [{ field: "question_bank_id", operator: "eq" as const, value: bankFilter }] : []),
+      ...(knowledgePointFilter
+        ? [{ field: "knowledge_point_id", operator: "eq" as const, value: knowledgePointFilter }]
+        : []),
+    ],
+    queryOptions: { enabled: autoSelectAll && !autoSelectDone && autoSelectFiltersReady },
+  });
+
+  useEffect(() => {
+    if (!autoSelectAll || autoSelectDone || !autoSelectFiltersReady) return;
+    const data = autoSelectQuery.data?.data;
+    if (!data) return;
+    setAutoSelectDone(true);
+    // 仅作为默认选择：用户尚未选过题时才整体带入，避免覆盖手动调整。
+    if (selectedIds.length > 0) return;
+    const ids = Array.from(new Set(data.map((question) => question.id)));
+    if (ids.length > 0) onChange(ids);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSelectAll, autoSelectDone, autoSelectFiltersReady, autoSelectQuery.data?.data]);
 
   const toggle = (id: string) => {
     if (selectedSet.has(id)) {

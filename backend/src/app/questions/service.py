@@ -3452,14 +3452,19 @@ async def _enhance_single_draft(
     if draft.options:
         options_str = json.dumps(draft.options, ensure_ascii=False)
 
-    prompt = f"""你是教研助手。给你一道题目和候选知识点，请同时完成两项任务：
+    prompt = f"""你是教研助手。给你一道题目和候选知识点，请同时完成三项任务：
 
 任务1 — 答案处理：
 - 如果题目没有提供答案，请为这道题生成标准答案。
 - 如果题目已有答案，请检查答案是否正确。如果答案有疑问（如明显错误、不完整、或与题目内容矛盾），标记 doubt=true 并说明原因。
 - answer_text 只返回答案本身，不要包含解析或说明。
 
-任务2 — 知识点匹配：
+任务2 — 解析处理：
+- 如果题目没有提供解析，请生成一段简明、可用于教学讲解的解析。
+- 如果题目已有解析，请检查是否与题目和答案一致；若解析为空、过短或明显不完整，请补全。
+- analysis 只返回解析内容本身，不要重复题干。
+
+任务3 — 知识点匹配：
 - 从候选知识点列表中选择与题目内容最相关的 0-3 个知识点。
 - 只能使用候选 id，不要编造。
 - 若没有明显相关的，返回空数组。
@@ -3468,11 +3473,12 @@ async def _enhance_single_draft(
 题目内容：{draft.content_text[:2000]}
 选项：{options_str or "（无）"}
 当前答案：{draft.answer_text or "（无）"}
+当前解析：{draft.analysis or "（无）"}
 候选知识点（JSON 列表）：
 {json.dumps(candidates_json, ensure_ascii=False)}
 
 只返回合法 JSON：
-{{"answer_text":"...", "doubt":true/false, "doubt_reason":"..."|null, "matched_kp_ids":["uuid1","uuid2"]}}""".strip()
+{{"answer_text":"...", "analysis":"...", "doubt":true/false, "doubt_reason":"..."|null, "matched_kp_ids":["uuid1","uuid2"]}}""".strip()
 
     try:
         data = await _request_deepseek_json(prompt)
@@ -3480,6 +3486,7 @@ async def _enhance_single_draft(
         return EnhancedDraft(draft_id=draft.draft_id)
 
     answer_text = str(data.get("answer_text", "")).strip() or None
+    analysis = str(data.get("analysis", "")).strip() or None
     doubt = bool(data.get("doubt", False))
     doubt_reason = str(data.get("doubt_reason", "")).strip() or None
 
@@ -3498,6 +3505,7 @@ async def _enhance_single_draft(
     return EnhancedDraft(
         draft_id=draft.draft_id,
         answer_text=answer_text,
+        analysis=analysis,
         doubt=doubt,
         doubt_reason=doubt_reason,
         suggested_knowledge_points=suggested,

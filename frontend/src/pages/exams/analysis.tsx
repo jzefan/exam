@@ -1,7 +1,14 @@
 import { useMemo, useState } from "react";
 import { useOne } from "@refinedev/core";
 import { useNavigate, useParams } from "react-router-dom";
-import { AlertTriangle, ChevronLeft, CheckCircle2, Loader2, Minus, PieChart, UserX } from "lucide-react";
+import { AlertTriangle, ChevronLeft, CheckCircle2, Download, Loader2, Minus, PieChart, UserX } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Card,
@@ -138,6 +145,83 @@ const formatGradingStatus = (value: string | null): string =>
 
 const formatQuestionType = (value: string | null): string =>
   value ? (questionTypeLabels[value] ?? value) : "—";
+
+type StudentExportSort = "studentNo" | "score";
+type StudentScoreExportCell = string | number;
+
+const getStudentNo = (student: StudentRow): string =>
+  (student.username ?? student.phone ?? "").trim();
+
+const compareStudentsByNo = (left: StudentRow, right: StudentRow): number => {
+  const leftNo = getStudentNo(left);
+  const rightNo = getStudentNo(right);
+  if (!leftNo && rightNo) return 1;
+  if (leftNo && !rightNo) return -1;
+  return leftNo.localeCompare(rightNo, "zh-CN", { numeric: true, sensitivity: "base" });
+};
+
+const compareStudentsByScore = (left: StudentRow, right: StudentRow): number => {
+  if (left.score === null && right.score !== null) return 1;
+  if (left.score !== null && right.score === null) return -1;
+  if (left.score !== null && right.score !== null && left.score !== right.score) {
+    return right.score - left.score;
+  }
+  return compareStudentsByNo(left, right);
+};
+
+const safeSpreadsheetText = (value: string | number | null | undefined): string => {
+  let text = value === null || value === undefined ? "" : String(value);
+  // Avoid spreadsheet formula injection for user-entered names/accounts.
+  if (/^[=+\-@]/.test(text)) {
+    text = `'${text}`;
+  }
+  return text;
+};
+
+const sanitizeFileName = (value: string): string =>
+  value.replace(/[\\/:*?"<>|]/g, "-").replace(/\s+/g, " ").trim() || "考试";
+
+const getSpreadsheetTextWidth = (value: StudentScoreExportCell): number => {
+  const text = String(value);
+  return [...text].reduce((width, char) => {
+    // CJK characters take roughly two latin columns in spreadsheets.
+    return width + (/[\u3400-\u9fff\uf900-\ufaff]/.test(char) ? 2 : 1);
+  }, 0);
+};
+
+function buildStudentScoreRows(
+  students: StudentRow[],
+  excludedIds: Set<string>,
+  sort: StudentExportSort,
+): StudentScoreExportCell[][] {
+  const sorted = [...students].sort(sort === "studentNo" ? compareStudentsByNo : compareStudentsByScore);
+  return [
+    ["姓名", "学号/账号", "手机号", "提交时间", "状态", "客观分", "主观分", "总分", "得分率", "是否计入统计"],
+    ...sorted.map((student) => [
+      safeSpreadsheetText(student.full_name),
+      safeSpreadsheetText(getStudentNo(student)),
+      safeSpreadsheetText(student.phone),
+      formatDateTime(student.submitted_at),
+      formatGradingStatus(student.grading_status),
+      formatScore(student.objective_score),
+      formatScore(student.subjective_score),
+      formatScore(student.score),
+      student.percent === null ? "" : `${student.percent.toFixed(1)}%`,
+      excludedIds.has(student.student_id) ? "否" : "是",
+    ]),
+  ];
+}
+
+function getStudentScoreColumnWidths(rows: StudentScoreExportCell[][]) {
+  const columnCount = Math.max(0, ...rows.map((row) => row.length));
+  return Array.from({ length: columnCount }, (_, columnIndex) => {
+    const maxWidth = Math.max(
+      8,
+      ...rows.map((row) => getSpreadsheetTextWidth(row[columnIndex] ?? "")),
+    );
+    return { wch: Math.min(Math.max(maxWidth + 2, 10), 32) };
+  });
+}
 
 function buildSubtitle(startTime: string | null, category: string | null): string | null {
   const parts: string[] = [];
@@ -453,6 +537,20 @@ export function ExamAnalysisPage() {
       else next.add(studentId);
       return next;
     });
+  };
+
+  const exportStudentScores = async (sort: StudentExportSort) => {
+    const XLSX = await import("xlsx");
+    const rows = buildStudentScoreRows(students, excludedIds, sort);
+    const worksheet = XLSX.utils.aoa_to_sheet(rows);
+    worksheet["!cols"] = getStudentScoreColumnWidths(rows);
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "学生成绩");
+    XLSX.writeFile(
+      workbook,
+      `${sanitizeFileName(title)}-学生成绩-${sort === "studentNo" ? "按学号顺序" : "按分数顺序"}.xlsx`,
+    );
   };
 
   const subtitle = buildSubtitle(start_time, category);
@@ -783,15 +881,33 @@ export function ExamAnalysisPage() {
                   )}
                 </CardDescription>
               </div>
-              {excludedIds.size > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setExcludedIds(new Set())}
-                  className="shrink-0 text-[12px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                >
-                  恢复全部
-                </button>
-              )}
+              <div className="flex shrink-0 items-center gap-2">
+                {excludedIds.size > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setExcludedIds(new Set())}
+                    className="text-[12px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                  >
+                    恢复全部
+                  </button>
+                )}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" disabled={students.length === 0}>
+                      <Download size={14} />
+                      导出
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-44">
+                    <DropdownMenuItem onClick={() => void exportStudentScores("studentNo")}>
+                      按学号顺序导出
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => void exportStudentScores("score")}>
+                      按分数顺序导出
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
             </div>
           </CardHeader>
           <CardContent>
@@ -817,7 +933,19 @@ export function ExamAnalysisPage() {
                     return (
                       <TableRow
                         key={s.student_id}
-                        className={cn(excluded && "opacity-40")}
+                        className={cn(
+                          "cursor-pointer transition-colors hover:bg-muted/40",
+                          excluded && "opacity-40",
+                        )}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => navigate(`/exams/${id}/students/${s.student_id}/result`)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            navigate(`/exams/${id}/students/${s.student_id}/result`);
+                          }
+                        }}
                       >
                         <TableCell>
                           <div className="font-medium">{s.full_name ?? "—"}</div>
@@ -849,7 +977,12 @@ export function ExamAnalysisPage() {
                               <TooltipTrigger asChild>
                                 <button
                                   type="button"
-                                  onClick={() => toggleExclude(s.student_id)}
+                                  aria-label={excluded ? "恢复计入统计" : "剔除出统计"}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    toggleExclude(s.student_id);
+                                  }}
+                                  onKeyDown={(event) => event.stopPropagation()}
                                   className={cn(
                                     "flex size-7 items-center justify-center rounded-md transition-colors",
                                     excluded

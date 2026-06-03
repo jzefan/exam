@@ -133,6 +133,7 @@ RELEASES_DIR="${APP_ROOT}/releases"
 SHARED_DIR="${APP_ROOT}/shared"
 ENV_DIR="${SHARED_DIR}/env"
 NGINX_DIR="${SHARED_DIR}/nginx"
+UPLOADS_DIR="${SHARED_DIR}/uploads"
 CURRENT_LINK="${APP_ROOT}/current"
 DEPLOY_ENV_FILE="${ENV_DIR}/deploy.env"
 TIMESTAMP="$(date +"%Y%m%d%H%M%S")"
@@ -254,7 +255,7 @@ fi
 
 export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-exam-app}"
 
-mkdir -p "${RELEASES_DIR}" "${ENV_DIR}" "${NGINX_DIR}"
+mkdir -p "${RELEASES_DIR}" "${ENV_DIR}" "${NGINX_DIR}" "${UPLOADS_DIR}"
 mkdir -p "${NEW_RELEASE}"
 
 log "Extracting release into ${NEW_RELEASE}"

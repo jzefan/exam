@@ -212,6 +212,13 @@ export function PracticeCreate() {
     successTo?: string;
     courseKpId?: string;
     courseSemesterId?: string;
+    knowledgePointId?: string;
+    knowledgePointName?: string;
+    knowledgePointPath?: string;
+    mainKnowledgePointId?: string;
+    mainKnowledgePointName?: string;
+    defaultBankName?: string;
+    initialStep?: number;
   };
   const { toast } = useToast();
   const { mutate: create, mutation } = useCreate();
@@ -637,6 +644,46 @@ export function PracticeCreate() {
     if (isEditMode || isTitleManuallyEdited) return;
     setTitle(suggestedPracticeTitle);
   }, [isEditMode, isTitleManuallyEdited, suggestedPracticeTitle]);
+
+  const [wizardDefaultBankName] = useState<string | undefined>(
+    navState.defaultBankName,
+  );
+
+  const courseNavAppliedRef = useRef(false);
+  useEffect(() => {
+    if (isEditMode || courseNavAppliedRef.current) return;
+    const {
+      knowledgePointId,
+      knowledgePointName,
+      knowledgePointPath,
+      mainKnowledgePointId,
+      mainKnowledgePointName,
+    } = navState;
+    if (knowledgePointId && knowledgePointName) {
+      courseNavAppliedRef.current = true;
+      const kp: SelectedKnowledgePoint = {
+        id: knowledgePointId,
+        name: knowledgePointName,
+        path: knowledgePointPath ?? knowledgePointName,
+      };
+      // 第一步的"课程"字段带上课程根节点，"知识点"字段带上具体的章节/知识点。
+      // 课程信息缺省时回退到知识点本身，保持旧行为。
+      const mainKp: SelectedKnowledgePoint =
+        mainKnowledgePointId && mainKnowledgePointName
+          ? {
+              id: mainKnowledgePointId,
+              name: mainKnowledgePointName,
+              path: mainKnowledgePointName,
+            }
+          : kp;
+      setMainKnowledgePoint(mainKp);
+      setSelectedKnowledgePoints([kp]);
+      if (navState.initialStep !== undefined) {
+        setCurrentStep(navState.initialStep);
+        setMaxVisitedStep((prev) => Math.max(prev, navState.initialStep!));
+      }
+    }
+  }, [isEditMode, navState]);
 
   const allocationState = validateTypeAllocation(aiQuestionCount, aiTypeAlloc);
   const aiAllocationError =
@@ -1380,6 +1427,13 @@ export function PracticeCreate() {
                     showSummary={false}
                     isFullscreen={isManualQuestionFullscreen}
                     onFullscreenChange={setIsManualQuestionFullscreen}
+                    initialBankName={wizardDefaultBankName}
+                    initialKnowledgePointId={
+                      navState.knowledgePointId
+                    }
+                    autoSelectAll={
+                      !isEditMode && Boolean(navState.knowledgePointId)
+                    }
                   />
                 ) : (
                   <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">

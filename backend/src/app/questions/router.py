@@ -16,8 +16,9 @@ from app.auth.models import User
 from app.common.pagination import PaginationParams, apply_filters, apply_pagination, get_total_count, parse_filters, parse_pagination
 from app.common.resource_access import can_read_shared_resource, can_write_owned_resource, teacher_visible_resource_filter
 from app.database import get_db
+from app.job_models.models import LearningResource
 from app.questions.models import KnowledgePoint, Question, QuestionImportJobStatus
-from app.questions.models import question_knowledge_points, question_tags
+from app.questions.models import question_knowledge_points, question_learning_resources, question_tags
 from app.questions.schemas import (
     KnowledgePointCreate,
     KnowledgePointResponse,
@@ -637,7 +638,23 @@ async def save_generated_to_course_bank_endpoint(
                 detail="No permission to read some knowledge points",
             ) from exc
         raise
+    if data.source_material_id is not None:
+        material = await db.get(LearningResource, data.source_material_id)
+        if material is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资料不存在")
     result = await save_generated_questions_to_default_course_bank(db, data.questions, user.id)
+    if data.source_material_id is not None and result.created_question_ids:
+        await db.execute(
+            question_learning_resources.insert().values(
+                [
+                    {
+                        "question_id": question_id,
+                        "resource_id": data.source_material_id,
+                    }
+                    for question_id in result.created_question_ids
+                ]
+            )
+        )
     return SaveGeneratedToCourseBankResponse(
         created=result.created,
         existing=result.existing,
@@ -767,6 +784,7 @@ async def enhance_import_drafts_stream_endpoint(
 
     async def event_stream():
         answers_completed = 0
+        analyses_completed = 0
         doubts_flagged = 0
         kps_matched = 0
 
@@ -775,6 +793,8 @@ async def enhance_import_drafts_stream_endpoint(
         ):
             if result.answer_text:
                 answers_completed += 1
+            if result.analysis:
+                analyses_completed += 1
             if result.doubt:
                 doubts_flagged += 1
             if result.suggested_knowledge_points:
@@ -786,6 +806,7 @@ async def enhance_import_drafts_stream_endpoint(
                 "total": total,
                 "draft_id": result.draft_id,
                 "answer_text": result.answer_text,
+                "analysis": result.analysis,
                 "doubt": result.doubt,
                 "doubt_reason": result.doubt_reason,
                 "suggested_knowledge_points": [
@@ -793,6 +814,7 @@ async def enhance_import_drafts_stream_endpoint(
                     for kp in result.suggested_knowledge_points
                 ],
                 "answers_completed": answers_completed,
+                "analyses_completed": analyses_completed,
                 "doubts_flagged": doubts_flagged,
                 "kps_matched": kps_matched,
             }, ensure_ascii=False)
@@ -801,6 +823,7 @@ async def enhance_import_drafts_stream_endpoint(
         done = json.dumps({
             "type": "done",
             "answers_completed": answers_completed,
+            "analyses_completed": analyses_completed,
             "doubts_flagged": doubts_flagged,
             "kps_matched": kps_matched,
         }, ensure_ascii=False)

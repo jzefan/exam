@@ -22,16 +22,7 @@ interface CodeBlockProps {
 
 export function CodeBlock({ code, language }: CodeBlockProps) {
   const trimmedCode = code.trim();
-  const highlighted = (() => {
-    try {
-      if (language && hljs.getLanguage(language)) {
-        return hljs.highlight(trimmedCode, { language }).value;
-      }
-      return hljs.highlightAuto(trimmedCode).value;
-    } catch {
-      return escapeHtml(trimmedCode);
-    }
-  })();
+  const highlighted = highlightCode(trimmedCode, language);
 
   return (
     <pre className="rounded-md text-xs">
@@ -43,7 +34,18 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
   );
 }
 
-function escapeHtml(str: string): string {
+export function highlightCode(code: string, language?: string) {
+  try {
+    if (language && hljs.getLanguage(language)) {
+      return hljs.highlight(code, { language }).value;
+    }
+    return hljs.highlightAuto(code).value;
+  } catch {
+    return escapeHtml(code);
+  }
+}
+
+export function escapeHtml(str: string): string {
   return str
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")

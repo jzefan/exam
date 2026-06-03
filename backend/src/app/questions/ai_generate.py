@@ -68,8 +68,8 @@ class AIGenerateRequest(BaseModel):
     # 与 prompt 分开，避免短指令字段被长正文淹没/截断。
     material_text: str = Field(default="", max_length=200000)
     # 学习资料图片（PDF 整页渲染、docx/pptx 嵌入图），data URL 形式。
-    # 非空时切换到多模态模型；上限 50 张以控制 token 成本。
-    material_images: list[str] = Field(default_factory=list, max_length=50)
+    # 非空时切换到多模态模型；与前端资料抽取页数上限保持一致。
+    material_images: list[str] = Field(default_factory=list, max_length=120)
     model: AIModelProvider = AIModelProvider.QWEN
 
 
@@ -265,6 +265,37 @@ def _sanitize_generated_question(question: dict[str, Any]) -> dict[str, Any]:
     return question
 
 
+def _expected_question_types(type_distribution: dict[str, int]) -> list[str]:
+    expected: list[str] = []
+    for qtype, count in type_distribution.items():
+        if count > 0:
+            expected.extend([qtype] * count)
+    return expected
+
+
+def _answer_text(answer: Any) -> str:
+    if not isinstance(answer, dict):
+        return ""
+    raw_answer = answer.get("text") or answer.get("correct")
+    return str(raw_answer).strip() if raw_answer is not None else ""
+
+
+def _validate_generated_question_shape(
+    question: dict[str, Any],
+    *,
+    expected_type: str | None,
+) -> str | None:
+    actual_type = question.get("type")
+    if expected_type is not None and actual_type != expected_type:
+        return f"AI 返回题型不符合要求：期望 {expected_type}，实际 {actual_type or '空'}"
+    if actual_type == "code":
+        if question.get("options") not in (None, {}):
+            return "AI 返回的代码题不能包含选择题选项"
+        if not _answer_text(question.get("answer")):
+            return "AI 返回的代码题缺少参考答案"
+    return None
+
+
 def _extract_generated_questions(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, dict):
         questions = payload.get("questions")
@@ -402,6 +433,7 @@ async def generate_questions_stream(
 
     question_count = 0
     generated_titles: list[str] = []
+    expected_types = _expected_question_types(request.type_distribution)
 
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -497,6 +529,22 @@ async def generate_questions_stream(
                                         for parsed_question in _extract_generated_questions(parsed_payload):
                                             if question_count >= request.total_count:
                                                 break
+                                            expected_type = (
+                                                expected_types[question_count]
+                                                if question_count < len(expected_types)
+                                                else None
+                                            )
+                                            shape_error = _validate_generated_question_shape(
+                                                parsed_question,
+                                                expected_type=expected_type,
+                                            )
+                                            if shape_error:
+                                                logger.warning(
+                                                    "Reject generated question shape: %s payload=%s",
+                                                    shape_error,
+                                                    parsed_question,
+                                                )
+                                                continue
                                             question_count += 1
                                             title = parsed_question.get("title")
                                             if isinstance(title, str) and title.strip():

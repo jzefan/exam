@@ -88,6 +88,21 @@ class QuestionCreate(BaseModel):
     knowledge_point_ids: list[uuid.UUID] = Field(default_factory=list)
     question_bank_id: uuid.UUID | None = None
 
+    @model_validator(mode="after")
+    def require_code_answer(self) -> "QuestionCreate":
+        if self.type == QuestionType.CODE:
+            answer_text = ""
+            if isinstance(self.answer, dict):
+                raw_answer = self.answer.get("text") or self.answer.get("correct")
+                answer_text = str(raw_answer).strip() if raw_answer is not None else ""
+                if not answer_text and self.answer.get("code") is not None:
+                    answer_text = str(self.answer.get("code")).strip()
+            if not answer_text:
+                raise ValueError("代码题必须填写参考答案")
+            if isinstance(self.answer, dict) and not self.answer.get("code"):
+                self.answer = {**self.answer, "code": answer_text}
+        return self
+
 
 class QuestionUpdate(BaseModel):
     type: QuestionType | None = None
@@ -296,6 +311,7 @@ class QuestionBulkCreateRequest(BaseModel):
 
 class SaveGeneratedToCourseBankRequest(BaseModel):
     questions: list[QuestionCreate] = Field(min_length=1, max_length=5000)
+    source_material_id: uuid.UUID | None = None
 
 
 class QuestionBulkCreateResponse(BaseModel):
@@ -400,6 +416,7 @@ class EnhanceDraftInput(BaseModel):
     content_text: str
     options: dict[str, str] | None = None
     answer_text: str | None = None
+    analysis: str | None = None
 
 
 class QuestionImportEnhanceDraftsRequest(BaseModel):
@@ -410,6 +427,7 @@ class QuestionImportEnhanceDraftsRequest(BaseModel):
 class EnhancedDraft(BaseModel):
     draft_id: str
     answer_text: str | None = None
+    analysis: str | None = None
     doubt: bool = False
     doubt_reason: str | None = None
     suggested_knowledge_points: list[KnowledgePointSuggestion] = Field(default_factory=list)

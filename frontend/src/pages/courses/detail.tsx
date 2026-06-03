@@ -4,17 +4,21 @@ import {
   useMemo,
   useRef,
   useState,
+  type DragEvent,
+  type KeyboardEvent,
   type ReactNode,
 } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   BookOpen,
   CalendarRange,
+  Calculator,
   Camera,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   ClipboardList,
+  Download,
   Edit3,
   ExternalLink,
   Eye,
@@ -69,8 +73,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { formatKnowledgeDisplayPath } from "@/lib/knowledge-display";
+import { writeExamSeed } from "@/lib/exam-seed";
 import { cn } from "@/lib/utils";
-import type { IQuestion } from "@/types";
+import type { IQuestion, QuestionType } from "@/types";
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
 import {
   CreateFromSelectionDialog,
@@ -84,28 +89,35 @@ import {
 import { KnowledgeImportDialog } from "@/pages/knowledge/KnowledgeImportDialog";
 import { KnowledgeCatalogPhotoDialog } from "@/pages/knowledge/KnowledgeCatalogPhotoDialog";
 import { MaterialAIGenerateDialog } from "@/pages/knowledge/MaterialAIGenerateDialog";
+import { ResourcePreview } from "@/pages/job-models/editor/resource-preview";
 import {
   extractMaterialContent,
   MATERIAL_PAGE_LIMIT,
+  MATERIAL_TEXT_LIMIT,
   UnsupportedMaterialFormatError,
 } from "@/pages/knowledge/extract-material-content";
 import type { KnowledgeImportPath } from "@/pages/knowledge/import-knowledge-utils";
 import { apiRequest } from "@/pages/grading/api";
 import {
   addCourseMaterialLink,
+  clearCourseMaterialQuestions,
   archiveExamToSemester,
   clearCourseKnowledgePoints,
+  clearCourseQuestions,
   deleteCourseMaterial,
+  getCourseAssignmentScoreSummary,
   getCourseKnowledgeTree,
   getTeacherCourse,
   listCourseAssignments,
   listCourseExams,
+  listCourseMaterialQuestions,
   listCourseMaterials,
   listCourseQuestions,
   listCourseSemesters,
   updateCourseKnowledgePointName,
   updateCourseMaterial,
   uploadCourseMaterialFile,
+  type CourseAssignmentScoreSummary,
   type CourseKnowledgeNode,
   type CourseSemester,
   type TeacherCourseDetail,
@@ -137,7 +149,7 @@ import {
 const AI_PREFILL_KEY = "ai_generate_prefill_v1";
 
 const ALL_SEMESTERS = "__all__";
-
+const ALL_QUESTION_KNOWLEDGE = "__all_question_knowledge__";
 type CourseTab =
   | "materials"
   | "exams"
@@ -150,7 +162,32 @@ type CourseMaterialExtractedContent = {
   images: string[];
 };
 
+type CourseMaterialBatchGenerateItem = {
+  material: TeacherCourseMaterial;
+  count: number;
+};
+
+type CourseMaterialBatchProgress = {
+  phase: "generating" | "saving" | "done";
+  currentIndex: number;
+  total: number;
+  currentTitle: string;
+  generated: number;
+  saved: number;
+};
+
+type CourseMaterialGeneratedQuestion = {
+  type: QuestionType;
+  title: string;
+  content: { text: string };
+  options: Record<string, string> | null;
+  answer: { text?: string; correct?: string };
+  analysis: string | null;
+  difficulty: number;
+};
+
 type CourseMaterialAIGenerateState = CourseMaterialExtractedContent & {
+  materialId: string;
   materialTitle: string;
   knowledgePointId: string;
   knowledgePointName: string;
@@ -164,6 +201,143 @@ function formatDate(value: string | null) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "未设置";
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function formatScore(value: number | null | undefined, digits = 1) {
+  if (value == null || Number.isNaN(value)) return "-";
+  return Number(value).toFixed(digits).replace(/\.0+$/, "");
+}
+
+function formatPercent(value: number | null | undefined) {
+  if (value == null || Number.isNaN(value)) return "-";
+  return `${Number(value).toFixed(1).replace(/\.0$/, "")}%`;
+}
+
+function escapeCsvCell(value: string | number | null | undefined) {
+  const text = value == null ? "" : String(value);
+  if (/[",\n\r]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+}
+
+function getFileKey(file: File) {
+  return `${file.name}:${file.size}:${file.lastModified}`;
+}
+
+function mergeMaterialUploadFiles(current: File[], incoming: File[]) {
+  const seen = new Set(current.map(getFileKey));
+  const merged = [...current];
+  for (const file of incoming) {
+    const key = getFileKey(file);
+    if (!seen.has(key)) {
+      seen.add(key);
+      merged.push(file);
+    }
+  }
+  return merged;
+}
+
+function formatFileSize(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+const MATERIAL_UPLOAD_AUTO_MATCH_MIN_SCORE = 0.62;
+
+function stripMaterialFileExtension(fileName: string) {
+  return fileName.replace(/\.[^.]+$/, "");
+}
+
+function normalizeMaterialMatchText(value: string) {
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/\.[a-z0-9]{2,8}$/i, "")
+    .replace(/[《》【】[\]()（）{}<>「」『』'"“”‘’]/g, "")
+    .replace(/[_\-—–+.,，。:：;；/\\|·、\s]+/g, "");
+}
+
+function getBigrams(value: string) {
+  if (value.length <= 1) return value ? [value] : [];
+  const bigrams: string[] = [];
+  for (let index = 0; index < value.length - 1; index += 1) {
+    bigrams.push(value.slice(index, index + 2));
+  }
+  return bigrams;
+}
+
+function diceSimilarity(left: string, right: string) {
+  if (!left || !right) return 0;
+  if (left === right) return 1;
+  const leftBigrams = getBigrams(left);
+  const rightBigrams = getBigrams(right);
+  if (leftBigrams.length === 0 || rightBigrams.length === 0) return 0;
+  const rightCounts = new Map<string, number>();
+  for (const item of rightBigrams) {
+    rightCounts.set(item, (rightCounts.get(item) ?? 0) + 1);
+  }
+  let matches = 0;
+  for (const item of leftBigrams) {
+    const count = rightCounts.get(item) ?? 0;
+    if (count > 0) {
+      matches += 1;
+      rightCounts.set(item, count - 1);
+    }
+  }
+  return (2 * matches) / (leftBigrams.length + rightBigrams.length);
+}
+
+function scoreMaterialTargetMatch(
+  file: File,
+  target: CourseKnowledgeUploadTarget,
+) {
+  const fileText = normalizeMaterialMatchText(
+    stripMaterialFileExtension(file.name),
+  );
+  const targetName = normalizeMaterialMatchText(target.name);
+  const targetPath = normalizeMaterialMatchText(target.path);
+  if (!fileText || !targetName) return 0;
+
+  const nameContains =
+    fileText.length >= 2 &&
+    targetName.length >= 2 &&
+    (fileText.includes(targetName) || targetName.includes(fileText));
+  const pathContains =
+    fileText.length >= 2 &&
+    targetPath.length >= 2 &&
+    (fileText.includes(targetPath) || targetPath.includes(fileText));
+
+  const nameScore = nameContains ? 0.96 : diceSimilarity(fileText, targetName);
+  const pathScore = pathContains
+    ? 0.78
+    : diceSimilarity(fileText, targetPath) * 0.82;
+
+  // Prefer concrete chapters/knowledge nodes over the course root when scores tie.
+  return Math.max(nameScore, pathScore) + Math.min(target.depth, 4) * 0.015;
+}
+
+function findAutoMatchedMaterialTarget(
+  files: File[],
+  targets: CourseKnowledgeUploadTarget[],
+) {
+  let best: {
+    target: CourseKnowledgeUploadTarget;
+    file: File;
+    score: number;
+  } | null = null;
+  for (const file of files) {
+    for (const target of targets) {
+      const score = scoreMaterialTargetMatch(file, target);
+      if (!best || score > best.score) {
+        best = { target, file, score };
+      }
+    }
+  }
+  return best && best.score >= MATERIAL_UPLOAD_AUTO_MATCH_MIN_SCORE
+    ? best
+    : null;
 }
 
 function EmptyPanel({
@@ -233,6 +407,7 @@ function materialMetaLabel(resourceType: string): string {
 }
 
 const GENERATABLE_MATERIAL_EXTENSIONS = new Set(["pdf", "docx", "pptx"]);
+const PREVIEWABLE_MATERIAL_EXTENSIONS = new Set(["pdf", "docx", "pptx"]);
 
 function getCourseMaterialExtension(
   material: TeacherCourseMaterial,
@@ -260,6 +435,12 @@ function canGenerateQuestionsFromCourseMaterial(
     GENERATABLE_MATERIAL_EXTENSIONS.has(
       getCourseMaterialExtension(material) ?? "",
     )
+  );
+}
+
+function canPreviewCourseMaterial(material: TeacherCourseMaterial): boolean {
+  return PREVIEWABLE_MATERIAL_EXTENSIONS.has(
+    getCourseMaterialExtension(material) ?? "",
   );
 }
 
@@ -346,6 +527,47 @@ function flattenCourseKnowledgeNodes(
   return [current, ...children];
 }
 
+function collectCourseKnowledgeNodeIds(
+  node: CourseKnowledgeNode | null,
+): Set<string> {
+  const ids = new Set<string>();
+  const visit = (current: CourseKnowledgeNode | null) => {
+    if (!current) return;
+    ids.add(current.id);
+    for (const child of current.children) {
+      visit(child);
+    }
+  };
+  visit(node);
+  return ids;
+}
+
+function filterMaterialsForKnowledgeNode(
+  materials: TeacherCourseMaterial[],
+  tree: CourseKnowledgeNode | null,
+  nodeId: string | null,
+) {
+  if (!nodeId) return materials;
+  const node = findCourseKnowledgeNode(tree, nodeId);
+  const nodeIds = collectCourseKnowledgeNodeIds(node);
+  if (nodeIds.size === 0) return [];
+  return materials.filter((material) => nodeIds.has(material.node_id));
+}
+
+function filterQuestionsForKnowledgeNode(
+  questions: IQuestion[],
+  tree: CourseKnowledgeNode | null,
+  nodeId: string | null,
+) {
+  if (!nodeId) return questions;
+  const node = findCourseKnowledgeNode(tree, nodeId);
+  const nodeIds = collectCourseKnowledgeNodeIds(node);
+  if (nodeIds.size === 0) return [];
+  return questions.filter((question) =>
+    question.knowledge_points.some((kp) => nodeIds.has(kp.id)),
+  );
+}
+
 function courseQuestionBankName(courseName: string | undefined) {
   const normalized = courseName?.trim();
   return normalized ? `${normalized.slice(0, 197)}-题库` : "主知识对应题库";
@@ -354,21 +576,34 @@ function courseQuestionBankName(courseName: string | undefined) {
 function MaterialsTab({
   materials,
   canWrite,
+  scopeLabel = "整门课程范围 · 含子知识点资料",
   onOpenAddLink,
   onPickUpload,
+  onOpenBatchGenerate,
+  onViewQuestions,
+  onPublishAssignment,
+  onDeleteQuestions,
   onAssociate,
   onGenerateFrom,
   onDelete,
 }: {
   materials: TeacherCourseMaterial[];
   canWrite: boolean;
+  scopeLabel?: string;
   onOpenAddLink: () => void;
   onPickUpload: () => void;
+  onOpenBatchGenerate: () => void;
+  onViewQuestions: (material: TeacherCourseMaterial) => void;
+  onPublishAssignment: (material: TeacherCourseMaterial) => void;
+  onDeleteQuestions: (material: TeacherCourseMaterial) => void;
   onAssociate: (material: TeacherCourseMaterial) => void;
   onGenerateFrom: (material: TeacherCourseMaterial) => void;
   onDelete: (material: TeacherCourseMaterial) => void;
 }) {
   const [query, setQuery] = useState("");
+  const generatableCount = materials.filter(
+    canGenerateQuestionsFromCourseMaterial,
+  ).length;
   const filtered = materials.filter((material) => {
     const text = `${material.title} ${material.node_name ?? ""}`.toLowerCase();
     return !query.trim() || text.includes(query.trim().toLowerCase());
@@ -389,9 +624,7 @@ function MaterialsTab({
             className="h-9 pl-9"
           />
         </div>
-        <span className="text-xs text-muted-foreground">
-          整门课程范围 · 含子知识点资料
-        </span>
+        <span className="text-xs text-muted-foreground">{scopeLabel}</span>
         <div className="flex-1" />
         {canWrite ? (
           <>
@@ -403,6 +636,16 @@ function MaterialsTab({
               <Upload size={14} className="mr-1.5" />
               上传资料
             </Button>
+            {generatableCount > 0 ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={onOpenBatchGenerate}
+              >
+                <Sparkles size={14} className="mr-1.5" />
+                一键生成题目
+              </Button>
+            ) : null}
           </>
         ) : (
           <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground">
@@ -423,6 +666,7 @@ function MaterialsTab({
           {filtered.map((material) => {
             const canGenerate =
               canGenerateQuestionsFromCourseMaterial(material);
+            const questionCount = material.question_count ?? 0;
 
             return (
               <div
@@ -461,6 +705,51 @@ function MaterialsTab({
                     从资料生成题目
                   </Button>
                 ) : null}
+                {questionCount > 0 ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-background px-2 py-0.5 font-sans text-[11px] font-semibold lining-nums tabular-nums text-muted-foreground transition hover:border-primary/40 hover:text-primary"
+                        title={`查看「${material.node_name ?? material.title}」下的题目`}
+                      >
+                        <BookOpen size={11} />
+                        {questionCount} 题
+                        <ChevronDown size={10} />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-36">
+                      <DropdownMenuItem
+                        onClick={() => onViewQuestions(material)}
+                      >
+                        <Eye size={14} className="mr-2" />
+                        查看
+                      </DropdownMenuItem>
+                      {canWrite ? (
+                        <>
+                          <DropdownMenuItem
+                            onClick={() => onPublishAssignment(material)}
+                          >
+                            <FilePlus2 size={14} className="mr-2" />
+                            发布作业
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onClick={() => onDeleteQuestions(material)}
+                          >
+                            <Trash2 size={14} className="mr-2" />
+                            删除题目
+                          </DropdownMenuItem>
+                        </>
+                      ) : null}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : (
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-background px-2 py-0.5 font-sans text-[11px] font-semibold lining-nums tabular-nums text-muted-foreground opacity-45">
+                    <BookOpen size={11} />0 题
+                  </span>
+                )}
                 {material.url ? (
                   <Button
                     variant="ghost"
@@ -583,58 +872,234 @@ function UploadCourseMaterialDialog({
   uploading,
   targets,
   selectedNodeId,
-  file,
+  files,
   onOpenChange,
   onSelectedNodeChange,
-  onFileChange,
+  onFilesChange,
   onSubmit,
 }: {
   open: boolean;
   uploading: boolean;
   targets: CourseKnowledgeUploadTarget[];
   selectedNodeId: string;
-  file: File | null;
+  files: File[];
   onOpenChange: (open: boolean) => void;
   onSelectedNodeChange: (nodeId: string) => void;
-  onFileChange: (file: File | null) => void;
+  onFilesChange: (files: File[]) => void;
   onSubmit: () => void;
 }) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const autoMatchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [autoMatchNotice, setAutoMatchNotice] = useState<{
+    targetName: string;
+    fileName: string;
+  } | null>(null);
+  const fileCount = files.length;
+  const clearAutoMatchTimer = useCallback(() => {
+    if (autoMatchTimerRef.current) {
+      clearTimeout(autoMatchTimerRef.current);
+      autoMatchTimerRef.current = null;
+    }
+  }, []);
+  const flashAutoMatchedTarget = (
+    target: CourseKnowledgeUploadTarget,
+    file: File,
+  ) => {
+    clearAutoMatchTimer();
+    setAutoMatchNotice({ targetName: target.name, fileName: file.name });
+    autoMatchTimerRef.current = setTimeout(() => {
+      setAutoMatchNotice(null);
+      autoMatchTimerRef.current = null;
+    }, 2200);
+  };
+  const addFiles = (incoming: FileList | File[]) => {
+    const nextFiles = Array.from(incoming).filter((file) => file.size > 0);
+    if (nextFiles.length === 0) return;
+    const mergedFiles = mergeMaterialUploadFiles(files, nextFiles);
+    const matched = findAutoMatchedMaterialTarget(nextFiles, targets);
+    if (matched) {
+      onSelectedNodeChange(matched.target.id);
+      flashAutoMatchedTarget(matched.target, matched.file);
+    }
+    onFilesChange(mergedFiles);
+  };
+  const removeFile = (fileToRemove: File) => {
+    const keyToRemove = getFileKey(fileToRemove);
+    onFilesChange(files.filter((file) => getFileKey(file) !== keyToRemove));
+  };
+  const openFilePicker = () => {
+    if (!uploading) inputRef.current?.click();
+  };
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setDragging(false);
+    if (!uploading) addFiles(event.dataTransfer.files);
+  };
+  const handleKeyboardOpen = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openFilePicker();
+    }
+  };
+  useEffect(() => {
+    if (!open || fileCount === 0) {
+      clearAutoMatchTimer();
+      setAutoMatchNotice(null);
+    }
+  }, [clearAutoMatchTimer, fileCount, open]);
+  useEffect(() => () => clearAutoMatchTimer(), [clearAutoMatchTimer]);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>上传课程资料</DialogTitle>
           <DialogDescription>
-            选择资料对应的课程知识点，再选择要上传的文件。
+            选择资料对应的课程知识点，可一次选择多个文件上传。
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <div className="space-y-2">
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="course-material-upload-node">关联知识点</Label>
-            <KnowledgeTargetSelect
-              id="course-material-upload-node"
-              targets={targets}
-              value={selectedNodeId}
-              onChange={onSelectedNodeChange}
-            />
-            <p className="text-xs text-muted-foreground">
-              如果课程知识结构还未完善，默认选择课程本身。
-            </p>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="course-material-upload-file">资料文件</Label>
-            <Input
-              id="course-material-upload-file"
-              type="file"
-              onChange={(event) =>
-                onFileChange(event.target.files?.[0] ?? null)
-              }
-            />
-            {file ? (
-              <p className="truncate text-xs text-muted-foreground">
-                已选择：{file.name}
+            <div
+              className={cn(
+                "rounded-md transition-all",
+                autoMatchNotice &&
+                  "animate-pulse ring-2 ring-primary/50 ring-offset-2 ring-offset-background",
+              )}
+            >
+              <KnowledgeTargetSelect
+                id="course-material-upload-node"
+                targets={targets}
+                value={selectedNodeId}
+                onChange={(nodeId) => {
+                  clearAutoMatchTimer();
+                  setAutoMatchNotice(null);
+                  onSelectedNodeChange(nodeId);
+                }}
+              />
+            </div>
+            {autoMatchNotice ? (
+              <p className="flex items-center gap-1.5 rounded-md bg-primary/10 px-2 py-1 text-xs font-medium text-primary">
+                <CheckCircle2 size={13} />
+                已根据《{autoMatchNotice.fileName}》自动匹配到：
+                {autoMatchNotice.targetName}
               </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                如果课程目录还未完善，默认选择课程本身。
+              </p>
+            )}
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="course-material-upload-file">资料文件</Label>
+            <div
+              role="button"
+              tabIndex={0}
+              aria-disabled={uploading}
+              onClick={openFilePicker}
+              onKeyDown={handleKeyboardOpen}
+              onDragEnter={(event) => {
+                event.preventDefault();
+                if (!uploading) setDragging(true);
+              }}
+              onDragOver={(event) => {
+                event.preventDefault();
+                if (!uploading) setDragging(true);
+              }}
+              onDragLeave={(event) => {
+                event.preventDefault();
+                const relatedTarget = event.relatedTarget;
+                if (
+                  relatedTarget instanceof Node &&
+                  event.currentTarget.contains(relatedTarget)
+                ) {
+                  return;
+                }
+                setDragging(false);
+              }}
+              onDrop={handleDrop}
+              className={cn(
+                "group flex min-h-36 cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed bg-muted/20 px-4 py-8 text-center transition-colors",
+                "hover:border-primary/70 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45",
+                dragging
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border text-muted-foreground",
+                uploading &&
+                  "pointer-events-none cursor-not-allowed opacity-60",
+              )}
+            >
+              <input
+                ref={inputRef}
+                id="course-material-upload-file"
+                className="hidden"
+                type="file"
+                multiple
+                disabled={uploading}
+                onChange={(event) => {
+                  addFiles(event.target.files ?? []);
+                  event.currentTarget.value = "";
+                }}
+              />
+              <div className="mb-3 flex size-11 items-center justify-center rounded-full bg-primary/10 text-primary transition-colors group-hover:bg-primary/15">
+                <Upload size={20} />
+              </div>
+              <p className="text-sm font-semibold text-foreground">
+                拖拽资料到这里，或点击选择文件
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                支持一次选择多个 PDF、Word、PPT、图片等资料文件
+              </p>
+            </div>
+            {fileCount > 0 ? (
+              <div className="overflow-hidden rounded-xl border border-border/70 bg-background">
+                <div className="flex items-center justify-between border-b border-border/70 px-3 py-2 text-xs text-muted-foreground">
+                  <span>已选择 {fileCount} 个文件</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    disabled={uploading}
+                    onClick={() => onFilesChange([])}
+                  >
+                    清空
+                  </Button>
+                </div>
+                <div className="flex max-h-44 flex-col gap-1 overflow-y-auto p-2">
+                  {files.map((file) => (
+                    <div
+                      key={getFileKey(file)}
+                      className="flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-muted/70"
+                    >
+                      <FileText size={16} className="shrink-0 text-primary" />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-foreground">
+                          {file.name}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {formatFileSize(file.size)}
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-8 shrink-0 text-muted-foreground hover:text-destructive"
+                        disabled={uploading}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          removeFile(file);
+                        }}
+                        aria-label={`删除 ${file.name}`}
+                      >
+                        <X size={14} />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
             ) : null}
           </div>
         </div>
@@ -650,7 +1115,7 @@ function UploadCourseMaterialDialog({
           </Button>
           <Button
             type="button"
-            disabled={!selectedNodeId || !file || uploading}
+            disabled={!selectedNodeId || fileCount === 0 || uploading}
             onClick={onSubmit}
           >
             {uploading ? (
@@ -658,7 +1123,7 @@ function UploadCourseMaterialDialog({
             ) : (
               <Upload size={14} className="mr-1.5" />
             )}
-            上传
+            {fileCount > 1 ? `上传 ${fileCount} 个文件` : "上传"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -742,11 +1207,549 @@ function AssociateMaterialKnowledgeDialog({
   );
 }
 
+function BatchGenerateMaterialsDialog({
+  open,
+  materials,
+  running,
+  progress,
+  onOpenChange,
+  onSubmit,
+}: {
+  open: boolean;
+  materials: TeacherCourseMaterial[];
+  running: boolean;
+  progress: CourseMaterialBatchProgress | null;
+  onOpenChange: (open: boolean) => void;
+  onSubmit: (items: CourseMaterialBatchGenerateItem[]) => Promise<void>;
+}) {
+  const generatable = useMemo(
+    () => materials.filter(canGenerateQuestionsFromCourseMaterial),
+    [materials],
+  );
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [countsById, setCountsById] = useState<Record<string, number>>({});
+  const [totalCount, setTotalCount] = useState(0);
+
+  useEffect(() => {
+    if (!open) return;
+    const nextIds = new Set(generatable.map((material) => material.id));
+    setSelectedIds(nextIds);
+    const nextCounts: Record<string, number> = {};
+    for (const material of generatable) {
+      nextCounts[material.id] = countsById[material.id] ?? 5;
+    }
+    setCountsById(nextCounts);
+    setTotalCount(generatable.length * 5);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, generatable.length]);
+
+  const selectedMaterials = generatable.filter((material) =>
+    selectedIds.has(material.id),
+  );
+  const selectedCount = selectedMaterials.length;
+  const effectiveTotal = selectedMaterials.reduce(
+    (sum, material) => sum + Math.max(0, countsById[material.id] ?? 0),
+    0,
+  );
+  const progressPercent = progress
+    ? Math.min(
+        100,
+        Math.round(
+          ((progress.currentIndex - 1 + (progress.phase === "done" ? 1 : 0.5)) /
+            Math.max(1, progress.total)) *
+            100,
+        ),
+      )
+    : 0;
+
+  const toggleMaterial = (materialId: string) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(materialId)) {
+        next.delete(materialId);
+      } else {
+        next.add(materialId);
+      }
+      return next;
+    });
+  };
+
+  const applyAverage = (nextTotal: number) => {
+    setTotalCount(nextTotal);
+    const selected = generatable.filter((material) =>
+      selectedIds.has(material.id),
+    );
+    if (selected.length === 0) return;
+    const base = Math.floor(nextTotal / selected.length);
+    const remainder = nextTotal % selected.length;
+    setCountsById((current) => {
+      const next = { ...current };
+      selected.forEach((material, index) => {
+        next[material.id] = Math.max(1, base + (index < remainder ? 1 : 0));
+      });
+      return next;
+    });
+  };
+
+  const submit = async () => {
+    const items = selectedMaterials
+      .map((material) => ({
+        material,
+        count: Math.max(0, countsById[material.id] ?? 0),
+      }))
+      .filter((item) => item.count > 0);
+    if (items.length === 0) return;
+    await onSubmit(items);
+  };
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (running) return;
+        onOpenChange(nextOpen);
+      }}
+    >
+      <DialogContent className="flex max-h-[86vh] max-w-3xl flex-col">
+        <DialogHeader>
+          <DialogTitle>一键生成题目</DialogTitle>
+          <DialogDescription>
+            按资料顺序批量生成题目。当前资料生成并保存完成后，系统会自动处理下一份资料。
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto">
+          <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-muted/30 px-3 py-3">
+            <div className="flex items-center gap-2">
+              <Label htmlFor="batch-material-total" className="text-xs">
+                总题数
+              </Label>
+              <Input
+                id="batch-material-total"
+                type="number"
+                min={selectedCount}
+                max={selectedCount * 50 || 50}
+                className="h-8 w-24"
+                value={totalCount}
+                disabled={running || selectedCount === 0}
+                onChange={(event) =>
+                  applyAverage(Math.max(1, Number(event.target.value) || 1))
+                }
+              />
+            </div>
+            <span className="text-xs text-muted-foreground">
+              已选 {selectedCount} 份资料，当前将生成 {effectiveTotal} 道题
+            </span>
+          </div>
+
+          <div className="space-y-2">
+            {generatable.length === 0 ? (
+              <EmptyPanel
+                icon={<FileText size={22} />}
+                title="没有可生成题目的资料"
+                description="仅 PDF、DOCX、PPTX 上传资料支持一键生成题目。"
+              />
+            ) : (
+              generatable.map((material, index) => {
+                const checked = selectedIds.has(material.id);
+                return (
+                  <div
+                    key={material.id}
+                    className={cn(
+                      "flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-2.5",
+                      !checked && "opacity-60",
+                    )}
+                  >
+                    <Checkbox
+                      checked={checked}
+                      disabled={running}
+                      onCheckedChange={() => toggleMaterial(material.id)}
+                      aria-label="选择资料"
+                    />
+                    <span className="w-7 shrink-0 font-sans text-sm font-semibold lining-nums tabular-nums text-muted-foreground">
+                      {index + 1}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-foreground">
+                        {material.title}
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">
+                        {material.node_name ?? "课程节点"}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Label
+                        htmlFor={`batch-material-count-${material.id}`}
+                        className="whitespace-nowrap text-xs text-muted-foreground"
+                      >
+                        题数
+                      </Label>
+                      <Input
+                        id={`batch-material-count-${material.id}`}
+                        type="number"
+                        min={1}
+                        max={50}
+                        className="h-8 w-20"
+                        disabled={running || !checked}
+                        value={countsById[material.id] ?? 5}
+                        onChange={(event) =>
+                          setCountsById((current) => ({
+                            ...current,
+                            [material.id]: Math.max(
+                              1,
+                              Math.min(50, Number(event.target.value) || 1),
+                            ),
+                          }))
+                        }
+                      />
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {running && progress ? (
+            <div className="space-y-2 rounded-lg border border-border bg-muted/30 px-3 py-3">
+              <div className="flex items-center justify-between gap-3 text-xs">
+                <span className="min-w-0 truncate text-foreground">
+                  正在处理 {progress.currentIndex}/{progress.total}：
+                  {progress.currentTitle}
+                </span>
+                <span className="shrink-0 font-sans lining-nums tabular-nums text-muted-foreground">
+                  已保存 {progress.saved} 题
+                </span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-all"
+                  style={{ width: `${progressPercent}%` }}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {progress.phase === "generating"
+                  ? `正在生成题目，已收到 ${progress.generated} 道。`
+                  : progress.phase === "saving"
+                    ? "正在保存到课程题库。"
+                    : "当前资料已完成，准备处理下一份。"}
+              </p>
+            </div>
+          ) : null}
+        </div>
+
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={running}
+            onClick={() => onOpenChange(false)}
+          >
+            取消
+          </Button>
+          <Button
+            type="button"
+            disabled={running || selectedCount === 0 || effectiveTotal === 0}
+            onClick={() => void submit()}
+          >
+            {running ? (
+              <LoaderCircle size={14} className="mr-1.5 animate-spin" />
+            ) : (
+              <Sparkles size={14} className="mr-1.5" />
+            )}
+            {running ? "生成中" : "确定生成"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AssignmentScoreSummaryDialog({
+  open,
+  loading,
+  summary,
+  courseName,
+  semesterLabel,
+  onOpenChange,
+  onRefresh,
+}: {
+  open: boolean;
+  loading: boolean;
+  summary: CourseAssignmentScoreSummary | null;
+  courseName: string;
+  semesterLabel: string;
+  onOpenChange: (open: boolean) => void;
+  onRefresh: () => void | Promise<void>;
+}) {
+  const assignedTotal = useMemo(
+    () =>
+      summary?.students.reduce(
+        (total, student) => total + student.assignment_count,
+        0,
+      ) ?? 0,
+    [summary],
+  );
+  const submittedTotal = useMemo(
+    () =>
+      summary?.students.reduce(
+        (total, student) => total + student.submitted_count,
+        0,
+      ) ?? 0,
+    [summary],
+  );
+  const completionPercent =
+    assignedTotal > 0 ? (submittedTotal / assignedTotal) * 100 : null;
+
+  const exportCsv = () => {
+    if (!summary) return;
+    const headers = [
+      "学号",
+      "姓名",
+      "用户名",
+      "手机",
+      "已交/已布置",
+      "平时成绩(百分制)",
+      "总得分",
+      "总分",
+      ...summary.assignments.map(
+        (assignment) =>
+          `${assignment.title}（满分${formatScore(assignment.total_score)}）`,
+      ),
+    ];
+    const rows = summary.students.map((student) => {
+      const cellsByAssignment = new Map(
+        student.cells.map((cell) => [cell.assignment_id, cell]),
+      );
+      return [
+        student.student_no ?? "",
+        student.full_name ?? "",
+        student.username ?? "",
+        student.phone ?? "",
+        `${student.submitted_count}/${student.assignment_count}`,
+        student.average_percent == null
+          ? ""
+          : Number(student.average_percent).toFixed(2),
+        Number(student.total_score).toFixed(2),
+        Number(student.max_score).toFixed(2),
+        ...summary.assignments.map((assignment) => {
+          const cell = cellsByAssignment.get(assignment.id);
+          if (!cell?.assigned) return "未布置";
+          if (cell.score == null) return cell.submitted_at ? "待批" : "未交";
+          return Number(cell.score).toFixed(2);
+        }),
+      ];
+    });
+    const csv = [headers, ...rows]
+      .map((row) => row.map(escapeCsvCell).join(","))
+      .join("\n");
+    const blob = new Blob([`\ufeff${csv}`], {
+      type: "text/csv;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const safeCourseName = (courseName || "课程").replace(/[\\/:*?"<>|]/g, "-");
+    const safeSemester = semesterLabel.replace(/[\\/:*?"<>|]/g, "-");
+    link.href = url;
+    link.download = `${safeCourseName}-平时成绩汇总-${safeSemester}-${formatDate(new Date().toISOString())}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const renderAssignmentCell = (
+    student: CourseAssignmentScoreSummary["students"][number],
+    assignmentId: string,
+    totalScore: number,
+  ) => {
+    const cell = student.cells.find(
+      (item) => item.assignment_id === assignmentId,
+    );
+    if (!cell?.assigned) {
+      return <span className="text-xs text-muted-foreground/70">未布置</span>;
+    }
+    if (cell.score == null) {
+      return (
+        <span className="text-xs text-muted-foreground">
+          {cell.submitted_at ? "待批" : "未交"}
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex flex-col leading-tight">
+        <span className="font-sans text-sm font-semibold lining-nums tabular-nums text-foreground">
+          {formatScore(cell.score)}
+          <span className="text-xs font-medium text-muted-foreground">
+            /{formatScore(totalScore)}
+          </span>
+        </span>
+        <span className="font-sans text-[11px] lining-nums tabular-nums text-muted-foreground">
+          {formatPercent(cell.percent)}
+        </span>
+      </span>
+    );
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[88vh] max-w-6xl flex-col">
+        <DialogHeader>
+          <DialogTitle>平时成绩汇总</DialogTitle>
+          <DialogDescription>
+            {courseName} · {semesterLabel} · 作业成绩按学生已布置范围汇总
+          </DialogDescription>
+        </DialogHeader>
+
+        {loading ? (
+          <div className="flex min-h-[360px] items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 text-sm text-muted-foreground">
+            <LoaderCircle size={18} className="mr-2 animate-spin" />
+            正在汇总作业成绩...
+          </div>
+        ) : !summary || summary.assignment_count === 0 ? (
+          <EmptyPanel
+            icon={<ClipboardList size={22} />}
+            title="暂无可汇总的作业"
+            description="当前课程或学期下还没有作业成绩。"
+          />
+        ) : (
+          <div className="min-h-0 flex-1 space-y-4 overflow-hidden">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {[
+                ["作业数", summary.assignment_count],
+                ["学生数", summary.student_count],
+                ["平均平时成绩", formatPercent(summary.class_average_percent)],
+                ["提交率", formatPercent(completionPercent)],
+              ].map(([label, value]) => (
+                <div
+                  key={label}
+                  className="rounded-lg border border-border bg-muted/20 px-3 py-2.5"
+                >
+                  <div className="text-xs text-muted-foreground">{label}</div>
+                  <div className="mt-1 font-sans text-xl font-semibold lining-nums tabular-nums text-foreground">
+                    {value}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="min-h-0 overflow-auto rounded-lg border border-border">
+              <table className="min-w-full border-collapse text-left text-sm">
+                <thead className="sticky top-0 z-10 bg-muted text-xs text-muted-foreground">
+                  <tr>
+                    <th className="sticky left-0 z-20 w-44 bg-muted px-3 py-2 font-medium">
+                      学生
+                    </th>
+                    <th className="w-28 px-3 py-2 font-medium">完成</th>
+                    <th className="w-32 px-3 py-2 font-medium">平时成绩</th>
+                    <th className="w-28 px-3 py-2 font-medium">总分</th>
+                    {summary.assignments.map((assignment) => (
+                      <th
+                        key={assignment.id}
+                        className="min-w-[150px] px-3 py-2 font-medium"
+                      >
+                        <div className="line-clamp-2 text-foreground">
+                          {assignment.title}
+                        </div>
+                        <div className="mt-0.5 font-sans lining-nums tabular-nums">
+                          {assignment.submitted_count}/
+                          {assignment.total_students}
+                          <span className="ml-1">
+                            · {formatScore(assignment.total_score)} 分
+                          </span>
+                        </div>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {summary.students.map((student) => (
+                    <tr
+                      key={student.student_id}
+                      className="border-t border-border bg-card hover:bg-muted/20"
+                    >
+                      <td className="sticky left-0 z-10 bg-card px-3 py-2 align-top shadow-[1px_0_0_hsl(var(--border))]">
+                        <div className="font-medium text-foreground">
+                          {student.full_name ||
+                            student.username ||
+                            "未命名学生"}
+                        </div>
+                        <div className="mt-0.5 font-sans text-[11px] lining-nums tabular-nums text-muted-foreground">
+                          {student.student_no ||
+                            student.username ||
+                            student.phone ||
+                            "-"}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 align-top font-sans lining-nums tabular-nums">
+                        {student.submitted_count}/{student.assignment_count}
+                      </td>
+                      <td className="px-3 py-2 align-top">
+                        <span className="font-sans text-sm font-semibold lining-nums tabular-nums text-foreground">
+                          {formatPercent(student.average_percent)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 align-top font-sans lining-nums tabular-nums">
+                        {formatScore(student.total_score)}/
+                        {formatScore(student.max_score)}
+                      </td>
+                      {summary.assignments.map((assignment) => (
+                        <td key={assignment.id} className="px-3 py-2 align-top">
+                          {renderAssignmentCell(
+                            student,
+                            assignment.id,
+                            assignment.total_score,
+                          )}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        <DialogFooter className="gap-2 sm:justify-between">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={loading}
+            onClick={() => void onRefresh()}
+          >
+            {loading ? (
+              <LoaderCircle size={14} className="mr-1.5 animate-spin" />
+            ) : (
+              <Calculator size={14} className="mr-1.5" />
+            )}
+            重新汇总
+          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+            >
+              关闭
+            </Button>
+            <Button
+              type="button"
+              disabled={loading || !summary || summary.students.length === 0}
+              onClick={exportCsv}
+            >
+              <Download size={14} className="mr-1.5" />
+              导出
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function ExamRows({
   items,
   kind,
   semesters,
   canWrite,
+  onSummarize,
   onArchive,
   onNewSemester,
   onClose,
@@ -757,6 +1760,7 @@ function ExamRows({
   kind: "exam" | "assignment";
   semesters: CourseSemester[];
   canWrite: boolean;
+  onSummarize?: () => void;
   onArchive: (examId: string, semesterId: string | null) => Promise<void>;
   onNewSemester: () => void;
   onClose: (exam: TeacherCourseExam) => void;
@@ -764,14 +1768,23 @@ function ExamRows({
   onCreate: () => void;
 }) {
   const navigate = useNavigate();
-  const header = canWrite ? (
-    <div className="flex items-center justify-end">
-      <Button size="sm" onClick={onCreate}>
-        <Plus size={14} className="mr-1.5" />
-        新建{kind === "exam" ? "考试" : "作业"}
-      </Button>
-    </div>
-  ) : null;
+  const header =
+    kind === "assignment" || canWrite ? (
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {kind === "assignment" ? (
+          <Button variant="outline" size="sm" onClick={onSummarize}>
+            <Calculator size={14} className="mr-1.5" />
+            平时成绩汇总
+          </Button>
+        ) : null}
+        {canWrite ? (
+          <Button size="sm" onClick={onCreate}>
+            <Plus size={14} className="mr-1.5" />
+            新建{kind === "exam" ? "考试" : "作业"}
+          </Button>
+        ) : null}
+      </div>
+    ) : null;
   if (items.length === 0) {
     return (
       <div className="flex flex-col gap-3">
@@ -888,28 +1901,57 @@ function ExamRows({
     </div>
   );
 }
-
 function QuestionsTab({
   questions,
   courseId,
   courseName,
   courseSemesterId,
+  courseSemester,
+  targetCourseKpId = courseId,
+  knowledgeFilterOptions,
+  knowledgeFilterNodeId,
+  onKnowledgeFilterChange,
   canWrite,
+  showClearAllQuestions = true,
   onPublishedExamOrAssignment,
+  onClearAllQuestions,
 }: {
   questions: IQuestion[];
   courseId: string;
   courseName: string;
   courseSemesterId: string | null;
+  courseSemester: CourseSemester | null;
+  targetCourseKpId?: string;
+  knowledgeFilterOptions: Array<{
+    id: string;
+    name: string;
+    depth: number;
+    path: string;
+  }>;
+  knowledgeFilterNodeId: string | null;
+  onKnowledgeFilterChange: (nodeId: string | null) => void;
+  existingExamTitles: string[];
+  knowledgeTree: CourseKnowledgeNode | null;
   canWrite: boolean;
+  showClearAllQuestions?: boolean;
   onPublishedExamOrAssignment: (
     category: CreateFromSelectionCategory,
   ) => void | Promise<void>;
+  onClearAllQuestions: () => void;
 }) {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [createFromSelectionOpen, setCreateFromSelectionOpen] = useState(false);
+
+  useEffect(() => {
+    const questionIds = new Set(questions.map((question) => question.id));
+    setSelected((current) => {
+      const next = new Set([...current].filter((id) => questionIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [questions]);
+
   const filtered = questions.filter((question) => {
     const text =
       `${question.title} ${question.knowledge_points.map((kp) => kp.name).join(" ")}`.toLowerCase();
@@ -957,35 +1999,28 @@ function QuestionsTab({
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
-        {canWrite && filtered.length > 0 ? (
-          <>
-            <div className="flex h-9 items-center gap-2 rounded-md border border-border bg-muted/30 px-3">
-              <Checkbox
-                checked={
-                  selectedQuestionCount === filtered.length &&
-                  filtered.length > 0
-                }
-                onCheckedChange={toggleSelectAll}
-                aria-label="全选题目"
-              />
-              <span className="whitespace-nowrap text-xs text-muted-foreground">
-                {selectedQuestionCount > 0
-                  ? `已选择 ${selectedQuestionCount} 题`
-                  : "全选"}
-              </span>
-            </div>
-            {selectedQuestionCount > 0 ? (
-              <Button
-                type="button"
-                size="sm"
-                className="h-9 px-3 text-xs"
-                onClick={() => setCreateFromSelectionOpen(true)}
-              >
-                <FilePlus2 size={13} className="mr-1.5" />
-                发起考试/作业
-              </Button>
-            ) : null}
-          </>
+        {knowledgeFilterOptions.length > 0 ? (
+          <Select
+            value={knowledgeFilterNodeId ?? ALL_QUESTION_KNOWLEDGE}
+            onValueChange={(value) =>
+              onKnowledgeFilterChange(
+                value === ALL_QUESTION_KNOWLEDGE ? null : value,
+              )
+            }
+          >
+            <SelectTrigger className="h-9 min-w-[180px] flex-1 sm:max-w-[240px] lg:flex-none">
+              <SelectValue placeholder="全部知识点" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_QUESTION_KNOWLEDGE}>全部知识点</SelectItem>
+              {knowledgeFilterOptions.map((item) => (
+                <SelectItem key={item.id} value={item.id}>
+                  {"　".repeat(Math.max(0, item.depth - 1))}
+                  {item.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         ) : null}
         <div className="flex-1" />
         <div className="relative min-w-[220px] flex-1 sm:max-w-[280px] lg:flex-none">
@@ -1011,14 +2046,56 @@ function QuestionsTab({
                     backTo: `/courses/${courseId}?tab=questions`,
                     backLabel: "返回课程详情",
                     successTo: `/courses/${courseId}?tab=questions`,
-                    courseKpId: courseId,
+                    courseKpId: targetCourseKpId,
                     courseName,
                   },
                 })
               }
             >
               <Upload size={14} className="mr-1.5" />
-              导入题目
+              导入
+            </Button>
+            {showClearAllQuestions && questions.length > 0 ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-destructive hover:text-destructive"
+                onClick={onClearAllQuestions}
+              >
+                <Trash2 size={14} className="mr-1.5" />
+                清除
+              </Button>
+            ) : null}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const seedKey = writeExamSeed({
+                  category: "exam",
+                  title: `${courseName.trim() || "课程"}-考试`,
+                  description: courseSemester
+                    ? `来自课程「${courseName}」${courseSemester.name}。`
+                    : `来自课程「${courseName}」。`,
+                  question_items: [],
+                  student_ids: [],
+                });
+                const params = new URLSearchParams();
+                params.set("seed_key", seedKey);
+                navigate(`/exams/create?${params.toString()}`, {
+                  state: {
+                    backTo: `/courses/${courseId}?tab=questions`,
+                    backLabel: "返回课程题目",
+                    successTo: `/courses/${courseId}?tab=exams`,
+                    courseKpId: targetCourseKpId,
+                    ...(courseSemesterId
+                      ? { courseSemesterId }
+                      : {}),
+                  },
+                });
+              }}
+            >
+              <ClipboardList size={14} className="mr-1.5" />
+              发布考试
             </Button>
             <Button
               size="sm"
@@ -1028,7 +2105,7 @@ function QuestionsTab({
                     backTo: `/courses/${courseId}?tab=questions`,
                     backLabel: "返回课程详情",
                     successTo: `/courses/${courseId}?tab=questions`,
-                    courseKpId: courseId,
+                    courseKpId: targetCourseKpId,
                   },
                 })
               }
@@ -1044,6 +2121,35 @@ function QuestionsTab({
           </span>
         )}
       </div>
+      {canWrite && filtered.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex h-9 items-center gap-2 rounded-md border border-border bg-muted/30 px-3">
+            <Checkbox
+              checked={
+                selectedQuestionCount === filtered.length && filtered.length > 0
+              }
+              onCheckedChange={toggleSelectAll}
+              aria-label="全选题目"
+            />
+            <span className="whitespace-nowrap text-xs text-muted-foreground">
+              {selectedQuestionCount > 0
+                ? `已选择 ${selectedQuestionCount} 题`
+                : "全选"}
+            </span>
+          </div>
+          {selectedQuestionCount > 0 ? (
+            <Button
+              type="button"
+              size="sm"
+              className="h-9 px-3 text-xs"
+              onClick={() => setCreateFromSelectionOpen(true)}
+            >
+              <FilePlus2 size={13} className="mr-1.5" />
+              发起考试/作业
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       {filtered.length === 0 ? (
         <EmptyPanel
           icon={<BookOpen size={22} />}
@@ -1078,7 +2184,15 @@ function QuestionsTab({
                     variant="ghost"
                     size="sm"
                     className="h-7 px-1.5 text-xs text-muted-foreground hover:text-primary sm:px-2"
-                    onClick={() => navigate(`/questions/edit/${question.id}`)}
+                    onClick={() =>
+                      navigate(`/questions/edit/${question.id}`, {
+                        state: {
+                          backTo: `/courses/${courseId}?tab=questions`,
+                          backLabel: "返回课程题目",
+                          successTo: `/courses/${courseId}?tab=questions`,
+                        },
+                      })
+                    }
                   >
                     <Eye size={13} className="sm:mr-1" />
                     <span className="hidden sm:inline">打开题目</span>
@@ -1099,7 +2213,7 @@ function QuestionsTab({
           score: question.score,
         }))}
         defaultTitle={defaultCreateTitle}
-        courseKpId={courseId}
+        courseKpId={targetCourseKpId}
         courseSemesterId={courseSemesterId}
         onPublished={(_, category) => {
           void onPublishedExamOrAssignment(category);
@@ -1120,7 +2234,7 @@ function CourseKnowledgeNodeDialog({
   onOpenChange,
   onRename,
   onAddLink,
-  onUploadFile,
+  onUploadFiles,
   onUpdateMaterial,
   onDeleteMaterial,
   onGenerateFromMaterial,
@@ -1144,7 +2258,7 @@ function CourseKnowledgeNodeDialog({
     nodeId: string,
     payload: { title: string; url: string; description?: string | null },
   ) => Promise<void>;
-  onUploadFile: (nodeId: string, file: File) => Promise<void>;
+  onUploadFiles: (nodeId: string, files: File[]) => Promise<void>;
   onUpdateMaterial: (
     materialId: string,
     payload: {
@@ -1256,11 +2370,11 @@ function CourseKnowledgeNodeDialog({
   };
 
   const uploadFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!node || !file) return;
+    const files = Array.from(event.target.files ?? []);
+    if (!node || files.length === 0) return;
     setBusy("upload");
     try {
-      await onUploadFile(node.id, file);
+      await onUploadFiles(node.id, files);
     } finally {
       setBusy(null);
       event.target.value = "";
@@ -1371,7 +2485,7 @@ function CourseKnowledgeNodeDialog({
                     ) : null}
                   </div>
                   <p className="mt-2 text-xs text-muted-foreground/80">
-                    名称将同步显示在课程知识结构树与题目归类中。
+                    名称将同步显示在课程目录树与题目归类中。
                   </p>
                 </div>
 
@@ -1503,6 +2617,7 @@ function CourseKnowledgeNodeDialog({
                         ref={fileInputRef}
                         className="hidden"
                         type="file"
+                        multiple
                         onChange={uploadFile}
                       />
                     </div>
@@ -1984,7 +3099,12 @@ function KnowledgeTreeRow({
   canWrite,
   assignmentLinksByNodeId,
   onOpenNode,
+  onViewMaterials,
+  onViewQuestions,
   onViewAssignments,
+  onGenerateFromMaterials,
+  onUploadMaterial,
+  onPublishAssignment,
   onRequestDelete,
 }: {
   node: CourseKnowledgeNode;
@@ -1992,12 +3112,18 @@ function KnowledgeTreeRow({
   canWrite: boolean;
   assignmentLinksByNodeId: Record<string, TeacherCourseExam[]>;
   onOpenNode: (kpId: string) => void;
+  onViewMaterials: (node: CourseKnowledgeNode) => void;
+  onViewQuestions: (node: CourseKnowledgeNode) => void;
   onViewAssignments: (node: CourseKnowledgeNode) => void;
+  onGenerateFromMaterials: (node: CourseKnowledgeNode) => void;
+  onUploadMaterial: (node: CourseKnowledgeNode) => void;
+  onPublishAssignment: (node: CourseKnowledgeNode) => void;
   onRequestDelete: (node: CourseKnowledgeNode) => void;
 }) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(depth === 0);
   const hasChildren = node.children.length > 0;
   const canDelete = canWrite && depth > 0;
+  const isChapter = depth === 1;
   const linkedAssignments = assignmentLinksByNodeId[node.id] ?? [];
 
   return (
@@ -2008,9 +3134,7 @@ function KnowledgeTreeRow({
           hasChildren && "cursor-pointer select-none",
         )}
         style={{ paddingLeft: 12 + depth * 22 }}
-        onDoubleClick={
-          hasChildren ? () => setExpanded((value) => !value) : undefined
-        }
+        onClick={hasChildren ? () => setExpanded((value) => !value) : undefined}
       >
         <button
           type="button"
@@ -2019,7 +3143,10 @@ function KnowledgeTreeRow({
             !hasChildren && "invisible",
           )}
           aria-label={expanded ? "收起" : "展开"}
-          onClick={() => setExpanded((value) => !value)}
+          onClick={(event) => {
+            event.stopPropagation();
+            setExpanded((value) => !value);
+          }}
         >
           {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
         </button>
@@ -2049,19 +3176,143 @@ function KnowledgeTreeRow({
           </button>
         ) : null}
         <span className="flex-1" />
-        <span className="font-sans text-[11px] font-medium lining-nums tabular-nums text-muted-foreground">
-          {node.question_count} 题
-        </span>
-        <span className="font-sans text-[11px] font-medium lining-nums tabular-nums text-muted-foreground">
-          {node.material_count} 资料
-        </span>
+        {isChapter ? (
+          <>
+            {node.question_count > 0 ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-background px-2 py-0.5 font-sans text-[11px] font-semibold lining-nums tabular-nums text-muted-foreground transition hover:border-primary/40 hover:text-primary"
+                    title={`查看「${node.name}」下的题目`}
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <BookOpen size={11} />
+                    {node.question_count} 题
+                    <ChevronDown size={10} />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-36">
+                  <DropdownMenuItem
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onViewQuestions(node);
+                    }}
+                  >
+                    <Eye size={14} className="mr-2" />
+                    查看
+                  </DropdownMenuItem>
+                  {canWrite ? (
+                    <DropdownMenuItem
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onPublishAssignment(node);
+                      }}
+                    >
+                      <FilePlus2 size={14} className="mr-2" />
+                      发布作业
+                    </DropdownMenuItem>
+                  ) : null}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-background px-2 py-0.5 font-sans text-[11px] font-semibold lining-nums tabular-nums text-muted-foreground opacity-45">
+                <BookOpen size={11} />0 题
+              </span>
+            )}
+            {node.material_count > 0 ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-background px-2 py-0.5 font-sans text-[11px] font-semibold lining-nums tabular-nums text-muted-foreground transition hover:border-primary/40 hover:text-primary"
+                    title={`查看「${node.name}」下的资料`}
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <FileText size={11} />
+                    {node.material_count} 资料
+                    <ChevronDown size={10} />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-36">
+                  <DropdownMenuItem
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onViewMaterials(node);
+                    }}
+                  >
+                    <Eye size={14} className="mr-2" />
+                    查看
+                  </DropdownMenuItem>
+                  {canWrite ? (
+                    <DropdownMenuItem
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onGenerateFromMaterials(node);
+                      }}
+                    >
+                      <Sparkles size={14} className="mr-2" />
+                      生成题目
+                    </DropdownMenuItem>
+                  ) : null}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-background px-2 py-0.5 font-sans text-[11px] font-semibold lining-nums tabular-nums text-muted-foreground opacity-45">
+                <FileText size={11} />0 资料
+              </span>
+            )}
+            {canWrite ? (
+              <>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 shrink-0 px-2 text-xs text-primary hover:bg-primary/10 hover:text-primary"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onUploadMaterial(node);
+                  }}
+                >
+                  <Upload size={13} className="mr-1" />
+                  上传资料
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 shrink-0 px-2 text-xs text-primary hover:bg-primary/10 hover:text-primary"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onPublishAssignment(node);
+                  }}
+                >
+                  <FilePlus2 size={13} className="mr-1" />
+                  发布作业
+                </Button>
+              </>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <span className="font-sans text-[11px] font-medium lining-nums tabular-nums text-muted-foreground">
+              {node.question_count} 题
+            </span>
+            <span className="font-sans text-[11px] font-medium lining-nums tabular-nums text-muted-foreground">
+              {node.material_count} 资料
+            </span>
+          </>
+        )}
         {canWrite ? (
           <Button
             variant="ghost"
             size="icon"
             className="size-7"
             aria-label="编辑知识点"
-            onClick={() => onOpenNode(node.id)}
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenNode(node.id);
+            }}
           >
             <Edit3 size={14} />
           </Button>
@@ -2072,7 +3323,10 @@ function KnowledgeTreeRow({
             size="icon"
             className="size-7 text-destructive hover:text-destructive"
             aria-label="删除知识点"
-            onClick={() => onRequestDelete(node)}
+            onClick={(event) => {
+              event.stopPropagation();
+              onRequestDelete(node);
+            }}
           >
             <Trash2 size={14} />
           </Button>
@@ -2087,7 +3341,12 @@ function KnowledgeTreeRow({
               canWrite={canWrite}
               assignmentLinksByNodeId={assignmentLinksByNodeId}
               onOpenNode={onOpenNode}
+              onViewMaterials={onViewMaterials}
+              onViewQuestions={onViewQuestions}
               onViewAssignments={onViewAssignments}
+              onGenerateFromMaterials={onGenerateFromMaterials}
+              onUploadMaterial={onUploadMaterial}
+              onPublishAssignment={onPublishAssignment}
               onRequestDelete={onRequestDelete}
             />
           ))
@@ -2104,7 +3363,12 @@ function KnowledgeTab({
   onOpenCatalogPhoto,
   onOpenAddNode,
   onOpenNode,
+  onViewMaterials,
+  onViewQuestions,
   onViewAssignments,
+  onGenerateFromMaterials,
+  onUploadMaterial,
+  onPublishAssignment,
   onRequestDeleteNode,
   onClearAll,
 }: {
@@ -2115,7 +3379,12 @@ function KnowledgeTab({
   onOpenCatalogPhoto: () => void;
   onOpenAddNode: () => void;
   onOpenNode: (kpId: string) => void;
+  onViewMaterials: (node: CourseKnowledgeNode) => void;
+  onViewQuestions: (node: CourseKnowledgeNode) => void;
   onViewAssignments: (node: CourseKnowledgeNode) => void;
+  onGenerateFromMaterials: (node: CourseKnowledgeNode) => void;
+  onUploadMaterial: (node: CourseKnowledgeNode) => void;
+  onPublishAssignment: (node: CourseKnowledgeNode) => void;
   onRequestDeleteNode: (node: CourseKnowledgeNode) => void;
   onClearAll: () => void;
 }) {
@@ -2124,7 +3393,7 @@ function KnowledgeTab({
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
         <span className="text-xs text-muted-foreground">
-          当前课程子树，不含其它课程主知识点
+          默认展示到章节层，点击章节可展开下级知识点
         </span>
         <div className="flex-1" />
         {canWrite ? (
@@ -2161,7 +3430,7 @@ function KnowledgeTab({
         )}
       </div>
       {!tree ? (
-        <EmptyPanel icon={<Layers3 size={22} />} title="暂无知识结构" />
+        <EmptyPanel icon={<Layers3 size={22} />} title="暂无课程目录" />
       ) : (
         <div className="rounded-xl border border-border bg-card p-2">
           <KnowledgeTreeRow
@@ -2170,7 +3439,12 @@ function KnowledgeTab({
             canWrite={canWrite}
             assignmentLinksByNodeId={assignmentLinksByNodeId}
             onOpenNode={onOpenNode}
+            onViewMaterials={onViewMaterials}
+            onViewQuestions={onViewQuestions}
             onViewAssignments={onViewAssignments}
+            onGenerateFromMaterials={onGenerateFromMaterials}
+            onUploadMaterial={onUploadMaterial}
+            onPublishAssignment={onPublishAssignment}
             onRequestDelete={onRequestDeleteNode}
           />
         </div>
@@ -2307,10 +3581,10 @@ export function CourseDetailPage() {
   const [selectedMaterialUploadNodeId, setSelectedMaterialUploadNodeId] =
     useState("");
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
-  const [materialUploadFile, setMaterialUploadFile] = useState<File | null>(
-    null,
-  );
+  const [materialUploadFiles, setMaterialUploadFiles] = useState<File[]>([]);
   const [materialToAssociate, setMaterialToAssociate] =
+    useState<TeacherCourseMaterial | null>(null);
+  const [previewMaterial, setPreviewMaterial] =
     useState<TeacherCourseMaterial | null>(null);
   const [associateMaterialNodeId, setAssociateMaterialNodeId] = useState("");
   const [associatingMaterial, setAssociatingMaterial] = useState(false);
@@ -2318,14 +3592,33 @@ export function CourseDetailPage() {
   const [activeSemesterId, setActiveSemesterId] =
     useState<string>(ALL_SEMESTERS);
   const [newSemesterOpen, setNewSemesterOpen] = useState(false);
+  const [semesterHintDismissed, setSemesterHintDismissed] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [catalogPhotoOpen, setCatalogPhotoOpen] = useState(false);
   const [addKnowledgeOpen, setAddKnowledgeOpen] = useState(false);
   const [addingKnowledge, setAddingKnowledge] = useState(false);
   const [addLinkOpen, setAddLinkOpen] = useState(false);
+  const [batchGenerateOpen, setBatchGenerateOpen] = useState(false);
+  const [batchGenerating, setBatchGenerating] = useState(false);
+  const [batchGenerateProgress, setBatchGenerateProgress] =
+    useState<CourseMaterialBatchProgress | null>(null);
+  const [assignmentScoreSummaryOpen, setAssignmentScoreSummaryOpen] =
+    useState(false);
+  const [assignmentScoreSummaryLoading, setAssignmentScoreSummaryLoading] =
+    useState(false);
+  const [assignmentScoreSummary, setAssignmentScoreSummary] =
+    useState<CourseAssignmentScoreSummary | null>(null);
   const [selectedKnowledgeNodeId, setSelectedKnowledgeNodeId] = useState<
     string | null
   >(null);
+  const [materialFilterNodeId, setMaterialFilterNodeId] = useState<
+    string | null
+  >(null);
+  const [questionFilterNodeId, setQuestionFilterNodeId] = useState<
+    string | null
+  >(null);
+  const [questionFilterMaterial, setQuestionFilterMaterial] =
+    useState<TeacherCourseMaterial | null>(null);
   const [assignmentFilterNodeId, setAssignmentFilterNodeId] = useState<
     string | null
   >(null);
@@ -2334,8 +3627,14 @@ export function CourseDetailPage() {
   const [deletingKnowledgeNode, setDeletingKnowledgeNode] = useState(false);
   const [materialToDelete, setMaterialToDelete] =
     useState<TeacherCourseMaterial | null>(null);
+  const [materialQuestionsToDelete, setMaterialQuestionsToDelete] =
+    useState<TeacherCourseMaterial | null>(null);
+  const [deletingMaterialQuestions, setDeletingMaterialQuestions] =
+    useState(false);
   const [clearKpOpen, setClearKpOpen] = useState(false);
   const [clearingKp, setClearingKp] = useState(false);
+  const [clearQuestionsOpen, setClearQuestionsOpen] = useState(false);
+  const [clearingQuestions, setClearingQuestions] = useState(false);
   const [examToClose, setExamToClose] = useState<TeacherCourseExam | null>(
     null,
   );
@@ -2350,9 +3649,35 @@ export function CourseDetailPage() {
 
   const semesterFilter =
     activeSemesterId === ALL_SEMESTERS ? null : activeSemesterId;
+  const selectedSemester =
+    activeSemesterId === ALL_SEMESTERS
+      ? null
+      : (semesters.find((semester) => semester.id === activeSemesterId) ??
+        null);
+  const selectedSemesterLabel =
+    activeSemesterId === ALL_SEMESTERS
+      ? "全部学期"
+      : (selectedSemester?.name ?? "当前学期");
+  const shouldShowCreateSemesterHint =
+    Boolean(course?.can_write) &&
+    !course?.is_deleted &&
+    !semesterHintDismissed &&
+    semesters.length === 0 &&
+    (course?.material_count ?? 0) === 0 &&
+    (course?.exam_count ?? 0) === 0 &&
+    (course?.assignment_count ?? 0) === 0 &&
+    (course?.question_count ?? 0) === 0;
   const selectedKnowledgeNode = findCourseKnowledgeNode(
     tree,
     selectedKnowledgeNodeId,
+  );
+  const materialFilterNode = findCourseKnowledgeNode(
+    tree,
+    materialFilterNodeId,
+  );
+  const questionFilterNode = findCourseKnowledgeNode(
+    tree,
+    questionFilterNodeId,
   );
   const assignmentFilterNode = findCourseKnowledgeNode(
     tree,
@@ -2371,10 +3696,30 @@ export function CourseDetailPage() {
       ),
     [assignments, assignmentFilterNodeId, tree],
   );
+  const filteredMaterials = useMemo(
+    () =>
+      filterMaterialsForKnowledgeNode(materials, tree, materialFilterNodeId),
+    [materials, materialFilterNodeId, tree],
+  );
+  const filteredQuestions = useMemo(
+    () =>
+      questionFilterMaterial
+        ? questions
+        : filterQuestionsForKnowledgeNode(questions, tree, questionFilterNodeId),
+    [questions, questionFilterMaterial, questionFilterNodeId, tree],
+  );
+  const questionKnowledgeFilterOptions = useMemo(
+    () => flattenCourseKnowledgeNodes(tree).filter((item) => item.depth > 0),
+    [tree],
+  );
   const materialUploadTargets = useMemo(
     () => flattenKnowledgeUploadTargets(tree),
     [tree],
   );
+
+  useEffect(() => {
+    setSemesterHintDismissed(false);
+  }, [id]);
 
   useEffect(() => {
     const defaultNodeId = resolveDefaultKnowledgeUploadTargetId(tree);
@@ -2439,10 +3784,23 @@ export function CourseDetailPage() {
   }, [materialToAssociate]);
 
   useEffect(() => {
+    if (materialFilterNodeId && !materialFilterNode) {
+      setMaterialFilterNodeId(null);
+    }
+    if (questionFilterNodeId && !questionFilterNode) {
+      setQuestionFilterNodeId(null);
+    }
     if (assignmentFilterNodeId && !assignmentFilterNode) {
       setAssignmentFilterNodeId(null);
     }
-  }, [assignmentFilterNode, assignmentFilterNodeId]);
+  }, [
+    assignmentFilterNode,
+    assignmentFilterNodeId,
+    materialFilterNode,
+    materialFilterNodeId,
+    questionFilterNode,
+    questionFilterNodeId,
+  ]);
 
   // 初始化只拉「课程 + 学期」(用于 PageIntroHeader 与各 Tab 上的徽标数字)，
   // 各 Tab 的实际数据由下面的 per-tab effect 按需懒加载。
@@ -2516,9 +3874,12 @@ export function CourseDetailPage() {
         .catch(fail)
         .finally(finishTabLoading);
     } else if (activeTab === "questions") {
-      listCourseQuestions(id)
-        .then((data) => {
-          if (!ignore) setQuestions(data);
+      Promise.all([listCourseQuestions(id), getCourseKnowledgeTree(id)])
+        .then(([questionData, treeData]) => {
+          if (!ignore) {
+            setQuestions(questionData);
+            setTree(treeData);
+          }
         })
         .catch(fail)
         .finally(finishTabLoading);
@@ -2561,7 +3922,7 @@ export function CourseDetailPage() {
       if (!id || !course) return;
       if (!course.direction_id) {
         throw new Error(
-          "课程缺少方向信息，无法导入。请先在知识结构中检查课程根节点。",
+          "课程缺少方向信息，无法导入。请先在课程目录中检查课程根节点。",
         );
       }
       const directionId = course.direction_id;
@@ -2645,7 +4006,7 @@ export function CourseDetailPage() {
       if (!course?.direction_id) {
         toast({
           title: "无法新增知识点",
-          description: "课程缺少方向信息，请先检查课程知识结构。",
+          description: "课程缺少方向信息，请先检查课程目录。",
           variant: "destructive",
         });
         return;
@@ -2667,7 +4028,7 @@ export function CourseDetailPage() {
         setAddKnowledgeOpen(false);
         toast({
           title: "已新增子知识点",
-          description: `「${name}」已添加到课程知识结构。`,
+          description: `「${name}」已添加到课程目录。`,
         });
         if (id) {
           const fresh = await getCourseKnowledgeTree(id);
@@ -2710,7 +4071,7 @@ export function CourseDetailPage() {
       setTree(fresh);
     } catch (err) {
       toast({
-        title: "知识结构刷新失败",
+        title: "课程目录刷新失败",
         description: err instanceof Error ? err.message : "请稍后重试",
         variant: "destructive",
       });
@@ -2734,15 +4095,18 @@ export function CourseDetailPage() {
     ]);
   }, [refreshCourseSummary, refreshKnowledgeTree, refreshMaterials]);
 
-  const handleOpenUploadDialog = useCallback(async () => {
+  const handleOpenUploadDialog = useCallback(async (nodeId?: string) => {
     setUploadDialogOpen(true);
-    setMaterialUploadFile(null);
+    setMaterialUploadFiles([]);
+    if (nodeId) {
+      setSelectedMaterialUploadNodeId(nodeId);
+    }
     if (!tree && id) {
       try {
         const fresh = await getCourseKnowledgeTree(id);
         setTree(fresh);
         setSelectedMaterialUploadNodeId(
-          resolveDefaultKnowledgeUploadTargetId(fresh),
+          nodeId || resolveDefaultKnowledgeUploadTargetId(fresh),
         );
       } catch (err) {
         toast({
@@ -2762,14 +4126,14 @@ export function CourseDetailPage() {
         setMaterialContentById((current) => ({
           ...current,
           [material.id]: {
-            sourceText: extracted.text.trim().slice(0, 120000),
+            sourceText: extracted.text.trim().slice(0, MATERIAL_TEXT_LIMIT),
             images: extracted.images,
           },
         }));
-        if (extracted.pageCount > 30) {
+        if (extracted.pageCount > MATERIAL_PAGE_LIMIT) {
           toast({
             title: "资料页数较多",
-            description: `当前共 ${extracted.pageCount} 页/张。建议尽量控制在 30 页以内；系统最多处理 ${MATERIAL_PAGE_LIMIT} 页/张。`,
+            description: `当前共 ${extracted.pageCount} 页/张。系统最多处理 ${MATERIAL_PAGE_LIMIT} 页/张。`,
           });
         }
         if (extracted.truncated) {
@@ -2796,17 +4160,17 @@ export function CourseDetailPage() {
       const file = await fetchCourseMaterialFile(material);
       const extracted = await extractMaterialContent(file);
       const content = {
-        sourceText: extracted.text.trim().slice(0, 120000),
+        sourceText: extracted.text.trim().slice(0, MATERIAL_TEXT_LIMIT),
         images: extracted.images,
       };
       setMaterialContentById((current) => ({
         ...current,
         [material.id]: content,
       }));
-      if (extracted.pageCount > 30) {
+      if (extracted.pageCount > MATERIAL_PAGE_LIMIT) {
         toast({
           title: "资料页数较多",
-          description: `当前共 ${extracted.pageCount} 页/张。建议尽量控制在 30 页以内；系统最多处理 ${MATERIAL_PAGE_LIMIT} 页/张。`,
+          description: `当前共 ${extracted.pageCount} 页/张。系统最多处理 ${MATERIAL_PAGE_LIMIT} 页/张。`,
         });
       }
       if (extracted.truncated) {
@@ -2820,19 +4184,37 @@ export function CourseDetailPage() {
     [toast],
   );
 
-  const handleUploadFile = useCallback(
-    async (nodeId: string, file: File) => {
-      if (!nodeId) return;
+  const handleUploadFiles = useCallback(
+    async (nodeId: string, files: File[]) => {
+      if (!nodeId || files.length === 0) return;
       setUploading(true);
       try {
-        await uploadAndExtractMaterial(nodeId, file);
+        const failed: string[] = [];
+        for (const file of files) {
+          try {
+            await uploadAndExtractMaterial(nodeId, file);
+          } catch (err) {
+            failed.push(
+              `${file.name}：${err instanceof Error ? err.message : "上传失败"}`,
+            );
+          }
+        }
+        const successCount = files.length - failed.length;
         toast({
-          title: "上传成功",
-          description: `《${file.name}》已添加到课程资料。`,
+          title: failed.length > 0 ? "部分资料上传失败" : "上传成功",
+          description:
+            failed.length > 0
+              ? `成功 ${successCount} 个，失败 ${failed.length} 个。${failed.slice(0, 2).join("；")}`
+              : successCount > 1
+                ? `${successCount} 个文件已添加到课程资料。`
+                : `《${files[0]?.name ?? "资料"}》已添加到课程资料。`,
+          variant: failed.length > 0 ? "destructive" : undefined,
         });
-        setUploadDialogOpen(false);
-        setMaterialUploadFile(null);
-        await refreshMaterialsAndTree();
+        if (successCount > 0) {
+          setUploadDialogOpen(false);
+          setMaterialUploadFiles([]);
+          await refreshMaterialsAndTree();
+        }
       } catch (err) {
         toast({
           title: "上传失败",
@@ -2846,14 +4228,33 @@ export function CourseDetailPage() {
     [refreshMaterialsAndTree, toast, uploadAndExtractMaterial],
   );
 
-  const handleUploadFileToNode = useCallback(
-    async (nodeId: string, file: File) => {
-      await uploadAndExtractMaterial(nodeId, file);
+  const handleUploadFilesToNode = useCallback(
+    async (nodeId: string, files: File[]) => {
+      if (files.length === 0) return;
+      const failed: string[] = [];
+      for (const file of files) {
+        try {
+          await uploadAndExtractMaterial(nodeId, file);
+        } catch (err) {
+          failed.push(
+            `${file.name}：${err instanceof Error ? err.message : "上传失败"}`,
+          );
+        }
+      }
+      const successCount = files.length - failed.length;
       toast({
-        title: "上传成功",
-        description: `《${file.name}》已添加到该知识点资料。`,
+        title: failed.length > 0 ? "部分资料上传失败" : "上传成功",
+        description:
+          failed.length > 0
+            ? `成功 ${successCount} 个，失败 ${failed.length} 个。${failed.slice(0, 2).join("；")}`
+            : successCount > 1
+              ? `${successCount} 个文件已添加到该知识点资料。`
+              : `《${files[0]?.name ?? "资料"}》已添加到该知识点资料。`,
+        variant: failed.length > 0 ? "destructive" : undefined,
       });
-      await refreshMaterialsAndTree();
+      if (successCount > 0) {
+        await refreshMaterialsAndTree();
+      }
     },
     [refreshMaterialsAndTree, toast, uploadAndExtractMaterial],
   );
@@ -2963,7 +4364,7 @@ export function CourseDetailPage() {
       );
       toast({
         title: "已删除知识点",
-        description: `「${knowledgeNodeToDelete.name}」已从课程知识结构移除。`,
+        description: `「${knowledgeNodeToDelete.name}」已从课程目录移除。`,
       });
       setSelectedKnowledgeNodeId((current) =>
         current === knowledgeNodeToDelete.id ? null : current,
@@ -3026,6 +4427,40 @@ export function CourseDetailPage() {
     }
   }, [materialToDelete, refreshMaterialsAndTree, toast]);
 
+  const handleDeleteMaterialQuestions = useCallback(async () => {
+    if (!id || !materialQuestionsToDelete) return;
+    setDeletingMaterialQuestions(true);
+    try {
+      const result = await clearCourseMaterialQuestions(
+        id,
+        materialQuestionsToDelete.id,
+      );
+      setMaterialQuestionsToDelete(null);
+      await Promise.all([refreshMaterialsAndTree(), refreshCourseSummary()]);
+      toast({
+        title: "已删除资料题目",
+        description:
+          result.deleted > 0
+            ? `共处理 ${result.deleted} 道题：彻底删除 ${result.hard_deleted} 道，软删除 ${result.soft_deleted} 道。已用于考试或练习的题目仍可在对应记录中查看。`
+            : "这份资料下没有可删除的题目。",
+      });
+    } catch (err) {
+      toast({
+        title: "删除题目失败",
+        description: err instanceof Error ? err.message : "请稍后重试",
+        variant: "destructive",
+      });
+    } finally {
+      setDeletingMaterialQuestions(false);
+    }
+  }, [
+    id,
+    materialQuestionsToDelete,
+    refreshCourseSummary,
+    refreshMaterialsAndTree,
+    toast,
+  ]);
+
   const handleClearKnowledgePoints = useCallback(async () => {
     if (!id) return;
     setClearingKp(true);
@@ -3051,6 +4486,32 @@ export function CourseDetailPage() {
       setClearingKp(false);
     }
   }, [id, toast]);
+
+  const handleClearCourseQuestions = useCallback(async () => {
+    if (!id) return;
+    setClearingQuestions(true);
+    try {
+      const result = await clearCourseQuestions(id);
+      setQuestions([]);
+      setClearQuestionsOpen(false);
+      await Promise.all([refreshCourseSummary(), refreshKnowledgeTree()]);
+      toast({
+        title: "已清除课程题目",
+        description:
+          result.deleted > 0
+            ? `共处理 ${result.deleted} 道题：彻底删除 ${result.hard_deleted} 道，软删除 ${result.soft_deleted} 道。已用于考试或练习的题目仍可在对应记录中查看。`
+            : "当前课程下没有可清除的题目。",
+      });
+    } catch (err) {
+      toast({
+        title: "清除题目失败",
+        description: err instanceof Error ? err.message : "请稍后重试",
+        variant: "destructive",
+      });
+    } finally {
+      setClearingQuestions(false);
+    }
+  }, [id, refreshCourseSummary, refreshKnowledgeTree, toast]);
 
   const handleGenerateFromMaterial = useCallback(
     async (material: TeacherCourseMaterial) => {
@@ -3088,6 +4549,7 @@ export function CourseDetailPage() {
           : [course?.name, fallbackNodeName].filter(Boolean).join(" / ");
 
       setMaterialAiGenerateState({
+        materialId: material.id,
         materialTitle: material.title,
         knowledgePointId: material.node_id,
         knowledgePointName,
@@ -3097,6 +4559,221 @@ export function CourseDetailPage() {
       });
     },
     [course, extractExistingMaterial, materialContentById, toast, tree],
+  );
+
+  const generateQuestionsForBatchMaterial = useCallback(
+    async ({
+      material,
+      extracted,
+      count,
+    }: {
+      material: TeacherCourseMaterial;
+      extracted: CourseMaterialExtractedContent;
+      count: number;
+    }) => {
+      const pathParts = findCourseKnowledgeNodePath(tree, material.node_id);
+      const fallbackNodeName = material.node_name ?? course?.name ?? "课程节点";
+      const knowledgePointName =
+        pathParts[pathParts.length - 1] ?? fallbackNodeName;
+      const requestBody = {
+        total_count: count,
+        difficulty: 3,
+        knowledge_point_ids: [material.node_id],
+        prompt: `请优先依据上传的学习资料「${material.title}」，为知识点「${knowledgePointName}」批量生成题目。题目应覆盖资料中的核心概念、关键步骤和易错点。`,
+        material_text: extracted.sourceText,
+        material_images: extracted.images,
+        model: "qwen",
+      };
+
+      const token = localStorage.getItem("access_token");
+      const response = await fetch("/api/questions/ai-generate/stream", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(requestBody),
+      });
+      if (!response.ok || !response.body) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.detail ?? `生成失败: ${response.status}`);
+      }
+
+      const generated: CourseMaterialGeneratedQuestion[] = [];
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let streamError: string | null = null;
+
+      const processEventPart = (part: string) => {
+        const dataLine = part
+          .split("\n")
+          .find((line) => line.startsWith("data:"));
+        if (!dataLine) return;
+        const payload = dataLine.replace(/^data:\s*/, "").trim();
+        if (!payload || payload === "[DONE]") return;
+        let event: { type?: string; data?: any; message?: string };
+        try {
+          event = JSON.parse(payload);
+        } catch {
+          return;
+        }
+        if (event.type === "question") {
+          generated.push({
+            type: (event.data?.type ?? "choice") as QuestionType,
+            title: event.data?.title ?? "",
+            content: {
+              text: event.data?.content?.text ?? event.data?.title ?? "",
+            },
+            options: event.data?.options ?? null,
+            answer: event.data?.answer ?? {},
+            analysis: event.data?.analysis ?? null,
+            difficulty: event.data?.difficulty ?? 3,
+          });
+          setBatchGenerateProgress((current) =>
+            current
+              ? {
+                  ...current,
+                  generated: generated.length,
+                }
+              : current,
+          );
+        } else if (event.type === "error") {
+          streamError = event.message ?? "生成失败";
+        }
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+        for (const part of parts) {
+          processEventPart(part);
+          if (streamError) break;
+        }
+        if (streamError) {
+          await reader.cancel();
+          break;
+        }
+      }
+      if (!streamError && buffer.trim()) {
+        processEventPart(buffer);
+      }
+      if (streamError) {
+        throw new Error(streamError);
+      }
+      if (generated.length === 0) {
+        throw new Error("未生成任何题目");
+      }
+
+      setBatchGenerateProgress((current) =>
+        current ? { ...current, phase: "saving" } : current,
+      );
+      const saveResult = await apiRequest<{
+        created: number;
+        created_question_ids?: string[];
+      }>("/questions/save-generated-to-course-bank", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          questions: generated.map((question) => ({
+            ...question,
+            score: 10,
+            tag_ids: [],
+            knowledge_point_ids: [material.node_id],
+          })),
+          source_material_id: material.id,
+        }),
+      });
+
+      return {
+        generated: generated.length,
+        saved: saveResult.created ?? generated.length,
+      };
+    },
+    [course?.name, tree],
+  );
+
+  const handleBatchGenerateMaterials = useCallback(
+    async (items: CourseMaterialBatchGenerateItem[]) => {
+      if (!id || items.length === 0) return;
+      setBatchGenerating(true);
+      let savedTotal = 0;
+      const failures: string[] = [];
+      try {
+        for (let index = 0; index < items.length; index += 1) {
+          const item = items[index];
+          setBatchGenerateProgress({
+            phase: "generating",
+            currentIndex: index + 1,
+            total: items.length,
+            currentTitle: item.material.title,
+            generated: 0,
+            saved: savedTotal,
+          });
+
+          try {
+            const extracted =
+              materialContentById[item.material.id] ??
+              (await extractExistingMaterial(item.material));
+            setBatchGenerateProgress((current) =>
+              current ? { ...current, phase: "generating" } : current,
+            );
+            const result = await generateQuestionsForBatchMaterial({
+              material: item.material,
+              extracted,
+              count: item.count,
+            });
+            savedTotal += result.saved;
+            setBatchGenerateProgress((current) =>
+              current
+                ? {
+                    ...current,
+                    phase: "done",
+                    generated: result.generated,
+                    saved: savedTotal,
+                  }
+                : current,
+            );
+          } catch (err) {
+            failures.push(
+              `${item.material.title}：${err instanceof Error ? err.message : "生成失败"}`,
+            );
+          }
+        }
+
+        await Promise.all([
+          listCourseQuestions(id).then(setQuestions),
+          refreshCourseSummary(),
+          refreshKnowledgeTree(),
+        ]);
+        toast({
+          title: failures.length > 0 ? "部分资料生成失败" : "批量生成完成",
+          description:
+            failures.length > 0
+              ? `已保存 ${savedTotal} 道题，失败 ${failures.length} 份。${failures.slice(0, 2).join("；")}`
+              : `已按顺序处理 ${items.length} 份资料，保存 ${savedTotal} 道题。`,
+          variant: failures.length > 0 ? "destructive" : undefined,
+        });
+        if (failures.length === 0) {
+          setBatchGenerateOpen(false);
+        }
+      } finally {
+        setBatchGenerating(false);
+        setBatchGenerateProgress(null);
+      }
+    },
+    [
+      extractExistingMaterial,
+      generateQuestionsForBatchMaterial,
+      id,
+      materialContentById,
+      refreshCourseSummary,
+      refreshKnowledgeTree,
+      toast,
+    ],
   );
 
   const handleGenerateFromKnowledgeNode = useCallback(
@@ -3145,6 +4822,103 @@ export function CourseDetailPage() {
     [],
   );
 
+  const handleViewMaterialsForKnowledgeNode = useCallback(
+    async (node: CourseKnowledgeNode) => {
+      if (!id) return;
+      try {
+        let nextMaterials = materials;
+        if (nextMaterials.length === 0) {
+          nextMaterials = await listCourseMaterials(id);
+          setMaterials(nextMaterials);
+        }
+        const previewable = filterMaterialsForKnowledgeNode(
+          nextMaterials,
+          tree,
+          node.id,
+        ).filter(canPreviewCourseMaterial);
+        if (previewable.length === 0) {
+          toast({
+            title: "暂不能预览资料",
+            description: "该章节下没有可在线查看的 PDF、DOCX 或 PPTX 资料。",
+            variant: "destructive",
+          });
+          return;
+        }
+        if (previewable.length > 1) {
+          toast({
+            title: "已打开一份资料",
+            description: `该章节下有 ${previewable.length} 份可预览资料，当前打开《${previewable[0].title}》。如需指定其它资料，请到课程资料中选择。`,
+          });
+        }
+        setPreviewMaterial(previewable[0]);
+      } catch (err) {
+        toast({
+          title: "资料加载失败",
+          description: err instanceof Error ? err.message : "请稍后重试",
+          variant: "destructive",
+        });
+      }
+    },
+    [id, materials, toast, tree],
+  );
+
+  const handleViewQuestionsForKnowledgeNode = useCallback(
+    (node: CourseKnowledgeNode) => {
+      setQuestionFilterNodeId(node.id);
+      setActiveTab("questions");
+    },
+    [],
+  );
+
+  const handleViewQuestionsForMaterial = useCallback(
+    (material: TeacherCourseMaterial) => {
+      setQuestionFilterNodeId(material.node_id);
+      setActiveTab("questions");
+    },
+    [],
+  );
+
+  const handleGenerateQuestionsFromNodeMaterials = useCallback(
+    async (node: CourseKnowledgeNode) => {
+      if (!id) return;
+      try {
+        let nextMaterials = materials;
+        if (nextMaterials.length === 0) {
+          nextMaterials = await listCourseMaterials(id);
+          setMaterials(nextMaterials);
+        }
+        const generatable = filterMaterialsForKnowledgeNode(
+          nextMaterials,
+          tree,
+          node.id,
+        ).filter(canGenerateQuestionsFromCourseMaterial);
+        if (generatable.length === 0) {
+          toast({
+            title: "暂不能智能出题",
+            description:
+              "该章节下没有可用于出题的 PDF、DOCX 或 PPTX 上传资料。",
+            variant: "destructive",
+          });
+          return;
+        }
+        if (generatable.length > 1) {
+          toast({
+            title: "已选择一份资料",
+            description: `该章节下有 ${generatable.length} 份可生成题目的资料，当前使用《${generatable[0].title}》。如需指定其它资料，请到课程资料中选择。`,
+          });
+        }
+        await handleGenerateFromMaterial(generatable[0]);
+      } catch (err) {
+        toast({
+          title: "资料加载失败",
+          description: err instanceof Error ? err.message : "请稍后重试",
+          variant: "destructive",
+        });
+      }
+    },
+    [handleGenerateFromMaterial, id, materials, toast, tree],
+  );
+
   const handleArchive = useCallback(
     async (examId: string, semesterId: string | null) => {
       if (!id) return;
@@ -3172,19 +4946,124 @@ export function CourseDetailPage() {
   );
 
   const goCreateExamOrAssignment = useCallback(
-    (kind: "exam" | "assignment") => {
+    (
+      kind: "exam" | "assignment",
+      options?: {
+        courseKpId?: string;
+        knowledgePointId?: string;
+        knowledgePointName?: string;
+        knowledgePointPath?: string;
+        mainKnowledgePointId?: string;
+        mainKnowledgePointName?: string;
+        defaultBankName?: string;
+        initialStep?: number;
+      },
+    ) => {
       navigate(kind === "exam" ? "/exams/create" : "/exams/practice/create", {
         state: {
           backTo: `/courses/${id}`,
           backLabel: "返回课程详情",
           successTo: `/courses/${id}?tab=${kind === "exam" ? "exams" : "assignments"}`,
-          courseKpId: id,
+          courseKpId: options?.courseKpId ?? id,
           ...(semesterFilter ? { courseSemesterId: semesterFilter } : {}),
+          ...(options?.knowledgePointId
+            ? {
+                knowledgePointId: options.knowledgePointId,
+                knowledgePointName: options.knowledgePointName,
+                knowledgePointPath: options.knowledgePointPath,
+              }
+            : {}),
+          ...(options?.mainKnowledgePointId
+            ? {
+                mainKnowledgePointId: options.mainKnowledgePointId,
+                mainKnowledgePointName: options.mainKnowledgePointName,
+              }
+            : {}),
+          ...(options?.defaultBankName
+            ? { defaultBankName: options.defaultBankName }
+            : {}),
+          ...(options?.initialStep !== undefined
+            ? { initialStep: options.initialStep }
+            : {}),
         },
       });
     },
     [id, navigate, semesterFilter],
   );
+
+  const handlePublishAssignmentForKnowledgeNode = useCallback(
+    (node: CourseKnowledgeNode) => {
+      const displayName = course?.name?.trim() || "课程";
+      goCreateExamOrAssignment("assignment", {
+        courseKpId: node.id,
+        knowledgePointId: node.id,
+        knowledgePointName: node.name,
+        knowledgePointPath: [displayName, node.name]
+          .filter(Boolean)
+          .join(" / "),
+        // 课程根节点带入第一步的"课程"字段；与具体知识点（章节）区分开。
+        ...(tree?.id && tree.id !== node.id
+          ? {
+              mainKnowledgePointId: tree.id,
+              mainKnowledgePointName: displayName,
+            }
+          : {}),
+        defaultBankName: `${displayName}-题库`,
+        initialStep: 1,
+      });
+    },
+    [goCreateExamOrAssignment, course?.name, tree?.id],
+  );
+
+  const handlePublishAssignmentForMaterial = useCallback(
+    (material: TeacherCourseMaterial) => {
+      const displayName = course?.name?.trim() || "课程";
+      const nodeName = material.node_name?.trim();
+      goCreateExamOrAssignment("assignment", {
+        courseKpId: material.node_id,
+        ...(nodeName
+          ? {
+              knowledgePointId: material.node_id,
+              knowledgePointName: nodeName,
+              knowledgePointPath: [displayName, nodeName]
+                .filter(Boolean)
+                .join(" / "),
+              ...(tree?.id && tree.id !== material.node_id
+                ? {
+                    mainKnowledgePointId: tree.id,
+                    mainKnowledgePointName: displayName,
+                  }
+                : {}),
+              defaultBankName: `${displayName}-题库`,
+              initialStep: 1,
+            }
+          : {}),
+      });
+    },
+    [goCreateExamOrAssignment, course?.name, tree?.id],
+  );
+
+  const loadAssignmentScoreSummary = useCallback(async () => {
+    if (!id) return;
+    setAssignmentScoreSummaryLoading(true);
+    try {
+      const summary = await getCourseAssignmentScoreSummary(id, semesterFilter);
+      setAssignmentScoreSummary(summary);
+    } catch (err) {
+      toast({
+        title: "汇总失败",
+        description: err instanceof Error ? err.message : "请稍后重试",
+        variant: "destructive",
+      });
+    } finally {
+      setAssignmentScoreSummaryLoading(false);
+    }
+  }, [id, semesterFilter, toast]);
+
+  const handleOpenAssignmentScoreSummary = useCallback(() => {
+    setAssignmentScoreSummaryOpen(true);
+    void loadAssignmentScoreSummary();
+  }, [loadAssignmentScoreSummary]);
 
   // After close/delete, refetch whichever list the action belongs to so counts
   // and rows stay in sync with the server.
@@ -3437,7 +5316,41 @@ export function CourseDetailPage() {
 
       {course.is_deleted ? (
         <div className="mx-auto w-full max-w-[1320px] rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-          这门课程已删除。当前仅支持查看课程资料、考试、作业、题目和知识结构，不能新增、编辑或删除内容。
+          这门课程已删除。当前仅支持查看课程资料、考试、作业、题目和课程目录，不能新增、编辑或删除内容。
+        </div>
+      ) : null}
+
+      {shouldShowCreateSemesterHint ? (
+        <div className="mx-auto flex w-full max-w-[1320px] flex-wrap items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <CalendarRange size={18} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="font-medium text-foreground">建议先创建学期</div>
+            <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+              当前课程还没有资料、题目、考试或作业。创建学期后，后续发起的考试和作业可以归档到对应学期；这不是必填步骤。
+            </div>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="shrink-0"
+            onClick={() => setNewSemesterOpen(true)}
+          >
+            <Plus size={14} className="mr-1.5" />
+            新建学期
+          </Button>
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="size-8 shrink-0 text-muted-foreground hover:text-foreground"
+            aria-label="关闭学期创建提醒"
+            onClick={() => setSemesterHintDismissed(true)}
+          >
+            <X size={15} />
+          </Button>
         </div>
       ) : null}
 
@@ -3484,21 +5397,50 @@ export function CourseDetailPage() {
         uploading={uploading}
         targets={materialUploadTargets}
         selectedNodeId={selectedMaterialUploadNodeId}
-        file={materialUploadFile}
+        files={materialUploadFiles}
         onOpenChange={(nextOpen) => {
           setUploadDialogOpen(nextOpen);
-          if (!nextOpen) setMaterialUploadFile(null);
+          if (!nextOpen) setMaterialUploadFiles([]);
         }}
         onSelectedNodeChange={setSelectedMaterialUploadNodeId}
-        onFileChange={setMaterialUploadFile}
+        onFilesChange={setMaterialUploadFiles}
         onSubmit={() => {
-          if (materialUploadFile) {
-            void handleUploadFile(
+          if (materialUploadFiles.length > 0) {
+            void handleUploadFiles(
               selectedMaterialUploadNodeId,
-              materialUploadFile,
+              materialUploadFiles,
             );
           }
         }}
+      />
+
+      <BatchGenerateMaterialsDialog
+        open={batchGenerateOpen}
+        materials={materials}
+        running={batchGenerating}
+        progress={batchGenerateProgress}
+        onOpenChange={setBatchGenerateOpen}
+        onSubmit={handleBatchGenerateMaterials}
+      />
+
+      <ResourcePreview
+        resource={
+          previewMaterial as Parameters<typeof ResourcePreview>[0]["resource"]
+        }
+        open={Boolean(previewMaterial)}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setPreviewMaterial(null);
+        }}
+      />
+
+      <AssignmentScoreSummaryDialog
+        open={assignmentScoreSummaryOpen}
+        loading={assignmentScoreSummaryLoading}
+        summary={assignmentScoreSummary}
+        courseName={course.name}
+        semesterLabel={selectedSemesterLabel}
+        onOpenChange={setAssignmentScoreSummaryOpen}
+        onRefresh={loadAssignmentScoreSummary}
       />
 
       <AssociateMaterialKnowledgeDialog
@@ -3551,6 +5493,40 @@ export function CourseDetailPage() {
       </AlertDialog>
 
       <AlertDialog
+        open={materialQuestionsToDelete !== null}
+        onOpenChange={(next) => {
+          if (!next && !deletingMaterialQuestions) {
+            setMaterialQuestionsToDelete(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除资料生成的题目</AlertDialogTitle>
+            <AlertDialogDescription>
+              确认删除《{materialQuestionsToDelete?.title}
+              》生成的题目？未被考试或练习使用过的题目会被彻底删除；已被使用过的题目会被软删除，仍可在原考试或练习记录中查看。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deletingMaterialQuestions}>
+              取消
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deletingMaterialQuestions}
+              onClick={(event) => {
+                event.preventDefault();
+                void handleDeleteMaterialQuestions();
+              }}
+            >
+              {deletingMaterialQuestions ? "删除中…" : "确认删除"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
         open={clearKpOpen}
         onOpenChange={(next) => {
           if (!clearingKp) setClearKpOpen(next);
@@ -3574,6 +5550,37 @@ export function CourseDetailPage() {
               }}
             >
               {clearingKp ? "清除中…" : "确认清除"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={clearQuestionsOpen}
+        onOpenChange={(next) => {
+          if (!clearingQuestions) setClearQuestionsOpen(next);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>清除课程下全部题目</AlertDialogTitle>
+            <AlertDialogDescription>
+              将清除本课程及其子知识点下的全部题目。未被考试或练习使用过的题目会被彻底删除；已被使用过的题目会被软删除，仍可在原考试或练习记录中查看。此操作不可恢复。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={clearingQuestions}>
+              取消
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={clearingQuestions}
+              onClick={(event) => {
+                event.preventDefault();
+                void handleClearCourseQuestions();
+              }}
+            >
+              {clearingQuestions ? "清除中…" : "确认清除"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -3679,6 +5686,7 @@ export function CourseDetailPage() {
         </div>
       ) : null}
 
+      {!shouldShowCreateSemesterHint ? (
       <div className="mx-auto w-full max-w-[1320px]">
         <div className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card px-3 py-2">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -3725,7 +5733,7 @@ export function CourseDetailPage() {
                   [
                     [
                       "knowledge",
-                      "知识结构",
+                      "课程目录",
                       null,
                       <Layers3 key="i" size={14} />,
                     ],
@@ -3776,15 +5784,46 @@ export function CourseDetailPage() {
                 {tabLoading === "materials" ? (
                   <LoadingPanel label="正在加载课程资料..." />
                 ) : (
-                  <MaterialsTab
-                    materials={materials}
-                    canWrite={course.can_write}
-                    onOpenAddLink={() => setAddLinkOpen(true)}
-                    onPickUpload={() => void handleOpenUploadDialog()}
-                    onAssociate={setMaterialToAssociate}
-                    onGenerateFrom={handleGenerateFromMaterial}
-                    onDelete={(material) => setMaterialToDelete(material)}
-                  />
+                  <div className="space-y-3">
+                    {materialFilterNode ? (
+                      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/20 bg-primary/10 px-3 py-2 text-sm text-primary">
+                        <FileText size={15} />
+                        <span className="font-medium">
+                          正在查看「{materialFilterNode.name}」相关资料
+                        </span>
+                        <span className="text-primary/75">
+                          共 {filteredMaterials.length} 份
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="ml-auto h-7 px-2 text-primary hover:bg-primary/10 hover:text-primary"
+                          onClick={() => setMaterialFilterNodeId(null)}
+                        >
+                          清除筛选
+                        </Button>
+                      </div>
+                    ) : null}
+                    <MaterialsTab
+                      materials={filteredMaterials}
+                      canWrite={course.can_write}
+                      scopeLabel={
+                        materialFilterNode
+                          ? `「${materialFilterNode.name}」目录范围 · 含下级资料`
+                          : undefined
+                      }
+                      onOpenAddLink={() => setAddLinkOpen(true)}
+                      onPickUpload={() => void handleOpenUploadDialog()}
+                      onOpenBatchGenerate={() => setBatchGenerateOpen(true)}
+                      onViewQuestions={handleViewQuestionsForMaterial}
+                      onPublishAssignment={handlePublishAssignmentForMaterial}
+                      onDeleteQuestions={setMaterialQuestionsToDelete}
+                      onAssociate={setMaterialToAssociate}
+                      onGenerateFrom={handleGenerateFromMaterial}
+                      onDelete={(material) => setMaterialToDelete(material)}
+                    />
+                  </div>
                 )}
               </TabsContent>
               <TabsContent value="exams" className="mt-0">
@@ -3834,6 +5873,7 @@ export function CourseDetailPage() {
                       kind="assignment"
                       semesters={semesters}
                       canWrite={course.can_write}
+                      onSummarize={handleOpenAssignmentScoreSummary}
                       onArchive={handleArchive}
                       onNewSemester={() => setNewSemesterOpen(true)}
                       onClose={(exam) => setExamToClose(exam)}
@@ -3847,19 +5887,50 @@ export function CourseDetailPage() {
                 {tabLoading === "questions" ? (
                   <LoadingPanel label="正在加载题目..." />
                 ) : (
-                  <QuestionsTab
-                    questions={questions}
-                    courseId={id ?? ""}
-                    courseName={course.name}
-                    courseSemesterId={semesterFilter}
-                    canWrite={course.can_write}
-                    onPublishedExamOrAssignment={handlePublishedFromSelection}
-                  />
+                  <div className="space-y-3">
+                    {questionFilterNode ? (
+                      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/20 bg-primary/10 px-3 py-2 text-sm text-primary">
+                        <BookOpen size={15} />
+                        <span className="font-medium">
+                          正在查看「{questionFilterNode.name}」相关题目
+                        </span>
+                        <span className="text-primary/75">
+                          共 {filteredQuestions.length} 道
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="ml-auto h-7 px-2 text-primary hover:bg-primary/10 hover:text-primary"
+                          onClick={() => setQuestionFilterNodeId(null)}
+                        >
+                          清除筛选
+                        </Button>
+                      </div>
+                    ) : null}
+                    <QuestionsTab
+                      questions={filteredQuestions}
+                      courseId={id ?? ""}
+                      courseName={course.name}
+                      courseSemesterId={semesterFilter}
+                      courseSemester={selectedSemester}
+                      targetCourseKpId={questionFilterNode?.id ?? id ?? ""}
+                      knowledgeFilterOptions={questionKnowledgeFilterOptions}
+                      knowledgeFilterNodeId={questionFilterNodeId}
+                      onKnowledgeFilterChange={setQuestionFilterNodeId}
+                      existingExamTitles={exams.map((exam) => exam.title)}
+                      knowledgeTree={tree}
+                      canWrite={course.can_write}
+                      showClearAllQuestions={!questionFilterNode}
+                      onPublishedExamOrAssignment={handlePublishedFromSelection}
+                      onClearAllQuestions={() => setClearQuestionsOpen(true)}
+                    />
+                  </div>
                 )}
               </TabsContent>
               <TabsContent value="knowledge" className="mt-0">
                 {tabLoading === "knowledge" ? (
-                  <LoadingPanel label="正在加载知识结构..." />
+                  <LoadingPanel label="正在加载课程目录..." />
                 ) : (
                   <KnowledgeTab
                     tree={tree}
@@ -3869,7 +5940,18 @@ export function CourseDetailPage() {
                     onOpenCatalogPhoto={() => setCatalogPhotoOpen(true)}
                     onOpenAddNode={() => setAddKnowledgeOpen(true)}
                     onOpenNode={handleOpenKnowledgeNode}
+                    onViewMaterials={handleViewMaterialsForKnowledgeNode}
+                    onViewQuestions={handleViewQuestionsForKnowledgeNode}
                     onViewAssignments={handleViewAssignmentsForKnowledgeNode}
+                    onGenerateFromMaterials={
+                      handleGenerateQuestionsFromNodeMaterials
+                    }
+                    onUploadMaterial={(node) =>
+                      void handleOpenUploadDialog(node.id)
+                    }
+                    onPublishAssignment={
+                      handlePublishAssignmentForKnowledgeNode
+                    }
                     onRequestDeleteNode={setKnowledgeNodeToDelete}
                     onClearAll={() => setClearKpOpen(true)}
                   />
@@ -3898,7 +5980,7 @@ export function CourseDetailPage() {
           }}
           onRename={handleRenameKnowledgeNode}
           onAddLink={handleAddNodeMaterialLink}
-          onUploadFile={handleUploadFileToNode}
+          onUploadFiles={handleUploadFilesToNode}
           onUpdateMaterial={handleUpdateNodeMaterial}
           onDeleteMaterial={(material) => setMaterialToDelete(material)}
           onGenerateFromMaterial={handleGenerateFromMaterial}
@@ -3906,7 +5988,21 @@ export function CourseDetailPage() {
           onGenerateQuestions={handleGenerateFromKnowledgeNode}
           onCreateQuestion={handleCreateQuestionFromKnowledgeNode}
           onViewQuestion={(questionId) =>
-            navigate(`/questions/edit/${questionId}`)
+            navigate(`/questions/edit/${questionId}`, {
+              state: {
+                backTo: `/courses/${id}?tab=knowledge${
+                  selectedKnowledgeNodeId
+                    ? `&node_id=${selectedKnowledgeNodeId}`
+                    : ""
+                }`,
+                backLabel: "返回课程目录",
+                successTo: `/courses/${id}?tab=knowledge${
+                  selectedKnowledgeNodeId
+                    ? `&node_id=${selectedKnowledgeNodeId}`
+                    : ""
+                }`,
+              },
+            })
           }
           onOpenAddNode={() => setAddKnowledgeOpen(true)}
           onRequestDeleteNode={setKnowledgeNodeToDelete}
@@ -3922,20 +6018,28 @@ export function CourseDetailPage() {
             knowledgePointName={materialAiGenerateState.knowledgePointName}
             knowledgePointPath={materialAiGenerateState.knowledgePointPath}
             materialTitle={materialAiGenerateState.materialTitle}
+            sourceMaterialId={materialAiGenerateState.materialId}
             materialSourceText={materialAiGenerateState.sourceText}
             materialImages={materialAiGenerateState.images}
             targetQuestionBankName={courseQuestionBankName(course.name)}
             onSaved={() => {
               if (id) {
-                void listCourseQuestions(id)
-                  .then(setQuestions)
-                  .catch(() => {});
+                void Promise.all([
+                  listCourseQuestions(id).then(setQuestions),
+                  refreshKnowledgeTree(),
+                  refreshCourseSummary(),
+                ]).catch(() => {});
+              } else {
+                void Promise.all([
+                  refreshKnowledgeTree(),
+                  refreshCourseSummary(),
+                ]).catch(() => {});
               }
-              void refreshCourseSummary();
             }}
           />
         ) : null}
       </div>
+      ) : null}
     </div>
   );
 }

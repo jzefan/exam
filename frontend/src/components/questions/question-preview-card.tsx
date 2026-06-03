@@ -8,7 +8,7 @@ import { Check, Clock3, Copy, GraduationCap, Loader2, Tag } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { IQuestion } from "@/types";
 import { Badge } from "@/components/ui/badge";
-import { CodeBlock } from "@/components/ui/code-block";
+import { CodeBlock, highlightCode } from "@/components/ui/code-block";
 import { LatexText } from "@/components/ui/latex-text";
 import {
   Popover,
@@ -152,8 +152,8 @@ function CodeAnswerBlock({
   language?: string;
 }) {
   const [copied, setCopied] = useState(false);
-  const trimmed = code.trim();
-  const lines = trimmed.split("\n");
+  const trimmed = code.replace(/\r\n/g, "\n").replace(/^\n+|\s+$/g, "");
+  const lines = trimmed ? trimmed.split("\n") : [""];
 
   const handleCopy = () => {
     navigator.clipboard?.writeText(trimmed);
@@ -186,22 +186,27 @@ function CodeAnswerBlock({
           {copied ? "已复制" : "复制"}
         </button>
       </div>
-      <div className="flex overflow-x-auto">
-        <div
-          aria-hidden="true"
-          className="flex-shrink-0 select-none border-r border-border py-3 text-right"
-        >
-          {lines.map((_, i) => (
+      <div className="max-h-[280px] overflow-auto">
+        <div className="min-w-max py-2">
+          {lines.map((line, i) => (
             <div
-              key={i}
-              className="px-3 font-mono text-[13px] leading-[1.6] text-muted-foreground/60"
+              key={`${i}-${line}`}
+              className="grid grid-cols-[3.5rem_minmax(0,1fr)]"
             >
-              {i + 1}
+              <span
+                aria-hidden="true"
+                className="sticky left-0 z-10 select-none border-r border-border bg-muted/30 px-3 text-right font-mono text-[12px] leading-6 text-muted-foreground/60"
+              >
+                {i + 1}
+              </span>
+              <code
+                className="hljs whitespace-pre bg-transparent px-3 font-mono text-[12px] leading-6"
+                dangerouslySetInnerHTML={{
+                  __html: line ? highlightCode(line, language) : "&nbsp;",
+                }}
+              />
             </div>
           ))}
-        </div>
-        <div className="min-w-0 flex-1 px-3 py-3 [&_.hljs]:!bg-transparent [&_.hljs]:!p-0 [&_code]:!bg-transparent [&_code]:!text-[13px] [&_code]:leading-[1.6] [&_pre]:!m-0 [&_pre]:!bg-transparent [&_pre]:!p-0 [&_pre]:leading-[1.6]">
-          <CodeBlock code={trimmed} language={language} />
         </div>
       </div>
     </div>
@@ -379,10 +384,16 @@ export function QuestionPreviewCard({
     .map((kp) => kp.name)
     .join(" · ");
 
-  const codeAnswer = question.answer?.code as string | undefined;
+  const codeAnswer =
+    (question.answer?.code as string | undefined) ||
+    (question.answer?.text as string | undefined) ||
+    (question.answer?.correct as string | undefined);
   const codeLanguage = (question.content?.language as string) || "python";
-
   const hasAnswerText = answerText !== "" && answerText !== "-";
+  const shouldShowAnswer =
+    showDetails &&
+    (!hideAnswer || hasAnswerText || (isCode && Boolean(codeAnswer)));
+
   const showSimpleAnswer =
     !showDetails && !hideAnswer && !isCode && hasAnswerText;
 
@@ -569,7 +580,7 @@ export function QuestionPreviewCard({
         >
           <div className="overflow-hidden">
             <div className="space-y-5">
-              {!hideAnswer ? (
+              {shouldShowAnswer ? (
                 <div>
                   <SectionLabel>参考答案</SectionLabel>
                   {isCode ? (

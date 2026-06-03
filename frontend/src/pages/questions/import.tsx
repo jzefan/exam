@@ -887,6 +887,7 @@ export function QuestionImportPage() {
       content_text: d.content_text,
       options: d.options,
       answer_text: d.answer_text,
+      analysis: d.analysis,
     }));
 
     let answersCompleted = 0;
@@ -941,6 +942,7 @@ export function QuestionImportPage() {
             total?: number;
             draft_id?: string;
             answer_text?: string | null;
+            analysis?: string | null;
             doubt?: boolean;
             doubt_reason?: string | null;
             suggested_knowledge_points?: Array<{
@@ -957,6 +959,9 @@ export function QuestionImportPage() {
             if (event.answer_text) {
               patch.answer_text = event.answer_text;
               answersCompleted++;
+            }
+            if (event.analysis) {
+              patch.analysis = event.analysis;
             }
             if (event.doubt) {
               patch.doubt = event.doubt;

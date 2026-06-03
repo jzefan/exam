@@ -74,6 +74,8 @@ services:
     environment:
       EXAM_JUDGE_RUNNER_URL: http://judge_runner:8010
       EXAM_LSP_RUNNER_URL: http://lsp_runner:8020
+    volumes:
+      - ${APP_ROOT}/shared/uploads:/app/uploads
     depends_on:
       db:
         condition: service_healthy

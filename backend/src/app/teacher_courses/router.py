@@ -20,15 +20,23 @@ from app.database import get_db
 from app.exams.models import Exam, ExamQuestion, ExamStudent, GradingStatus
 from app.job_models.models import LearningResource
 from app.learning.models import Direction, KnowledgePoint, Major
-from app.questions.models import Question, question_knowledge_points
+from app.questions.models import Question, question_knowledge_points, question_learning_resources
 from app.questions.router import _build_question_response
-from app.questions.service import get_or_create_root_knowledge_question_bank
+from app.questions.service import (
+    can_hard_delete_question,
+    get_or_create_root_knowledge_question_bank,
+    soft_delete_question,
+)
 from app.teacher_courses.models import CourseSemester, ExamSemesterAssignment
 from app.teacher_courses.schemas import (
     CourseKnowledgeNode,
     CourseSemesterCreate,
     CourseSemesterResponse,
     ExamSemesterArchiveRequest,
+    TeacherCourseAssignmentScoreCell,
+    TeacherCourseAssignmentScoreColumn,
+    TeacherCourseAssignmentScoreStudent,
+    TeacherCourseAssignmentScoreSummary,
     TeacherCourseCreate,
     TeacherCourseDetail,
     TeacherCourseExam,
@@ -184,14 +192,14 @@ async def _course_counts(
         LearningResource.node_id.in_(subtree_ids),
     )
 
-    # An exam belongs to the course when either pinned via Exam.course_kp_id or
-    # via an EXISTS over its question knowledge-point links into the course subtree.
+    # An exam belongs to the course when either pinned to the course directory
+    # subtree or via question knowledge-point links into that subtree.
     has_kp_in_subtree = exists().where(
         ExamQuestion.exam_id == Exam.id,
         ExamQuestion.question_id == question_knowledge_points.c.question_id,
         question_knowledge_points.c.knowledge_point_id.in_(subtree_ids),
     )
-    belongs_to_course = or_(Exam.course_kp_id == course_id, has_kp_in_subtree)
+    belongs_to_course = or_(Exam.course_kp_id.in_(subtree_ids), has_kp_in_subtree)
 
     # 考试/作业按学期归档：指定学期时，只统计归档到该学期的考试（不含「未归档」）。
     semester_pin = (
@@ -323,7 +331,7 @@ async def _batch_course_counts(
     # 3) exams + 4) practices per course — same shape, branch on category in one pass.
     # Two paths into a course:
     #   (a) via questions whose KP is in the course subtree (legacy implicit link)
-    #   (b) via Exam.course_kp_id directly pointing at the course root
+    #   (b) via Exam.course_kp_id directly pointing at any node in the course subtree
     # We aggregate distinct exam ids per (course, category) by running both paths
     # and unioning in Python.
     def _accum_exam_counts(rows):
@@ -346,11 +354,12 @@ async def _batch_course_counts(
         .where(Exam.deleted_at.is_(None), Exam.category.in_(["exam", "practice"]))
     )
     pinned_stmt = (
-        select(Exam.course_kp_id, Exam.category, Exam.id)
+        select(subtree.c.course_id, Exam.category, Exam.id)
+        .select_from(subtree)
+        .join(Exam, Exam.course_kp_id == subtree.c.kp_id)
         .where(
             Exam.deleted_at.is_(None),
             Exam.category.in_(["exam", "practice"]),
-            Exam.course_kp_id.in_(course_ids),
         )
     )
     if not is_admin:
@@ -387,13 +396,13 @@ async def _batch_course_counts(
         )
     )
     p_pinned_stmt = (
-        select(Exam.course_kp_id, Exam.id, ExamStudent.student_id)
-        .select_from(Exam)
+        select(subtree.c.course_id, Exam.id, ExamStudent.student_id)
+        .select_from(subtree)
+        .join(Exam, Exam.course_kp_id == subtree.c.kp_id)
         .join(ExamStudent, ExamStudent.exam_id == Exam.id)
         .where(
             Exam.deleted_at.is_(None),
             Exam.category == "exam",
-            Exam.course_kp_id.in_(course_ids),
             ExamStudent.submitted_at.is_not(None),
             ExamStudent.grading_status != GradingStatus.REVIEWED.value,
         )
@@ -655,6 +664,21 @@ async def list_teacher_course_materials(course_id: uuid.UUID, db: DB, user: Curr
         .order_by(LearningResource.created_at.desc())
     )
     rows = (await db.execute(stmt)).all()
+    resource_ids = [resource.id for resource, _node_name in rows]
+    question_count_by_resource: dict[uuid.UUID, int] = {}
+    if resource_ids:
+        count_rows = (
+            await db.execute(
+                select(question_learning_resources.c.resource_id, func.count(Question.id))
+                .join(Question, Question.id == question_learning_resources.c.question_id)
+                .where(
+                    question_learning_resources.c.resource_id.in_(resource_ids),
+                    Question.deleted_at.is_(None),
+                )
+                .group_by(question_learning_resources.c.resource_id)
+            )
+        ).all()
+        question_count_by_resource = {resource_id: count for resource_id, count in count_rows}
     return [
         TeacherCourseMaterial(
             id=resource.id,
@@ -666,6 +690,7 @@ async def list_teacher_course_materials(course_id: uuid.UUID, db: DB, user: Curr
             description=resource.description,
             source=resource.source,
             file_path=resource.file_path,
+            question_count=question_count_by_resource.get(resource.id, 0),
             created_at=resource.created_at,
             updated_at=resource.updated_at,
         )
@@ -688,7 +713,7 @@ async def _list_course_exams(
         include_deleted_root=bool(course and course.deleted_at is not None),
     )
     # An exam belongs to this course when either:
-    #   (a) it was explicitly pinned to the course at creation (Exam.course_kp_id), or
+    #   (a) it was pinned to any node in the course directory subtree, or
     #   (b) at least one of its questions has a knowledge point inside the course subtree.
     has_kp_in_subtree = exists().where(
         ExamQuestion.exam_id == Exam.id,
@@ -706,7 +731,7 @@ async def _list_course_exams(
         .where(
             Exam.deleted_at.is_(None),
             Exam.category == category,
-            or_(Exam.course_kp_id == course_id, has_kp_in_subtree),
+            or_(Exam.course_kp_id.in_(select(subtree.c.id)), has_kp_in_subtree),
         )
         .options(
             selectinload(Exam.exam_questions).selectinload(
@@ -797,6 +822,182 @@ async def list_teacher_course_assignments(
     )
 
 
+@router.get(
+    "/{course_id}/assignment-score-summary",
+    response_model=TeacherCourseAssignmentScoreSummary,
+)
+async def get_teacher_course_assignment_score_summary(
+    course_id: uuid.UUID,
+    db: DB,
+    user: CurrentUser,
+    semester_id: Annotated[uuid.UUID | None, Query()] = None,
+) -> TeacherCourseAssignmentScoreSummary:
+    is_admin = await _is_course_admin(db, user)
+    course, *_ = await _get_visible_course(
+        db,
+        course_id,
+        user=user,
+        is_admin=is_admin,
+        include_deleted=True,
+    )
+    subtree = _course_subtree_cte(
+        course_id,
+        include_deleted_root=course.deleted_at is not None,
+    )
+    has_kp_in_subtree = exists().where(
+        ExamQuestion.exam_id == Exam.id,
+        ExamQuestion.question_id == question_knowledge_points.c.question_id,
+        question_knowledge_points.c.knowledge_point_id.in_(select(subtree.c.id)),
+    )
+    stmt = (
+        select(Exam, CourseSemester)
+        .outerjoin(ExamSemesterAssignment, ExamSemesterAssignment.exam_id == Exam.id)
+        .outerjoin(
+            CourseSemester,
+            (CourseSemester.id == ExamSemesterAssignment.course_semester_id)
+            & (CourseSemester.deleted_at.is_(None)),
+        )
+        .where(
+            Exam.deleted_at.is_(None),
+            Exam.category == "practice",
+            or_(Exam.course_kp_id.in_(select(subtree.c.id)), has_kp_in_subtree),
+        )
+        .options(selectinload(Exam.exam_students).selectinload(ExamStudent.student))
+        .order_by(Exam.created_at.asc())
+    )
+    if semester_id is not None:
+        stmt = stmt.where(ExamSemesterAssignment.course_semester_id == semester_id)
+    if not is_admin:
+        stmt = stmt.where(teacher_owned_resource_filter(Exam, user.id))
+
+    rows = (await db.execute(stmt)).unique().all()
+    assignment_columns: list[TeacherCourseAssignmentScoreColumn] = []
+    exams_by_id: dict[uuid.UUID, Exam] = {}
+    student_rows: dict[uuid.UUID, dict[str, object]] = {}
+    scores_by_student: dict[uuid.UUID, dict[uuid.UUID, ExamStudent]] = {}
+
+    for exam, semester in rows:
+        exams_by_id[exam.id] = exam
+        submitted_count = sum(1 for item in exam.exam_students if item.submitted_at is not None)
+        assignment_columns.append(
+            TeacherCourseAssignmentScoreColumn(
+                id=exam.id,
+                title=exam.title,
+                total_score=round(float(exam.total_score or 0), 2),
+                submitted_count=submitted_count,
+                total_students=len(exam.exam_students),
+                semester_id=semester.id if semester else None,
+                semester_name=semester.name if semester else None,
+                start_time=exam.start_time,
+                end_time=exam.end_time,
+            )
+        )
+        for exam_student in exam.exam_students:
+            student = exam_student.student
+            student_rows.setdefault(
+                exam_student.student_id,
+                {
+                    "student_no": student.student_id if student else None,
+                    "full_name": student.full_name if student else None,
+                    "username": student.username if student else None,
+                    "phone": student.phone if student else None,
+                },
+            )
+            scores_by_student.setdefault(exam_student.student_id, {})[exam.id] = exam_student
+
+    students: list[TeacherCourseAssignmentScoreStudent] = []
+    for student_id, info in student_rows.items():
+        student_no = info.get("student_no")
+        full_name = info.get("full_name")
+        username = info.get("username")
+        phone = info.get("phone")
+        cells: list[TeacherCourseAssignmentScoreCell] = []
+        submitted_count = 0
+        assignment_count = 0
+        total_score = 0.0
+        max_score = 0.0
+        student_scores = scores_by_student.get(student_id, {})
+        for column in assignment_columns:
+            exam = exams_by_id[column.id]
+            assigned_score = student_scores.get(column.id)
+            if assigned_score is None:
+                cells.append(
+                    TeacherCourseAssignmentScoreCell(
+                        assignment_id=column.id,
+                        assigned=False,
+                    )
+                )
+                continue
+
+            assignment_count += 1
+            possible_score = max(float(exam.total_score or 0), 0.0)
+            max_score += possible_score
+            raw_score = float(assigned_score.score) if assigned_score.score is not None else None
+            if raw_score is not None:
+                total_score += raw_score
+            if assigned_score.submitted_at is not None:
+                submitted_count += 1
+            percent = None
+            if raw_score is not None and possible_score > 0:
+                percent = round(raw_score / possible_score * 100, 2)
+            cells.append(
+                TeacherCourseAssignmentScoreCell(
+                    assignment_id=column.id,
+                    assigned=True,
+                    score=round(raw_score, 2) if raw_score is not None else None,
+                    percent=percent,
+                    submitted_at=assigned_score.submitted_at,
+                    grading_status=assigned_score.grading_status,
+                )
+            )
+
+        average_percent = round(total_score / max_score * 100, 2) if max_score > 0 else None
+        students.append(
+            TeacherCourseAssignmentScoreStudent(
+                student_id=student_id,
+                student_no=student_no if isinstance(student_no, str) else None,
+                full_name=full_name if isinstance(full_name, str) else None,
+                username=username if isinstance(username, str) else None,
+                phone=phone if isinstance(phone, str) else None,
+                submitted_count=submitted_count,
+                assignment_count=assignment_count,
+                total_score=round(total_score, 2),
+                max_score=round(max_score, 2),
+                average_percent=average_percent,
+                cells=cells,
+            )
+        )
+
+    students.sort(
+        key=lambda item: (
+            item.full_name or "",
+            item.username or "",
+            item.student_no or "",
+            str(item.student_id),
+        )
+    )
+    student_percents = [
+        student.average_percent
+        for student in students
+        if student.average_percent is not None
+    ]
+    class_average_percent = (
+        round(sum(student_percents) / len(student_percents), 2)
+        if student_percents
+        else None
+    )
+    return TeacherCourseAssignmentScoreSummary(
+        course_id=course_id,
+        semester_id=semester_id,
+        assignment_count=len(assignment_columns),
+        student_count=len(students),
+        class_average_percent=class_average_percent,
+        assignments=assignment_columns,
+        students=students,
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
 @router.get("/{course_id}/questions", response_model=list[TeacherCourseQuestion])
 async def list_teacher_course_questions(
     course_id: uuid.UUID,
@@ -834,6 +1035,169 @@ async def list_teacher_course_questions(
         stmt = stmt.where(teacher_owned_resource_filter(Question, user.id))
     questions = (await db.execute(stmt)).scalars().unique().all()
     return [await _build_question_response(db, question) for question in questions]
+
+
+@router.delete("/{course_id}/questions", status_code=status.HTTP_200_OK)
+async def clear_teacher_course_questions(
+    course_id: uuid.UUID, db: DB, user: CurrentUser
+) -> dict[str, int]:
+    is_admin = await _is_course_admin(db, user)
+    course, *_ = await _get_visible_course(
+        db,
+        course_id,
+        user=user,
+        is_admin=is_admin,
+        include_deleted=False,
+    )
+    if not can_write_owned_resource(
+        is_platform_admin=is_admin,
+        current_user_id=user.id,
+        owner_id=course.owner_id,
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权修改该课程")
+
+    subtree = _course_subtree_cte(course_id)
+    stmt = (
+        select(Question)
+        .join(question_knowledge_points, Question.id == question_knowledge_points.c.question_id)
+        .where(
+            Question.deleted_at.is_(None),
+            question_knowledge_points.c.knowledge_point_id.in_(select(subtree.c.id)),
+        )
+        .distinct()
+    )
+    if not is_admin:
+        stmt = stmt.where(teacher_owned_resource_filter(Question, user.id))
+
+    questions = (await db.execute(stmt)).scalars().unique().all()
+    hard_deleted = 0
+    soft_deleted = 0
+    for question in questions:
+        if await can_hard_delete_question(db, question.id):
+            await db.delete(question)
+            hard_deleted += 1
+        else:
+            await soft_delete_question(db, question)
+            soft_deleted += 1
+
+    await db.commit()
+    return {
+        "deleted": hard_deleted + soft_deleted,
+        "hard_deleted": hard_deleted,
+        "soft_deleted": soft_deleted,
+    }
+
+
+@router.get("/{course_id}/materials/{resource_id}/questions", response_model=list[TeacherCourseQuestion])
+async def list_teacher_course_material_questions(
+    course_id: uuid.UUID,
+    resource_id: uuid.UUID,
+    db: DB,
+    user: CurrentUser,
+) -> list[TeacherCourseQuestion]:
+    is_admin = await _is_course_admin(db, user)
+    course, *_ = await _get_visible_course(
+        db,
+        course_id,
+        user=user,
+        is_admin=is_admin,
+        include_deleted=True,
+    )
+    subtree = _course_subtree_cte(course_id, include_deleted_root=course.deleted_at is not None)
+    material = await db.scalar(
+        select(LearningResource).where(
+            LearningResource.id == resource_id,
+            LearningResource.node_type == "kp",
+            LearningResource.node_id.in_(select(subtree.c.id)),
+        )
+    )
+    if material is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资料不存在")
+
+    stmt = (
+        select(Question)
+        .join(question_learning_resources, Question.id == question_learning_resources.c.question_id)
+        .where(
+            question_learning_resources.c.resource_id == resource_id,
+            Question.deleted_at.is_(None),
+        )
+        .options(
+            selectinload(Question.creator),
+            selectinload(Question.question_bank),
+            selectinload(Question.tags),
+            selectinload(Question.knowledge_points),
+        )
+        .distinct()
+        .order_by(Question.updated_at.desc())
+    )
+    if not is_admin:
+        stmt = stmt.where(teacher_owned_resource_filter(Question, user.id))
+    questions = (await db.execute(stmt)).scalars().unique().all()
+    return [await _build_question_response(db, question) for question in questions]
+
+
+@router.delete("/{course_id}/materials/{resource_id}/questions", status_code=status.HTTP_200_OK)
+async def clear_teacher_course_material_questions(
+    course_id: uuid.UUID,
+    resource_id: uuid.UUID,
+    db: DB,
+    user: CurrentUser,
+) -> dict[str, int]:
+    is_admin = await _is_course_admin(db, user)
+    course, *_ = await _get_visible_course(
+        db,
+        course_id,
+        user=user,
+        is_admin=is_admin,
+        include_deleted=False,
+    )
+    if not can_write_owned_resource(
+        is_platform_admin=is_admin,
+        current_user_id=user.id,
+        owner_id=course.owner_id,
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权修改该课程")
+
+    subtree = _course_subtree_cte(course_id)
+    material = await db.scalar(
+        select(LearningResource).where(
+            LearningResource.id == resource_id,
+            LearningResource.node_type == "kp",
+            LearningResource.node_id.in_(select(subtree.c.id)),
+        )
+    )
+    if material is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资料不存在")
+
+    stmt = (
+        select(Question)
+        .join(question_learning_resources, Question.id == question_learning_resources.c.question_id)
+        .where(
+            question_learning_resources.c.resource_id == resource_id,
+            Question.deleted_at.is_(None),
+        )
+        .distinct()
+    )
+    if not is_admin:
+        stmt = stmt.where(teacher_owned_resource_filter(Question, user.id))
+    questions = (await db.execute(stmt)).scalars().unique().all()
+
+    hard_deleted = 0
+    soft_deleted = 0
+    for question in questions:
+        if await can_hard_delete_question(db, question.id):
+            await db.delete(question)
+            hard_deleted += 1
+        else:
+            await soft_delete_question(db, question)
+            soft_deleted += 1
+
+    await db.commit()
+    return {
+        "deleted": hard_deleted + soft_deleted,
+        "hard_deleted": hard_deleted,
+        "soft_deleted": soft_deleted,
+    }
 
 
 @router.get("/{course_id}/knowledge-tree", response_model=CourseKnowledgeNode)
@@ -960,6 +1324,9 @@ def _semester_to_response(
         course_id=semester.course_id,
         name=semester.name,
         description=semester.description,
+        semester_major_label=semester.semester_major_label,
+        semester_major_description=semester.semester_major_description,
+        class_ids=semester.class_ids or [],
         start_date=semester.start_date,
         end_date=semester.end_date,
         exam_count=exam_count,
@@ -1024,6 +1391,9 @@ async def create_course_semester(
         course_id=course_id,
         name=name,
         description=payload.description,
+        semester_major_label=payload.semester_major_label.strip() if payload.semester_major_label else None,
+        semester_major_description=payload.semester_major_description,
+        class_ids=[str(class_id) for class_id in payload.class_ids],
         start_date=payload.start_date,
         end_date=payload.end_date,
         owner_id=user.id,

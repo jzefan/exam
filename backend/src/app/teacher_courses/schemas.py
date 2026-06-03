@@ -15,6 +15,9 @@ from app.questions.schemas import QuestionResponse
 class CourseSemesterCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     description: str | None = Field(default=None, max_length=2000)
+    semester_major_label: str | None = Field(default=None, max_length=200)
+    semester_major_description: str | None = Field(default=None, max_length=2000)
+    class_ids: list[uuid.UUID] = Field(default_factory=list)
     start_date: date | None = None
     end_date: date | None = None
 
@@ -24,6 +27,9 @@ class CourseSemesterResponse(BaseModel):
     course_id: uuid.UUID
     name: str
     description: str | None = None
+    semester_major_label: str | None = None
+    semester_major_description: str | None = None
+    class_ids: list[uuid.UUID] = Field(default_factory=list)
     start_date: date | None = None
     end_date: date | None = None
     exam_count: int = 0
@@ -79,6 +85,7 @@ class TeacherCourseMaterial(BaseModel):
     description: str | None = None
     source: str | None = None
     file_path: str | None = None
+    question_count: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -108,6 +115,52 @@ class TeacherCourseExam(BaseModel):
     semester_name: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class TeacherCourseAssignmentScoreColumn(BaseModel):
+    id: uuid.UUID
+    title: str
+    total_score: float = 0
+    submitted_count: int = 0
+    total_students: int = 0
+    semester_id: uuid.UUID | None = None
+    semester_name: str | None = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+
+
+class TeacherCourseAssignmentScoreCell(BaseModel):
+    assignment_id: uuid.UUID
+    assigned: bool = False
+    score: float | None = None
+    percent: float | None = None
+    submitted_at: datetime | None = None
+    grading_status: str | None = None
+
+
+class TeacherCourseAssignmentScoreStudent(BaseModel):
+    student_id: uuid.UUID
+    student_no: str | None = None
+    full_name: str | None = None
+    username: str | None = None
+    phone: str | None = None
+    submitted_count: int = 0
+    assignment_count: int = 0
+    total_score: float = 0
+    max_score: float = 0
+    average_percent: float | None = None
+    cells: list[TeacherCourseAssignmentScoreCell] = Field(default_factory=list)
+
+
+class TeacherCourseAssignmentScoreSummary(BaseModel):
+    course_id: uuid.UUID
+    semester_id: uuid.UUID | None = None
+    assignment_count: int = 0
+    student_count: int = 0
+    class_average_percent: float | None = None
+    assignments: list[TeacherCourseAssignmentScoreColumn] = Field(default_factory=list)
+    students: list[TeacherCourseAssignmentScoreStudent] = Field(default_factory=list)
+    generated_at: datetime
 
 
 class TeacherCourseQuestion(QuestionResponse):
