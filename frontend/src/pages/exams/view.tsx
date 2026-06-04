@@ -202,6 +202,14 @@ export function ExamPaperViewPage() {
     );
   };
 
+  const replaceQuestion = (oldId: string, newId: string) => {
+    setQuestionItems((prev) =>
+      prev.map((item) =>
+        item.question_id === oldId ? { ...item, question_id: newId } : item,
+      ),
+    );
+  };
+
   const applyTypeScoreAllocationToItems = (
     items: ExamQuestionFormItem[],
     summary: QuestionTypeSummary,
@@ -371,6 +379,7 @@ export function ExamPaperViewPage() {
             setQuestionItems((prev) => applyTypeScoreAllocationToItems(prev, summary, parsed));
           }}
           onQuestionScoreChange={updateQuestionScore}
+          onReplaceQuestion={replaceQuestion}
         />
 
         <PaperSummarySidebar title="考试摘要">

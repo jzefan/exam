@@ -106,7 +106,7 @@ function renderHighlightedLatexText(text: string, keyword?: string) {
 }
 
 /* ── difficulty bars ── */
-const DIFFICULTY_LABELS: Record<number, string> = {
+export const DIFFICULTY_LABELS: Record<number, string> = {
   1: "容易",
   2: "较易",
   3: "中等",
@@ -114,7 +114,7 @@ const DIFFICULTY_LABELS: Record<number, string> = {
   5: "很难",
 };
 
-function DifficultyBars({ level }: { level: number }) {
+export function DifficultyBars({ level }: { level: number }) {
   return (
     <span className="inline-flex items-center gap-[3px]" aria-hidden="true">
       {[1, 2, 3, 4, 5].map((i) => (
@@ -228,9 +228,11 @@ function measureTextWidth(text: string, font: string) {
 function ChoiceOptions({
   question,
   highlightKeyword,
+  markCorrect = false,
 }: {
   question: IQuestion;
   highlightKeyword?: string;
+  markCorrect?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [layout, setLayout] = useState<ChoiceOptionsLayout>("single-column");
@@ -291,6 +293,14 @@ function ChoiceOptions({
   }
 
   const entries = Object.entries(question.options as Record<string, string>);
+  const correctRaw = question.answer?.correct;
+  const correctKeys = new Set<string>(
+    Array.isArray(correctRaw)
+      ? correctRaw.map(String)
+      : typeof correctRaw === "string" && correctRaw
+        ? [correctRaw]
+        : [],
+  );
   const layoutClass =
     layout === "single-row"
       ? "flex flex-nowrap gap-x-6 gap-y-0.5 overflow-hidden"
@@ -300,19 +310,28 @@ function ChoiceOptions({
 
   return (
     <div ref={containerRef} className={cn("mt-2", layoutClass)}>
-      {entries.map(([key, value]) => (
-        <span
-          key={key}
-          className={cn(
-            "text-sm text-muted-foreground",
-            layout === "single-row"
-              ? "min-w-0 whitespace-nowrap"
-              : "min-w-0 break-words",
-          )}
-        >
-          {key}. {renderHighlightedLatexText(value, highlightKeyword)}
-        </span>
-      ))}
+      {entries.map(([key, value]) => {
+        const isCorrect = markCorrect && correctKeys.has(key);
+        return (
+          <span
+            key={key}
+            className={cn(
+              "inline-flex items-baseline gap-1 text-sm",
+              isCorrect ? "font-semibold text-primary" : "text-muted-foreground",
+              layout === "single-row"
+                ? "min-w-0 whitespace-nowrap"
+                : "min-w-0 break-words",
+            )}
+          >
+            {isCorrect ? (
+              <Check size={14} className="shrink-0 translate-y-0.5 text-primary" />
+            ) : null}
+            <span className="min-w-0">
+              {key}. {renderHighlightedLatexText(value, highlightKeyword)}
+            </span>
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -328,6 +347,10 @@ export function QuestionPreviewCard({
   defaultExpanded = false,
   hideTypeBadge = false,
   hideAnswer = false,
+  hideScoreAndDifficulty = false,
+  hideHeader = false,
+  hideMeta = false,
+  markChoiceAnswer = false,
   highlightKeyword,
   expandOnHover = false,
   hoverDetailDelay = 180,
@@ -347,6 +370,10 @@ export function QuestionPreviewCard({
   defaultExpanded?: boolean;
   hideTypeBadge?: boolean;
   hideAnswer?: boolean;
+  hideScoreAndDifficulty?: boolean;
+  hideHeader?: boolean;
+  hideMeta?: boolean;
+  markChoiceAnswer?: boolean;
   highlightKeyword?: string;
   expandOnHover?: boolean;
   hoverDetailDelay?: number;
@@ -390,12 +417,19 @@ export function QuestionPreviewCard({
     (question.answer?.correct as string | undefined);
   const codeLanguage = (question.content?.language as string) || "python";
   const hasAnswerText = answerText !== "" && answerText !== "-";
+  // 选择题在选项上直接标记答案时，不再单独展示答案/参考答案区。
+  const choiceAnswerInline = markChoiceAnswer && normalizedType === "choice";
   const shouldShowAnswer =
     showDetails &&
+    !choiceAnswerInline &&
     (!hideAnswer || hasAnswerText || (isCode && Boolean(codeAnswer)));
 
   const showSimpleAnswer =
-    !showDetails && !hideAnswer && !isCode && hasAnswerText;
+    !showDetails &&
+    !hideAnswer &&
+    !isCode &&
+    hasAnswerText &&
+    !choiceAnswerInline;
 
   const updatedLabel = (() => {
     try {
@@ -477,6 +511,7 @@ export function QuestionPreviewCard({
       {...props}
     >
       {/* header */}
+      {!hideHeader ? (
       <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-1 sm:px-5">
         {typeof index === "number" ? (
           <span className="min-w-[1.25rem] font-serif text-lg font-bold tabular-nums text-foreground">
@@ -496,23 +531,28 @@ export function QuestionPreviewCard({
 
         <div className="flex-1" />
 
-        <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap">
-          <span className="hidden whitespace-nowrap text-xs text-muted-foreground sm:inline">
-            {difficultyLabel}
-          </span>
-          <DifficultyBars level={question.difficulty} />
-        </span>
-        <span className="h-4 w-px bg-border" />
-        <span className="whitespace-nowrap font-serif text-sm font-semibold tabular-nums text-foreground">
-          {question.score}
-          <span className="ml-0.5 text-xs font-medium text-muted-foreground">
-            分
-          </span>
-        </span>
+        {!hideScoreAndDifficulty ? (
+          <>
+            <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap">
+              <span className="hidden whitespace-nowrap text-xs text-muted-foreground sm:inline">
+                {difficultyLabel}
+              </span>
+              <DifficultyBars level={question.difficulty} />
+            </span>
+            <span className="h-4 w-px bg-border" />
+            <span className="whitespace-nowrap font-serif text-sm font-semibold tabular-nums text-foreground">
+              {question.score}
+              <span className="ml-0.5 text-xs font-medium text-muted-foreground">
+                分
+              </span>
+            </span>
+          </>
+        ) : null}
         {trailing ? (
           <span className="ml-1 inline-flex items-center">{trailing}</span>
         ) : null}
       </div>
+      ) : null}
 
       {/* body */}
       <div className="px-2 py-2 sm:px-5">
@@ -533,6 +573,7 @@ export function QuestionPreviewCard({
         <ChoiceOptions
           question={question}
           highlightKeyword={highlightKeyword}
+          markCorrect={markChoiceAnswer}
         />
 
         {recognitionMeta ? (
@@ -620,8 +661,9 @@ export function QuestionPreviewCard({
                 </div>
               ) : null}
 
-              {question.tags.length > 0 ||
-              question.knowledge_points.length > 0 ? (
+              {!hideMeta &&
+              (question.tags.length > 0 ||
+                question.knowledge_points.length > 0) ? (
                 <div className="flex flex-wrap items-center gap-1.5">
                   {question.tags.length > 0 ? (
                     <>
@@ -687,7 +729,8 @@ export function QuestionPreviewCard({
               ) : null}
 
               {/* footer */}
-              {updatedLabel || question.usage_count > 0 || actions ? (
+              {!hideMeta &&
+              (updatedLabel || question.usage_count > 0 || actions) ? (
                 <div className="flex items-center justify-between gap-3 border-t border-border pt-3">
                   <span className="inline-flex items-center gap-2 whitespace-nowrap text-xs text-muted-foreground">
                     {updatedLabel ? <span>更新于 {updatedLabel}</span> : null}

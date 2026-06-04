@@ -31,6 +31,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
+import { exportExam } from "@/lib/exam-export";
 import { cn } from "@/lib/utils";
 import { examStatusOptions } from "./components/ExamStatusBadge";
 import { ExamCard, ExamCardEmptyState } from "./components/ExamCard";
@@ -65,6 +66,22 @@ export function ExamList() {
   const { mutate: deleteExam } = useDelete();
   const { mutate: updateExam } = useUpdate();
   const { toast } = useToast();
+
+  const handleExportExam = async (
+    examId: string,
+    format: "docx" | "pdf",
+    answers: boolean,
+  ) => {
+    try {
+      await exportExam(examId, { format, answers });
+    } catch (error) {
+      toast({
+        title: "导出失败",
+        description: getErrorMessage(error, "请稍后重试"),
+        variant: "destructive",
+      });
+    }
+  };
 
   const changeStatus = (examId: string, status: string, title?: string) => {
     const successTitle = status === "closed" ? "关闭成功" : "状态更新成功";
@@ -311,6 +328,12 @@ export function ExamList() {
               onAnalysis={() => navigate(`/exams/${exam.id}/analysis`)}
               onClose={() => setCloseTarget(exam)}
               onDelete={() => setDeleteTarget(exam)}
+              onExport={
+                exam.category === "exam"
+                  ? (format, answers) =>
+                      handleExportExam(exam.id, format, answers)
+                  : undefined
+              }
             />
           ))}
         </div>

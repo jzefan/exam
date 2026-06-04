@@ -1,15 +1,18 @@
 """Exam API router."""
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Literal
+from urllib.parse import quote
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.auth.dependencies import CurrentUser, user_has_role
+from app.exams.paper_export import build_exam_paper, render_docx, render_pdf
 from app.common.resource_access import can_write_owned_resource
 from app.common.pagination import (
     PaginationParams,
@@ -156,10 +159,7 @@ async def _get_writable_exam_or_404(
 
 def _build_exam_response(exam: Exam, student_id: uuid.UUID | None = None) -> ExamResponse:
     submitted = sum(1 for s in exam.exam_students if s.submitted_at is not None)
-    has_student_history = any(
-        s.started_at is not None or s.submitted_at is not None
-        for s in exam.exam_students
-    )
+    has_student_history = any(s.started_at is not None or s.submitted_at is not None for s in exam.exam_students)
     knowledge_points_by_id: dict[uuid.UUID, object] = {}
     for exam_question in exam.exam_questions:
         question = exam_question.question
@@ -168,9 +168,7 @@ def _build_exam_response(exam: Exam, student_id: uuid.UUID | None = None) -> Exa
         for knowledge_point in question.knowledge_points or []:
             knowledge_points_by_id.setdefault(knowledge_point.id, knowledge_point)
     exam_student = (
-        next((s for s in exam.exam_students if s.student_id == student_id), None)
-        if student_id is not None
-        else None
+        next((s for s in exam.exam_students if s.student_id == student_id), None) if student_id is not None else None
     )
     return ExamResponse(
         id=exam.id,
@@ -249,9 +247,7 @@ def _build_detail_response(exam: Exam) -> ExamDetailResponse:
     )
 
 
-async def _sync_questions(
-    db: AsyncSession, exam_id: uuid.UUID, question_items: list[ExamQuestionItem]
-) -> None:
+async def _sync_questions(db: AsyncSession, exam_id: uuid.UUID, question_items: list[ExamQuestionItem]) -> None:
     await db.execute(delete(ExamQuestion).where(ExamQuestion.exam_id == exam_id))
     for i, item in enumerate(question_items):
         db.add(
@@ -264,12 +260,8 @@ async def _sync_questions(
         )
 
 
-async def _sync_students(
-    db: AsyncSession, exam_id: uuid.UUID, student_ids: list[uuid.UUID]
-) -> None:
-    existing_rows = (
-        await db.execute(select(ExamStudent).where(ExamStudent.exam_id == exam_id))
-    ).scalars().all()
+async def _sync_students(db: AsyncSession, exam_id: uuid.UUID, student_ids: list[uuid.UUID]) -> None:
+    existing_rows = (await db.execute(select(ExamStudent).where(ExamStudent.exam_id == exam_id))).scalars().all()
     existing_by_student = {row.student_id: row for row in existing_rows}
     requested_ids = set(student_ids)
 
@@ -316,13 +308,10 @@ async def list_exams(
         try:
             root_kp_id = uuid.UUID(root_kp_id_str)
             kp_anchor = (
-                select(KnowledgePoint.id)
-                .where(KnowledgePoint.id == root_kp_id)
-                .cte(name="kp_subtree", recursive=True)
+                select(KnowledgePoint.id).where(KnowledgePoint.id == root_kp_id).cte(name="kp_subtree", recursive=True)
             )
             kp_subtree = kp_anchor.union_all(
-                select(KnowledgePoint.id)
-                .where(KnowledgePoint.parent_id == kp_anchor.c.id)
+                select(KnowledgePoint.id).where(KnowledgePoint.parent_id == kp_anchor.c.id)
             )
             matching_exam_ids = (
                 select(ExamQuestion.exam_id)
@@ -355,6 +344,43 @@ async def get_exam(
     return _build_detail_response(exam)
 
 
+_EXPORT_MEDIA_TYPES = {
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "pdf": "application/pdf",
+}
+
+
+@router.get("/{exam_id}/export")
+async def export_exam_paper(
+    exam_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+    export_format: Annotated[Literal["docx", "pdf"], Query(alias="format")] = "docx",
+    answers: bool = False,
+) -> Response:
+    """Export an exam as a standard-format paper (docx/pdf, with/without answers)."""
+    exam = await _get_visible_exam_or_404(db, exam_id, user)
+    paper = await build_exam_paper(
+        db,
+        exam,
+        with_answers=answers,
+        school_name=settings.exam_export_school_name,
+        exam_form=settings.exam_export_form,
+    )
+    content = render_docx(paper) if export_format == "docx" else render_pdf(paper)
+
+    variant = "（含答案）" if answers else "（空白）"
+    name_parts = [p for p in (paper.course_name, paper.class_label, paper.exam_title) if p]
+    base = "-".join(name_parts) or "试卷"
+    filename = f"{base}{variant}.{export_format}"
+    disposition = f'attachment; filename="exam-{exam_id}.{export_format}"; ' f"filename*=UTF-8''{quote(filename)}"
+    return Response(
+        content=content,
+        media_type=_EXPORT_MEDIA_TYPES[export_format],
+        headers={"Content-Disposition": disposition},
+    )
+
+
 @router.post("", response_model=ExamDetailResponse, status_code=status.HTTP_201_CREATED)
 async def create_exam(
     body: ExamCreate,
@@ -385,15 +411,10 @@ async def create_exam(
 
     # 在某个学期下创建考试/作业时，直接归档到该学期，无需再手动归档。
     if body.course_semester_id is not None:
-        db.add(
-            ExamSemesterAssignment(
-                exam_id=exam.id, course_semester_id=body.course_semester_id
-            )
-        )
+        db.add(ExamSemesterAssignment(exam_id=exam.id, course_semester_id=body.course_semester_id))
 
     question_items = body.question_items or [
-        ExamQuestionItem(question_id=qid, order=i, score_override=None)
-        for i, qid in enumerate(body.question_ids)
+        ExamQuestionItem(question_id=qid, order=i, score_override=None) for i, qid in enumerate(body.question_ids)
     ]
     if question_items:
         for i, item in enumerate(question_items):
@@ -438,8 +459,7 @@ async def update_exam(
 
     if question_items is not None:
         normalized_question_items = [
-            ExamQuestionItem(**item) if isinstance(item, dict) else item
-            for item in question_items
+            ExamQuestionItem(**item) if isinstance(item, dict) else item for item in question_items
         ]
         if not has_explicit_total_score:
             computed_total_score = sum(float(item.score_override or 0) for item in normalized_question_items)
@@ -670,11 +690,7 @@ async def get_student_result_for_teacher(
         answer_feedback = (answer.feedback or {}) if answer else {}
         grading_failed = bool(answer_feedback.get("grading_failed"))
         needs_human_review = bool(answer_feedback.get("needs_human_review"))
-        grading_pending = (
-            is_pending_ai
-            and question.type.value in _SUBJECTIVE_TYPES
-            and not grading_failed
-        )
+        grading_pending = is_pending_ai and question.type.value in _SUBJECTIVE_TYPES and not grading_failed
         question_items.append(
             StudentExamResultQuestionResponse(
                 question_id=question.id,
@@ -683,7 +699,9 @@ async def get_student_result_for_teacher(
                 title=question.title,
                 content=_build_student_question_content(question),
                 options=question.options,
-                total_score=exam_question.score_override if exam_question.score_override is not None else question.score,
+                total_score=(
+                    exam_question.score_override if exam_question.score_override is not None else question.score
+                ),
                 score_awarded=answer.score_awarded if answer else 0.0,
                 is_correct=answer.is_correct if answer else False,
                 answer_content=answer.answer_content if answer else {},
@@ -710,9 +728,7 @@ async def get_student_result_for_teacher(
         grading_status=exam_student.grading_status,
         can_view=True,
         blocked_reason=(
-            "主观题正在进行 AI 评分，主观题分数将在评估完成后更新。客观题分数已可见。"
-            if is_pending_ai
-            else None
+            "主观题正在进行 AI 评分，主观题分数将在评估完成后更新。客观题分数已可见。" if is_pending_ai else None
         ),
         questions=question_items,
     )
@@ -802,7 +818,9 @@ async def update_student_question_score_for_teacher(
     if exam_question is None or exam_question.question is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found in this exam")
 
-    total_score = exam_question.score_override if exam_question.score_override is not None else exam_question.question.score
+    total_score = (
+        exam_question.score_override if exam_question.score_override is not None else exam_question.question.score
+    )
     total_score = float(total_score or 0.0)
     score_awarded = round(float(body.score_awarded), 2)
     if score_awarded > total_score:
@@ -895,9 +913,7 @@ async def update_student_question_score_for_teacher(
 
     if latest_submission_id is not None:
         submission = (
-            await db.execute(
-                select(StudentExamSubmission).where(StudentExamSubmission.id == latest_submission_id)
-            )
+            await db.execute(select(StudentExamSubmission).where(StudentExamSubmission.id == latest_submission_id))
         ).scalar_one_or_none()
         if submission is not None:
             submission.objective_score = exam_student.objective_score
@@ -979,9 +995,7 @@ def _median(values: list[float]) -> float | None:
     return (ordered[mid - 1] + ordered[mid]) / 2
 
 
-def _build_analysis_response(
-    exam: Exam, answers: list[StudentExamAnswer]
-) -> ExamAnalysisResponse:
+def _build_analysis_response(exam: Exam, answers: list[StudentExamAnswer]) -> ExamAnalysisResponse:
     total_score = exam.total_score or 0.0
     students = list(exam.exam_students)
     exam_questions = sorted(exam.exam_questions, key=lambda q: q.order)
@@ -1042,12 +1056,8 @@ def _build_analysis_response(
         q_answers = answers_by_question.get(eq.question_id, [])
         attempt_count = len(q_answers)
         correct_count = sum(1 for a in q_answers if a.is_correct)
-        avg_score = (
-            sum(a.score_awarded for a in q_answers) / attempt_count if attempt_count else None
-        )
-        max_score = eq.score_override if eq.score_override is not None else (
-            eq.question.score if eq.question else 0.0
-        )
+        avg_score = sum(a.score_awarded for a in q_answers) / attempt_count if attempt_count else None
+        max_score = eq.score_override if eq.score_override is not None else (eq.question.score if eq.question else 0.0)
         question_rows.append(
             QuestionStatRow(
                 question_id=eq.question_id,
@@ -1074,9 +1084,7 @@ def _build_analysis_response(
         else:
             rate = sum(1 for a in q_answers if a.is_correct) / len(q_answers)
         for kp in question.knowledge_points or []:
-            bucket = kp_accumulator.setdefault(
-                kp.id, {"name": kp.name, "count": 0, "rate_sum": 0.0, "rate_n": 0}
-            )
+            bucket = kp_accumulator.setdefault(kp.id, {"name": kp.name, "count": 0, "rate_sum": 0.0, "rate_n": 0})
             bucket["count"] = int(bucket["count"]) + 1
             if rate is not None:
                 bucket["rate_sum"] = float(bucket["rate_sum"]) + rate
@@ -1131,9 +1139,7 @@ async def get_exam_analysis(
     exam = await _get_writable_exam_or_404(db, exam_id, user)
 
     answer_rows = (
-        await db.execute(
-            select(StudentExamAnswer).where(StudentExamAnswer.exam_id == exam_id)
-        )
-    ).scalars().all()
+        (await db.execute(select(StudentExamAnswer).where(StudentExamAnswer.exam_id == exam_id))).scalars().all()
+    )
 
     return _build_analysis_response(exam, list(answer_rows))

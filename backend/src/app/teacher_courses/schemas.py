@@ -85,7 +85,6 @@ class TeacherCourseMaterial(BaseModel):
     description: str | None = None
     source: str | None = None
     file_path: str | None = None
-    question_count: int = 0
     created_at: datetime
     updated_at: datetime
 

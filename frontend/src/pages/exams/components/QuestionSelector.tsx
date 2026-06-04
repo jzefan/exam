@@ -492,6 +492,7 @@ export function QuestionSelector({
                         question={q}
                         mode="detailed"
                         defaultExpanded
+                        markChoiceAnswer
                         className={cn(
                           "flex-1 transition-all",
                           isSelected ? "border-primary/50 ring-1 ring-primary/20" : "",
@@ -558,6 +559,7 @@ export function QuestionSelector({
             question={previewQuestion}
             mode="detailed"
             defaultExpanded
+            markChoiceAnswer
             className="border-0 shadow-none"
           />
         </div>

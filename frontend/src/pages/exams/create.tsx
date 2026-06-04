@@ -18,8 +18,8 @@ function createInitialForm(): ExamFormValues {
     description: "",
     start_time: "",
     end_time: "",
-    duration_minutes: 60,
-    total_score: 100,
+    duration_minutes: 90,
+    total_score: 0,
     status: "draft",
     position_id: null,
     max_switch_count: 0,
@@ -32,6 +32,22 @@ function createInitialForm(): ExamFormValues {
     student_ids: [],
     public_link_enabled: false,
   };
+}
+
+function getNextCourseExamTitle(courseName: string | undefined, existingTitles: string[] = []) {
+  const baseTitle = `${courseName?.trim() || "课程"}-考试`;
+  let maxSuffix = existingTitles.includes(baseTitle) ? 0 : -1;
+  const escapedBase = baseTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`^${escapedBase}-(\\d+)$`);
+
+  for (const title of existingTitles) {
+    const match = title.match(pattern);
+    if (match) {
+      maxSuffix = Math.max(maxSuffix, Number(match[1]));
+    }
+  }
+
+  return maxSuffix < 0 ? baseTitle : `${baseTitle}-${maxSuffix + 1}`;
 }
 
 interface PublicLinkResponse {
@@ -59,14 +75,24 @@ export function ExamCreate() {
     successTo?: string;
     courseKpId?: string;
     courseSemesterId?: string;
+    courseName?: string;
+    existingExamTitles?: string[];
+    defaultBankName?: string;
   };
   const [searchParams] = useSearchParams();
   const { mutate: create, mutation } = useCreate();
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [initialValues, setInitialValues] = useState<ExamFormValues>(() => createInitialForm());
+  const [initialValues, setInitialValues] = useState<ExamFormValues>(() => ({
+    ...createInitialForm(),
+    title: navState.courseName
+      ? getNextCourseExamTitle(navState.courseName, navState.existingExamTitles)
+      : "",
+  }));
   const [seedLoading, setSeedLoading] = useState(false);
   const [wizardInitialStep, setWizardInitialStep] = useState(0);
-  const [wizardDefaultBankName, setWizardDefaultBankName] = useState<string | undefined>(undefined);
+  const [wizardDefaultBankName, setWizardDefaultBankName] = useState<string | undefined>(
+    navState.defaultBankName,
+  );
   const { toast } = useToast();
   const seedPaperId = searchParams.get("paper_id");
   const seedKey = searchParams.get("seed_key");
@@ -94,7 +120,9 @@ export function ExamCreate() {
     setInitialValues({
       ...createInitialForm(),
       category: "exam",
-      title: payload.title ?? "",
+      title: navState.courseName
+        ? getNextCourseExamTitle(navState.courseName, navState.existingExamTitles)
+        : (payload.title ?? ""),
       description: payload.description ?? "",
       question_mode: "auto",
       question_ids: payload.question_items.map((item) => item.question_id),
@@ -112,8 +140,10 @@ export function ExamCreate() {
     const courseNameMatch = (payload.description ?? "").match(/「(.+?)」/);
     if (courseNameMatch?.[1]) {
       setWizardDefaultBankName(`${courseNameMatch[1]}-题库`);
+    } else if (navState.defaultBankName) {
+      setWizardDefaultBankName(navState.defaultBankName);
     }
-  }, [seedKey, toast]);
+  }, [navState.courseName, navState.defaultBankName, navState.existingExamTitles, seedKey, toast]);
 
   useEffect(() => {
     let cancelled = false;
@@ -126,7 +156,12 @@ export function ExamCreate() {
     }
     if (!seedPaperId) {
       setSeedLoading(false);
-      setInitialValues(createInitialForm());
+      setInitialValues({
+        ...createInitialForm(),
+        title: navState.courseName
+          ? getNextCourseExamTitle(navState.courseName, navState.existingExamTitles)
+          : "",
+      });
       setSubmitError(null);
       return () => {
         cancelled = true;
@@ -176,7 +211,7 @@ export function ExamCreate() {
     return () => {
       cancelled = true;
     };
-  }, [seedPaperId, toast]);
+  }, [navState.courseName, navState.existingExamTitles, seedKey, seedPaperId, toast]);
 
   const handleSubmit = (values: ExamFormValues) => {
     setSubmitError(null);
@@ -254,6 +289,7 @@ export function ExamCreate() {
       onSubmit={handleSubmit}
       initialStep={wizardInitialStep}
       defaultAutoBankName={wizardDefaultBankName}
+      defaultBankName={wizardDefaultBankName}
     />
   );
 }

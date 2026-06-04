@@ -100,17 +100,16 @@ import type { KnowledgeImportPath } from "@/pages/knowledge/import-knowledge-uti
 import { apiRequest } from "@/pages/grading/api";
 import {
   addCourseMaterialLink,
-  clearCourseMaterialQuestions,
   archiveExamToSemester,
   clearCourseKnowledgePoints,
   clearCourseQuestions,
   deleteCourseMaterial,
+  exportExam,
   getCourseAssignmentScoreSummary,
   getCourseKnowledgeTree,
   getTeacherCourse,
   listCourseAssignments,
   listCourseExams,
-  listCourseMaterialQuestions,
   listCourseMaterials,
   listCourseQuestions,
   listCourseSemesters,
@@ -187,7 +186,6 @@ type CourseMaterialGeneratedQuestion = {
 };
 
 type CourseMaterialAIGenerateState = CourseMaterialExtractedContent & {
-  materialId: string;
   materialTitle: string;
   knowledgePointId: string;
   knowledgePointName: string;
@@ -568,6 +566,21 @@ function filterQuestionsForKnowledgeNode(
   );
 }
 
+function buildCourseQuestionCountByNodeId(
+  node: CourseKnowledgeNode | null,
+): Record<string, number> {
+  const result: Record<string, number> = {};
+  const visit = (current: CourseKnowledgeNode | null) => {
+    if (!current) return;
+    result[current.id] = current.question_count;
+    for (const child of current.children) {
+      visit(child);
+    }
+  };
+  visit(node);
+  return result;
+}
+
 function courseQuestionBankName(courseName: string | undefined) {
   const normalized = courseName?.trim();
   return normalized ? `${normalized.slice(0, 197)}-题库` : "主知识对应题库";
@@ -577,12 +590,12 @@ function MaterialsTab({
   materials,
   canWrite,
   scopeLabel = "整门课程范围 · 含子知识点资料",
+  questionCountByNodeId,
   onOpenAddLink,
   onPickUpload,
   onOpenBatchGenerate,
   onViewQuestions,
   onPublishAssignment,
-  onDeleteQuestions,
   onAssociate,
   onGenerateFrom,
   onDelete,
@@ -590,12 +603,12 @@ function MaterialsTab({
   materials: TeacherCourseMaterial[];
   canWrite: boolean;
   scopeLabel?: string;
+  questionCountByNodeId: Record<string, number>;
   onOpenAddLink: () => void;
   onPickUpload: () => void;
   onOpenBatchGenerate: () => void;
   onViewQuestions: (material: TeacherCourseMaterial) => void;
   onPublishAssignment: (material: TeacherCourseMaterial) => void;
-  onDeleteQuestions: (material: TeacherCourseMaterial) => void;
   onAssociate: (material: TeacherCourseMaterial) => void;
   onGenerateFrom: (material: TeacherCourseMaterial) => void;
   onDelete: (material: TeacherCourseMaterial) => void;
@@ -666,7 +679,7 @@ function MaterialsTab({
           {filtered.map((material) => {
             const canGenerate =
               canGenerateQuestionsFromCourseMaterial(material);
-            const questionCount = material.question_count ?? 0;
+            const questionCount = questionCountByNodeId[material.node_id] ?? 0;
 
             return (
               <div
@@ -711,7 +724,7 @@ function MaterialsTab({
                       <button
                         type="button"
                         className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-background px-2 py-0.5 font-sans text-[11px] font-semibold lining-nums tabular-nums text-muted-foreground transition hover:border-primary/40 hover:text-primary"
-                        title={`查看「${material.node_name ?? material.title}」下的题目`}
+                        title={`查看「${material.node_name ?? material.title}」知识点下的题目`}
                       >
                         <BookOpen size={11} />
                         {questionCount} 题
@@ -732,14 +745,6 @@ function MaterialsTab({
                           >
                             <FilePlus2 size={14} className="mr-2" />
                             发布作业
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            className="text-destructive focus:text-destructive"
-                            onClick={() => onDeleteQuestions(material)}
-                          >
-                            <Trash2 size={14} className="mr-2" />
-                            删除题目
                           </DropdownMenuItem>
                         </>
                       ) : null}
@@ -1755,6 +1760,7 @@ function ExamRows({
   onClose,
   onDelete,
   onCreate,
+  onExport,
 }: {
   items: TeacherCourseExam[];
   kind: "exam" | "assignment";
@@ -1766,6 +1772,11 @@ function ExamRows({
   onClose: (exam: TeacherCourseExam) => void;
   onDelete: (exam: TeacherCourseExam) => void;
   onCreate: () => void;
+  onExport?: (
+    exam: TeacherCourseExam,
+    format: "docx" | "pdf",
+    answers: boolean,
+  ) => void;
 }) {
   const navigate = useNavigate();
   const header =
@@ -1892,6 +1903,11 @@ function ExamRows({
             onAnalysis={() => navigate(`/exams/${item.id}/analysis`)}
             onClose={() => onClose(item)}
             onDelete={() => onDelete(item)}
+            onExport={
+              onExport
+                ? (format, answers) => onExport(item, format, answers)
+                : undefined
+            }
             extraBadges={semesterBadge}
             extraActions={archiveMenu}
             canManage={canWrite}
@@ -1911,6 +1927,8 @@ function QuestionsTab({
   knowledgeFilterOptions,
   knowledgeFilterNodeId,
   onKnowledgeFilterChange,
+  existingExamTitles,
+  knowledgeTree,
   canWrite,
   showClearAllQuestions = true,
   onPublishedExamOrAssignment,
@@ -1964,6 +1982,9 @@ function QuestionsTab({
   const selectedQuestionCount = selectedQuestionIds.length;
   const selectedQuestionsInOrder = filtered.filter((question) =>
     selectedQuestionIds.includes(question.id),
+  );
+  const selectedKnowledgeOption = knowledgeFilterOptions.find(
+    (item) => item.id === knowledgeFilterNodeId,
   );
   const defaultCreateTitle = (() => {
     const d = new Date();
@@ -2087,6 +2108,19 @@ function QuestionsTab({
                     backLabel: "返回课程题目",
                     successTo: `/courses/${courseId}?tab=exams`,
                     courseKpId: targetCourseKpId,
+                    courseName,
+                    existingExamTitles,
+                    defaultBankName: courseQuestionBankName(courseName),
+                    mainKnowledgePointId: knowledgeTree?.id ?? courseId,
+                    mainKnowledgePointName: courseName,
+                    ...(selectedKnowledgeOption
+                      ? {
+                          knowledgePointId: selectedKnowledgeOption.id,
+                          knowledgePointName: selectedKnowledgeOption.name,
+                          knowledgePointPath: selectedKnowledgeOption.path,
+                          initialStep: 1,
+                        }
+                      : {}),
                     ...(courseSemesterId
                       ? { courseSemesterId }
                       : {}),
@@ -3617,8 +3651,6 @@ export function CourseDetailPage() {
   const [questionFilterNodeId, setQuestionFilterNodeId] = useState<
     string | null
   >(null);
-  const [questionFilterMaterial, setQuestionFilterMaterial] =
-    useState<TeacherCourseMaterial | null>(null);
   const [assignmentFilterNodeId, setAssignmentFilterNodeId] = useState<
     string | null
   >(null);
@@ -3627,10 +3659,6 @@ export function CourseDetailPage() {
   const [deletingKnowledgeNode, setDeletingKnowledgeNode] = useState(false);
   const [materialToDelete, setMaterialToDelete] =
     useState<TeacherCourseMaterial | null>(null);
-  const [materialQuestionsToDelete, setMaterialQuestionsToDelete] =
-    useState<TeacherCourseMaterial | null>(null);
-  const [deletingMaterialQuestions, setDeletingMaterialQuestions] =
-    useState(false);
   const [clearKpOpen, setClearKpOpen] = useState(false);
   const [clearingKp, setClearingKp] = useState(false);
   const [clearQuestionsOpen, setClearQuestionsOpen] = useState(false);
@@ -3703,10 +3731,12 @@ export function CourseDetailPage() {
   );
   const filteredQuestions = useMemo(
     () =>
-      questionFilterMaterial
-        ? questions
-        : filterQuestionsForKnowledgeNode(questions, tree, questionFilterNodeId),
-    [questions, questionFilterMaterial, questionFilterNodeId, tree],
+      filterQuestionsForKnowledgeNode(questions, tree, questionFilterNodeId),
+    [questions, questionFilterNodeId, tree],
+  );
+  const questionCountByNodeId = useMemo(
+    () => buildCourseQuestionCountByNodeId(tree),
+    [tree],
   );
   const questionKnowledgeFilterOptions = useMemo(
     () => flattenCourseKnowledgeNodes(tree).filter((item) => item.depth > 0),
@@ -4427,40 +4457,6 @@ export function CourseDetailPage() {
     }
   }, [materialToDelete, refreshMaterialsAndTree, toast]);
 
-  const handleDeleteMaterialQuestions = useCallback(async () => {
-    if (!id || !materialQuestionsToDelete) return;
-    setDeletingMaterialQuestions(true);
-    try {
-      const result = await clearCourseMaterialQuestions(
-        id,
-        materialQuestionsToDelete.id,
-      );
-      setMaterialQuestionsToDelete(null);
-      await Promise.all([refreshMaterialsAndTree(), refreshCourseSummary()]);
-      toast({
-        title: "已删除资料题目",
-        description:
-          result.deleted > 0
-            ? `共处理 ${result.deleted} 道题：彻底删除 ${result.hard_deleted} 道，软删除 ${result.soft_deleted} 道。已用于考试或练习的题目仍可在对应记录中查看。`
-            : "这份资料下没有可删除的题目。",
-      });
-    } catch (err) {
-      toast({
-        title: "删除题目失败",
-        description: err instanceof Error ? err.message : "请稍后重试",
-        variant: "destructive",
-      });
-    } finally {
-      setDeletingMaterialQuestions(false);
-    }
-  }, [
-    id,
-    materialQuestionsToDelete,
-    refreshCourseSummary,
-    refreshMaterialsAndTree,
-    toast,
-  ]);
-
   const handleClearKnowledgePoints = useCallback(async () => {
     if (!id) return;
     setClearingKp(true);
@@ -4549,7 +4545,6 @@ export function CourseDetailPage() {
           : [course?.name, fallbackNodeName].filter(Boolean).join(" / ");
 
       setMaterialAiGenerateState({
-        materialId: material.id,
         materialTitle: material.title,
         knowledgePointId: material.node_id,
         knowledgePointName,
@@ -4684,7 +4679,6 @@ export function CourseDetailPage() {
             tag_ids: [],
             knowledge_point_ids: [material.node_id],
           })),
-          source_material_id: material.id,
         }),
       });
 
@@ -4965,6 +4959,10 @@ export function CourseDetailPage() {
           backLabel: "返回课程详情",
           successTo: `/courses/${id}?tab=${kind === "exam" ? "exams" : "assignments"}`,
           courseKpId: options?.courseKpId ?? id,
+          ...(course?.name ? { courseName: course.name } : {}),
+          ...(kind === "exam"
+            ? { existingExamTitles: exams.map((exam) => exam.title) }
+            : {}),
           ...(semesterFilter ? { courseSemesterId: semesterFilter } : {}),
           ...(options?.knowledgePointId
             ? {
@@ -4988,7 +4986,7 @@ export function CourseDetailPage() {
         },
       });
     },
-    [id, navigate, semesterFilter],
+    [course?.name, exams, id, navigate, semesterFilter],
   );
 
   const handlePublishAssignmentForKnowledgeNode = useCallback(
@@ -5041,6 +5039,25 @@ export function CourseDetailPage() {
       });
     },
     [goCreateExamOrAssignment, course?.name, tree?.id],
+  );
+
+  const handleExportExam = useCallback(
+    async (
+      exam: TeacherCourseExam,
+      format: "docx" | "pdf",
+      answers: boolean,
+    ) => {
+      try {
+        await exportExam(exam.id, { format, answers });
+      } catch (err) {
+        toast({
+          title: "导出失败",
+          description: err instanceof Error ? err.message : "请稍后重试",
+          variant: "destructive",
+        });
+      }
+    },
+    [toast],
   );
 
   const loadAssignmentScoreSummary = useCallback(async () => {
@@ -5247,6 +5264,11 @@ export function CourseDetailPage() {
                           backLabel: "返回课程详情",
                           successTo: `/courses/${id}?tab=exams`,
                           courseKpId: id,
+                          courseName: course.name,
+                          existingExamTitles: exams.map((exam) => exam.title),
+                          defaultBankName: courseQuestionBankName(course.name),
+                          mainKnowledgePointId: tree?.id ?? id,
+                          mainKnowledgePointName: course.name,
                           ...(semesterFilter
                             ? { courseSemesterId: semesterFilter }
                             : {}),
@@ -5487,40 +5509,6 @@ export function CourseDetailPage() {
               onClick={() => void handleDeleteMaterial()}
             >
               确认删除
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <AlertDialog
-        open={materialQuestionsToDelete !== null}
-        onOpenChange={(next) => {
-          if (!next && !deletingMaterialQuestions) {
-            setMaterialQuestionsToDelete(null);
-          }
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>删除资料生成的题目</AlertDialogTitle>
-            <AlertDialogDescription>
-              确认删除《{materialQuestionsToDelete?.title}
-              》生成的题目？未被考试或练习使用过的题目会被彻底删除；已被使用过的题目会被软删除，仍可在原考试或练习记录中查看。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={deletingMaterialQuestions}>
-              取消
-            </AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              disabled={deletingMaterialQuestions}
-              onClick={(event) => {
-                event.preventDefault();
-                void handleDeleteMaterialQuestions();
-              }}
-            >
-              {deletingMaterialQuestions ? "删除中…" : "确认删除"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -5808,6 +5796,7 @@ export function CourseDetailPage() {
                     <MaterialsTab
                       materials={filteredMaterials}
                       canWrite={course.can_write}
+                      questionCountByNodeId={questionCountByNodeId}
                       scopeLabel={
                         materialFilterNode
                           ? `「${materialFilterNode.name}」目录范围 · 含下级资料`
@@ -5818,7 +5807,6 @@ export function CourseDetailPage() {
                       onOpenBatchGenerate={() => setBatchGenerateOpen(true)}
                       onViewQuestions={handleViewQuestionsForMaterial}
                       onPublishAssignment={handlePublishAssignmentForMaterial}
-                      onDeleteQuestions={setMaterialQuestionsToDelete}
                       onAssociate={setMaterialToAssociate}
                       onGenerateFrom={handleGenerateFromMaterial}
                       onDelete={(material) => setMaterialToDelete(material)}
@@ -5840,6 +5828,7 @@ export function CourseDetailPage() {
                     onClose={(exam) => setExamToClose(exam)}
                     onDelete={(exam) => setExamToDelete(exam)}
                     onCreate={() => goCreateExamOrAssignment("exam")}
+                    onExport={handleExportExam}
                   />
                 )}
               </TabsContent>
@@ -6018,7 +6007,6 @@ export function CourseDetailPage() {
             knowledgePointName={materialAiGenerateState.knowledgePointName}
             knowledgePointPath={materialAiGenerateState.knowledgePointPath}
             materialTitle={materialAiGenerateState.materialTitle}
-            sourceMaterialId={materialAiGenerateState.materialId}
             materialSourceText={materialAiGenerateState.sourceText}
             materialImages={materialAiGenerateState.images}
             targetQuestionBankName={courseQuestionBankName(course.name)}

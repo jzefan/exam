@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import {
   Clock,
   ClipboardList,
+  Download,
   Eye,
   FileText,
   GraduationCap,
@@ -15,6 +16,14 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Tooltip,
   TooltipContent,
@@ -60,6 +69,7 @@ export function ExamCard({
   onAnalysis,
   onClose,
   onDelete,
+  onExport,
   extraBadges,
   extraActions,
   canManage = true,
@@ -70,6 +80,7 @@ export function ExamCard({
   onAnalysis: () => void;
   onClose: () => void;
   onDelete: () => void;
+  onExport?: (format: "docx" | "pdf", answers: boolean) => void;
   extraBadges?: ReactNode;
   extraActions?: ReactNode;
   canManage?: boolean;
@@ -252,6 +263,38 @@ export function ExamCard({
               <span>删除</span>
             </Button>
           )}
+
+          {canManage && onExport ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold"
+                >
+                  <Download size={14} />
+                  <span>导出</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-40">
+                <DropdownMenuLabel className="text-xs">Word</DropdownMenuLabel>
+                <DropdownMenuItem onClick={() => onExport("docx", true)}>
+                  含答案
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onExport("docx", false)}>
+                  空白试卷
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel className="text-xs">PDF</DropdownMenuLabel>
+                <DropdownMenuItem onClick={() => onExport("pdf", true)}>
+                  含答案
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onExport("pdf", false)}>
+                  空白试卷
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
 
           {canManage ? extraActions : null}
         </div>

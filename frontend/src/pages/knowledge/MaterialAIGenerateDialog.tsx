@@ -107,7 +107,6 @@ export interface MaterialAIGenerateDialogProps {
   /** 完整路径，例如 "计算机科学 / 后端 / 数据结构 / 二叉树" */
   knowledgePointPath: string;
   materialTitle: string;
-  sourceMaterialId?: string;
   materialSourceText: string;
   materialImages: string[];
   targetQuestionBankName?: string;
@@ -143,7 +142,7 @@ function TypeChip({
 
   return (
     <div
-      className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 ${
+      className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 ${
         active
           ? "border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30"
           : "border-border bg-muted/30"
@@ -156,12 +155,12 @@ function TypeChip({
       >
         {label}
       </span>
-      <div className="flex items-center gap-px">
+      <div className="flex shrink-0 items-center gap-2">
         <button
           type="button"
           onClick={() => set(value - 1)}
           disabled={value === 0}
-          className="flex size-[22px] items-center justify-center rounded-md border border-border bg-background text-foreground hover:bg-muted disabled:cursor-default disabled:text-muted-foreground/30"
+          className="flex size-6 items-center justify-center rounded-md border border-border bg-background text-foreground hover:bg-muted disabled:cursor-default disabled:text-muted-foreground/30"
         >
           <Minus size={12} />
         </button>
@@ -169,7 +168,7 @@ function TypeChip({
           type="number"
           min={0}
           max={50}
-          className={`w-7 bg-transparent text-center text-[14px] font-bold tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${
+          className={`w-12 bg-transparent text-center text-[14px] font-bold tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${
             active ? "text-blue-600 dark:text-blue-400" : ""
           }`}
           value={display}
@@ -185,7 +184,7 @@ function TypeChip({
         <button
           type="button"
           onClick={() => set(value + 1)}
-          className="flex size-[22px] items-center justify-center rounded-md border border-border bg-background text-foreground hover:bg-muted"
+          className="flex size-6 items-center justify-center rounded-md border border-border bg-background text-foreground hover:bg-muted"
         >
           <Plus size={12} />
         </button>
@@ -201,7 +200,6 @@ export function MaterialAIGenerateDialog({
   knowledgePointName,
   knowledgePointPath,
   materialTitle,
-  sourceMaterialId,
   materialSourceText,
   materialImages,
   targetQuestionBankName = DEFAULT_TARGET_QUESTION_BANK_NAME,
@@ -479,10 +477,7 @@ export function MaterialAIGenerateDialog({
           created_question_ids?: string[];
         }>("/api/questions/save-generated-to-course-bank", {
           method: "POST",
-          body: JSON.stringify({
-            questions: payload,
-            source_material_id: sourceMaterialId,
-          }),
+          body: JSON.stringify({ questions: payload }),
         });
         return { selected, saveResult };
       } catch (err) {
@@ -502,7 +497,7 @@ export function MaterialAIGenerateDialog({
         throw err;
       }
     },
-    [knowledgePointId, questions, sourceMaterialId, toast],
+    [knowledgePointId, questions, toast],
   );
 
   const saveToCourseBank = useCallback(async () => {

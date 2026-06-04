@@ -311,7 +311,6 @@ class QuestionBulkCreateRequest(BaseModel):
 
 class SaveGeneratedToCourseBankRequest(BaseModel):
     questions: list[QuestionCreate] = Field(min_length=1, max_length=5000)
-    source_material_id: uuid.UUID | None = None
 
 
 class QuestionBulkCreateResponse(BaseModel):

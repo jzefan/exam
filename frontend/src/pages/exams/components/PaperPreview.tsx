@@ -1,9 +1,13 @@
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
+import {
+  QuestionPreviewCard,
+  DIFFICULTY_LABELS,
+} from "@/components/questions/question-preview-card";
 import { cn } from "@/lib/utils";
 import type { QuestionType } from "@/types";
 
+import { ExamQuestionActions } from "./ExamQuestionActions";
 import type { PaperPreviewItem, QuestionTypeSummary } from "./paper-view-utils";
 import { questionTypeLabels } from "./paper-view-utils";
 import type { ScoreViewMode } from "./PaperScorePanel";
@@ -18,6 +22,7 @@ export function PaperPreview({
   typeScoreDrafts,
   onTypeScoreChange,
   onQuestionScoreChange,
+  onReplaceQuestion,
   className,
 }: {
   title: string;
@@ -29,8 +34,10 @@ export function PaperPreview({
   typeScoreDrafts: Partial<Record<QuestionType, string>>;
   onTypeScoreChange: (summary: QuestionTypeSummary, value: string) => void;
   onQuestionScoreChange: (questionId: string, value: string) => void;
+  onReplaceQuestion?: (oldId: string, newId: string) => void;
   className?: string;
 }) {
+  const currentExamQuestionIds = items.map((item) => item.question.id);
   const nextMode = scoreMode === "order" ? "type" : "order";
   const nextModeLabel = nextMode === "type" ? "按题型展示" : "按顺序展示";
 
@@ -39,7 +46,9 @@ export function PaperPreview({
       ? questionTypeSummaries
           .map((summary) => ({
             summary,
-            items: items.filter((item) => summary.questionIds.includes(item.question.id)),
+            items: items.filter((item) =>
+              summary.questionIds.includes(item.question.id),
+            ),
           }))
           .filter((group) => group.items.length > 0)
       : [];
@@ -65,9 +74,13 @@ export function PaperPreview({
         <div className="space-y-2 border-b border-dashed border-border/70 pb-5 text-center">
           <div className="flex items-center justify-center gap-2">
             <Badge variant="outline">{categoryLabel}</Badge>
-            <span className="text-xs font-medium text-muted-foreground">标准试卷预览</span>
+            <span className="text-xs font-medium text-muted-foreground">
+              标准试卷预览
+            </span>
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">{title}</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">
+            {title}
+          </h1>
         </div>
 
         <div className="mt-6 space-y-6">
@@ -84,17 +97,25 @@ export function PaperPreview({
                       <span className="text-base font-semibold text-primary">
                         {summary.count}
                       </span>
-                      <span className="text-base font-semibold text-foreground">题，</span>
-                      <span className="text-base font-semibold text-foreground">共</span>
+                      <span className="text-base font-semibold text-foreground">
+                        题，
+                      </span>
+                      <span className="text-base font-semibold text-foreground">
+                        共
+                      </span>
                       <Input
                         className="h-8 w-24 border-primary/20 bg-background/90 px-2 text-center text-sm font-medium"
                         type="number"
                         min={0}
                         step="0.5"
                         value={typeScoreDrafts[summary.type] ?? ""}
-                        onChange={(event) => onTypeScoreChange(summary, event.target.value)}
+                        onChange={(event) =>
+                          onTypeScoreChange(summary, event.target.value)
+                        }
                       />
-                      <span className="text-base font-semibold text-foreground">分</span>
+                      <span className="text-base font-semibold text-foreground">
+                        分
+                      </span>
                     </div>
                   </div>
 
@@ -109,24 +130,52 @@ export function PaperPreview({
                             <span className="text-sm font-medium text-muted-foreground">
                               {questionTypeLabels[item.question.type] ?? "题目"}
                             </span>
+                            <span className="text-xs text-muted-foreground">
+                              {DIFFICULTY_LABELS[item.question.difficulty] ??
+                                item.question.difficulty}
+                            </span>
+                            {item.question.knowledge_points.length > 0 && (
+                              <span className="text-xs text-muted-foreground">
+                                {item.question.knowledge_points
+                                  .map((kp) => kp.name)
+                                  .join(" · ")}
+                              </span>
+                            )}
                           </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-semibold text-foreground">考试分数</span>
+                          <div className="flex flex-wrap items-center gap-2">
+                            {onReplaceQuestion && (
+                              <ExamQuestionActions
+                                question={item.question}
+                                currentExamQuestionIds={currentExamQuestionIds}
+                                onReplaceQuestion={onReplaceQuestion}
+                              />
+                            )}
+                            <span className="text-sm font-semibold text-foreground">
+                              分数
+                            </span>
                             <Input
                               className="h-8 w-20"
                               type="number"
                               min={0}
                               step="0.5"
                               value={item.scoreOverride ?? ""}
-                              onChange={(event) => onQuestionScoreChange(item.question.id, event.target.value)}
+                              onChange={(event) =>
+                                onQuestionScoreChange(
+                                  item.question.id,
+                                  event.target.value,
+                                )
+                              }
                             />
                           </div>
                         </div>
 
                         <QuestionPreviewCard
                           question={item.question}
-                          mode="compact"
-                          hideTypeBadge
+                          mode="detailed"
+                          defaultExpanded
+                          hideHeader
+                          hideMeta
+                          markChoiceAnswer
                           className="rounded-2xl border-border/60 bg-background p-5"
                         />
                       </section>
@@ -144,24 +193,52 @@ export function PaperPreview({
                       <span className="text-sm font-medium text-muted-foreground">
                         {questionTypeLabels[item.question.type] ?? "题目"}
                       </span>
+                      <span className="text-xs text-muted-foreground">
+                        {DIFFICULTY_LABELS[item.question.difficulty] ??
+                          item.question.difficulty}
+                      </span>
+                      {item.question.knowledge_points.length > 0 && (
+                        <span className="text-xs text-muted-foreground">
+                          {item.question.knowledge_points
+                            .map((kp) => kp.name)
+                            .join(" · ")}
+                        </span>
+                      )}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-foreground">考试分数</span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {onReplaceQuestion && (
+                        <ExamQuestionActions
+                          question={item.question}
+                          currentExamQuestionIds={currentExamQuestionIds}
+                          onReplaceQuestion={onReplaceQuestion}
+                        />
+                      )}
+                      <span className="text-sm font-semibold text-foreground">
+                        分数
+                      </span>
                       <Input
                         className="h-8 w-20"
                         type="number"
                         min={0}
                         step="0.5"
                         value={item.scoreOverride ?? ""}
-                        onChange={(event) => onQuestionScoreChange(item.question.id, event.target.value)}
+                        onChange={(event) =>
+                          onQuestionScoreChange(
+                            item.question.id,
+                            event.target.value,
+                          )
+                        }
                       />
                     </div>
                   </div>
 
                   <QuestionPreviewCard
                     question={item.question}
-                    mode="compact"
-                    hideTypeBadge
+                    mode="detailed"
+                    defaultExpanded
+                    hideHeader
+                    hideMeta
+                    markChoiceAnswer
                     className="rounded-2xl border-border/60 bg-background p-5"
                   />
                 </section>

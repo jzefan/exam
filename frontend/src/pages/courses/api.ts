@@ -60,7 +60,6 @@ export interface TeacherCourseMaterial {
   description: string | null;
   source: string | null;
   file_path: string | null;
-  question_count: number;
   created_at: string;
   updated_at: string;
 }
@@ -333,28 +332,12 @@ export function listCourseQuestions(courseId: string) {
   return dedupedGet<IQuestion[]>(`/teacher/courses/${courseId}/questions`);
 }
 
-export function listCourseMaterialQuestions(courseId: string, resourceId: string) {
-  return dedupedGet<IQuestion[]>(
-    `/teacher/courses/${courseId}/materials/${resourceId}/questions`,
-  );
-}
-
 export function clearCourseQuestions(courseId: string) {
   return apiRequest<{
     deleted: number;
     hard_deleted: number;
     soft_deleted: number;
   }>(`/teacher/courses/${courseId}/questions`, { method: "DELETE" });
-}
-
-export function clearCourseMaterialQuestions(courseId: string, resourceId: string) {
-  return apiRequest<{
-    deleted: number;
-    hard_deleted: number;
-    soft_deleted: number;
-  }>(`/teacher/courses/${courseId}/materials/${resourceId}/questions`, {
-    method: "DELETE",
-  });
 }
 
 export interface CourseKnowledgeNode {
@@ -376,3 +359,5 @@ export function updateCourseKnowledgePointName(nodeId: string, name: string) {
     body: JSON.stringify({ name }),
   });
 }
+
+export { exportExam, type ExamExportFormat } from "@/lib/exam-export";

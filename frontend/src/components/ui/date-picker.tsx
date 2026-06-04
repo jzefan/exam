@@ -1,8 +1,8 @@
 import { format, addMonths, startOfDay, subMonths } from "date-fns";
 import { zhCN } from "date-fns/locale";
-import { CalendarIcon, ChevronLeft, ChevronRight } from "lucide-react";
-import type { ChangeEvent, ChangeEventHandler } from "react";
-import { useState } from "react";
+import { CalendarIcon, ChevronLeft, ChevronRight, Clock } from "lucide-react";
+import type { ChangeEvent, ChangeEventHandler, WheelEvent as ReactWheelEvent } from "react";
+import { useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  COMMON_TIMES,
+  parseTimeInput,
+  stepTime,
+  TIME_STEP_MINUTES,
+} from "@/components/ui/date-picker-utils";
 
 interface DatePickerProps {
   value: Date | undefined;
@@ -39,6 +45,8 @@ export function DatePicker({
 }: DatePickerProps) {
   const [month, setMonth] = useState<Date>(value ?? new Date());
   const [open, setOpen] = useState(false);
+  const [timeDraft, setTimeDraft] = useState<string | null>(null);
+  const lastWheelStepAtRef = useRef(Number.NEGATIVE_INFINITY);
 
   const isSameDay = (left: Date, right: Date) =>
     left.getFullYear() === right.getFullYear() &&
@@ -79,6 +87,37 @@ export function DatePicker({
       ? `${String(minDateTime.getHours()).padStart(2, "0")}:${String(minDateTime.getMinutes()).padStart(2, "0")}`
       : undefined;
 
+  const isTimeDisabled = (time: string) =>
+    minTimeValue !== undefined && time < minTimeValue;
+
+  const commitTimeDraft = () => {
+    const parsed = parseTimeInput(timeDraft ?? "");
+    if (parsed && !isTimeDisabled(parsed)) {
+      commitTimeValue(parsed);
+    }
+    setTimeDraft(null);
+  };
+
+  const stepTimeBy = (direction: 1 | -1) => {
+    const base = parseTimeInput(timeDraft ?? "") ?? timeValue;
+    const next = stepTime(base, direction, TIME_STEP_MINUTES);
+    if (!isTimeDisabled(next)) {
+      commitTimeValue(next);
+      setTimeDraft(null);
+    }
+  };
+  const handleTimeWheel = (event: ReactWheelEvent<HTMLInputElement>) => {
+    event.preventDefault();
+    if (event.deltaY === 0) return;
+
+    const now = performance.now();
+    if (now - lastWheelStepAtRef.current < 120) {
+      return;
+    }
+    lastWheelStepAtRef.current = now;
+    stepTimeBy(event.deltaY < 0 ? 1 : -1);
+  };
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -96,9 +135,10 @@ export function DatePicker({
             : placeholder}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-auto p-0">
+      <PopoverContent align="start" className={cn("p-0", includeTime ? "w-[24rem]" : "w-auto")}>
         <div className="space-y-0">
           <Calendar
+            className={cn(includeTime && "w-full")}
             captionLayout="dropdown"
             components={{
               MonthCaption: (props) => <>{props.children}</>,
@@ -177,17 +217,75 @@ export function DatePicker({
             locale={zhCN}
           />
           {includeTime && (
-            <div className="border-t border-border p-3">
+            <div className="space-y-2.5 border-t border-border p-3">
+              {/* Quick-pick common times */}
+              <div className="grid grid-flow-col grid-rows-3 gap-1.5">
+                {COMMON_TIMES.map((time) => {
+                  const active = timeValue === time;
+                  const disabled = isTimeDisabled(time);
+                  return (
+                    <button
+                      key={time}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => commitTimeValue(time)}
+                      className={cn(
+                        "h-7 min-w-0 rounded-md border px-1 text-[11px] font-medium tabular-nums transition-colors",
+                        active
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : "border-input bg-background text-foreground hover:bg-accent hover:text-accent-foreground",
+                        disabled &&
+                          "cursor-not-allowed opacity-40 hover:bg-background hover:text-foreground",
+                      )}
+                    >
+                      {time}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Manual fine-tune + confirm */}
               <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">时间</span>
-                <input
-                  type="time"
-                  value={timeValue}
-                  min={minTimeValue}
-                  className="h-8 rounded-md border border-input bg-background px-2 text-sm"
-                  onChange={(event) => commitTimeValue(event.target.value)}
-                />
-                <Button type="button" size="sm" className="ml-auto h-8" onClick={() => setOpen(false)}>
+                <span className="shrink-0 text-xs text-muted-foreground">时间</span>
+                <div className="relative">
+                  <Clock
+                    size={13}
+                    className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground"
+                  />
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="09:30"
+                    aria-label="时间，可手动输入或滚动调整（每 5 分钟）"
+                    title="可手动输入，或在此滚动以 5 分钟为步进调整，也可用上下方向键"
+                    value={timeDraft ?? timeValue}
+                    className="h-8 w-32 rounded-md border border-input bg-background pl-7 pr-2 text-sm tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    onChange={(event) => setTimeDraft(event.target.value)}
+                    onBlur={commitTimeDraft}
+                    onWheel={handleTimeWheel}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        commitTimeDraft();
+                      } else if (event.key === "ArrowUp") {
+                        event.preventDefault();
+                        stepTimeBy(1);
+                      } else if (event.key === "ArrowDown") {
+                        event.preventDefault();
+                        stepTimeBy(-1);
+                      }
+                    }}
+                  />
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  className="ml-auto h-8"
+                  onClick={() => {
+                    commitTimeDraft();
+                    setOpen(false);
+                  }}
+                >
                   确定
                 </Button>
               </div>

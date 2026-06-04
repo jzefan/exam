@@ -20,7 +20,7 @@ from app.database import get_db
 from app.exams.models import Exam, ExamQuestion, ExamStudent, GradingStatus
 from app.job_models.models import LearningResource
 from app.learning.models import Direction, KnowledgePoint, Major
-from app.questions.models import Question, question_knowledge_points, question_learning_resources
+from app.questions.models import Question, question_knowledge_points
 from app.questions.router import _build_question_response
 from app.questions.service import (
     can_hard_delete_question,
@@ -664,21 +664,6 @@ async def list_teacher_course_materials(course_id: uuid.UUID, db: DB, user: Curr
         .order_by(LearningResource.created_at.desc())
     )
     rows = (await db.execute(stmt)).all()
-    resource_ids = [resource.id for resource, _node_name in rows]
-    question_count_by_resource: dict[uuid.UUID, int] = {}
-    if resource_ids:
-        count_rows = (
-            await db.execute(
-                select(question_learning_resources.c.resource_id, func.count(Question.id))
-                .join(Question, Question.id == question_learning_resources.c.question_id)
-                .where(
-                    question_learning_resources.c.resource_id.in_(resource_ids),
-                    Question.deleted_at.is_(None),
-                )
-                .group_by(question_learning_resources.c.resource_id)
-            )
-        ).all()
-        question_count_by_resource = {resource_id: count for resource_id, count in count_rows}
     return [
         TeacherCourseMaterial(
             id=resource.id,
@@ -690,7 +675,6 @@ async def list_teacher_course_materials(course_id: uuid.UUID, db: DB, user: Curr
             description=resource.description,
             source=resource.source,
             file_path=resource.file_path,
-            question_count=question_count_by_resource.get(resource.id, 0),
             created_at=resource.created_at,
             updated_at=resource.updated_at,
         )
@@ -1070,118 +1054,6 @@ async def clear_teacher_course_questions(
         stmt = stmt.where(teacher_owned_resource_filter(Question, user.id))
 
     questions = (await db.execute(stmt)).scalars().unique().all()
-    hard_deleted = 0
-    soft_deleted = 0
-    for question in questions:
-        if await can_hard_delete_question(db, question.id):
-            await db.delete(question)
-            hard_deleted += 1
-        else:
-            await soft_delete_question(db, question)
-            soft_deleted += 1
-
-    await db.commit()
-    return {
-        "deleted": hard_deleted + soft_deleted,
-        "hard_deleted": hard_deleted,
-        "soft_deleted": soft_deleted,
-    }
-
-
-@router.get("/{course_id}/materials/{resource_id}/questions", response_model=list[TeacherCourseQuestion])
-async def list_teacher_course_material_questions(
-    course_id: uuid.UUID,
-    resource_id: uuid.UUID,
-    db: DB,
-    user: CurrentUser,
-) -> list[TeacherCourseQuestion]:
-    is_admin = await _is_course_admin(db, user)
-    course, *_ = await _get_visible_course(
-        db,
-        course_id,
-        user=user,
-        is_admin=is_admin,
-        include_deleted=True,
-    )
-    subtree = _course_subtree_cte(course_id, include_deleted_root=course.deleted_at is not None)
-    material = await db.scalar(
-        select(LearningResource).where(
-            LearningResource.id == resource_id,
-            LearningResource.node_type == "kp",
-            LearningResource.node_id.in_(select(subtree.c.id)),
-        )
-    )
-    if material is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资料不存在")
-
-    stmt = (
-        select(Question)
-        .join(question_learning_resources, Question.id == question_learning_resources.c.question_id)
-        .where(
-            question_learning_resources.c.resource_id == resource_id,
-            Question.deleted_at.is_(None),
-        )
-        .options(
-            selectinload(Question.creator),
-            selectinload(Question.question_bank),
-            selectinload(Question.tags),
-            selectinload(Question.knowledge_points),
-        )
-        .distinct()
-        .order_by(Question.updated_at.desc())
-    )
-    if not is_admin:
-        stmt = stmt.where(teacher_owned_resource_filter(Question, user.id))
-    questions = (await db.execute(stmt)).scalars().unique().all()
-    return [await _build_question_response(db, question) for question in questions]
-
-
-@router.delete("/{course_id}/materials/{resource_id}/questions", status_code=status.HTTP_200_OK)
-async def clear_teacher_course_material_questions(
-    course_id: uuid.UUID,
-    resource_id: uuid.UUID,
-    db: DB,
-    user: CurrentUser,
-) -> dict[str, int]:
-    is_admin = await _is_course_admin(db, user)
-    course, *_ = await _get_visible_course(
-        db,
-        course_id,
-        user=user,
-        is_admin=is_admin,
-        include_deleted=False,
-    )
-    if not can_write_owned_resource(
-        is_platform_admin=is_admin,
-        current_user_id=user.id,
-        owner_id=course.owner_id,
-    ):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权修改该课程")
-
-    subtree = _course_subtree_cte(course_id)
-    material = await db.scalar(
-        select(LearningResource).where(
-            LearningResource.id == resource_id,
-            LearningResource.node_type == "kp",
-            LearningResource.node_id.in_(select(subtree.c.id)),
-        )
-    )
-    if material is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资料不存在")
-
-    stmt = (
-        select(Question)
-        .join(question_learning_resources, Question.id == question_learning_resources.c.question_id)
-        .where(
-            question_learning_resources.c.resource_id == resource_id,
-            Question.deleted_at.is_(None),
-        )
-        .distinct()
-    )
-    if not is_admin:
-        stmt = stmt.where(teacher_owned_resource_filter(Question, user.id))
-    questions = (await db.execute(stmt)).scalars().unique().all()
-
     hard_deleted = 0
     soft_deleted = 0
     for question in questions:

@@ -58,5 +58,12 @@ class Settings(BaseSettings):
     oidc_scopes: str = "openid profile email offline_access exam:read exam:write"
     oidc_jwks_cache_ttl_seconds: int = 3600
 
+    # Exam paper export: header fields that are not part of the data model.
+    exam_export_school_name: str = "江苏卫生健康职业学院"
+    exam_export_form: str = "闭卷笔试"
+    # Optional CJK .ttf to embed in exported PDFs (guarantees rendering on
+    # viewers without Adobe-GB1 fonts). Empty -> built-in STSong-Light CID font.
+    exam_export_pdf_font_path: str = ""
+
 
 settings = Settings()

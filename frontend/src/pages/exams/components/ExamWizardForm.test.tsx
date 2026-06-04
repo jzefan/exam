@@ -13,6 +13,7 @@ const { apiRequestMock } = vi.hoisted(() => ({
 const useGetIdentityMock = vi.fn();
 const useListMock = vi.fn();
 const navigateMock = vi.fn();
+let locationStateMock: unknown = null;
 // 始终相对当前时间生成，避免测试依赖具体日期（固定日期会随时间流逝变成过去而导致校验失败）。
 function futureLocalDateTime(offsetMs: number): string {
   const date = new Date(Date.now() + offsetMs);
@@ -109,11 +110,19 @@ const QUESTION_FIXTURES = [
 vi.mock("@refinedev/core", () => ({
   useGetIdentity: (...args: unknown[]) => useGetIdentityMock(...args),
   useList: (...args: unknown[]) => useListMock(...args),
+  useInvalidate: () => vi.fn(),
+  useOne: ({ id }: { id: string }) => ({
+    query: {
+      data: { data: QUESTION_FIXTURES.find((question) => question.id === id) ?? null },
+      isLoading: false,
+    },
+  }),
+  useUpdate: () => ({ mutate: vi.fn(), mutation: { isPending: false } }),
 }));
 
 vi.mock("react-router-dom", () => ({
   useBeforeUnload: vi.fn(),
-  useLocation: () => ({ pathname: "/exams/create", search: "", hash: "", state: null, key: "test" }),
+  useLocation: () => ({ pathname: "/exams/create", search: "", hash: "", state: locationStateMock, key: "test" }),
   useNavigate: () => navigateMock,
 }));
 
@@ -161,6 +170,7 @@ function createInitialValues(): ExamFormValues {
 
 describe("ExamWizardForm", () => {
   beforeEach(() => {
+    locationStateMock = null;
     apiRequestMock.mockReset();
     apiRequestMock.mockImplementation((path: string) => {
       if (path === "/knowledge/majors") {
@@ -335,6 +345,225 @@ describe("ExamWizardForm", () => {
 
     await waitFor(() => {
       expect(screen.getByText("第 2 步：选择题目 / 自动出卷")).toBeInTheDocument();
+    });
+  });
+
+  it("prefills the course and course question bank when launched from a course", async () => {
+    locationStateMock = {
+      courseKpId: "course-1",
+      courseName: "Python程序设计",
+    };
+    useListMock.mockImplementation(({ resource, filters }: { resource: string; filters?: Array<{ field: string; value: unknown }> }) => {
+      if (resource === "question-banks") {
+        return {
+          query: {
+            data: {
+              data: [
+                { id: "bank-course", name: "Python程序设计-题库" },
+                { id: "bank-other", name: "其它题库" },
+              ],
+            },
+            isLoading: false,
+          },
+        };
+      }
+
+      if (resource === "questions") {
+        const questionIds = filters?.find((filter) => filter.field === "id")?.value;
+        if (Array.isArray(questionIds)) {
+          return {
+            query: {
+              data: { data: QUESTION_FIXTURES.filter((question) => questionIds.includes(question.id)) },
+              isLoading: false,
+            },
+          };
+        }
+        return { query: { data: { data: QUESTION_FIXTURES }, isLoading: false } };
+      }
+
+      return { query: { data: { data: [] }, total: 0, isFetching: false, isLoading: false } };
+    });
+
+    render(
+      <ExamWizardForm
+        mode="create"
+        initialValues={{
+          ...createInitialValues(),
+          question_mode: "auto",
+          question_ids: [],
+          question_items: [],
+          total_score: 0,
+        }}
+        isPending={false}
+        submitError={null}
+        onSubmit={vi.fn()}
+        initialStep={1}
+        defaultAutoBankName="Python程序设计-题库"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Python程序设计-题库")).toBeInTheDocument();
+    });
+  });
+
+  it("uses default per-type scores and updates the summary total before generation", async () => {
+    const user = userEvent.setup();
+    useListMock.mockImplementation(({ resource, filters }: { resource: string; filters?: Array<{ field: string; value: unknown }> }) => {
+      if (resource === "question-banks") {
+        return {
+          query: {
+            data: { data: [{ id: "bank-1", name: "题库" }] },
+            isLoading: false,
+          },
+        };
+      }
+
+      if (resource === "questions") {
+        const questionIds = filters?.find((filter) => filter.field === "id")?.value;
+        if (Array.isArray(questionIds)) {
+          return {
+            query: {
+              data: { data: QUESTION_FIXTURES.filter((question) => questionIds.includes(question.id)) },
+              isLoading: false,
+            },
+          };
+        }
+        return { query: { data: { data: QUESTION_FIXTURES }, isLoading: false } };
+      }
+
+      return { query: { data: { data: [] }, total: 0, isFetching: false, isLoading: false } };
+    });
+
+    render(
+      <ExamWizardForm
+        mode="create"
+        initialValues={{
+          ...createInitialValues(),
+          question_mode: "auto",
+          question_ids: [],
+          question_items: [],
+          total_score: 0,
+        }}
+        isPending={false}
+        submitError={null}
+        onSubmit={vi.fn()}
+        initialStep={1}
+      />,
+    );
+
+    const choiceCount = screen.getByLabelText("选择题数量");
+    await user.clear(choiceCount);
+    await user.type(choiceCount, "2");
+
+    const codeCount = screen.getByLabelText("编程题数量");
+    await user.clear(codeCount);
+    await user.type(codeCount, "1");
+
+    expect(screen.getByLabelText("选择题每题分值")).toHaveValue(1);
+    expect(screen.getByLabelText("编程题每题分值")).toHaveValue(10);
+    expect(screen.getByText("12 分")).toBeInTheDocument();
+  });
+
+  it("keeps knowledge quotas within the selected type plan", async () => {
+    const user = userEvent.setup();
+    const kp1 = { id: "kp-1", name: "Python程序设计导论", path: "Python程序设计导论" };
+    const kp2 = { id: "kp-2", name: "程序流程控制", path: "程序流程控制" };
+    const makeQuestion = (id: string, type: "choice" | "code", kp: typeof kp1) => ({
+      id,
+      type,
+      title: `${type}-${id}`,
+      content: { text: `${type}-${id}` },
+      options: type === "choice" ? { A: "A", B: "B" } : null,
+      answer: type === "choice" ? { correct: "A" } : { text: "print('ok')" },
+      analysis: null,
+      difficulty: 3,
+      score: type === "choice" ? 1 : 10,
+      usage_count: 0,
+      question_bank_id: "bank-1",
+      question_bank_name: "题库",
+      tags: [],
+      knowledge_points: [kp],
+      created_by: "user-1",
+      created_by_name: "Teacher",
+      created_at: "2026-04-01T00:00:00Z",
+      updated_at: "2026-04-01T00:00:00Z",
+    });
+    const questions = [
+      makeQuestion("choice-1", "choice", kp1),
+      makeQuestion("choice-2", "choice", kp1),
+      makeQuestion("choice-3", "choice", kp2),
+      makeQuestion("choice-4", "choice", kp2),
+      makeQuestion("code-1", "code", kp1),
+      makeQuestion("code-2", "code", kp2),
+      makeQuestion("code-3", "code", kp2),
+    ];
+
+    useListMock.mockImplementation(({ resource, filters }: { resource: string; filters?: Array<{ field: string; value: unknown }> }) => {
+      if (resource === "question-banks") {
+        return {
+          query: {
+            data: { data: [{ id: "bank-1", name: "题库" }] },
+            isLoading: false,
+          },
+        };
+      }
+
+      if (resource === "knowledge-points") {
+        return {
+          query: {
+            data: { data: [kp1, kp2] },
+            isLoading: false,
+          },
+        };
+      }
+
+      if (resource === "questions") {
+        const questionIds = filters?.find((filter) => filter.field === "id")?.value;
+        if (Array.isArray(questionIds)) {
+          return {
+            query: {
+              data: { data: questions.filter((question) => questionIds.includes(question.id)) },
+              isLoading: false,
+            },
+          };
+        }
+        return { query: { data: { data: questions }, isLoading: false } };
+      }
+
+      return { query: { data: { data: [] }, total: 0, isFetching: false, isLoading: false } };
+    });
+
+    render(
+      <ExamWizardForm
+        mode="create"
+        initialValues={{
+          ...createInitialValues(),
+          question_mode: "auto",
+          question_ids: [],
+          question_items: [],
+          total_score: 0,
+        }}
+        isPending={false}
+        submitError={null}
+        onSubmit={vi.fn()}
+        initialStep={1}
+      />,
+    );
+
+    await user.clear(screen.getByLabelText("选择题数量"));
+    await user.type(screen.getByLabelText("选择题数量"), "3");
+    await user.clear(screen.getByLabelText("编程题数量"));
+    await user.type(screen.getByLabelText("编程题数量"), "2");
+    await user.click(screen.getByRole("button", { name: /技能知识点配额/ }));
+    await user.click(screen.getByRole("button", { name: "按章节均匀覆盖" }));
+
+    expect(screen.getAllByText("合计 5 题").length).toBeGreaterThanOrEqual(2);
+
+    await user.click(screen.getByRole("button", { name: "生成题单" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/最近生成 5 题 \/ 23 分/)).toBeInTheDocument();
     });
   });
 

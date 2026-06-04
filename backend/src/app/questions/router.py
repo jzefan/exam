@@ -16,9 +16,8 @@ from app.auth.models import User
 from app.common.pagination import PaginationParams, apply_filters, apply_pagination, get_total_count, parse_filters, parse_pagination
 from app.common.resource_access import can_read_shared_resource, can_write_owned_resource, teacher_visible_resource_filter
 from app.database import get_db
-from app.job_models.models import LearningResource
 from app.questions.models import KnowledgePoint, Question, QuestionImportJobStatus
-from app.questions.models import question_knowledge_points, question_learning_resources, question_tags
+from app.questions.models import question_knowledge_points, question_tags
 from app.questions.schemas import (
     KnowledgePointCreate,
     KnowledgePointResponse,
@@ -638,23 +637,7 @@ async def save_generated_to_course_bank_endpoint(
                 detail="No permission to read some knowledge points",
             ) from exc
         raise
-    if data.source_material_id is not None:
-        material = await db.get(LearningResource, data.source_material_id)
-        if material is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资料不存在")
     result = await save_generated_questions_to_default_course_bank(db, data.questions, user.id)
-    if data.source_material_id is not None and result.created_question_ids:
-        await db.execute(
-            question_learning_resources.insert().values(
-                [
-                    {
-                        "question_id": question_id,
-                        "resource_id": data.source_material_id,
-                    }
-                    for question_id in result.created_question_ids
-                ]
-            )
-        )
     return SaveGeneratedToCourseBankResponse(
         created=result.created,
         existing=result.existing,
