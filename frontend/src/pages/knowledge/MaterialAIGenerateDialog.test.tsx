@@ -92,7 +92,7 @@ describe("MaterialAIGenerateDialog", () => {
     expect(screen.getByRole("button", { name: "保存到「主知识对应题库」" })).toBeInTheDocument();
   });
 
-  it("enables 生成作业 after generation and creates practice assignment from selected questions", async () => {
+  it("enables 生成练习 after generation and creates practice assignment from selected questions", async () => {
     const user = userEvent.setup();
     const onSaved = vi.fn();
     const onOpenChange = vi.fn();
@@ -127,7 +127,7 @@ describe("MaterialAIGenerateDialog", () => {
 
     renderDialog({ onOpenChange, onSaved });
 
-    const createAssignmentButton = screen.getByRole("button", { name: "生成作业" });
+    const createAssignmentButton = screen.getByRole("button", { name: "生成练习" });
     expect(createAssignmentButton).toBeDisabled();
 
     await user.click(screen.getByRole("button", { name: "开始生成" }));
@@ -138,10 +138,10 @@ describe("MaterialAIGenerateDialog", () => {
 
     await user.click(createAssignmentButton);
 
-    expect(screen.getByRole("textbox", { name: "作业标题" })).toHaveValue("二叉树 - 1题练习");
+    expect(screen.getByRole("textbox", { name: "练习标题" })).toHaveValue("二叉树 - 1题练习");
 
     await user.click(screen.getByRole("button", { name: "选择学生" }));
-    await user.click(screen.getByRole("button", { name: "发布作业" }));
+    await user.click(screen.getByRole("button", { name: "发布练习" }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -176,12 +176,12 @@ describe("MaterialAIGenerateDialog", () => {
     expect(new Date(examBody.end_time).getTime()).toBeGreaterThan(new Date(examBody.start_time).getTime());
 
     expect(toastMock).not.toHaveBeenCalled();
-    expect(await screen.findByRole("dialog", { name: "作业已发布" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "练习已发布" })).toBeInTheDocument();
     expect(screen.getByText("二叉树 - 1题练习")).toBeInTheDocument();
     expect(onSaved).not.toHaveBeenCalled();
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
 
-    await user.click(screen.getByRole("button", { name: "查看作业" }));
+    await user.click(screen.getByRole("button", { name: "查看练习" }));
 
     await waitFor(() => {
       expect(latestPathname).toBe("/exams/exam-1/view");
@@ -227,14 +227,14 @@ describe("MaterialAIGenerateDialog", () => {
 
     await user.click(screen.getByRole("button", { name: "开始生成" }));
     await screen.findByText("生成题目 1");
-    await user.click(screen.getByRole("button", { name: "生成作业" }));
+    await user.click(screen.getByRole("button", { name: "生成练习" }));
     await user.click(screen.getByRole("button", { name: "选择学生" }));
-    await user.click(screen.getByRole("button", { name: "发布作业" }));
+    await user.click(screen.getByRole("button", { name: "发布练习" }));
 
     await waitFor(() => {
       expect(toastMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "发布作业失败",
+          title: "发布练习失败",
           description: "保存题目成功但未返回可用于组卷的题目 ID",
           variant: "destructive",
         }),
@@ -244,7 +244,7 @@ describe("MaterialAIGenerateDialog", () => {
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/exams"))).toBe(false);
     expect(onSaved).not.toHaveBeenCalled();
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
-    expect(screen.getByRole("dialog", { name: "生成作业" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "生成练习" })).toBeInTheDocument();
   });
 
   it("shows publish failure and keeps dialogs open when /api/exams rejects after save succeeds", async () => {
@@ -284,14 +284,14 @@ describe("MaterialAIGenerateDialog", () => {
 
     await user.click(screen.getByRole("button", { name: "开始生成" }));
     await screen.findByText("生成题目 1");
-    await user.click(screen.getByRole("button", { name: "生成作业" }));
+    await user.click(screen.getByRole("button", { name: "生成练习" }));
     await user.click(screen.getByRole("button", { name: "选择学生" }));
-    await user.click(screen.getByRole("button", { name: "发布作业" }));
+    await user.click(screen.getByRole("button", { name: "发布练习" }));
 
     await waitFor(() => {
       expect(toastMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "发布作业失败",
+          title: "发布练习失败",
           description: "发布考试失败",
           variant: "destructive",
         }),
@@ -301,6 +301,6 @@ describe("MaterialAIGenerateDialog", () => {
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/exams"))).toBe(true);
     expect(onSaved).not.toHaveBeenCalled();
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
-    expect(screen.getByRole("dialog", { name: "生成作业" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "生成练习" })).toBeInTheDocument();
   });
 });

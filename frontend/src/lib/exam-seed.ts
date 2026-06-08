@@ -1,5 +1,5 @@
 /**
- * 在"从题目列表直接创建考试/作业"场景下，用来临时传递预填数据。
+ * 在"从题目列表直接创建考试/练习"场景下，用来临时传递预填数据。
  *
  * 设计要点：
  * - 数据只存 sessionStorage，避免把几十道题的 ID 塞进 URL。
@@ -20,7 +20,7 @@ export interface ExamSeedQuestionItem {
 }
 
 export interface ExamSeedPayload {
-  /** 考试或作业/练习。作业在后端用 category=practice 表示。 */
+  /** 考试或练习。练习在后端用 category=practice 表示。 */
   category: "exam" | "practice";
   /** 预填的名称；允许缺省。 */
   title?: string;

@@ -83,6 +83,12 @@ export function WrongAnswerDetailPage() {
   const shouldRenderStandardCode =
     (item.question_type === "code" || Boolean(standardCodeLanguage)) &&
     Boolean(standardCode.trim());
+  const choiceOptions =
+    item.question_type === "choice" &&
+    item.question_options &&
+    typeof item.question_options === "object"
+      ? Object.entries(item.question_options)
+      : [];
 
   return (
     <div className="space-y-6">
@@ -126,6 +132,23 @@ export function WrongAnswerDetailPage() {
             __html: renderLatexInHtml((item.question_content.text as string | undefined) ?? item.question_title),
           }}
         />
+        {choiceOptions.length > 0 ? (
+          <div className="grid gap-2">
+            {choiceOptions.map(([key, value]) => (
+              <div
+                key={key}
+                className="flex items-start gap-3 rounded-xl border border-border/60 bg-muted/20 px-4 py-3"
+              >
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-background text-[12px] font-semibold text-muted-foreground">
+                  {key}
+                </span>
+                <span className="pt-1 text-[14px] leading-6 text-foreground">
+                  <LatexText>{String(value)}</LatexText>
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </section>
 
       <div className="grid gap-6 lg:grid-cols-2">

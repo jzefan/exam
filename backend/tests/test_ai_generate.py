@@ -7,6 +7,9 @@ from sqlalchemy import select
 
 from app.auth.models import User
 from app.config import settings
+from app.exams.models import Exam
+from app.exams.router import _unique_exam_title_for_owner
+from app.exams.schemas import ExamMockGenerateRequest
 from app.learning.models import KnowledgePoint
 from app.questions.ai_generate import (
     AIGenerateRequest,
@@ -101,10 +104,51 @@ def _question_stream_line(index: int) -> str:
     )
 
 
-def test_ai_generate_request_defaults_to_qwen() -> None:
+def test_ai_generate_request_defaults_to_deepseek() -> None:
     request = AIGenerateRequest()
 
-    assert request.model == "qwen"
+    assert request.model == "deepseek"
+    assert settings.deepseek_model_name == "deepseek-v4-flash"
+
+
+def test_exam_mock_generate_request_defaults_to_deepseek() -> None:
+    request = ExamMockGenerateRequest()
+
+    assert request.model == "deepseek"
+
+
+@pytest.mark.asyncio
+async def test_unique_exam_title_for_owner_increments_duplicate_mock_title(
+    db_session,
+    admin_token: str,
+) -> None:
+    admin = (await db_session.execute(select(User).where(User.username == "admin"))).scalar_one()
+    db_session.add_all(
+        [
+            Exam(
+                category="exam",
+                title="Python程序设计 - 模拟试卷",
+                created_by=admin.id,
+                owner_id=admin.id,
+            ),
+            Exam(
+                category="exam",
+                title="Python程序设计 - 模拟试卷-2",
+                created_by=admin.id,
+                owner_id=admin.id,
+            ),
+        ]
+    )
+    await db_session.flush()
+
+    title = await _unique_exam_title_for_owner(
+        db_session,
+        owner_id=admin.id,
+        category="exam",
+        base_title="Python程序设计 - 模拟试卷",
+    )
+
+    assert title == "Python程序设计 - 模拟试卷-3"
 
 
 @pytest.mark.asyncio
@@ -448,6 +492,7 @@ def test_build_system_prompt_includes_weighted_knowledge_context() -> None:
         difficulty=3,
         type_distribution={"choice": 4, "short_answer": 2},
         knowledge_keywords="事务, 并发控制",
+        course_name="数据库技术",
         prompt="结合教学案例命题",
         model="qwen",
     )
@@ -457,6 +502,7 @@ def test_build_system_prompt_includes_weighted_knowledge_context() -> None:
         difficulty=request.difficulty,
         type_distribution=request.type_distribution,
         knowledge_keywords=request.knowledge_keywords,
+        course_name=request.course_name,
         user_prompt=request.prompt,
         knowledge_contexts=[
             {
@@ -474,13 +520,37 @@ def test_build_system_prompt_includes_weighted_knowledge_context() -> None:
     assert "专业：软件工程" in prompt
     assert "方向：软件开发" in prompt
     assert "主知识点（课程语境）：数据库技术" in prompt
+    assert "本次必须严格围绕课程/主知识点「数据库技术」命题" in prompt
+    assert "必须忽略模型可能记住的任何无关历史对话" in prompt
+    assert "以本次课程/考试/知识点/资料为唯一依据" in prompt
     assert "当前重点知识点：事务隔离级别" in prompt
     assert "上层知识链路：数据库技术 > 事务管理 > 事务隔离级别" in prompt
     assert "可参考的下级知识点：脏读、不可重复读、幻读" in prompt
     assert "主知识点用于确定课程语境，是命题的核心范围，权重高于子知识点" in prompt
     assert "若存在同名或近义知识点，优先采用当前专业/方向/主知识点链路下的含义" in prompt
+    assert "严禁生成与当前课程、专业、方向、知识链路无关" in prompt
+    assert "必须沿用原题的学科场景、术语体系、考查能力和同一子知识点" in prompt
+    assert "严禁出现重复题、同题改写题" in prompt
+    assert "选择题(choice)的 analysis 必须逐项覆盖所有选项" in prompt
     assert "补充参考关键词：事务、并发控制。" in prompt
     assert "额外要求：结合教学案例命题" in prompt
+
+
+def test_build_system_prompt_uses_exam_title_when_course_name_missing() -> None:
+    prompt = build_ai_generate_system_prompt(
+        total_count=1,
+        difficulty=3,
+        type_distribution={"code": 1},
+        knowledge_keywords="",
+        exam_title="Python程序设计-考试",
+        user_prompt="生成一道编程题",
+        knowledge_contexts=[],
+    )
+
+    assert "本次考试/练习名称为「Python程序设计-考试」" in prompt
+    assert "若课程名缺失，则以该考试/练习名称作为命题范围边界" in prompt
+    assert "不得把代码题、简答题等改成选择题结构" in prompt
+    assert "不得沿用任何不属于该边界的模型记忆" in prompt
 
 
 def test_build_system_prompt_forbids_material_source_prefixes() -> None:

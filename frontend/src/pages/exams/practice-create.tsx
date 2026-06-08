@@ -28,6 +28,10 @@ import { AIQuestionConfigPanel } from "@/components/questions/ai-question-config
 import { type AIModelProvider } from "@/components/questions/ai-question-config-constants";
 import { AIGeneratedQuestionCard } from "@/components/questions/ai-generated-question-card";
 import {
+  DIFFICULTY_LABELS,
+  QuestionPreviewCard,
+} from "@/components/questions/question-preview-card";
+import {
   KnowledgePointSelector,
   type SelectedKnowledgePoint,
 } from "@/components/questions/knowledge-point-selector";
@@ -35,6 +39,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DatePicker } from "@/components/ui/date-picker";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PageIntroHeader } from "@/components/ui/page-intro-header";
@@ -61,11 +72,16 @@ import type {
 
 import { QuestionSelector } from "./components/QuestionSelector";
 import { ClassStudentSelector } from "./components/ClassStudentSelector";
+import { ExamQuestionActions } from "./components/ExamQuestionActions";
 import {
   getErrorMessage,
   getPublishedExamStatus,
   toSubmitDateTime,
 } from "./components/exam-form-utils";
+import {
+  questionTypeLabels,
+  type QuestionTypeSummary,
+} from "./components/paper-view-utils";
 
 type PracticeStepId = "knowledge" | "questions" | "students" | "publish";
 type QuestionMode = "manual" | "ai";
@@ -264,6 +280,16 @@ export function PracticeCreate() {
   const [questionItems, setQuestionItems] = useState<PracticeQuestionItem[]>(
     [],
   );
+  const [scoreDialogOpen, setScoreDialogOpen] = useState(false);
+  const [scorePreviewMode, setScorePreviewMode] = useState<"order" | "type">(
+    "order",
+  );
+  const [typeScoreDrafts, setTypeScoreDrafts] = useState<
+    Partial<Record<QuestionType, string>>
+  >({});
+  const typeScoreDraftDefaultsRef = useRef<
+    Partial<Record<QuestionType, string>>
+  >({});
   const [isManualQuestionFullscreen, setIsManualQuestionFullscreen] =
     useState(false);
   const [studentIds, setStudentIds] = useState<string[]>([]);
@@ -302,6 +328,10 @@ export function PracticeCreate() {
     aiQuestions.length > 0 &&
     !aiGenerating &&
     currentAIPersistKeys.some((key) => !persistedAIQuestionKeys.includes(key));
+  const showQuestionStepPreviewButton =
+    currentStepId === "questions" &&
+    questionMode === "ai" &&
+    questionIds.length > 0;
   const { dialog: unsavedGuardDialog } = useUnsavedGeneratedQuestionsGuard({
     when: hasUnsavedGeneratedQuestions,
     message: "当前生成的题目尚未加入练习，确定离开当前页面吗？",
@@ -337,6 +367,58 @@ export function PracticeCreate() {
   const selectedQuestionMap = useMemo(
     () => new Map(selectedQuestions.map((question) => [question.id, question])),
     [selectedQuestions],
+  );
+  const sortedQuestionItems = useMemo(
+    () => [...questionItems].sort((left, right) => left.order - right.order),
+    [questionItems],
+  );
+  const questionTypeSummaries = useMemo(() => {
+    const grouped = new Map<QuestionType, QuestionTypeSummary>();
+    for (const item of sortedQuestionItems) {
+      const question = selectedQuestionMap.get(item.question_id);
+      if (!question) continue;
+      const type = question.type;
+      const existing = grouped.get(type);
+      if (existing) {
+        existing.count += 1;
+        existing.totalScore = Number(
+          (existing.totalScore + (Number(item.score_override) || 0)).toFixed(2),
+        );
+        existing.questionIds.push(item.question_id);
+        continue;
+      }
+      grouped.set(type, {
+        type,
+        count: 1,
+        totalScore: Number((Number(item.score_override) || 0).toFixed(2)),
+        questionIds: [item.question_id],
+      });
+    }
+
+    return (Object.keys(questionTypeLabels) as QuestionType[])
+      .map((type) => grouped.get(type))
+      .filter((item): item is QuestionTypeSummary => Boolean(item));
+  }, [selectedQuestionMap, sortedQuestionItems]);
+  const questionItemsByType = useMemo(
+    () =>
+      questionTypeSummaries.map((summary) => ({
+        summary,
+        items: sortedQuestionItems.filter((item) =>
+          summary.questionIds.includes(item.question_id),
+        ),
+      })),
+    [questionTypeSummaries, sortedQuestionItems],
+  );
+  const questionTypeDraftDefaults = useMemo(
+    () =>
+      questionTypeSummaries.reduce<Partial<Record<QuestionType, string>>>(
+        (acc, summary) => {
+          acc[summary.type] = String(summary.totalScore);
+          return acc;
+        },
+        {},
+      ),
+    [questionTypeSummaries],
   );
   const todayPracticeTitlePrefix = useMemo(() => getDefaultPracticeTitle(), []);
   const practiceTitleSuggestionQuery = useList<PracticeDetail>({
@@ -478,6 +560,27 @@ export function PracticeCreate() {
       ),
     [questionItems],
   );
+
+  useEffect(() => {
+    const previousDefaults = typeScoreDraftDefaultsRef.current;
+    setTypeScoreDrafts((prev) => {
+      const next = questionTypeSummaries.reduce<
+        Partial<Record<QuestionType, string>>
+      >((acc, summary) => {
+        const defaultValue = questionTypeDraftDefaults[summary.type] ?? "";
+        const previousDefaultValue = previousDefaults[summary.type];
+        const currentValue = prev[summary.type];
+        acc[summary.type] =
+          currentValue === undefined || currentValue === previousDefaultValue
+            ? defaultValue
+            : currentValue;
+        return acc;
+      }, {});
+
+      return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+    });
+    typeScoreDraftDefaultsRef.current = questionTypeDraftDefaults;
+  }, [questionTypeDraftDefaults, questionTypeSummaries]);
 
   useEffect(() => {
     abortRef.current?.abort();
@@ -927,6 +1030,9 @@ export function PracticeCreate() {
               ? typeDistribution
               : undefined,
           knowledge_point_ids: selectedKnowledgePoints.map((item) => item.id),
+          course_name:
+            mainKnowledgePoint?.name ?? navState.mainKnowledgePointName ?? "",
+          exam_title: title.trim() || undefined,
           prompt: aiPrompt.trim() || undefined,
           model: aiModel,
         }),
@@ -1027,6 +1133,25 @@ export function PracticeCreate() {
     abortRef.current?.abort();
   };
 
+  const changeQuestionMode = (nextMode: QuestionMode) => {
+    if (nextMode === questionMode) return;
+
+    if (questionMode === "manual" && nextMode !== "manual") {
+      setQuestionIds([]);
+      setQuestionItems([]);
+      setAIQuestions([]);
+      setAIApplying(false);
+      setPersistedAIQuestionKeys([]);
+    }
+    if (questionMode === "ai" && nextMode !== "ai") {
+      abortRef.current?.abort();
+      setAIGenerating(false);
+      setAIApplying(false);
+    }
+
+    setQuestionMode(nextMode);
+  };
+
   const removeAIQuestion = (index: number) => {
     const target = aiQuestions.find((question) => question.index === index);
     setAIQuestions((prev) =>
@@ -1037,6 +1162,64 @@ export function PracticeCreate() {
         prev.filter((questionId) => questionId !== target.persistedQuestionId),
       );
     }
+  };
+
+  const updateQuestionScore = (questionId: string, value: string) => {
+    const parsed = Number(value);
+    setQuestionItems((prev) =>
+      prev.map((item) =>
+        item.question_id === questionId
+          ? {
+              ...item,
+              score_override: Number.isFinite(parsed) ? parsed : 0,
+            }
+          : item,
+      ),
+    );
+  };
+
+  const replaceQuestion = useCallback((oldId: string, newId: string) => {
+    setQuestionIds((prev) =>
+      prev.map((questionId) => (questionId === oldId ? newId : questionId)),
+    );
+    setQuestionItems((prev) =>
+      prev.map((item) =>
+        item.question_id === oldId ? { ...item, question_id: newId } : item,
+      ),
+    );
+  }, []);
+
+  const applyTypeScoreAllocation = (summary: QuestionTypeSummary) => {
+    const draftValue = Number(typeScoreDrafts[summary.type] ?? "");
+    if (!Number.isFinite(draftValue) || draftValue <= 0) {
+      toast({
+        title: "题型总分无效",
+        description: `${questionTypeLabels[summary.type]}的总分必须大于 0。`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const totalCents = Math.round(draftValue * 100);
+    const baseCents = Math.floor(totalCents / summary.count);
+    const remainder = totalCents - baseCents * summary.count;
+
+    setQuestionItems((prev) => {
+      let matched = 0;
+      return prev.map((item) => {
+        if (!summary.questionIds.includes(item.question_id)) {
+          return item;
+        }
+
+        const cents =
+          baseCents + (matched === summary.count - 1 ? remainder : 0);
+        matched += 1;
+        return {
+          ...item,
+          score_override: Number((cents / 100).toFixed(2)),
+        };
+      });
+    });
   };
 
   const handleSubmit = () => {
@@ -1197,6 +1380,305 @@ export function PracticeCreate() {
         onBack={() => navigate(navState.backTo ?? "/exams")}
         backLabel={navState.backLabel ?? "返回考试与练习"}
       />
+
+      <Dialog open={scoreDialogOpen} onOpenChange={setScoreDialogOpen}>
+        <DialogContent className="flex max-h-[88vh] flex-col overflow-hidden sm:max-w-6xl">
+          <DialogHeader>
+            <DialogTitle>预览与设置分数</DialogTitle>
+            <DialogDescription>
+              查看练习题目内容，并按题型或逐题设置每道题的练习分数。
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 border-y border-border py-3">
+            <div className="text-sm text-muted-foreground">
+              已选{" "}
+              <span className="font-semibold text-foreground">
+                {sortedQuestionItems.length}
+              </span>{" "}
+              题，合计{" "}
+              <span className="font-semibold text-foreground">
+                {totalScore}
+              </span>{" "}
+              分
+            </div>
+            <div className="flex rounded-lg border border-border bg-muted/30 p-1">
+              <Button
+                type="button"
+                variant={scorePreviewMode === "order" ? "default" : "ghost"}
+                size="sm"
+                className="h-8 px-3 text-xs"
+                onClick={() => setScorePreviewMode("order")}
+              >
+                按顺序
+              </Button>
+              <Button
+                type="button"
+                variant={scorePreviewMode === "type" ? "default" : "ghost"}
+                size="sm"
+                className="h-8 px-3 text-xs"
+                onClick={() => setScorePreviewMode("type")}
+              >
+                按题型
+              </Button>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto rounded-2xl bg-muted/10">
+            {sortedQuestionItems.length === 0 ? (
+              <div className="p-8 text-center text-sm text-muted-foreground">
+                还没有题目，请先返回第 2 步选择题目。
+              </div>
+            ) : scorePreviewMode === "order" ? (
+              <div className="divide-y divide-border/70">
+                {sortedQuestionItems.map((item, index) => {
+                  const question = selectedQuestionMap.get(item.question_id);
+                  const invalidScore =
+                    !Number.isFinite(item.score_override) ||
+                    (item.score_override ?? 0) <= 0;
+                  const scoreInputId = `practice-question-score-${item.question_id}`;
+
+                  return (
+                    <div key={item.question_id} className="px-4 py-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex min-w-0 flex-wrap items-center gap-3">
+                          <Badge variant="outline">第 {index + 1} 题</Badge>
+                          <span className="text-sm font-medium text-foreground/80">
+                            {question
+                              ? questionTypeLabels[question.type]
+                              : "题目"}
+                          </span>
+                          {question ? (
+                            <span className="text-xs text-muted-foreground">
+                              {DIFFICULTY_LABELS[question.difficulty] ??
+                                question.difficulty}
+                            </span>
+                          ) : null}
+                          {question &&
+                          question.knowledge_points.length > 0 ? (
+                            <span className="text-xs text-muted-foreground">
+                              {question.knowledge_points
+                                .map((kp) => kp.name)
+                                .join(" · ")}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          {question ? (
+                            <ExamQuestionActions
+                              question={question}
+                              currentExamQuestionIds={questionIds}
+                              onReplaceQuestion={replaceQuestion}
+                              courseKnowledgePointId={
+                                mainKnowledgePoint?.id ?? navState.courseKpId
+                              }
+                              examTitle={title}
+                            />
+                          ) : null}
+                          <Label
+                            htmlFor={scoreInputId}
+                            className="text-xs text-muted-foreground"
+                          >
+                            练习分数
+                          </Label>
+                          <Input
+                            id={scoreInputId}
+                            type="number"
+                            min={0.5}
+                            step={0.5}
+                            value={item.score_override ?? ""}
+                            onChange={(event) =>
+                              updateQuestionScore(
+                                item.question_id,
+                                event.target.value,
+                              )
+                            }
+                            className={cn(
+                              "h-8 w-20 bg-background px-2 text-right text-xs shadow-sm",
+                              invalidScore &&
+                                "border-destructive/50 text-destructive focus-visible:ring-destructive/30",
+                            )}
+                          />
+                          <span className="text-sm text-muted-foreground">
+                            分
+                          </span>
+                        </div>
+                      </div>
+                      {question ? (
+                        <QuestionPreviewCard
+                          question={question}
+                          mode="detailed"
+                          defaultExpanded
+                          hideHeader
+                          hideMeta
+                          markChoiceAnswer
+                          className="mt-2 w-full border-0 bg-transparent p-0 shadow-none"
+                        />
+                      ) : (
+                        <p className="mt-2 text-sm font-medium text-foreground">
+                          题目 {index + 1}
+                        </p>
+                      )}
+                      {invalidScore ? (
+                        <p className="mt-1 text-xs text-destructive">
+                          练习分数必须大于 0。
+                        </p>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="divide-y divide-border/70">
+                {questionItemsByType.map(({ summary, items }) => (
+                  <section key={summary.type} className="px-4 py-4">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex min-w-0 flex-wrap items-center gap-3">
+                        <Badge variant="outline">
+                          {questionTypeLabels[summary.type]}
+                        </Badge>
+                        <span className="text-xs text-muted-foreground">
+                          {summary.count} 题
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          当前合计 {summary.totalScore} 分
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-end gap-2">
+                        <Label
+                          htmlFor={`practice-type-total-score-${summary.type}`}
+                          className="text-xs text-muted-foreground"
+                        >
+                          题型总分
+                        </Label>
+                        <Input
+                          id={`practice-type-total-score-${summary.type}`}
+                          type="number"
+                          min={0.01}
+                          step={0.01}
+                          value={typeScoreDrafts[summary.type] ?? ""}
+                          onChange={(event) =>
+                            setTypeScoreDrafts((prev) => ({
+                              ...prev,
+                              [summary.type]: event.target.value,
+                            }))
+                          }
+                          className="h-8 w-20 bg-background px-2 text-right text-xs shadow-sm"
+                        />
+                        <span className="text-xs text-muted-foreground">
+                          分
+                        </span>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 px-2 text-xs"
+                          onClick={() => applyTypeScoreAllocation(summary)}
+                        >
+                          均分到每题
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="space-y-3">
+                      {items.map((item, index) => {
+                        const question = selectedQuestionMap.get(
+                          item.question_id,
+                        );
+                        const invalidScore =
+                          !Number.isFinite(item.score_override) ||
+                          (item.score_override ?? 0) <= 0;
+                        const scoreInputId = `practice-type-question-score-${item.question_id}`;
+
+                        return (
+                          <div
+                            key={item.question_id}
+                            className="space-y-2 rounded-xl bg-background/70 p-3"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div className="flex min-w-0 flex-wrap items-center gap-3">
+                                <Badge variant="outline">
+                                  {questionTypeLabels[summary.type]} 第{" "}
+                                  {index + 1} 题
+                                </Badge>
+                                {question ? (
+                                  <span className="text-xs text-muted-foreground">
+                                    {DIFFICULTY_LABELS[question.difficulty] ??
+                                      question.difficulty}
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div className="flex flex-wrap items-center justify-end gap-2">
+                                {question ? (
+                                  <ExamQuestionActions
+                                    question={question}
+                                    currentExamQuestionIds={questionIds}
+                                    onReplaceQuestion={replaceQuestion}
+                                    courseKnowledgePointId={
+                                      mainKnowledgePoint?.id ?? navState.courseKpId
+                                    }
+                                    examTitle={title}
+                                  />
+                                ) : null}
+                                <Label
+                                  htmlFor={scoreInputId}
+                                  className="text-xs text-muted-foreground"
+                                >
+                                  练习分数
+                                </Label>
+                                <Input
+                                  id={scoreInputId}
+                                  type="number"
+                                  min={0.5}
+                                  step={0.5}
+                                  value={item.score_override ?? ""}
+                                  onChange={(event) =>
+                                    updateQuestionScore(
+                                      item.question_id,
+                                      event.target.value,
+                                    )
+                                  }
+                                  className={cn(
+                                    "h-8 w-20 bg-background px-2 text-right text-xs shadow-sm",
+                                    invalidScore &&
+                                      "border-destructive/50 text-destructive focus-visible:ring-destructive/30",
+                                  )}
+                                />
+                                <span className="text-sm text-muted-foreground">
+                                  分
+                                </span>
+                              </div>
+                            </div>
+                            {question ? (
+                              <QuestionPreviewCard
+                                question={question}
+                                mode="detailed"
+                                defaultExpanded
+                                hideHeader
+                                hideMeta
+                                markChoiceAnswer
+                                className="w-full border-0 bg-transparent p-0 shadow-none"
+                              />
+                            ) : (
+                              <p className="text-sm font-medium text-foreground">
+                                题目 {index + 1}
+                              </p>
+                            )}
+                            {invalidScore ? (
+                              <p className="text-xs text-destructive">
+                                练习分数必须大于 0。
+                              </p>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {submitError && (
         <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
@@ -1371,7 +1853,7 @@ export function PracticeCreate() {
                 <div className="grid gap-3 md:grid-cols-2">
                   <button
                     type="button"
-                    onClick={() => setQuestionMode("manual")}
+                    onClick={() => changeQuestionMode("manual")}
                     className={cn(
                       "rounded-xl border px-4 py-3 text-left transition-colors",
                       questionMode === "manual"
@@ -1395,7 +1877,7 @@ export function PracticeCreate() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setQuestionMode("ai")}
+                    onClick={() => changeQuestionMode("ai")}
                     className={cn(
                       "rounded-xl border px-4 py-3 text-left transition-colors",
                       questionMode === "ai"
@@ -1568,8 +2050,16 @@ export function PracticeCreate() {
 
           {currentStepId === "publish" && (
             <Card>
-              <CardHeader>
+              <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
                 <CardTitle>步骤 4：发布设置</CardTitle>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setScoreDialogOpen(true)}
+                >
+                  预览与设置分数
+                </Button>
               </CardHeader>
               <CardContent className="space-y-5">
                 <div className="grid gap-4 sm:grid-cols-2">
@@ -1746,18 +2236,38 @@ export function PracticeCreate() {
                   {questionIds.length} 题
                 </span>
               </div>
+              {showQuestionStepPreviewButton ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 w-full justify-center text-xs"
+                  onClick={() => setScoreDialogOpen(true)}
+                >
+                  <BookCopy size={14} className="mr-1.5" />
+                  预览
+                </Button>
+              ) : null}
               <div className="flex items-center justify-between gap-3 text-sm">
                 <span className="text-muted-foreground">学生</span>
                 <span className="font-medium text-foreground">
                   {studentIds.length} 人
                 </span>
               </div>
-              <div className="flex items-center justify-between gap-3 text-sm">
+              <button
+                type="button"
+                className="group flex w-full items-center justify-between gap-3 rounded-md text-left text-sm outline-none transition-colors hover:bg-primary/5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                title="点击设置练习分数"
+                onClick={() => setScoreDialogOpen(true)}
+              >
                 <span className="text-muted-foreground">总分</span>
-                <span className="font-medium text-foreground">
+                <span className="font-medium text-foreground transition-colors group-hover:text-primary">
                   {totalScore} 分
+                  <span className="ml-2 hidden text-xs font-normal text-primary group-hover:inline">
+                    可设置
+                  </span>
                 </span>
-              </div>
+              </button>
               <div className="flex items-center justify-between gap-3 text-sm">
                 <span className="text-muted-foreground">时长</span>
                 <span className="font-medium text-foreground">

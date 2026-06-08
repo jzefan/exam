@@ -193,10 +193,10 @@ export function PaperDetailPage() {
               size="sm"
               onClick={() => setQuickPublishMode("practice")}
               disabled={archived || paper.questions.length === 0}
-              title="基于当前试卷快速发布一次练习/作业"
+              title="基于当前试卷快速发布一次练习"
             >
               <Send className="h-4 w-4" />
-              发布作业
+              发布练习
             </Button>
             <Button
               size="sm"

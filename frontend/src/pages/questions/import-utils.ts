@@ -472,6 +472,7 @@ export function buildImportableQuestions(drafts: QuestionImportDraft[], question
         analysis: draft.analysis || null,
         difficulty: clampedDifficulty,
         score: 10,
+        source: "imported" as const,
         tag_ids: [],
         knowledge_point_ids: draft.suggested_knowledge_points?.map((kp) => kp.id) ?? [],
         question_bank_id: questionBankId,

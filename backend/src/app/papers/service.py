@@ -8,6 +8,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import pdfplumber
 from docx import Document
@@ -39,6 +40,10 @@ from app.questions.schemas import (
     QuestionImportDraft,
     QuestionImportImageInput,
 )
+from app.questions.similarity import (
+    question_is_too_similar_to_any,
+    question_summary_for_prompt,
+)
 from app.questions.service import (
     bulk_create_questions_fast,
     get_or_create_named_private_question_bank,
@@ -53,6 +58,38 @@ class PaperGenerationProfile:
     difficulty: int
     knowledge_point_ids: list[uuid.UUID | str]
     prompt: str
+
+
+@dataclass(frozen=True)
+class GeneratedQuestionItemsResult:
+    question_items: list[PaperQuestionItem]
+    reused_source_question_ids: set[uuid.UUID]
+    generated_question_count: int
+    reused_source_question_count: int
+    reused_bank_question_count: int
+
+
+@dataclass(frozen=True)
+class GenerationPlanSlot:
+    source_item: Any
+    question_type: str
+    knowledge_point_ids: list[uuid.UUID]
+    knowledge_point_names: list[str]
+    knowledge_key: str
+    knowledge_label: str
+    type_distribution_text: str
+    knowledge_distribution_text: str
+    knowledge_quota_index: int
+    knowledge_quota_count: int
+    type_quota_index: int
+    type_quota_count: int
+
+
+@dataclass(frozen=True)
+class GenerationPlan:
+    slots: list[GenerationPlanSlot]
+    type_distribution: dict[str, int]
+    knowledge_distribution: dict[str, int]
 
 
 def _format_docx_table(table: object, order: int) -> str:
@@ -119,6 +156,7 @@ def build_paper_generation_profile(
     source_questions: list[dict],
     root_knowledge_point_id: uuid.UUID | str | None,
     difficulty_strategy: str,
+    total_count: int | None = None,
 ) -> PaperGenerationProfile:
     if not source_questions:
         return PaperGenerationProfile(
@@ -130,6 +168,7 @@ def build_paper_generation_profile(
         )
 
     distribution = Counter(str(item.get("type") or "choice") for item in source_questions)
+    target_total = total_count if total_count is not None else len(source_questions)
     difficulties = [int(item.get("difficulty") or 3) for item in source_questions]
     average = round(sum(difficulties) / len(difficulties)) if difficulties else 3
     if difficulty_strategy == "easier":
@@ -138,11 +177,520 @@ def build_paper_generation_profile(
         average += 1
     difficulty = min(5, max(1, average))
     return PaperGenerationProfile(
-        total_count=len(source_questions),
-        type_distribution=dict(distribution),
+        total_count=target_total,
+        type_distribution=_scale_distribution(dict(distribution), target_total),
         difficulty=difficulty,
         knowledge_point_ids=[root_knowledge_point_id] if root_knowledge_point_id else [],
         prompt="请参考源试卷的题型结构、难度和考查范围，生成一份内容不同但能力要求接近的新试卷。",
+    )
+
+
+def _scale_distribution(distribution: dict[str, int], total_count: int) -> dict[str, int]:
+    original_total = sum(distribution.values())
+    if original_total <= 0 or total_count <= 0:
+        return {}
+
+    scaled: dict[str, int] = {}
+    remainders: list[tuple[float, str]] = []
+    for key, value in distribution.items():
+        exact = total_count * value / original_total
+        base = int(exact)
+        if value > 0 and base == 0:
+            base = 1
+        scaled[key] = base
+        remainders.append((exact - base, key))
+
+    current = sum(scaled.values())
+    if current < total_count:
+        for _, key in sorted(remainders, reverse=True):
+            if current >= total_count:
+                break
+            scaled[key] += 1
+            current += 1
+    elif current > total_count:
+        for _, key in sorted(remainders):
+            if current <= total_count:
+                break
+            if scaled[key] > 0:
+                scaled[key] -= 1
+                current -= 1
+
+    return {key: value for key, value in scaled.items() if value > 0}
+
+
+def _question_type_value(question: Question) -> str:
+    return question.type.value if hasattr(question.type, "value") else str(question.type)
+
+
+def _source_item_question_type(item: Any) -> str:
+    return _question_type_value(item.question)
+
+
+def _source_item_knowledge_point_ids(item: Any) -> list[uuid.UUID]:
+    question = item.question
+    return [knowledge_point.id for knowledge_point in question.knowledge_points or []]
+
+
+def _source_item_knowledge_point_names(item: Any) -> list[str]:
+    question = item.question
+    return [
+        str(knowledge_point.name).strip()
+        for knowledge_point in question.knowledge_points or []
+        if str(knowledge_point.name).strip()
+    ]
+
+
+def _source_item_primary_knowledge_key(
+    item: Any,
+    root_knowledge_point_id: uuid.UUID | None,
+) -> str:
+    knowledge_point_ids = _source_item_knowledge_point_ids(item)
+    if knowledge_point_ids:
+        return str(knowledge_point_ids[0])
+    if root_knowledge_point_id is not None:
+        return str(root_knowledge_point_id)
+    return "__unmarked__"
+
+
+def _source_item_generation_knowledge_ids(
+    item: Any,
+    root_knowledge_point_id: uuid.UUID | None,
+) -> list[uuid.UUID]:
+    knowledge_point_ids = _source_item_knowledge_point_ids(item)
+    if knowledge_point_ids:
+        return knowledge_point_ids
+    return [root_knowledge_point_id] if root_knowledge_point_id is not None else []
+
+
+def _source_item_generation_knowledge_label(
+    item: Any,
+    root_knowledge_point_id: uuid.UUID | None,
+) -> tuple[str, list[str]]:
+    names = _source_item_knowledge_point_names(item)
+    if names:
+        return " / ".join(names), names
+    if root_knowledge_point_id is not None:
+        return "课程主知识", ["课程主知识"]
+    return "未标注知识点", []
+
+
+def _source_item_score(item: Any) -> float | None:
+    if item.score_override is not None:
+        return float(item.score_override)
+    if item.question is not None and item.question.score is not None:
+        return float(item.question.score)
+    return None
+
+
+def _normalise_prompt_text(value: Any, *, max_length: int = 500) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        preferred = value.get("text") or value.get("html") or value.get("markdown")
+        if preferred is not None:
+            value = preferred
+    text = re.sub(r"\s+", " ", str(value)).strip()
+    if len(text) > max_length:
+        return f"{text[:max_length]}..."
+    return text
+
+
+def _format_source_question_context(slot: GenerationPlanSlot | Any) -> str:
+    source_item = slot.source_item if isinstance(slot, GenerationPlanSlot) else slot
+    question = source_item.question
+    knowledge_point_names = "、".join(
+        knowledge_point.name for knowledge_point in question.knowledge_points or []
+    )
+    parts = [
+        f"源题题型：{_source_item_question_type(source_item)}",
+        f"源题难度：{question.difficulty}",
+        f"源题知识点：{knowledge_point_names or '未标注'}",
+        f"源题标题：{_normalise_prompt_text(question.title, max_length=180)}",
+        f"源题内容：{_normalise_prompt_text(question.content, max_length=520)}",
+    ]
+    if question.options:
+        parts.append(f"源题选项：{_normalise_prompt_text(question.options, max_length=360)}")
+    if question.answer:
+        parts.append(f"源题答案：{_normalise_prompt_text(question.answer, max_length=260)}")
+    if question.analysis:
+        parts.append(f"源题解析：{_normalise_prompt_text(question.analysis, max_length=360)}")
+    return _normalise_prompt_text("\n".join(part for part in parts if part), max_length=1400)
+
+
+def _format_generation_plan_context(slot: GenerationPlanSlot | Any) -> str:
+    if not isinstance(slot, GenerationPlanSlot):
+        return ""
+    return (
+        "后端已完成本次模拟卷配额设计："
+        f"整卷题型配额为 {slot.type_distribution_text}；"
+        f"整卷知识点配额为 {slot.knowledge_distribution_text}；"
+        f"当前题型 {slot.question_type} 为第 {slot.type_quota_index}/{slot.type_quota_count} 题；"
+        f"当前知识点「{slot.knowledge_label}」为第 {slot.knowledge_quota_index}/{slot.knowledge_quota_count} 题。"
+        "必须按照这个题型和知识点生成，不得自行切换到其它知识点或其它学科。"
+    )
+
+
+def _build_slot_ai_prompt(
+    base_prompt: str,
+    slot: GenerationPlanSlot | Any,
+    selected_questions: list[Any] | None = None,
+) -> str:
+    source_context = _format_source_question_context(slot)
+    plan_context = _format_generation_plan_context(slot)
+    selected_questions = selected_questions or []
+    selected_context = ""
+    if selected_questions:
+        summaries = [
+            f"{index}. {question_summary_for_prompt(question)}"
+            for index, question in enumerate(selected_questions[-8:], start=1)
+        ]
+        selected_context = "\n本卷已选题摘要（新题不得与这些题重复或近似）：\n" + "\n".join(summaries)
+    prompt = f"""{base_prompt}
+
+你正在为同一门课程、同一主知识点和同一子知识点补充一道新题。请先分析下方源题的学科领域、课程语境、知识点链路、考查能力和题型结构，再生成内容不同但考查目标等价的新题。
+必须保持源题所属课程/主知识和子知识点，不得迁移到语文、英语、文学、历史、常识或其它无关学科；除非源题和知识点本身就是这些学科。
+必须保持同一题型与相近难度。若源题是编程题，新题也必须是编程任务，并给出可判分参考答案。
+严禁生成与本卷已选题、源题重复或基本近似的题目；不能只是替换变量名、数字、选项顺序或同义改写。
+{plan_context}
+
+源题参考：
+{source_context}
+{selected_context}
+"""
+    return _normalise_prompt_text(prompt, max_length=1900)
+
+
+def _combined_generation_key(question_type: str, knowledge_key: str) -> str:
+    return f"{question_type}\u241f{knowledge_key}"
+
+
+def _split_combined_generation_key(key: str) -> tuple[str, str]:
+    question_type, knowledge_key = key.split("\u241f", 1)
+    return question_type, knowledge_key
+
+
+def _build_generation_plan(
+    source_items: list[Any],
+    *,
+    total_count: int,
+    root_knowledge_point_id: uuid.UUID | None,
+    prefer_root_knowledge_point: bool = False,
+) -> GenerationPlan:
+    grouped_items: dict[str, list[Any]] = {}
+    key_order: list[str] = []
+    knowledge_labels: dict[str, str] = {}
+
+    for item in source_items:
+        question_type = _source_item_question_type(item)
+        if prefer_root_knowledge_point and root_knowledge_point_id is not None:
+            knowledge_key = str(root_knowledge_point_id)
+            label = "课程主知识"
+        else:
+            knowledge_key = _source_item_primary_knowledge_key(item, root_knowledge_point_id)
+            label, _ = _source_item_generation_knowledge_label(item, root_knowledge_point_id)
+        combined_key = _combined_generation_key(question_type, knowledge_key)
+        if combined_key not in grouped_items:
+            grouped_items[combined_key] = []
+            key_order.append(combined_key)
+        grouped_items[combined_key].append(item)
+        knowledge_labels.setdefault(knowledge_key, label)
+
+    combined_distribution = {
+        key: len(items)
+        for key, items in grouped_items.items()
+    }
+    combined_quota = _scale_distribution(combined_distribution, total_count)
+
+    raw_slots: list[tuple[Any, str, str]] = []
+    max_quota = max(combined_quota.values(), default=0)
+    group_offsets: dict[str, int] = {}
+    for round_index in range(max_quota):
+        for key in key_order:
+            if round_index >= combined_quota.get(key, 0):
+                continue
+            question_type, knowledge_key = _split_combined_generation_key(key)
+            items = grouped_items[key]
+            offset = group_offsets.get(key, 0)
+            raw_slots.append((items[offset % len(items)], question_type, knowledge_key))
+            group_offsets[key] = offset + 1
+
+    type_distribution = Counter(question_type for _, question_type, _ in raw_slots)
+    knowledge_distribution = Counter(knowledge_key for _, _, knowledge_key in raw_slots)
+    type_distribution_text = "、".join(
+        f"{question_type} {count}题"
+        for question_type, count in type_distribution.items()
+    ) or "无"
+    knowledge_distribution_text = "、".join(
+        f"{knowledge_labels.get(knowledge_key, knowledge_key)} {count}题"
+        for knowledge_key, count in knowledge_distribution.items()
+    ) or "无"
+    type_seen: Counter[str] = Counter()
+    knowledge_seen: Counter[str] = Counter()
+    slots: list[GenerationPlanSlot] = []
+    for item, question_type, knowledge_key in raw_slots:
+        type_seen[question_type] += 1
+        knowledge_seen[knowledge_key] += 1
+        if prefer_root_knowledge_point and root_knowledge_point_id is not None:
+            label = "课程主知识"
+            names = ["课程主知识"]
+            knowledge_point_ids = [root_knowledge_point_id]
+        else:
+            label, names = _source_item_generation_knowledge_label(item, root_knowledge_point_id)
+            knowledge_point_ids = _source_item_generation_knowledge_ids(item, root_knowledge_point_id)
+        slots.append(
+            GenerationPlanSlot(
+                source_item=item,
+                question_type=question_type,
+                knowledge_point_ids=knowledge_point_ids,
+                knowledge_point_names=names,
+                knowledge_key=knowledge_key,
+                knowledge_label=knowledge_labels.get(knowledge_key, label),
+                type_distribution_text=type_distribution_text,
+                knowledge_distribution_text=knowledge_distribution_text,
+                knowledge_quota_index=knowledge_seen[knowledge_key],
+                knowledge_quota_count=knowledge_distribution[knowledge_key],
+                type_quota_index=type_seen[question_type],
+                type_quota_count=type_distribution[question_type],
+            )
+        )
+
+    return GenerationPlan(
+        slots=slots,
+        type_distribution=dict(type_distribution),
+        knowledge_distribution={
+            knowledge_labels.get(key, key): count
+            for key, count in knowledge_distribution.items()
+        },
+    )
+
+
+def _question_scope_query_for_generation(*, user: User, is_admin: bool) -> Select:
+    query = select(Question).where(Question.deleted_at.is_(None))
+    if not is_admin:
+        query = query.outerjoin(QuestionBank, Question.question_bank_id == QuestionBank.id).where(
+            or_(
+                teacher_owned_resource_filter(Question, user.id),
+                and_(
+                    Question.question_bank_id.is_not(None),
+                    QuestionBank.visibility == VisibilityScope.PLATFORM,
+                ),
+            )
+        )
+    return query.options(selectinload(Question.knowledge_points))
+
+
+async def _pick_existing_question_for_slot(
+    db: AsyncSession,
+    slot: GenerationPlanSlot,
+    *,
+    excluded_question_ids: set[uuid.UUID],
+    selected_questions: list[Any],
+    user: User,
+    is_admin: bool,
+) -> Question | None:
+    source_question = slot.source_item.question
+    type_value = slot.question_type
+    knowledge_point_ids = slot.knowledge_point_ids
+    base_query = _question_scope_query_for_generation(user=user, is_admin=is_admin).where(
+        Question.type == type_value,
+    )
+    if excluded_question_ids:
+        base_query = base_query.where(Question.id.not_in(excluded_question_ids))
+
+    query_attempts: list[Select] = []
+    if source_question.question_bank_id is not None and knowledge_point_ids:
+        query_attempts.append(
+            base_query.where(
+                Question.question_bank_id == source_question.question_bank_id,
+                Question.knowledge_points.any(KnowledgePoint.id.in_(knowledge_point_ids)),
+            )
+        )
+    if source_question.question_bank_id is not None:
+        query_attempts.append(base_query.where(Question.question_bank_id == source_question.question_bank_id))
+    if knowledge_point_ids:
+        query_attempts.append(
+            base_query.where(Question.knowledge_points.any(KnowledgePoint.id.in_(knowledge_point_ids)))
+        )
+    query_attempts.append(base_query)
+
+    for query in query_attempts:
+        rows = (await db.execute(query.limit(100))).scalars().unique().all()
+        distinct_rows = [
+            row for row in rows
+            if not question_is_too_similar_to_any(row, [source_question, *selected_questions])
+        ]
+        if distinct_rows:
+            return random.choice(list(distinct_rows))
+    return None
+
+
+async def generate_question_items_from_source_items(
+    db: AsyncSession,
+    source_items: list[Any],
+    *,
+    total_count: int,
+    source_reuse_rate: int,
+    root_knowledge_point_id: uuid.UUID | None,
+    prefer_root_knowledge_point: bool,
+    difficulty_strategy: str,
+    model: str,
+    user: User,
+    is_admin: bool,
+    exam_title: str | None = None,
+) -> GeneratedQuestionItemsResult:
+    source_items = [item for item in sorted(source_items, key=lambda value: value.order) if item.question is not None]
+    if not source_items:
+        raise ValueError("源内容没有可用于生成的题目")
+    if total_count < len(source_items):
+        raise ValueError("目标题目数不能少于源题目数")
+
+    source_questions: list[dict] = [
+        {
+            "type": _source_item_question_type(item),
+            "difficulty": item.question.difficulty,
+            "knowledge_point_ids": _source_item_knowledge_point_ids(item),
+        }
+        for item in source_items
+    ]
+    profile = build_paper_generation_profile(
+        source_questions,
+        root_knowledge_point_id if prefer_root_knowledge_point else None,
+        difficulty_strategy,
+        total_count=total_count,
+    )
+    plan = _build_generation_plan(
+        source_items,
+        total_count=total_count,
+        root_knowledge_point_id=root_knowledge_point_id,
+        prefer_root_knowledge_point=prefer_root_knowledge_point,
+    )
+    slots = plan.slots
+    if len(slots) != total_count:
+        raise ValueError("无法按源题型和知识点比例生成题目计划")
+    profile.type_distribution = plan.type_distribution
+
+    allowed_source_reuse_count = min(
+        len(source_items),
+        int(total_count * source_reuse_rate / 100),
+    )
+    source_slots = list(range(min(len(source_items), len(slots))))
+    reused_slot_indices = set(random.sample(source_slots, allowed_source_reuse_count)) if allowed_source_reuse_count > 0 else set()
+
+    selected_question_ids: list[uuid.UUID | None] = [None] * len(slots)
+    selected_scores: list[float | None] = [None] * len(slots)
+    used_question_ids: set[uuid.UUID] = {item.question_id for item in source_items}
+    selected_questions: list[Any] = []
+    reused_source_question_ids: set[uuid.UUID] = set()
+    reused_source_question_count = 0
+
+    for index in reused_slot_indices:
+        slot = slots[index]
+        if question_is_too_similar_to_any(slot.source_item.question, selected_questions):
+            continue
+        selected_question_ids[index] = slot.source_item.question_id
+        selected_scores[index] = _source_item_score(slot.source_item)
+        selected_questions.append(slot.source_item.question)
+        reused_source_question_ids.add(slot.source_item.question_id)
+        reused_source_question_count += 1
+
+    reused_bank_question_count = 0
+    for index, slot in enumerate(slots):
+        if selected_question_ids[index] is not None:
+            continue
+        picked = await _pick_existing_question_for_slot(
+            db,
+            slot,
+            excluded_question_ids=used_question_ids,
+            selected_questions=selected_questions,
+            user=user,
+            is_admin=is_admin,
+        )
+        if picked is None:
+            continue
+        selected_question_ids[index] = picked.id
+        selected_scores[index] = _source_item_score(slot.source_item)
+        used_question_ids.add(picked.id)
+        selected_questions.append(picked)
+        reused_bank_question_count += 1
+
+    ai_slots = [index for index, question_id in enumerate(selected_question_ids) if question_id is None]
+    generated_question_ids: list[uuid.UUID] = []
+    generated_questions: list[QuestionCreate] = []
+    for index in ai_slots:
+        slot = slots[index]
+        ai_profile = PaperGenerationProfile(
+            total_count=1,
+            type_distribution={slot.question_type: 1},
+            difficulty=profile.difficulty,
+            knowledge_point_ids=slot.knowledge_point_ids or profile.knowledge_point_ids,
+            prompt=_build_slot_ai_prompt(profile.prompt, slot, selected_questions),
+        )
+        generated: QuestionCreate | None = None
+        for retry_index in range(3):
+            retry_prompt = ai_profile.prompt
+            if retry_index > 0:
+                retry_prompt = _normalise_prompt_text(
+                    f"{ai_profile.prompt}\n前一次生成题与本卷已有题或源题过于相似，请换一个明显不同的任务、案例或考查角度。",
+                    max_length=1900,
+                )
+            request = AIGenerateRequest(
+                total_count=1,
+                difficulty=ai_profile.difficulty,
+                type_distribution=ai_profile.type_distribution,
+                knowledge_point_ids=[kp for kp in ai_profile.knowledge_point_ids if isinstance(kp, uuid.UUID)],
+                exam_title=exam_title or "",
+                prompt=retry_prompt,
+                model=AIModelProvider(model),
+            )
+            async for event in generate_questions_stream(db, request, user.id):
+                event_type = str(event.get("type") or "")
+                if event_type == "error":
+                    raise ValueError(str(event.get("message") or "AI 生成失败"))
+                if event_type != "question":
+                    continue
+                payload = event.get("data")
+                if isinstance(payload, dict):
+                    candidate = _question_create_from_ai_payload(payload, profile=ai_profile)
+                    if question_is_too_similar_to_any(candidate, [slot.source_item.question, *selected_questions]):
+                        break
+                    generated = candidate
+                    break
+            if generated is not None:
+                break
+        if generated is None:
+            raise ValueError("AI 生成题目与已有题过于相似，无法生成足够的不重复题目")
+        generated.score = _source_item_score(slot.source_item) or generated.score
+        generated_questions.append(generated)
+        selected_questions.append(generated)
+
+    if generated_questions:
+        result = await bulk_create_questions_fast(db, generated_questions, user.id)
+        if len(result.created_question_ids) != len(generated_questions):
+            raise ValueError("AI 生成题目入库数量不足")
+        generated_question_ids = list(result.created_question_ids)
+
+    for slot_index, question_id in zip(ai_slots, generated_question_ids, strict=True):
+        selected_question_ids[slot_index] = question_id
+        selected_scores[slot_index] = _source_item_score(slots[slot_index].source_item)
+
+    question_items = [
+        PaperQuestionItem(
+            question_id=question_id,
+            order=index,
+            score_override=selected_scores[index],
+        )
+        for index, question_id in enumerate(selected_question_ids)
+        if question_id is not None
+    ]
+    if len(question_items) != total_count:
+        raise ValueError("生成题目数量不足")
+
+    return GeneratedQuestionItemsResult(
+        question_items=question_items,
+        reused_source_question_ids=reused_source_question_ids,
+        generated_question_count=len(generated_questions),
+        reused_source_question_count=reused_source_question_count,
+        reused_bank_question_count=reused_bank_question_count,
     )
 
 
@@ -643,90 +1191,19 @@ async def generate_paper_from_source(
     if not source_items:
         raise ValueError("源试卷没有可用于生成的题目")
 
-    source_questions: list[dict] = [
-        {
-            "type": item.question.type.value if hasattr(item.question.type, "value") else str(item.question.type),
-            "difficulty": item.question.difficulty,
-            "knowledge_point_ids": [knowledge_point.id for knowledge_point in item.question.knowledge_points],
-        }
-        for item in source_items
-    ]
-
-    profile = build_paper_generation_profile(
-        source_questions,
-        source.root_knowledge_point_id if body.prefer_root_knowledge_point else None,
-        body.difficulty_strategy,
+    generated = await generate_question_items_from_source_items(
+        db,
+        source_items,
+        total_count=len(source_items),
+        source_reuse_rate=body.source_reuse_rate,
+        root_knowledge_point_id=source.root_knowledge_point_id,
+        prefer_root_knowledge_point=body.prefer_root_knowledge_point,
+        difficulty_strategy=body.difficulty_strategy,
+        model=body.model,
+        user=user,
+        is_admin=is_admin,
+        exam_title=source.title,
     )
-
-    reuse_count = min(
-        len(source_items),
-        int(profile.total_count * body.source_reuse_rate / 100),
-    )
-    reused_items = random.sample(source_items, reuse_count) if reuse_count > 0 else []
-
-    remaining_distribution = dict(profile.type_distribution)
-    for item in reused_items:
-        type_str = (
-            item.question.type.value
-            if hasattr(item.question.type, "value")
-            else str(item.question.type)
-        )
-        if remaining_distribution.get(type_str, 0) > 0:
-            remaining_distribution[type_str] -= 1
-    remaining_distribution = {key: value for key, value in remaining_distribution.items() if value > 0}
-
-    new_count = profile.total_count - len(reused_items)
-
-    generated_questions: list[QuestionCreate] = []
-    new_question_ids: list[uuid.UUID] = []
-    if new_count > 0:
-        request = AIGenerateRequest(
-            total_count=new_count,
-            difficulty=profile.difficulty,
-            type_distribution=remaining_distribution,
-            knowledge_point_ids=[kp for kp in profile.knowledge_point_ids if isinstance(kp, uuid.UUID)],
-            prompt=profile.prompt,
-            model=AIModelProvider(body.model),
-        )
-
-        async for event in generate_questions_stream(db, request, user.id):
-            event_type = str(event.get("type") or "")
-            if event_type == "error":
-                raise ValueError(str(event.get("message") or "AI 生成失败"))
-            if event_type != "question":
-                continue
-            payload = event.get("data")
-            if not isinstance(payload, dict):
-                continue
-            generated_questions.append(_question_create_from_ai_payload(payload, profile=profile))
-
-        if len(generated_questions) != new_count:
-            raise ValueError("AI 生成题目数量不足")
-
-        result = await bulk_create_questions_fast(db, generated_questions, user.id)
-        if len(result.created_question_ids) != new_count:
-            raise ValueError("AI 生成题目入库数量不足")
-        new_question_ids = list(result.created_question_ids)
-
-    sorted_reused = sorted(reused_items, key=lambda item: item.order)
-    question_items: list[PaperQuestionItem] = []
-    for index, item in enumerate(sorted_reused):
-        question_items.append(
-            PaperQuestionItem(
-                question_id=item.question_id,
-                order=index,
-                score_override=float(item.score_override) if item.score_override is not None else None,
-            )
-        )
-    base_offset = len(sorted_reused)
-    for index, question_id in enumerate(new_question_ids):
-        question_items.append(
-            PaperQuestionItem(
-                question_id=question_id,
-                order=base_offset + index,
-                score_override=generated_questions[index].score,
-            )
-        )
 
     return await create_paper(
         db,
@@ -736,7 +1213,7 @@ async def generate_paper_from_source(
             source_type="ai_generated",
             source_paper_id=source.id,
             root_knowledge_point_id=source.root_knowledge_point_id,
-            question_items=question_items,
+            question_items=generated.question_items,
         ),
         user=user,
         is_admin=is_admin,

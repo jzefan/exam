@@ -12,17 +12,43 @@ export const questionTypeLabels: Record<QuestionType, string> = {
   code: "编程题",
 };
 
+const questionTypeDisplayOrder: Record<QuestionType, number> = {
+  choice: 0,
+  true_false: 1,
+  fill_in: 2,
+  short_answer: 3,
+  essay: 4,
+  code: 5,
+};
+
 export type PaperPreviewItem = {
   question: IQuestion;
   order: number;
   scoreOverride: number | null;
+  sourceExamId: string | null;
+  sourceQuestionId: string | null;
+  isSourceReused: boolean;
 };
+
+export function getPaperQuestionAnchorId(questionId: string) {
+  return `paper-question-${questionId}`;
+}
 
 export type QuestionTypeSummary = {
   type: QuestionType;
   count: number;
   totalScore: number;
   questionIds: string[];
+};
+
+export type QuestionJumpItem = {
+  previewItem: PaperPreviewItem;
+  displayIndex: number;
+};
+
+export type QuestionJumpGroup = {
+  summary: QuestionTypeSummary;
+  items: QuestionJumpItem[];
 };
 
 export function buildPaperPreviewItems(
@@ -32,7 +58,6 @@ export function buildPaperPreviewItems(
   const questionMap = new Map(questions.map((question) => [question.id, question]));
 
   return [...questionItems]
-    .sort((a, b) => a.order - b.order)
     .map((item) => {
       const question = questionMap.get(item.question_id);
       if (!question) {
@@ -43,9 +68,32 @@ export function buildPaperPreviewItems(
         question,
         order: item.order,
         scoreOverride: item.score_override,
+        sourceExamId: item.source_exam_id ?? null,
+        sourceQuestionId: item.source_question_id ?? null,
+        isSourceReused: Boolean(
+          item.source_exam_id &&
+          item.source_question_id &&
+          item.source_question_id === question.id,
+        ),
       };
     })
-    .filter((item): item is PaperPreviewItem => Boolean(item));
+    .filter((item): item is PaperPreviewItem => Boolean(item))
+    .sort((a, b) => {
+      const aType = normalizeQuestionType(a.question.type);
+      const bType = normalizeQuestionType(b.question.type);
+      const aTypeOrder = aType === null ? Number.MAX_SAFE_INTEGER : questionTypeDisplayOrder[aType];
+      const bTypeOrder = bType === null ? Number.MAX_SAFE_INTEGER : questionTypeDisplayOrder[bType];
+
+      if (aTypeOrder !== bTypeOrder) {
+        return aTypeOrder - bTypeOrder;
+      }
+
+      if (a.order !== b.order) {
+        return a.order - b.order;
+      }
+
+      return a.question.id.localeCompare(b.question.id);
+    });
 }
 
 export function buildQuestionTypeSummaries(items: PaperPreviewItem[]): QuestionTypeSummary[] {
@@ -76,6 +124,30 @@ export function buildQuestionTypeSummaries(items: PaperPreviewItem[]): QuestionT
   return (Object.keys(questionTypeLabels) as QuestionType[])
     .map((type) => grouped.get(type))
     .filter((item): item is QuestionTypeSummary => Boolean(item));
+}
+
+export function buildQuestionJumpGroups(
+  items: PaperPreviewItem[],
+  summaries: QuestionTypeSummary[],
+): QuestionJumpGroup[] {
+  const itemByQuestionId = new Map(
+    items.map((item, index) => [
+      item.question.id,
+      {
+        previewItem: item,
+        displayIndex: index + 1,
+      },
+    ]),
+  );
+
+  return summaries
+    .map((summary) => ({
+      summary,
+      items: summary.questionIds
+        .map((questionId) => itemByQuestionId.get(questionId))
+        .filter((item): item is QuestionJumpItem => Boolean(item)),
+    }))
+    .filter((group) => group.items.length > 0);
 }
 
 export function buildEvenScoreAllocation(total: number, count: number): number[] {

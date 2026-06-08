@@ -90,7 +90,7 @@ describe("Dashboard", () => {
       ["我的课程", "/courses"],
       ["导入题目", "/questions/import"],
       ["创建考试", "/exams/create"],
-      ["发布作业", "/exams/practice/create"],
+      ["发布练习", "/exams/practice/create"],
       ["考试阅卷", "/grading"],
     ] as const
 

@@ -51,6 +51,8 @@ export interface ITokenResponse {
 }
 
 export type QuestionType = "choice" | "true_false" | "fill_in" | "short_answer" | "essay" | "code";
+
+export type QuestionSource = "manual" | "ai_generated" | "imported";
 export type CodeLanguage = "python" | "javascript" | "java" | "cpp" | "c" | "go";
 
 export interface ITag {
@@ -108,6 +110,7 @@ export interface IExam {
   allow_retake: boolean;
   show_result: boolean;
   notes_template: string | null;
+  course_kp_id: string | null;
   total_questions: number;
   total_students: number;
   submitted_count: number;
@@ -222,6 +225,8 @@ export interface IExamQuestion {
   question_id: string;
   order: number;
   score_override: number | null;
+  source_exam_id?: string | null;
+  source_question_id?: string | null;
   question_title: string | null;
   question_type: string | null;
   question_score: number | null;
@@ -418,6 +423,7 @@ export interface IWrongAnswerDetail {
   tags: string[];
   mastered: boolean;
   question_content: Record<string, unknown>;
+  question_options?: Record<string, unknown> | null;
   standard_answer: Record<string, unknown>;
   analysis: string | null;
   student_answer: Record<string, unknown>;
@@ -464,6 +470,7 @@ export interface IQuestion {
   analysis: string | null;
   difficulty: number;
   score: number;
+  source?: QuestionSource;
   usage_count: number;
   question_bank_id: string | null;
   question_bank_name: string | null;

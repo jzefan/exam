@@ -42,64 +42,63 @@ function WrongAnswerCard({ item }: { item: IWrongAnswer }) {
 
   return (
     <Card
-      className="group hover:border-primary/30 hover:shadow-xl hover:shadow-primary/5 transition-all duration-300 cursor-pointer rounded-2xl border-border/50 bg-card/50 overflow-hidden"
+      className="group cursor-pointer overflow-hidden rounded-2xl border-border/50 bg-card/50 transition-all duration-300 hover:border-primary/30 hover:shadow-lg hover:shadow-primary/5"
       onClick={() => navigate(`/wrong-answers/${item.id}`)}
     >
       <CardContent className="p-0">
-        <div className="p-5 space-y-4">
-          <div className="flex items-center justify-between gap-3">
-            <Badge variant="secondary" className="text-[10px] font-bold uppercase tracking-wider rounded-md px-2 py-0.5">
-              {getStudentQuestionTypeLabel(item.question_type, locale)}
-            </Badge>
-            
-            {item.mastered ? (
-               <div className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-700 shadow-sm shadow-emerald-200/50">
-                <CheckCircle2 size={10} />
-                {locale === "en" ? "Mastered" : "已掌握"}
-              </div>
-            ) : (
-              <div className={cn("flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black shadow-sm", severityBg, severityColor)}>
-                <AlertCircle size={10} />
-                {tStudent("wrong_answers_wrong_times", { count: item.wrong_count }, locale)}
-              </div>
-            )}
-          </div>
+        <div className="grid gap-4 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+          <div className="min-w-0 space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="secondary" className="rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider">
+                {getStudentQuestionTypeLabel(item.question_type, locale)}
+              </Badge>
 
-          <div className="min-h-[3.5rem] flex flex-col gap-3">
-            <p className="text-[15px] font-bold text-foreground/90 line-clamp-2 leading-snug group-hover:text-primary transition-colors"
+              {item.mastered ? (
+                <div className="flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-black text-emerald-700 shadow-sm shadow-emerald-200/50">
+                  <CheckCircle2 size={10} />
+                  {locale === "en" ? "Mastered" : "已掌握"}
+                </div>
+              ) : (
+                <div className={cn("flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-black shadow-sm", severityBg, severityColor)}>
+                  <AlertCircle size={10} />
+                  {tStudent("wrong_answers_wrong_times", { count: item.wrong_count }, locale)}
+                </div>
+              )}
+            </div>
+
+            <p className="line-clamp-2 text-[15px] font-bold leading-snug text-foreground/90 transition-colors group-hover:text-primary"
               dangerouslySetInnerHTML={{ __html: renderLatexInHtml(item.question_title) }}
             />
-            
-            {item.tags && item.tags.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {item.tags.slice(0, 3).map((tag, idx) => (
-                  <span key={idx} className="text-[10px] font-bold text-muted-foreground/40 uppercase tracking-widest bg-muted/30 px-1.5 py-0.5 rounded">
-                    {tag}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
 
-          <div className="flex items-center justify-between pt-4 border-t border-border/40">
-            <div className="flex flex-col gap-1.5 min-w-0">
-              <div className="flex items-center gap-2 text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest truncate">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+              <div className="flex min-w-0 items-center gap-2 truncate text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60">
                 <BookOpen size={12} className="shrink-0 opacity-40" />
                 <span className="truncate">{item.exam_title}</span>
               </div>
-              <div className="flex items-center gap-2 text-[10px] font-bold text-muted-foreground/40 uppercase tracking-widest">
-                <Calendar size={12} className="shrink-0 opacity-40" /> 
+              <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/40">
+                <Calendar size={12} className="shrink-0 opacity-40" />
                 <span>
-                  {item.mastered 
+                  {item.mastered
                     ? tStudent("wrong_answers_mastered_at", { date: dateStr }, locale)
                     : tStudent("wrong_answers_date", { date: dateStr }, locale)
                   }
                 </span>
               </div>
+
+              {item.tags && item.tags.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {item.tags.slice(0, 3).map((tag, idx) => (
+                    <span key={idx} className="rounded bg-muted/30 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/40">
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
-            <div className="flex size-8 items-center justify-center rounded-full bg-muted/30 group-hover:bg-primary/10 transition-colors">
-              <ChevronRight size={14} className="text-muted-foreground/30 group-hover:text-primary group-hover:translate-x-0.5 transition-all" />
-            </div>
+          </div>
+
+          <div className="hidden size-8 items-center justify-center rounded-full bg-muted/30 transition-colors group-hover:bg-primary/10 sm:flex">
+            <ChevronRight size={14} className="text-muted-foreground/30 transition-all group-hover:translate-x-0.5 group-hover:text-primary" />
           </div>
         </div>
       </CardContent>
@@ -159,9 +158,9 @@ export function WrongAnswers() {
       </header>
 
       {isLoading ? (
-        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="space-y-3">
           {[1, 2, 3, 4, 5, 6].map((i) => (
-            <div key={i} className="h-44 rounded-2xl bg-muted animate-pulse border border-border/40" />
+            <div key={i} className="h-28 animate-pulse rounded-2xl border border-border/40 bg-muted" />
           ))}
         </div>
       ) : items.length === 0 ? (
@@ -173,7 +172,7 @@ export function WrongAnswers() {
           <p className="text-xs text-muted-foreground/60 mt-1">{tStudent("wrong_answers_empty_desc", undefined, locale)}</p>
         </div>
       ) : (
-        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="space-y-3">
           {items.map((item) => <WrongAnswerCard key={item.id} item={item} />)}
         </div>
       )}

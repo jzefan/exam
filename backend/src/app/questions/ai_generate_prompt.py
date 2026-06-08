@@ -165,6 +165,8 @@ def build_ai_generate_system_prompt(
     type_distribution: dict[str, int],
     knowledge_keywords: str,
     user_prompt: str,
+    course_name: str = "",
+    exam_title: str = "",
     knowledge_contexts: list[KnowledgePointPromptContext] | None = None,
     material_text: str = "",
 ) -> str:
@@ -202,6 +204,35 @@ def build_ai_generate_system_prompt(
                     context_lines.append(f"   可参考的下级知识点：{shown}{suffix}")
         knowledge_context_instruction = "\n".join(context_lines)
 
+    explicit_course_name = course_name.strip()
+    explicit_exam_title = exam_title.strip()
+    inferred_course_names = [
+        context["course_name"].strip()
+        for context in knowledge_contexts
+        if context.get("course_name", "").strip()
+    ]
+    strict_course_name = explicit_course_name or (inferred_course_names[0] if inferred_course_names else "")
+    strict_scope_lines = [
+        "学科与上下文硬性边界：",
+        "- 只允许依据本次请求中明确给出的课程、考试、专业、方向、知识点、资料和额外要求生成题目。",
+        "- 必须忽略模型可能记住的任何无关历史对话、个人记忆、其它老师/其它学科/其它考试的上下文、先前生成过的数学或其它课程题目。",
+        "- 不得主动迁移到与本次课程或考试无关的学科、术语、案例或题材；即使模型记忆中存在其它学科内容，也必须视为无效信息。",
+        "- 如果模型内部记忆、历史上下文或常见示例与本次请求边界冲突，必须完全丢弃这些记忆，以本次课程/考试/知识点/资料为唯一依据。",
+    ]
+    if strict_course_name:
+        strict_scope_lines.append(
+            f"- 本次必须严格围绕课程/主知识点「{strict_course_name}」命题；题干、选项、答案和解析都必须符合该课程的学科语境。"
+        )
+    if explicit_exam_title:
+        strict_scope_lines.append(
+            f"- 本次考试/练习名称为「{explicit_exam_title}」；若课程名缺失，则以该考试/练习名称作为命题范围边界。"
+        )
+    if strict_course_name or explicit_exam_title:
+        strict_scope_lines.append(
+            "- 如果资料、额外要求或模型记忆中出现与上述课程/考试无关的内容，必须舍弃，不得据此出题。"
+        )
+    strict_scope_instruction = "\n".join(strict_scope_lines)
+
     coverage_instruction = ""
     if any(context.get("is_course") for context in knowledge_contexts):
         coverage_instruction = (
@@ -236,6 +267,7 @@ def build_ai_generate_system_prompt(
 
 要求：
 - 难度级别：{difficulty_label}（{difficulty}/5）
+- {strict_scope_instruction}
 - {type_instruction}
 - {knowledge_context_instruction}
 - {coverage_instruction}
@@ -251,6 +283,10 @@ def build_ai_generate_system_prompt(
 - 若当前选择的是下层知识点，必须沿其父节点向上还原到主知识点、方向、专业后再理解题意。
 - 若当前选择的知识点存在下级知识点，可将其作为细化参考，但不要超出当前主知识点语境。
 - 若存在同名或近义知识点，优先采用当前专业/方向/主知识点链路下的含义，不得混入其它专业或方向的定义、案例、术语。
+- 必须先判断当前课程/专业所属学科，严禁生成与当前课程、专业、方向、知识链路无关的语文、英语、文学、历史、常识类题目；除非当前课程本身就是这些学科。
+- 命题前必须先在内部确认并锁定本次课程/考试边界，再在该边界内构造题目；不得沿用任何不属于该边界的模型记忆、过往对话、其它教师或其它学科内容。
+- 若额外要求中提供了原题内容或源题参考，必须沿用原题的学科场景、术语体系、考查能力和同一子知识点，只能替换素材、数值或任务场景，不得迁移到其它学科。
+- 同一次生成的一组题目必须互相区分，严禁出现重复题、同题改写题、题干/选项/答案/考查点基本相同的近似题；每道题应覆盖不同角度、任务或情境。
 
 输出格式要求：
 - 每道题目输出为一个独立的 JSON 对象，题目之间用换行分隔
@@ -273,6 +309,7 @@ def build_ai_generate_system_prompt(
 
 说明：
 - 选择题(choice)的 answer 使用 {{"correct": "A"}} 格式，options 为选项字典
+- 选择题(choice)的 analysis 必须逐项覆盖所有选项，说明每个选项为什么正确或为什么错误；不得只解释正确选项，也不得遗漏任一选项标识。
 - 判断题(true_false)的 answer 使用 {{"correct": "true"}} 或 {{"correct": "false"}}，options 设为 null
 - 其他题型的 answer 使用 {{"text": "答案内容"}} 格式，options 设为 null
 - 代码题(code)必须使用 {{"text": "参考答案"}} 格式，answer.text 不能为空；参考答案必须包含可执行/可判分的参考实现、关键代码或明确解法步骤

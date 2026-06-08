@@ -201,7 +201,7 @@ async def _course_counts(
     )
     belongs_to_course = or_(Exam.course_kp_id.in_(subtree_ids), has_kp_in_subtree)
 
-    # 考试/作业按学期归档：指定学期时，只统计归档到该学期的考试（不含「未归档」）。
+    # 考试/练习按学期归档：指定学期时，只统计归档到该学期的考试（不含「未归档」）。
     semester_pin = (
         exists().where(
             ExamSemesterAssignment.exam_id == Exam.id,
@@ -726,7 +726,7 @@ async def _list_course_exams(
         .order_by(Exam.created_at.desc())
     )
     if semester_id is not None:
-        # 按学期归档：指定学期时只显示归档到该学期的考试/作业，新建学期默认为空。
+        # 按学期归档：指定学期时只显示归档到该学期的考试/练习，新建学期默认为空。
         stmt = stmt.where(ExamSemesterAssignment.course_semester_id == semester_id)
     if not is_admin:
         stmt = stmt.where(teacher_owned_resource_filter(Exam, user.id))
@@ -987,7 +987,7 @@ async def list_teacher_course_questions(
     course_id: uuid.UUID,
     db: DB,
     user: CurrentUser,
-    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    limit: Annotated[int, Query(ge=1, le=5000)] = 2000,
 ) -> list[TeacherCourseQuestion]:
     is_admin = await _is_course_admin(db, user)
     course, *_ = await _get_visible_course(

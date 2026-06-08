@@ -317,7 +317,7 @@ export function QuestionEditFormContent({
                   <div className="min-w-0">
                     <AlertTitle>题目内容已锁定</AlertTitle>
                     <AlertDescription className="space-y-1">
-                      <p>这道题正在某些考试或练习中使用，题目内容已锁定。你仍可修改答案、解析、难度、知识点标签和编程题测试用例。</p>
+                      <p>这道题已有学生提交过答卷，题目内容已锁定。你仍可修改答案、解析、难度、知识点标签和编程题测试用例。</p>
                       {editLock?.has_submitted_attempts ? (
                         <p>修改答案或编程题测试用例后，系统会自动重新评分受影响的已提交答卷。</p>
                       ) : null}

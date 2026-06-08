@@ -1,15 +1,17 @@
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Trash2 } from "lucide-react";
 import {
   QuestionPreviewCard,
   DIFFICULTY_LABELS,
 } from "@/components/questions/question-preview-card";
 import { cn } from "@/lib/utils";
-import type { QuestionType } from "@/types";
+import type { IQuestion, QuestionType } from "@/types";
 
 import { ExamQuestionActions } from "./ExamQuestionActions";
 import type { PaperPreviewItem, QuestionTypeSummary } from "./paper-view-utils";
-import { questionTypeLabels } from "./paper-view-utils";
+import { getPaperQuestionAnchorId, questionTypeLabels } from "./paper-view-utils";
 import type { ScoreViewMode } from "./PaperScorePanel";
 
 export function PaperPreview({
@@ -23,6 +25,9 @@ export function PaperPreview({
   onTypeScoreChange,
   onQuestionScoreChange,
   onReplaceQuestion,
+  onRemoveQuestion,
+  onQuestionUpdated,
+  courseKnowledgePointId,
   className,
 }: {
   title: string;
@@ -35,9 +40,15 @@ export function PaperPreview({
   onTypeScoreChange: (summary: QuestionTypeSummary, value: string) => void;
   onQuestionScoreChange: (questionId: string, value: string) => void;
   onReplaceQuestion?: (oldId: string, newId: string) => void;
+  onRemoveQuestion?: (questionId: string) => void;
+  onQuestionUpdated?: (question: IQuestion) => void;
+  courseKnowledgePointId?: string | null;
   className?: string;
 }) {
   const currentExamQuestionIds = items.map((item) => item.question.id);
+  const itemNumberByQuestionId = new Map(
+    items.map((item, index) => [item.question.id, index + 1]),
+  );
   const nextMode = scoreMode === "order" ? "type" : "order";
   const nextModeLabel = nextMode === "type" ? "按题型展示" : "按顺序展示";
 
@@ -120,13 +131,26 @@ export function PaperPreview({
                   </div>
 
                   <div className="space-y-6">
-                    {groupedQuestions.map((item, index) => (
-                      <section key={item.question.id} className="space-y-3">
+                    {groupedQuestions.map((item) => (
+                      <section
+                        key={item.question.id}
+                        id={getPaperQuestionAnchorId(item.question.id)}
+                        data-paper-question-id={item.question.id}
+                        className="scroll-mt-24 space-y-3"
+                      >
                         <div className="flex flex-wrap items-center justify-between gap-3">
                           <div className="flex flex-wrap items-center gap-2">
                             <Badge variant="outline" className="font-semibold">
-                              第 {index + 1} 题
+                              第 {itemNumberByQuestionId.get(item.question.id)} 题
                             </Badge>
+                            {item.isSourceReused ? (
+                              <Badge
+                                variant="outline"
+                                className="border-amber-200 bg-amber-50 text-amber-700"
+                              >
+                                原卷题
+                              </Badge>
+                            ) : null}
                             <span className="text-sm font-medium text-muted-foreground">
                               {questionTypeLabels[item.question.type] ?? "题目"}
                             </span>
@@ -148,7 +172,23 @@ export function PaperPreview({
                                 question={item.question}
                                 currentExamQuestionIds={currentExamQuestionIds}
                                 onReplaceQuestion={onReplaceQuestion}
+                                courseKnowledgePointId={courseKnowledgePointId}
+                                examTitle={title}
+                                onQuestionUpdated={onQuestionUpdated}
                               />
+                            )}
+                            {onRemoveQuestion && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                onClick={() => onRemoveQuestion(item.question.id)}
+                                aria-label={`删除第 ${itemNumberByQuestionId.get(item.question.id)} 题`}
+                                title="从当前考试移除"
+                              >
+                                <Trash2 size={14} />
+                              </Button>
                             )}
                             <span className="text-sm font-semibold text-foreground">
                               分数
@@ -172,11 +212,11 @@ export function PaperPreview({
                         <QuestionPreviewCard
                           question={item.question}
                           mode="detailed"
-                          defaultExpanded
+                          expandOnClick
                           hideHeader
                           hideMeta
                           markChoiceAnswer
-                          className="rounded-2xl border-border/60 bg-background p-5"
+                          className="cursor-pointer rounded-2xl border-border/60 bg-background p-5 transition-colors hover:border-primary/50"
                         />
                       </section>
                     ))}
@@ -184,12 +224,25 @@ export function PaperPreview({
                 </section>
               ))
             : items.map((item, index) => (
-                <section key={item.question.id} className="space-y-3">
+                <section
+                  key={item.question.id}
+                  id={getPaperQuestionAnchorId(item.question.id)}
+                  data-paper-question-id={item.question.id}
+                  className="scroll-mt-24 space-y-3"
+                >
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge variant="outline" className="font-semibold">
                         第 {index + 1} 题
                       </Badge>
+                      {item.isSourceReused ? (
+                        <Badge
+                          variant="outline"
+                          className="border-amber-200 bg-amber-50 text-amber-700"
+                        >
+                          原卷题
+                        </Badge>
+                      ) : null}
                       <span className="text-sm font-medium text-muted-foreground">
                         {questionTypeLabels[item.question.type] ?? "题目"}
                       </span>
@@ -211,7 +264,23 @@ export function PaperPreview({
                           question={item.question}
                           currentExamQuestionIds={currentExamQuestionIds}
                           onReplaceQuestion={onReplaceQuestion}
+                          courseKnowledgePointId={courseKnowledgePointId}
+                          examTitle={title}
+                          onQuestionUpdated={onQuestionUpdated}
                         />
+                      )}
+                      {onRemoveQuestion && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          onClick={() => onRemoveQuestion(item.question.id)}
+                          aria-label={`删除第 ${index + 1} 题`}
+                          title="从当前考试移除"
+                        >
+                          <Trash2 size={14} />
+                        </Button>
                       )}
                       <span className="text-sm font-semibold text-foreground">
                         分数
@@ -235,11 +304,11 @@ export function PaperPreview({
                   <QuestionPreviewCard
                     question={item.question}
                     mode="detailed"
-                    defaultExpanded
+                    expandOnClick
                     hideHeader
                     hideMeta
                     markChoiceAnswer
-                    className="rounded-2xl border-border/60 bg-background p-5"
+                    className="cursor-pointer rounded-2xl border-border/60 bg-background p-5 transition-colors hover:border-primary/50"
                   />
                 </section>
               ))}

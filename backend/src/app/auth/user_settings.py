@@ -19,7 +19,7 @@ from app.database import get_db
 from app.models import Base, TimestampMixin
 
 router = APIRouter()
-DEFAULT_PROVIDER_PRIORITY = ("qwen", "deepseek", "claude")
+DEFAULT_PROVIDER_PRIORITY = ("deepseek", "qwen", "claude")
 
 
 # ── Model ──────────────────────────────────────────────────────────
@@ -30,7 +30,7 @@ class UserSettings(Base, TimestampMixin):
     user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
     )
-    ai_provider: Mapped[str] = mapped_column(String(50), default="qwen", nullable=False)
+    ai_provider: Mapped[str] = mapped_column(String(50), default="deepseek", nullable=False)
     ai_api_key_encrypted: Mapped[str | None] = mapped_column(String(500), nullable=True)
     ai_model_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     ai_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)

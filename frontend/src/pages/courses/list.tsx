@@ -152,7 +152,7 @@ function CourseCard({
         <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 border-t border-border pt-4">
           <CountChip icon={<FileText size={14} />} label="资料" value={course.material_count} />
           <CountChip icon={<ClipboardList size={14} />} label="考试" value={course.exam_count} />
-          <CountChip icon={<ListChecks size={14} />} label="作业" value={course.assignment_count} />
+          <CountChip icon={<ListChecks size={14} />} label="练习" value={course.assignment_count} />
           <CountChip icon={<BookOpen size={14} />} label="题目" value={course.question_count} />
         </div>
         <div className="mt-auto flex items-center justify-between gap-3 pt-4">
@@ -290,7 +290,7 @@ export function CourseListPage() {
         title="我的课程"
         description={
           courses.length === 0
-            ? "按课程视角组织资料、考试、作业、题目与知识结构。"
+            ? "按课程视角组织资料、考试、练习、题目与知识结构。"
             : `正常 ${activeTotal} 门 · 已删除 ${deletedTotal} 门${totalPending > 0 ? ` · ${totalPending} 项待处理` : ""}`
         }
         actions={
@@ -335,7 +335,7 @@ export function CourseListPage() {
             <AlertDialogTitle>删除课程</AlertDialogTitle>
             <AlertDialogDescription>
               确认删除「{courseToDelete?.name}
-              」？删除后课程会进入已删除区域，只能查看资料、考试、作业、题目和知识结构，不能继续编辑或新增内容。
+              」？删除后课程会进入已删除区域，只能查看资料、考试、练习、题目和知识结构，不能继续编辑或新增内容。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

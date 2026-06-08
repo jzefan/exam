@@ -38,6 +38,8 @@ class ExamQuestionItem(BaseModel):
     question_id: uuid.UUID
     order: int = 0
     score_override: float | None = None
+    source_exam_id: uuid.UUID | None = None
+    source_question_id: uuid.UUID | None = None
 
 
 class ExamQuestionResponse(BaseModel):
@@ -46,6 +48,8 @@ class ExamQuestionResponse(BaseModel):
     question_id: uuid.UUID
     order: int
     score_override: float | None
+    source_exam_id: uuid.UUID | None = None
+    source_question_id: uuid.UUID | None = None
     # Flattened question info
     question_title: str | None = None
     question_type: str | None = None
@@ -159,6 +163,21 @@ class ExamDetailResponse(ExamResponse):
 
     questions: list[ExamQuestionResponse] = Field(default_factory=list)
     students: list[ExamStudentResponse] = Field(default_factory=list)
+
+
+class ExamMockGenerateRequest(BaseModel):
+    question_count: int | None = Field(default=None, ge=1, le=500)
+    source_reuse_rate: int = Field(default=80, ge=0, le=100)
+    difficulty_strategy: Literal["similar", "easier", "harder"] = "similar"
+    model: Literal["qwen", "deepseek", "claude"] = "deepseek"
+    title: str | None = Field(default=None, max_length=200)
+
+
+class ExamMockGenerateResponse(BaseModel):
+    exam_id: uuid.UUID
+    generated_question_count: int
+    reused_source_question_count: int
+    reused_bank_question_count: int
 
 
 # ── Exam Analysis ──

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useGetIdentity, useList } from "@refinedev/core";
-import { Search, Check, FileText, Maximize2, Minimize2 } from "lucide-react";
+import { Search, Check, FileText, Maximize2, Minimize2, ChevronDown, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,8 +24,6 @@ import type { SelectedKnowledgePoint } from "@/components/questions/knowledge-po
 
 const ALL_BANKS = "__all_banks__";
 const ALL_TYPES = "__all_types__";
-const HOVER_PREVIEW_OPEN_DELAY = 1000;
-const HOVER_PREVIEW_CLOSE_DELAY = 120;
 
 const typeLabels: Record<string, { label: string; className: string }> = {
   choice: { label: "选择", className: "border-primary/20 bg-primary/10 text-primary" },
@@ -68,10 +66,7 @@ export function QuestionSelector({
   const [knowledgePointFilter, setKnowledgePointFilter] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [internalIsFullscreen, setInternalIsFullscreen] = useState(false);
-  const [previewTooltip, setPreviewTooltip] = useState<{ questionId: string; x: number; y: number } | null>(null);
-  const previewOpenTimerRef = useRef<number | null>(null);
-  const previewCloseTimerRef = useRef<number | null>(null);
-  const pendingPreviewRef = useRef<{ questionId: string; x: number; y: number } | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const isFullscreen = controlledIsFullscreen ?? internalIsFullscreen;
   const pageSize = isFullscreen ? 500 : 20;
   const setIsFullscreen = (next: boolean) => {
@@ -101,24 +96,23 @@ export function QuestionSelector({
     };
   }, [isFullscreen]);
 
-  useEffect(
-    () => () => {
-      if (previewOpenTimerRef.current) {
-        window.clearTimeout(previewOpenTimerRef.current);
-      }
-      if (previewCloseTimerRef.current) {
-        window.clearTimeout(previewCloseTimerRef.current);
-      }
-    },
-    [],
-  );
-
   // Load question banks for filtering
   const { query: bankQuery } = useList<IQuestionBank>({
     resource: "question-banks",
     pagination: { currentPage: 1, pageSize: 200 },
   });
   const banks = bankQuery.data?.data ?? [];
+  const { query: knowledgePointQuery } = useList<SelectedKnowledgePoint>({
+    resource: "knowledge-points",
+    pagination: { currentPage: 1, pageSize: 500 },
+  });
+  const knowledgePoints = Array.from(
+    new Map(
+      [...(knowledgePointOptions ?? []), ...(knowledgePointQuery.data?.data ?? [])].map(
+        (item) => [item.id, item],
+      ),
+    ).values(),
+  );
 
   useEffect(() => {
     if (!initialBankName || bankNameInitialised || banks.length === 0) return;
@@ -142,7 +136,7 @@ export function QuestionSelector({
     pagination: { currentPage: page, pageSize, mode: "server" },
     sorters: [{ field: "created_at", order: "desc" }],
     filters: [
-      ...(search ? [{ field: "title", operator: "contains" as const, value: search }] : []),
+      ...(search ? [{ field: "search_text", operator: "contains" as const, value: search }] : []),
       ...(bankFilter ? [{ field: "question_bank_id", operator: "eq" as const, value: bankFilter }] : []),
       ...(typeFilter ? [{ field: "type", operator: "eq" as const, value: typeFilter }] : []),
       ...(knowledgePointFilter
@@ -158,9 +152,6 @@ export function QuestionSelector({
   const total = questionQuery.data?.total ?? 0;
   const isLoading = questionQuery.isLoading;
   const totalPages = Math.ceil(total / pageSize);
-  const previewQuestion = previewTooltip
-    ? questions.find((question) => question.id === previewTooltip.questionId) ?? null
-    : null;
 
   // 从课程详情跳转过来时，默认全选「课程题库 + 知识点」过滤下的全部题目。
   // 等过滤条件（题库名解析、知识点）就绪后再拉全量，避免误选到未过滤的题目。
@@ -200,64 +191,8 @@ export function QuestionSelector({
     }
   };
 
-  const clearPreviewOpenTimer = () => {
-    if (previewOpenTimerRef.current) {
-      window.clearTimeout(previewOpenTimerRef.current);
-      previewOpenTimerRef.current = null;
-    }
-  };
-
-  const clearPreviewCloseTimer = () => {
-    if (previewCloseTimerRef.current) {
-      window.clearTimeout(previewCloseTimerRef.current);
-      previewCloseTimerRef.current = null;
-    }
-  };
-
-  const openPreviewAtPoint = (questionId: string, x: number, y: number) => {
-    pendingPreviewRef.current = null;
-    clearPreviewCloseTimer();
-    setPreviewTooltip({ questionId, x, y });
-  };
-
-  const schedulePreviewAtPoint = (questionId: string, x: number, y: number) => {
-    clearPreviewOpenTimer();
-    clearPreviewCloseTimer();
-    pendingPreviewRef.current = { questionId, x, y };
-    setPreviewTooltip(null);
-    previewOpenTimerRef.current = window.setTimeout(() => {
-      const pendingPreview = pendingPreviewRef.current;
-      if (pendingPreview?.questionId === questionId) {
-        openPreviewAtPoint(questionId, pendingPreview.x, pendingPreview.y);
-      }
-      previewOpenTimerRef.current = null;
-    }, HOVER_PREVIEW_OPEN_DELAY);
-  };
-
-  const closePreview = (questionId?: string) => {
-    clearPreviewCloseTimer();
-    if (!questionId || pendingPreviewRef.current?.questionId === questionId) {
-      pendingPreviewRef.current = null;
-      clearPreviewOpenTimer();
-    }
-    setPreviewTooltip((current) => {
-      if (!questionId || current?.questionId === questionId) {
-        return null;
-      }
-      return current;
-    });
-  };
-
-  const schedulePreviewClose = (questionId?: string) => {
-    clearPreviewCloseTimer();
-    previewCloseTimerRef.current = window.setTimeout(() => {
-      closePreview(questionId);
-    }, HOVER_PREVIEW_CLOSE_DELAY);
-  };
-
-  const openPreviewAtElement = (questionId: string, element: HTMLElement) => {
-    const rect = element.getBoundingClientRect();
-    openPreviewAtPoint(questionId, rect.left + 24, rect.bottom + 6);
+  const toggleExpanded = (questionId: string) => {
+    setExpandedId((prev) => (prev === questionId ? null : questionId));
   };
 
   const shouldIgnoreCardToggle = (target: EventTarget | null) =>
@@ -265,12 +200,12 @@ export function QuestionSelector({
     Boolean(target.closest("button,a,input,textarea,select,[role='button'],[data-no-card-toggle='true']"));
 
   const renderFilters = () => (
-    <div className="flex flex-col gap-2 sm:flex-row">
-      <div className="relative flex-1">
+    <div className="grid gap-2 lg:grid-cols-[minmax(280px,1fr)_minmax(160px,220px)_minmax(140px,180px)_minmax(180px,240px)]">
+      <div className="relative min-w-0">
         <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
         <Input
           aria-label="搜索题目"
-          placeholder="搜索题目..."
+          placeholder="按关键字搜索题干、标题或选项..."
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
           className="h-9 pl-8 text-sm"
@@ -283,7 +218,7 @@ export function QuestionSelector({
           setPage(1);
         }}
       >
-        <SelectTrigger className="h-9 w-full sm:w-[156px]" aria-label="按题库筛选">
+        <SelectTrigger className="h-9 w-full" aria-label="按题库筛选">
           <SelectValue placeholder="全部题库" />
         </SelectTrigger>
         <SelectContent>
@@ -302,7 +237,7 @@ export function QuestionSelector({
           setPage(1);
         }}
       >
-        <SelectTrigger className="h-9 w-full sm:w-[140px]" aria-label="按题型筛选">
+        <SelectTrigger className="h-9 w-full" aria-label="按题型筛选">
           <SelectValue placeholder="全部题型" />
         </SelectTrigger>
         <SelectContent>
@@ -314,7 +249,7 @@ export function QuestionSelector({
           ))}
         </SelectContent>
       </Select>
-      {knowledgePointOptions && knowledgePointOptions.length > 0 && (
+      {knowledgePoints.length > 0 && (
         <Select
           value={knowledgePointFilter ?? ALL_BANKS}
           onValueChange={(value) => {
@@ -322,12 +257,12 @@ export function QuestionSelector({
             setPage(1);
           }}
         >
-          <SelectTrigger className="h-9 w-full sm:w-[180px]" aria-label="按知识点筛选">
+          <SelectTrigger className="h-9 w-full" aria-label="按知识点筛选">
             <SelectValue placeholder="全部知识点" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_BANKS}>全部知识点</SelectItem>
-            {knowledgePointOptions.map((item) => (
+            {knowledgePoints.map((item) => (
               <SelectItem key={item.id} value={item.id}>
                 {item.name}
               </SelectItem>
@@ -339,7 +274,7 @@ export function QuestionSelector({
   );
 
   const renderQuestionList = () => (
-    <div className="max-h-[400px] divide-y divide-border/40 overflow-y-auto rounded-lg">
+    <div className="max-h-[min(56vh,520px)] divide-y divide-border/40 overflow-y-auto rounded-lg border border-border/60">
       {isLoading ? (
         <div className="p-8 text-center text-sm text-muted-foreground">加载中...</div>
       ) : questions.length === 0 ? (
@@ -350,73 +285,104 @@ export function QuestionSelector({
       ) : (
         questions.map((q) => {
           const isSelected = selectedSet.has(q.id);
+          const isExpanded = expandedId === q.id;
           const t = typeLabels[q.type] ?? { label: q.type, className: "" };
           const questionText = getQuestionTitle(q);
           const questionHtml = getQuestionContentHtml(q);
           return (
             <div
               key={q.id}
-              role="button"
-              tabIndex={0}
-              aria-pressed={isSelected}
-              aria-label={questionText}
-              className={`w-full flex items-center gap-3 px-3 py-3.5 text-left transition-colors border-l-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+              className={
                 isSelected
-                  ? "border-l-primary bg-primary/5 hover:bg-primary/10"
-                  : "border-l-transparent hover:bg-muted/50"
-              }`}
-              onPointerEnter={(event) => schedulePreviewAtPoint(q.id, event.clientX, event.clientY)}
-              onPointerMove={(event) => {
-                if (previewTooltip?.questionId === q.id) {
-                  openPreviewAtPoint(q.id, event.clientX, event.clientY);
-                } else if (pendingPreviewRef.current?.questionId === q.id) {
-                  pendingPreviewRef.current = { questionId: q.id, x: event.clientX, y: event.clientY };
-                }
-              }}
-              onPointerLeave={() => schedulePreviewClose(q.id)}
-              onFocus={(event) => openPreviewAtElement(q.id, event.currentTarget)}
-              onBlur={() => schedulePreviewClose(q.id)}
-              onClick={() => toggle(q.id)}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter" && event.key !== " ") return;
-                event.preventDefault();
-                toggle(q.id);
-              }}
+                  ? "border-l-2 border-l-primary bg-primary/5"
+                  : "border-l-2 border-l-transparent"
+              }
             >
               <div
-                className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${
-                  isSelected
-                    ? "bg-primary border-primary text-primary-foreground"
-                    : "border-input"
+                role="button"
+                tabIndex={0}
+                aria-expanded={isExpanded}
+                aria-label={questionText}
+                className={`grid w-full grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] items-center gap-3 px-3 py-3.5 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+                  isSelected ? "hover:bg-primary/10" : "hover:bg-muted/50"
                 }`}
+                onClick={() => toggleExpanded(q.id)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  toggleExpanded(q.id);
+                }}
               >
-                {isSelected && <Check size={12} />}
+                <button
+                  type="button"
+                  data-no-card-toggle="true"
+                  aria-label={isSelected ? "取消选择题目" : "选择题目"}
+                  aria-pressed={isSelected}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    toggle(q.id);
+                  }}
+                  className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+                    isSelected
+                      ? "bg-primary border-primary text-primary-foreground"
+                      : "border-input"
+                  }`}
+                >
+                  {isSelected && <Check size={12} />}
+                </button>
+                <Badge
+                  variant="outline"
+                  className={`text-xs shrink-0 ${
+                    isSelected
+                      ? "border-primary/25 bg-primary/10 text-primary"
+                      : t.className
+                  }`}
+                >
+                  {t.label}
+                </Badge>
+                <div className={`min-w-0 overflow-hidden text-sm ${isSelected ? "font-medium text-foreground" : "text-foreground"}`}>
+                  {questionHtml ? (
+                    <RichContent
+                      html={questionHtml}
+                      className="line-clamp-1 max-w-full break-words [&_.katex-display]:my-0 [&_.katex-display]:inline-block [&_*]:!text-inherit"
+                    />
+                  ) : (
+                    <span className="block truncate">
+                      <LatexText>{questionText}</LatexText>
+                    </span>
+                  )}
+                </div>
+                <span className={`shrink-0 whitespace-nowrap text-xs ${isSelected ? "text-foreground/75" : "text-muted-foreground"}`}>
+                  {q.score}分 · 难度{q.difficulty}
+                </span>
+                <ChevronDown
+                  size={16}
+                  className={`shrink-0 text-muted-foreground transition-transform ${isExpanded ? "rotate-180" : ""}`}
+                />
               </div>
-              <Badge
-                variant="outline"
-                className={`text-xs shrink-0 ${
-                  isSelected
-                    ? "border-primary/25 bg-primary/10 text-primary"
-                    : t.className
-                }`}
-              >
-                {t.label}
-              </Badge>
-              <div className={`min-w-0 flex-1 text-sm ${isSelected ? "font-medium text-foreground" : "text-foreground"}`}>
-                {questionHtml ? (
-                  <RichContent
-                    html={questionHtml}
-                    className="line-clamp-1 break-all [&_.katex-display]:my-0 [&_.katex-display]:inline-block [&_*]:!text-inherit"
-                  />
-                ) : (
-                  <span className="block truncate">
-                    <LatexText>{questionText}</LatexText>
-                  </span>
-                )}
-              </div>
-              <span className={`text-xs shrink-0 ${isSelected ? "text-foreground/75" : "text-muted-foreground"}`}>
-                {q.score}分 · 难度{q.difficulty}
-              </span>
+              {isExpanded && (
+                <div className="border-t border-dashed border-primary/30 bg-muted/30 px-3 pb-4 pt-3">
+                  <div className="relative rounded-xl border border-primary/20 bg-background p-4 shadow-sm ring-1 ring-primary/5">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label="关闭题目详情"
+                      className="absolute right-2 top-2 z-10 h-7 w-7 rounded-full bg-background/90 shadow-sm"
+                      onClick={() => setExpandedId(null)}
+                    >
+                      <X size={13} />
+                    </Button>
+                    <QuestionPreviewCard
+                      question={q}
+                      mode="detailed"
+                      defaultExpanded
+                      markChoiceAnswer
+                      className="border-0 bg-transparent pr-8 shadow-none"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           );
         })
@@ -542,28 +508,6 @@ export function QuestionSelector({
       {renderFilters()}
 
       {renderQuestionList()}
-
-      {previewTooltip && previewQuestion && !isFullscreen && (
-        <div
-          className="fixed z-50 max-h-[70vh] w-[min(44rem,calc(100vw-2rem))] overflow-auto rounded-xl border bg-background p-0 text-foreground shadow-xl opacity-0 translate-y-2 transition-all duration-500 ease-out animate-in fade-in-0 slide-in-from-bottom-2 data-[state=open]:opacity-100"
-          style={{
-            left: Math.min(previewTooltip.x, window.innerWidth - 720),
-            top: Math.min(previewTooltip.y + 10, window.innerHeight - 120),
-            opacity: 1,
-            transform: "translateY(0)",
-          }}
-          onPointerEnter={() => clearPreviewCloseTimer()}
-          onPointerLeave={() => closePreview(previewTooltip.questionId)}
-        >
-          <QuestionPreviewCard
-            question={previewQuestion}
-            mode="detailed"
-            defaultExpanded
-            markChoiceAnswer
-            className="border-0 shadow-none"
-          />
-        </div>
-      )}
 
       {/* Pagination */}
       {!isFullscreen && totalPages > 1 && (

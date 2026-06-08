@@ -16,7 +16,7 @@ from app.auth.models import User
 from app.common.pagination import PaginationParams, apply_filters, apply_pagination, get_total_count, parse_filters, parse_pagination
 from app.common.resource_access import can_read_shared_resource, can_write_owned_resource, teacher_visible_resource_filter
 from app.database import get_db
-from app.questions.models import KnowledgePoint, Question, QuestionImportJobStatus
+from app.questions.models import KnowledgePoint, Question, QuestionImportJobStatus, QuestionSource
 from app.questions.models import question_knowledge_points, question_tags
 from app.questions.schemas import (
     KnowledgePointCreate,
@@ -60,6 +60,7 @@ from app.questions.service import (
     bulk_create_questions_fast,
     build_question_edit_lock_info,
     clear_question_bank_questions,
+    complete_question_answer_analysis,
     match_and_create_import_question,
     create_knowledge_point,
     create_question,
@@ -329,6 +330,24 @@ async def get_question(
     return await _build_question_response(db, question)
 
 
+@questions_router.post("/{question_id}/complete-answer", response_model=QuestionResponse)
+async def complete_question_answer_endpoint(
+    question_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+) -> QuestionResponse:
+    """若题目缺少答案或解析，调用 AI 补全并持久化后返回。"""
+    is_admin = await _is_question_admin(db, user)
+    question = await get_question_by_id(db, question_id, user=user, is_platform_admin=is_admin)
+    if question is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found")
+    try:
+        updated = await complete_question_answer_analysis(db, question)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    return await _build_question_response(db, updated)
+
+
 @questions_router.post("", response_model=QuestionResponse, status_code=status.HTTP_201_CREATED)
 async def create_question_endpoint(
     data: QuestionCreate,
@@ -594,6 +613,7 @@ async def bulk_create_questions_endpoint(
         for knowledge_point_id in question.knowledge_point_ids
     }
     await _ensure_can_read_knowledge_points(db, list(knowledge_point_ids), user, is_admin)
+    # /bulk 同时服务导入与 AI 生成，来源由调用方在 QuestionCreate.source 指定。
     result = await bulk_create_questions(db, data.questions, user.id)
     await log_event(
         db,
@@ -683,6 +703,11 @@ async def import_bulk_create_job_endpoint(
             for q in data.questions
         ]
 
+    # 课程/批量导入入库的题目统一标记为"导入"来源。
+    data.questions = [
+        question.model_copy(update={"source": QuestionSource.IMPORTED})
+        for question in data.questions
+    ]
     result = await bulk_create_questions_fast(db, data.questions, user.id)
     job = await create_question_import_job(db, user_id=user.id, total_count=result.created)
     job.created_question_ids = [str(question_id) for question_id in result.created_question_ids]

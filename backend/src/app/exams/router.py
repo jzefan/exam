@@ -4,7 +4,7 @@ import uuid
 from typing import Annotated, Literal
 from urllib.parse import quote
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import delete, select
@@ -40,6 +40,8 @@ from app.exams.schemas import (
     ExamAnalysisResponse,
     ExamCreate,
     ExamDetailResponse,
+    ExamMockGenerateRequest,
+    ExamMockGenerateResponse,
     ExamQuestionItem,
     ExamQuestionResponse,
     ExamResponse,
@@ -62,6 +64,7 @@ from app.exams.time_utils import (
     coerce_exam_input_datetime_to_utc,
     coerce_persisted_exam_datetime_to_utc,
 )
+from app.papers.service import generate_question_items_from_source_items
 from app.questions.service import cleanup_soft_deleted_question_if_orphaned
 from app.questions.models import question_knowledge_points
 from app.learning.models import KnowledgePoint
@@ -220,6 +223,8 @@ def _build_detail_response(exam: Exam) -> ExamDetailResponse:
             question_id=eq.question_id,
             order=eq.order,
             score_override=eq.score_override,
+            source_exam_id=eq.source_exam_id,
+            source_question_id=eq.source_question_id,
             question_title=eq.question.title if eq.question else None,
             question_type=eq.question.type.value if eq.question else None,
             question_score=eq.question.score if eq.question else None,
@@ -248,16 +253,57 @@ def _build_detail_response(exam: Exam) -> ExamDetailResponse:
 
 
 async def _sync_questions(db: AsyncSession, exam_id: uuid.UUID, question_items: list[ExamQuestionItem]) -> None:
+    existing_rows = (
+        await db.execute(select(ExamQuestion).where(ExamQuestion.exam_id == exam_id))
+    ).scalars().all()
+    existing_by_question_id = {row.question_id: row for row in existing_rows}
     await db.execute(delete(ExamQuestion).where(ExamQuestion.exam_id == exam_id))
     for i, item in enumerate(question_items):
+        existing = existing_by_question_id.get(item.question_id)
+        source_exam_id = item.source_exam_id
+        source_question_id = item.source_question_id
+        if source_exam_id is None and source_question_id is None and existing is not None:
+            source_exam_id = existing.source_exam_id
+            source_question_id = existing.source_question_id
         db.add(
             ExamQuestion(
                 exam_id=exam_id,
                 question_id=item.question_id,
                 order=item.order if item.order is not None else i,
                 score_override=item.score_override,
+                source_exam_id=source_exam_id,
+                source_question_id=source_question_id,
             )
         )
+
+
+async def _unique_exam_title_for_owner(
+    db: AsyncSession,
+    *,
+    owner_id: uuid.UUID,
+    category: str,
+    base_title: str,
+) -> str:
+    normalized = base_title.strip() or "模拟试卷"
+    existing_titles = set(
+        await db.scalars(
+            select(Exam.title).where(
+                Exam.owner_id == owner_id,
+                Exam.category == category,
+                Exam.deleted_at.is_(None),
+                Exam.title.like(f"{normalized}%"),
+            )
+        )
+    )
+    if normalized not in existing_titles:
+        return normalized
+
+    index = 2
+    while True:
+        candidate = f"{normalized}-{index}"
+        if candidate not in existing_titles:
+            return candidate
+        index += 1
 
 
 async def _sync_students(db: AsyncSession, exam_id: uuid.UUID, student_ids: list[uuid.UUID]) -> None:
@@ -381,6 +427,124 @@ async def export_exam_paper(
     )
 
 
+@router.post("/{exam_id}/mock-generate", response_model=ExamMockGenerateResponse, status_code=status.HTTP_201_CREATED)
+async def generate_mock_exam(
+    exam_id: uuid.UUID,
+    body: ExamMockGenerateRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+) -> ExamMockGenerateResponse:
+    source = await _get_writable_exam_or_404(db, exam_id, user)
+    source_items = [
+        item
+        for item in sorted(source.exam_questions, key=lambda question_item: question_item.order)
+        if item.question is not None
+    ]
+    source_question_count = len(source_items)
+    if source_question_count == 0:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="原考试没有可用于生成模拟卷的题目")
+
+    target_count = body.question_count or source_question_count
+    if target_count < source_question_count:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="模拟试卷题目数不能少于原考试题目数",
+        )
+
+    source_start_time = coerce_persisted_exam_datetime_to_utc(source.start_time)
+    inferred_mock_end_time = (
+        source_start_time - timedelta(minutes=1) if source_start_time is not None else None
+    )
+    mock_end_time = (
+        inferred_mock_end_time
+        if inferred_mock_end_time is not None and inferred_mock_end_time > datetime.now(timezone.utc)
+        else None
+    )
+
+    is_admin = await _is_exam_admin(db, user.id)
+    try:
+        generated = await generate_question_items_from_source_items(
+            db,
+            source_items,
+            total_count=target_count,
+            source_reuse_rate=body.source_reuse_rate,
+            root_knowledge_point_id=source.course_kp_id,
+            prefer_root_knowledge_point=False,
+            difficulty_strategy=body.difficulty_strategy,
+            model=body.model,
+            user=user,
+            is_admin=is_admin,
+            exam_title=source.title,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    total_score = sum(float(item.score_override or 0) for item in generated.question_items) or source.total_score
+    requested_title = (body.title or "").strip() or f"{source.title} - 模拟试卷"
+    title = await _unique_exam_title_for_owner(
+        db,
+        owner_id=user.id,
+        category=source.category,
+        base_title=requested_title,
+    )
+    mock_exam = Exam(
+        category=source.category,
+        title=title,
+        description=f"基于「{source.title}」生成的模拟试卷。",
+        start_time=None,
+        end_time=mock_end_time,
+        duration_minutes=source.duration_minutes,
+        total_score=total_score,
+        status="ongoing",
+        position_id=source.position_id,
+        max_switch_count=source.max_switch_count,
+        allow_retake=source.allow_retake,
+        show_result=source.show_result,
+        notes_template=source.notes_template,
+        question_mode="auto",
+        course_kp_id=source.course_kp_id,
+        created_by=user.id,
+        owner_id=user.id,
+    )
+    db.add(mock_exam)
+    await db.flush()
+
+    for index, item in enumerate(generated.question_items):
+        reused_from_source = item.question_id in generated.reused_source_question_ids
+        db.add(
+            ExamQuestion(
+                exam_id=mock_exam.id,
+                question_id=item.question_id,
+                order=item.order if item.order is not None else index,
+                score_override=item.score_override,
+                source_exam_id=source.id if reused_from_source else None,
+                source_question_id=item.question_id if reused_from_source else None,
+            )
+        )
+
+    seen_student_ids: set[uuid.UUID] = set()
+    for source_student in source.exam_students:
+        if source_student.student_id in seen_student_ids:
+            continue
+        seen_student_ids.add(source_student.student_id)
+        db.add(ExamStudent(exam_id=mock_exam.id, student_id=source_student.student_id))
+
+    source_semester_id = await db.scalar(
+        select(ExamSemesterAssignment.course_semester_id).where(ExamSemesterAssignment.exam_id == source.id)
+    )
+    if source_semester_id is not None:
+        db.add(ExamSemesterAssignment(exam_id=mock_exam.id, course_semester_id=source_semester_id))
+
+    await db.commit()
+
+    return ExamMockGenerateResponse(
+        exam_id=mock_exam.id,
+        generated_question_count=generated.generated_question_count,
+        reused_source_question_count=generated.reused_source_question_count,
+        reused_bank_question_count=generated.reused_bank_question_count,
+    )
+
+
 @router.post("", response_model=ExamDetailResponse, status_code=status.HTTP_201_CREATED)
 async def create_exam(
     body: ExamCreate,
@@ -409,7 +573,7 @@ async def create_exam(
     db.add(exam)
     await db.flush()
 
-    # 在某个学期下创建考试/作业时，直接归档到该学期，无需再手动归档。
+    # 在某个学期下创建考试/练习时，直接归档到该学期，无需再手动归档。
     if body.course_semester_id is not None:
         db.add(ExamSemesterAssignment(exam_id=exam.id, course_semester_id=body.course_semester_id))
 
@@ -554,6 +718,8 @@ async def list_exam_questions(
             question_id=eq.question_id,
             order=eq.order,
             score_override=eq.score_override,
+            source_exam_id=eq.source_exam_id,
+            source_question_id=eq.source_question_id,
             question_title=eq.question.title if eq.question else None,
             question_type=eq.question.type.value if eq.question else None,
             question_score=eq.question.score if eq.question else None,

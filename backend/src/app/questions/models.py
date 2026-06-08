@@ -28,6 +28,14 @@ class TagType(str, enum.Enum):
     CUSTOM = "custom"
 
 
+class QuestionSource(str, enum.Enum):
+    """题目来源：手工添加、AI 生成、导入。"""
+
+    MANUAL = "manual"
+    AI_GENERATED = "ai_generated"
+    IMPORTED = "imported"
+
+
 class QuestionImportJobStatus(str, enum.Enum):
     PENDING = "pending"
     RUNNING = "running"
@@ -87,6 +95,9 @@ class Question(OwnerMixin, BaseModel):
     analysis: Mapped[str | None] = mapped_column(Text, nullable=True)
     difficulty: Mapped[int] = mapped_column(Integer, nullable=False)
     score: Mapped[float] = mapped_column(Float, default=10.0, nullable=False)
+    source: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=QuestionSource.MANUAL.value, server_default="manual"
+    )
     usage_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False)
     question_bank_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("question_banks.id"), nullable=True)

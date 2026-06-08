@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import re
 import uuid
+from collections import Counter
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -147,10 +148,70 @@ def _options(raw: object) -> tuple[PaperOption, ...]:
 
 
 def _score_note(scores: list[float], total: float) -> str:
+    """`每小题X分，共Y分`, where X is the predominant per-question score; any
+    question whose score differs is called out as `（第N题Z分…）`."""
     total_label = _format_number(total)
-    if scores and len(set(scores)) == 1:
-        return f"每小题{_format_number(scores[0])}分，共{total_label}分"
-    return f"共{total_label}分"
+    if not scores:
+        return f"共{total_label}分"
+    mode_score = Counter(scores).most_common(1)[0][0]
+    note = f"每小题{_format_number(mode_score)}分，共{total_label}分"
+    exceptions = [(index + 1, score) for index, score in enumerate(scores) if score != mode_score]
+    if exceptions:
+        detail = "、".join(f"第{number}题{_format_number(score)}分" for number, score in exceptions)
+        note = f"{note}，其中{detail}"
+    return note
+
+
+_DEFAULT_SEMESTER = "2025-2026学年第一学期"
+_DEFAULT_EXAM_TYPE = "期末考试"
+_DEFAULT_MAJOR = "智能医疗装备技术专业"
+# Specific exam-type phrases to look for in the exam name, in priority order.
+_EXAM_TYPE_KEYWORDS = ("期末考试", "期中考试", "结业考试", "补考", "模拟考试", "月考")
+
+
+def _extract_exam_type(title: str | None) -> str:
+    text = title or ""
+    for keyword in _EXAM_TYPE_KEYWORDS:
+        if keyword in text:
+            return keyword
+    if "期末" in text:
+        return "期末考试"
+    if "期中" in text:
+        return "期中考试"
+    return _DEFAULT_EXAM_TYPE
+
+
+def _extract_major(class_label: str | None, course_name: str | None, exam_title: str | None) -> str:
+    # Prefer the semester's class/major label when present.
+    if class_label and class_label.strip():
+        label = class_label.strip()
+        if "专业" not in label and "班" not in label:
+            label = f"{label}专业"
+        return label
+    # Otherwise look for a '…专业' token in the course / exam name.
+    for text in (course_name, exam_title):
+        if not text:
+            continue
+        match = re.search(r"[一-龥A-Za-z0-9]+专业", text)
+        if match:
+            return match.group(0)
+    return _DEFAULT_MAJOR
+
+
+def paper_header_lines(paper: "ExamPaper") -> tuple[str, str, str]:
+    """Three centered title lines for the paper header:
+
+    1. 学校名称 + 学期 (semester from the exam; a fixed default when absent)
+    2. 《课程名》 + 考试类型 + 试卷 (type parsed from the exam name)
+    3. （专业）
+    """
+    semester = paper.semester_name or _DEFAULT_SEMESTER
+    line1 = f"{paper.school_name}{semester}"
+    course = f"《{paper.course_name}》" if paper.course_name else ""
+    line2 = f"{course}{_extract_exam_type(paper.exam_title)}试卷"
+    major = _extract_major(paper.class_label, paper.course_name, paper.exam_title)
+    line3 = f"（{major}）"
+    return line1, line2, line3
 
 
 def assemble_sections(exam: Exam, *, with_answers: bool) -> tuple[PaperSection, ...]:

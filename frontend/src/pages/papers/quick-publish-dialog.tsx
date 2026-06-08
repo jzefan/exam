@@ -100,14 +100,14 @@ export function PaperQuickPublishDialog({
       });
 
       toast({
-        title: isExam ? "考试已创建" : "作业已发布",
+        title: isExam ? "考试已创建" : "练习已发布",
         description: `${title.trim()}（${studentIds.length} 名学生）`,
       });
       onOpenChange(false);
       onPublished?.(created.id);
     } catch (error) {
       toast({
-        title: isExam ? "创建考试失败" : "发布作业失败",
+        title: isExam ? "创建考试失败" : "发布练习失败",
         description: error instanceof Error ? error.message : "请稍后重试",
         variant: "destructive",
       });
@@ -116,11 +116,11 @@ export function PaperQuickPublishDialog({
     }
   };
 
-  const dialogTitle = isExam ? "快速创建考试" : "快速发布作业";
+  const dialogTitle = isExam ? "快速创建考试" : "快速发布练习";
   const description = isExam
     ? `基于当前试卷发起一场正式考试，添加学生即可发布，其他设置稍后可在考试详情中调整。`
     : `基于当前试卷发布一次课堂练习，添加学生即可发布，其他设置稍后可在练习详情中调整。`;
-  const submitLabel = isExam ? "创建考试" : "发布作业";
+  const submitLabel = isExam ? "创建考试" : "发布练习";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -139,13 +139,13 @@ export function PaperQuickPublishDialog({
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto">
           <div className="space-y-2">
             <Label htmlFor="paper-quick-publish-title">
-              {isExam ? "考试标题" : "作业标题"}
+              {isExam ? "考试标题" : "练习标题"}
             </Label>
             <Input
               id="paper-quick-publish-title"
               value={title}
               onChange={(event) => setTitle(event.target.value)}
-              placeholder={isExam ? "请输入考试标题" : "请输入作业标题"}
+              placeholder={isExam ? "请输入考试标题" : "请输入练习标题"}
             />
           </div>
 
@@ -154,7 +154,7 @@ export function PaperQuickPublishDialog({
             onChange={setStudentIds}
             summaryLabel={isExam ? "名考生" : "名学生"}
             emptySummaryText={
-              isExam ? "请选择至少一名考生即可创建考试。" : "请选择至少一名学生即可发布作业。"
+              isExam ? "请选择至少一名考生即可创建考试。" : "请选择至少一名学生即可发布练习。"
             }
             defaultSupplementCollapsed
           />

@@ -20,7 +20,7 @@ from app.common.resource_access import teacher_owned_resource_filter, teacher_vi
 from app.database import async_session
 from app.config import settings
 from app.exams.models import Exam, ExamQuestion, ExamStudent, StudentExamAnswer, StudentExamSubmission, StudentExamSubmissionAnswer, StudentQuestionProgress
-from app.questions.models import KnowledgePoint, Question, QuestionBank, QuestionImportJob, QuestionImportJobStatus, QuestionType, Tag, question_tags
+from app.questions.models import KnowledgePoint, Question, QuestionBank, QuestionImportJob, QuestionImportJobStatus, QuestionSource, QuestionType, Tag, question_tags
 from app.questions.schemas import (
     EnhanceDraftInput,
     EnhancedDraft,
@@ -73,7 +73,7 @@ class AffectedSubmittedAttempt:
     submission_id: uuid.UUID
 
 
-IN_USE_QUESTION_EDIT_ERROR = "这道题正在考试或练习中使用，不能修改题干、选项、题型或分值。"
+IN_USE_QUESTION_EDIT_ERROR = "这道题已有学生提交过答卷，不能修改题干、选项、题型或分值。"
 IN_USE_ALLOWED_FIELDS = ["answer", "analysis", "difficulty", "knowledge_point_ids", "code_test_cases"]
 IN_USE_REGRADE_FIELDS = ["answer", "code_test_cases"]
 ALLOWED_CODE_CONTENT_KEYS = {"sample_tests", "test_cases", "judge_cases"}
@@ -346,6 +346,15 @@ async def get_question_by_id(
     return result.unique().scalar_one_or_none()
 
 
+def _question_source_value(source: object) -> str:
+    """Normalize a QuestionSource enum or string into the stored string value."""
+    if isinstance(source, QuestionSource):
+        return source.value
+    if isinstance(source, str) and source:
+        return source
+    return QuestionSource.MANUAL.value
+
+
 async def create_question(db: AsyncSession, data: QuestionCreate, user_id: uuid.UUID) -> Question:
     question = Question(
         type=data.type,
@@ -356,6 +365,7 @@ async def create_question(db: AsyncSession, data: QuestionCreate, user_id: uuid.
         analysis=data.analysis,
         difficulty=data.difficulty,
         score=data.score,
+        source=_question_source_value(data.source),
         created_by=user_id,
         owner_id=user_id,
         question_bank_id=data.question_bank_id,
@@ -435,17 +445,8 @@ def _extract_locked_code_content(content: Any) -> dict[str, Any]:
 
 
 async def question_is_in_use(db: AsyncSession, question_id: uuid.UUID) -> bool:
-    """Return True when the question is referenced by any non-deleted exam."""
-    exam_ref = await db.scalar(
-        select(ExamQuestion.question_id)
-        .join(Exam, Exam.id == ExamQuestion.exam_id)
-        .where(
-            ExamQuestion.question_id == question_id,
-            Exam.deleted_at.is_(None),
-        )
-        .limit(1)
-    )
-    return exam_ref is not None
+    """Return True only after the question has submitted answers to preserve."""
+    return await question_has_submitted_attempts(db, question_id)
 
 
 async def question_has_submitted_attempts(db: AsyncSession, question_id: uuid.UUID) -> bool:
@@ -2456,7 +2457,7 @@ async def _recognize_full_text_with_ai(
 
     Boundary-aware chunking ensures no question gets cut in half between two
     chunks. Each chunk's per-call output cap is high enough to accommodate
-    reasoning-model traces (e.g. deepseek-v4-pro).
+    reasoning-model traces (e.g. DeepSeek reasoning models).
 
     Image URL map is passed through to draft building so LLM-referenced images
     get full URLs.
@@ -2647,7 +2648,7 @@ async def _request_openai_compatible_jsonl(
 ) -> list[dict]:
     """OpenAI-compatible chat-completion call returning parsed JSONL (one JSON object per line).
 
-    max_tokens=16000 leaves headroom for reasoning models (e.g. deepseek-v4-pro)
+    max_tokens=16000 leaves headroom for reasoning models (e.g. DeepSeek reasoning models)
     that consume thousands of tokens in `reasoning_content` before the final answer.
     """
     content = await _request_openai_compatible_text(
@@ -2960,6 +2961,7 @@ async def bulk_create_questions_fast(
             analysis=data.analysis,
             difficulty=data.difficulty,
             score=data.score,
+            source=_question_source_value(data.source),
             created_by=user_id,
             owner_id=user_id,
             question_bank_id=data.question_bank_id,
@@ -3301,7 +3303,10 @@ async def match_and_create_import_question(
     candidates = await _load_root_descendant_knowledge_points(db, root_knowledge_point_id)
     matched_ids = await match_knowledge_points_with_ai(question_data, candidates)
     question_payload = question_data.model_copy(
-        update={"knowledge_point_ids": list({*question_data.knowledge_point_ids, *matched_ids})}
+        update={
+            "knowledge_point_ids": list({*question_data.knowledge_point_ids, *matched_ids}),
+            "source": QuestionSource.IMPORTED,
+        }
     )
     question = await create_question(db, question_payload, user_id)
     matched_kps = [kp for kp in candidates if kp.id in matched_ids]
@@ -3404,7 +3409,9 @@ async def save_generated_questions_to_default_course_bank(
             root_knowledge_point=root_knowledge_point,
         )
     scoped_questions = [
-        question.model_copy(update={"question_bank_id": bank.id})
+        question.model_copy(
+            update={"question_bank_id": bank.id, "source": QuestionSource.AI_GENERATED}
+        )
         for question in questions
     ]
     return await bulk_create_questions(db, scoped_questions, user_id)
@@ -3510,6 +3517,97 @@ async def _enhance_single_draft(
         doubt_reason=doubt_reason,
         suggested_knowledge_points=suggested,
     )
+
+
+def _extract_question_content_text(question: Question) -> str:
+    content = question.content
+    if isinstance(content, dict):
+        text = content.get("text")
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+        html = content.get("html")
+        if isinstance(html, str) and html.strip():
+            return re.sub(r"<[^>]+>", " ", html).strip()
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+    return question.title or ""
+
+
+def _question_answer_is_empty(question: Question) -> bool:
+    answer = question.answer if isinstance(question.answer, dict) else {}
+    qtype = question.type.value if hasattr(question.type, "value") else str(question.type)
+    if qtype == "choice":
+        return not answer.get("correct")
+    if qtype == "true_false":
+        return answer.get("correct") is None
+    if qtype == "fill_in":
+        correct = answer.get("correct")
+        if isinstance(correct, list):
+            return not any(str(item).strip() for item in correct)
+        return not (correct and str(correct).strip())
+    if qtype in ("short_answer", "essay"):
+        text = answer.get("text")
+        return not (
+            answer.get("points")
+            or answer.get("key_points")
+            or (isinstance(text, str) and text.strip())
+        )
+    if qtype == "code":
+        return not (answer.get("code") or answer.get("text"))
+    return not answer
+
+
+async def complete_question_answer_analysis(db: AsyncSession, question: Question) -> Question:
+    """若题目缺少答案或解析，调用 AI 补全并持久化；已完整则原样返回。"""
+    qtype = question.type.value if hasattr(question.type, "value") else str(question.type)
+    answer_empty = _question_answer_is_empty(question)
+    analysis_empty = not (question.analysis or "").strip()
+    if not answer_empty and not analysis_empty:
+        return question
+
+    content_text = _extract_question_content_text(question)
+    options_str = (
+        json.dumps(question.options, ensure_ascii=False) if question.options else "（无）"
+    )
+    prompt = f"""你是教研助手。请为下面的题目补全标准答案和解析。
+
+题目类型：{qtype}
+题目内容：{content_text[:2000]}
+选项：{options_str}
+
+只返回合法 JSON：{{"answer": <答案对象>, "analysis": "解析文本"}}
+其中 answer 的格式必须依据题型：
+- 单选题(choice)：{{"correct":"A"}}
+- 多选题(choice)：{{"correct":["A","B"]}}
+- 判断题(true_false)：{{"correct":true}} 或 {{"correct":false}}
+- 填空题(fill_in)：{{"correct":["答案1","答案2"]}}
+- 简答题/论述题(short_answer/essay)：{{"points":["要点1","要点2"]}}
+- 编程题(code)：{{"code":"参考代码"}}
+解析要简明、可用于教学讲解，不要重复题干。"""
+
+    try:
+        data = await _request_deepseek_json(prompt)
+    except Exception as exc:  # noqa: BLE001 - surface as a clean error to the caller
+        raise RuntimeError(f"AI 补全答案/解析失败：{exc}") from exc
+
+    changed = False
+    if answer_empty:
+        ai_answer = data.get("answer")
+        if isinstance(ai_answer, dict) and ai_answer:
+            question.answer = ai_answer
+            changed = True
+    if analysis_empty:
+        ai_analysis = str(data.get("analysis", "")).strip()
+        if ai_analysis:
+            question.analysis = ai_analysis
+            changed = True
+
+    if changed:
+        question.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(question)
+
+    return question
 
 
 async def enhance_import_drafts(

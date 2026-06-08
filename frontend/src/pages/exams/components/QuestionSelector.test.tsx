@@ -9,10 +9,11 @@ const useListMock = vi.fn();
 
 vi.mock("@refinedev/core", () => ({
   useList: (...args: unknown[]) => useListMock(...args),
+  useGetIdentity: () => ({ data: { primary_org: { role_name: "teacher" } } }),
 }));
 
 describe("QuestionSelector", () => {
-  it("shows a full question preview on hover for manual selection", async () => {
+  it("shows a full question preview after clicking a manual selection row", async () => {
     useListMock.mockImplementation(({ resource }: { resource: string }) => {
       if (resource === "question-banks") {
         return { query: { data: { data: [] }, isLoading: false } };
@@ -53,7 +54,7 @@ describe("QuestionSelector", () => {
     const user = userEvent.setup();
     render(<QuestionSelector onChange={vi.fn()} selectedIds={[]} />);
 
-    await user.hover(screen.getByRole("button", { name: /下面关于 tcp 三次握手的说法/i }));
+    await user.click(screen.getByRole("button", { name: /下面关于 tcp 三次握手的说法/i }));
 
     await waitFor(() => {
       expect(screen.getAllByText("下面关于 TCP 三次握手的说法，正确的是？").length).toBeGreaterThan(1);
@@ -61,9 +62,14 @@ describe("QuestionSelector", () => {
     expect(
       screen.getAllByText((_, element) => element?.textContent === "A. 客户端发送 SYN").length,
     ).toBeGreaterThan(0);
-    expect(
-      screen.getAllByText((_, element) => element?.textContent === "答案：A").length,
-    ).toBeGreaterThan(0);
+    expect(screen.getByText("解析")).toBeInTheDocument();
+    expect(screen.getByText("握手的第一步由客户端发起 SYN。")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "关闭题目详情" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("解析")).not.toBeInTheDocument();
+    });
   });
 
   it("renders latex content in the manual selection list row", async () => {

@@ -7,8 +7,10 @@ import {
   FileText,
   GraduationCap,
   Lock,
+  MoreHorizontal,
   Pencil,
   PieChart,
+  Sparkles,
   Trash2,
   UserCheck,
   Users,
@@ -24,12 +26,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 import { ExamStatusBadge } from "./ExamStatusBadge";
@@ -67,27 +63,31 @@ export function ExamCard({
   onView,
   onEdit,
   onAnalysis,
+  onGenerateMock,
   onClose,
   onDelete,
   onExport,
   extraBadges,
   extraActions,
+  moreActions,
+  collapseSecondaryActions = false,
   canManage = true,
 }: {
   exam: ExamCardData;
   onView: () => void;
   onEdit: () => void;
   onAnalysis: () => void;
+  onGenerateMock?: () => void;
   onClose: () => void;
   onDelete: () => void;
   onExport?: (format: "docx" | "pdf", answers: boolean) => void;
   extraBadges?: ReactNode;
   extraActions?: ReactNode;
+  moreActions?: ReactNode;
+  collapseSecondaryActions?: boolean;
   canManage?: boolean;
 }) {
   const effectiveStatus = getEffectiveExamStatus(exam);
-  const canClose =
-    effectiveStatus !== "ongoing" || exam.submitted_count >= exam.total_students;
   const canViewAnalysis =
     effectiveStatus !== "draft" &&
     effectiveStatus !== "upcoming" &&
@@ -102,6 +102,82 @@ export function ExamCard({
     0,
     exam.knowledge_points.length - visibleKnowledgePoints.length,
   );
+  const exportMenuItems = onExport ? (
+    <>
+      <DropdownMenuLabel className="text-xs">导出 Word</DropdownMenuLabel>
+      <DropdownMenuItem onClick={() => onExport("docx", true)}>
+        <Download size={14} className="mr-2" />
+        含答案
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={() => onExport("docx", false)}>
+        <Download size={14} className="mr-2" />
+        空白试卷
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+      <DropdownMenuLabel className="text-xs">导出 PDF</DropdownMenuLabel>
+      <DropdownMenuItem onClick={() => onExport("pdf", true)}>
+        <Download size={14} className="mr-2" />
+        含答案
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={() => onExport("pdf", false)}>
+        <Download size={14} className="mr-2" />
+        空白试卷
+      </DropdownMenuItem>
+    </>
+  ) : null;
+  const mockMenuItem =
+    onGenerateMock && exam.category === "exam" ? (
+      <DropdownMenuItem onClick={onGenerateMock}>
+        <Sparkles size={14} className="mr-2 text-primary" />
+        生成模拟卷
+      </DropdownMenuItem>
+    ) : null;
+  const moreMenu =
+    canManage &&
+    (moreActions ||
+      (collapseSecondaryActions && (onExport || mockMenuItem))) ? (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold"
+          aria-label="更多操作"
+        >
+          <MoreHorizontal size={14} />
+          <span>更多</span>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-48">
+        {collapseSecondaryActions && onExport ? exportMenuItems : null}
+        {collapseSecondaryActions && onExport && mockMenuItem ? (
+          <DropdownMenuSeparator />
+        ) : null}
+        {collapseSecondaryActions ? mockMenuItem : null}
+        {collapseSecondaryActions && (onExport || mockMenuItem) && moreActions ? (
+          <DropdownMenuSeparator />
+        ) : null}
+        {moreActions}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  ) : null;
+  const exportMenu = canManage && onExport && !collapseSecondaryActions ? (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold"
+        >
+          <Download size={14} />
+          <span>导出</span>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-48">
+        {exportMenuItems}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  ) : null;
 
   return (
     <div className="group relative overflow-hidden rounded-xl border border-border/50 bg-card p-0 transition-all hover:border-primary/20 hover:shadow-xl hover:shadow-primary/[0.03]">
@@ -208,44 +284,16 @@ export function ExamCard({
             </Button>
           ) : null}
 
-          {canViewAnalysis && (
+          {canManage && effectiveStatus !== "closed" && (
             <Button
               variant="ghost"
               size="sm"
-              className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold"
-              onClick={onAnalysis}
+              className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold text-amber-600 hover:bg-amber-50 hover:text-amber-700"
+              onClick={onClose}
             >
-              <PieChart size={14} />
-              <span>结果分析</span>
+              <Lock size={14} />
+              <span>关闭</span>
             </Button>
-          )}
-
-          {canManage && (effectiveStatus === "upcoming" ||
-            effectiveStatus === "ongoing" ||
-            effectiveStatus === "completed") && (
-            <TooltipProvider delayDuration={200}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold text-amber-600 hover:bg-amber-50 hover:text-amber-700"
-                      disabled={!canClose}
-                      onClick={onClose}
-                    >
-                      <Lock size={14} />
-                      <span>关闭</span>
-                    </Button>
-                  </span>
-                </TooltipTrigger>
-                {!canClose && (
-                  <TooltipContent side="bottom">
-                    <p className="text-xs">仍有考生在考试中，无法关闭</p>
-                  </TooltipContent>
-                )}
-              </Tooltip>
-            </TooltipProvider>
           )}
 
           {canManage && (effectiveStatus === "draft" ||
@@ -264,39 +312,33 @@ export function ExamCard({
             </Button>
           )}
 
-          {canManage && onExport ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold"
-                >
-                  <Download size={14} />
-                  <span>导出</span>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-40">
-                <DropdownMenuLabel className="text-xs">Word</DropdownMenuLabel>
-                <DropdownMenuItem onClick={() => onExport("docx", true)}>
-                  含答案
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => onExport("docx", false)}>
-                  空白试卷
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel className="text-xs">PDF</DropdownMenuLabel>
-                <DropdownMenuItem onClick={() => onExport("pdf", true)}>
-                  含答案
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => onExport("pdf", false)}>
-                  空白试卷
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+          {canManage && onGenerateMock && exam.category === "exam" && !collapseSecondaryActions ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold text-primary hover:bg-primary/5 hover:text-primary"
+              onClick={onGenerateMock}
+            >
+              <Sparkles size={14} />
+              <span>生成模拟卷</span>
+            </Button>
           ) : null}
 
+          {canViewAnalysis && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold"
+              onClick={onAnalysis}
+            >
+              <PieChart size={14} />
+              <span>结果分析</span>
+            </Button>
+          )}
+
+          {exportMenu}
           {canManage ? extraActions : null}
+          {moreMenu}
         </div>
       </div>
     </div>

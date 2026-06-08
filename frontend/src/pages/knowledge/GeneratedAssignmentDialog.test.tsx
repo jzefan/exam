@@ -40,7 +40,7 @@ describe("GeneratedAssignmentDialog", () => {
       />,
     );
 
-    expect(screen.getByRole("textbox", { name: "作业标题" })).toHaveValue("数字特征练习");
+    expect(screen.getByRole("textbox", { name: "练习标题" })).toHaveValue("数字特征练习");
     expect(screen.getByText("将发布 3 道题")).toBeInTheDocument();
     expect(screen.getByRole("dialog")).toHaveClass("sm:max-w-5xl");
     expect(screen.getByText("补充方式默认收起")).toBeInTheDocument();
@@ -78,8 +78,8 @@ describe("GeneratedAssignmentDialog", () => {
       />,
     );
 
-    const publishButton = screen.getByRole("button", { name: "发布作业" });
-    const titleInput = screen.getByRole("textbox", { name: "作业标题" });
+    const publishButton = screen.getByRole("button", { name: "发布练习" });
+    const titleInput = screen.getByRole("textbox", { name: "练习标题" });
 
     expect(publishButton).toBeDisabled();
 
@@ -107,9 +107,9 @@ describe("GeneratedAssignmentDialog", () => {
       />,
     );
 
-    await user.type(screen.getByRole("textbox", { name: "作业标题" }), "线性代数练习");
+    await user.type(screen.getByRole("textbox", { name: "练习标题" }), "线性代数练习");
     await user.click(screen.getByRole("button", { name: "选择学生" }));
-    await user.click(screen.getByRole("button", { name: "发布作业" }));
+    await user.click(screen.getByRole("button", { name: "发布练习" }));
 
     expect(onSubmit).toHaveBeenCalledWith({
       title: "线性代数练习",

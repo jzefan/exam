@@ -29,6 +29,7 @@ from app.questions.ai_generate_prompt import (
     build_ai_generate_system_prompt as _build_system_prompt,
     load_knowledge_point_prompt_contexts,
 )
+from app.questions.similarity import question_is_too_similar_to_any
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,8 @@ class AIGenerateRequest(BaseModel):
     type_distribution: dict[str, int] = Field(default_factory=dict)
     knowledge_point_ids: list[uuid.UUID] = Field(default_factory=list)
     knowledge_keywords: str = Field(default="", max_length=500)
+    course_name: str = Field(default="", max_length=200)
+    exam_title: str = Field(default="", max_length=300)
     prompt: str = Field(default="", max_length=2000)
     # 学习资料原文（PDF/Word/Markdown 等抽取后的纯文本）。
     # 与 prompt 分开，避免短指令字段被长正文淹没/截断。
@@ -70,7 +73,7 @@ class AIGenerateRequest(BaseModel):
     # 学习资料图片（PDF 整页渲染、docx/pptx 嵌入图），data URL 形式。
     # 非空时切换到多模态模型；与前端资料抽取页数上限保持一致。
     material_images: list[str] = Field(default_factory=list, max_length=120)
-    model: AIModelProvider = AIModelProvider.QWEN
+    model: AIModelProvider = AIModelProvider.DEEPSEEK
 
 
 class FrequentKnowledgePointItem(BaseModel):
@@ -334,7 +337,8 @@ def _build_generation_user_content(
         duplicate_instruction = f"已生成题目标题：{recent_titles}。" if recent_titles else ""
         text = (
             f"前面已成功收到 {generated_count} 道题，还差 {remaining_count} 道。"
-            f"请继续生成剩余 {remaining_count} 道，只输出新增题目的 JSON，不要重复已生成题目。"
+            f"请继续生成剩余 {remaining_count} 道，只输出新增题目的 JSON，不要重复或改写已生成题目，"
+            "也不要生成题干、选项、答案或考查点基本相同的近似题。"
             f"{duplicate_instruction}"
         )
 
@@ -405,6 +409,8 @@ async def generate_questions_stream(
         difficulty=request.difficulty,
         type_distribution=request.type_distribution,
         knowledge_keywords=request.knowledge_keywords,
+        course_name=request.course_name,
+        exam_title=request.exam_title,
         user_prompt=request.prompt,
         material_text=request.material_text,
         knowledge_contexts=knowledge_contexts,
@@ -433,6 +439,7 @@ async def generate_questions_stream(
 
     question_count = 0
     generated_titles: list[str] = []
+    accepted_questions: list[dict[str, Any]] = []
     expected_types = _expected_question_types(request.type_distribution)
 
     try:
@@ -545,7 +552,14 @@ async def generate_questions_stream(
                                                     parsed_question,
                                                 )
                                                 continue
+                                            if question_is_too_similar_to_any(parsed_question, accepted_questions):
+                                                logger.warning(
+                                                    "Reject near-duplicate generated question: payload=%s",
+                                                    parsed_question,
+                                                )
+                                                continue
                                             question_count += 1
+                                            accepted_questions.append(parsed_question)
                                             title = parsed_question.get("title")
                                             if isinstance(title, str) and title.strip():
                                                 generated_titles.append(title.strip())

@@ -59,14 +59,19 @@ async def _create_owner_user(db_session, prefix: str = "question-lock-owner") ->
 
 
 async def _create_submitted_attempt(db_session, *, exam_id, question_id, student_id) -> None:
-    db_session.add(
-        ExamStudent(
-            exam_id=exam_id,
-            student_id=student_id,
-            started_at=datetime.now(timezone.utc) - timedelta(minutes=10),
-            submitted_at=datetime.now(timezone.utc),
+    exam_student = await db_session.get(ExamStudent, {"exam_id": exam_id, "student_id": student_id})
+    if exam_student is None:
+        db_session.add(
+            ExamStudent(
+                exam_id=exam_id,
+                student_id=student_id,
+                started_at=datetime.now(timezone.utc) - timedelta(minutes=10),
+                submitted_at=datetime.now(timezone.utc),
+            )
         )
-    )
+    else:
+        exam_student.started_at = exam_student.started_at or datetime.now(timezone.utc) - timedelta(minutes=10)
+        exam_student.submitted_at = datetime.now(timezone.utc)
     db_session.add(
         StudentExamAnswer(
             exam_id=exam_id,
@@ -284,25 +289,28 @@ async def test_update_question_api_allows_title_change_when_question_in_use(
 
     client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
 
-    # title / tag_ids / question_bank_id are metadata — allowed even when in use
+    # 未提交时，即使题目已被发布考试引用，也允许任意修改。
     response = await client.put(
         f"/api/questions/{question.id}",
-        json={"title": "新的题干"},
+        json={"title": "新的题干", "score": 999},
     )
     assert response.status_code == 200
 
-    # score / type / content / options are still forbidden
+    await _create_submitted_attempt(db_session, exam_id=exam.id, question_id=question.id, student_id=student.id)
+    await db_session.commit()
+
+    # 已有提交后，score / type / content / options are forbidden.
     response = await client.put(
         f"/api/questions/{question.id}",
-        json={"score": 999},
+        json={"score": 888},
     )
     assert response.status_code == 400
-    assert response.json()["detail"] == "这道题正在考试或练习中使用，不能修改题干、选项、题型或分值。"
+    assert response.json()["detail"] == "这道题已有学生提交过答卷，不能修改题干、选项、题型或分值。"
 
 
 @pytest.mark.asyncio
-async def test_question_is_in_use_for_any_non_deleted_exam_ref(db_session) -> None:
-    """Any non-deleted exam reference should lock the question for structure edits."""
+async def test_question_is_in_use_only_after_submitted_attempts(db_session) -> None:
+    """Exam references without submissions should not lock question structure edits."""
     admin = await _create_owner_user(db_session, prefix="question-lock-admin")
     question = Question(
         type=QuestionType.SHORT_ANSWER,
@@ -336,26 +344,35 @@ async def test_question_is_in_use_for_any_non_deleted_exam_ref(db_session) -> No
     db_session.add(ongoing_exam)
     await db_session.flush()
     db_session.add(ExamQuestion(exam_id=ongoing_exam.id, question_id=question.id, order=0))
+    student = User(
+        username="question-lock-student-no-submit",
+        email="question-lock-student-no-submit@example.com",
+        password_hash="hashed",
+        full_name="Question Lock Student No Submit",
+        is_active=True,
+    )
+    db_session.add(student)
     await db_session.flush()
-
-    assert await question_is_in_use(db_session, question.id) is True
-
-    # Soft-deleted exam: not in use
-    ongoing_exam.deleted_at = datetime.now(timezone.utc)
+    db_session.add(
+        ExamStudent(
+            exam_id=ongoing_exam.id,
+            student_id=student.id,
+            attempt_state="in_progress",
+            started_at=datetime.now(timezone.utc),
+        )
+    )
     await db_session.flush()
 
     assert await question_is_in_use(db_session, question.id) is False
 
-    # Draft exam: still in use because the exam reference remains active
-    ongoing_exam.deleted_at = None
-    ongoing_exam.status = "draft"
+    await _create_submitted_attempt(db_session, exam_id=ongoing_exam.id, question_id=question.id, student_id=student.id)
     await db_session.flush()
     assert await question_is_in_use(db_session, question.id) is True
 
-    # Completed exam: still in use until the exam itself is deleted
-    ongoing_exam.status = "completed"
+    # Soft-deleted exam: submitted answers no longer lock this question.
+    ongoing_exam.deleted_at = datetime.now(timezone.utc)
     await db_session.flush()
-    assert await question_is_in_use(db_session, question.id) is True
+    assert await question_is_in_use(db_session, question.id) is False
 
 
 @pytest.mark.asyncio

@@ -68,18 +68,18 @@ export function GeneratedAssignmentDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-5xl">
         <DialogHeader>
-          <DialogTitle className="text-base">生成作业</DialogTitle>
+          <DialogTitle className="text-base">生成练习</DialogTitle>
           <DialogDescription>将发布 {questionCount} 道题</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="generated-assignment-title">作业标题</Label>
+            <Label htmlFor="generated-assignment-title">练习标题</Label>
             <Input
               id="generated-assignment-title"
               value={title}
               onChange={(event) => setTitle(event.target.value)}
-              placeholder="请输入作业标题"
+              placeholder="请输入练习标题"
             />
           </div>
 
@@ -87,7 +87,7 @@ export function GeneratedAssignmentDialog({
             selectedIds={studentIds}
             onChange={setStudentIds}
             summaryLabel="名学生"
-            emptySummaryText="请选择至少一名学生发布作业。"
+            emptySummaryText="请选择至少一名学生发布练习。"
             defaultSupplementCollapsed
           />
         </div>
@@ -98,7 +98,7 @@ export function GeneratedAssignmentDialog({
           </Button>
           <Button onClick={() => void handleSubmit()} disabled={!canSubmit}>
             {isSubmitting ? <Loader2 className="animate-spin" /> : null}
-            发布作业
+            发布练习
           </Button>
         </DialogFooter>
       </DialogContent>

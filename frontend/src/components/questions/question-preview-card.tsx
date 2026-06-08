@@ -6,7 +6,7 @@ import { zhCN } from "date-fns/locale";
 import { Check, Clock3, Copy, GraduationCap, Loader2, Tag } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import type { IQuestion } from "@/types";
+import type { IQuestion, QuestionSource } from "@/types";
 import { Badge } from "@/components/ui/badge";
 import { CodeBlock, highlightCode } from "@/components/ui/code-block";
 import { LatexText } from "@/components/ui/latex-text";
@@ -104,6 +104,28 @@ function renderHighlightedLatexText(text: string, keyword?: string) {
     </>
   );
 }
+
+/* ── question source badge ── */
+const QUESTION_SOURCE_META: Record<
+  QuestionSource,
+  { label: string; className: string }
+> = {
+  manual: {
+    label: "手动添加",
+    className:
+      "border border-border bg-muted text-muted-foreground",
+  },
+  ai_generated: {
+    label: "AI 生成",
+    className:
+      "border border-primary/30 bg-primary/10 text-primary",
+  },
+  imported: {
+    label: "导入",
+    className:
+      "border border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950/30 dark:text-sky-300",
+  },
+};
 
 /* ── difficulty bars ── */
 export const DIFFICULTY_LABELS: Record<number, string> = {
@@ -316,7 +338,7 @@ function ChoiceOptions({
           <span
             key={key}
             className={cn(
-              "inline-flex items-baseline gap-1 text-sm",
+              "text-sm",
               isCorrect ? "font-semibold text-primary" : "text-muted-foreground",
               layout === "single-row"
                 ? "min-w-0 whitespace-nowrap"
@@ -324,11 +346,12 @@ function ChoiceOptions({
             )}
           >
             {isCorrect ? (
-              <Check size={14} className="shrink-0 translate-y-0.5 text-primary" />
+              <Check
+                size={14}
+                className="mr-1 inline-block align-text-bottom text-primary"
+              />
             ) : null}
-            <span className="min-w-0">
-              {key}. {renderHighlightedLatexText(value, highlightKeyword)}
-            </span>
+            {key}. {renderHighlightedLatexText(value, highlightKeyword)}
           </span>
         );
       })}
@@ -353,6 +376,7 @@ export function QuestionPreviewCard({
   markChoiceAnswer = false,
   highlightKeyword,
   expandOnHover = false,
+  expandOnClick = false,
   hoverDetailDelay = 180,
   knowledgeRecognitionStatus,
   onClick,
@@ -376,19 +400,23 @@ export function QuestionPreviewCard({
   markChoiceAnswer?: boolean;
   highlightKeyword?: string;
   expandOnHover?: boolean;
+  expandOnClick?: boolean;
   hoverDetailDelay?: number;
   knowledgeRecognitionStatus?: QuestionKnowledgeRecognitionStatus | null;
 } & HTMLAttributes<HTMLDivElement>) {
   const [isHovered, setIsHovered] = useState(false);
   const [isHoverExpanded, setIsHoverExpanded] = useState(false);
+  const [isClickExpanded, setIsClickExpanded] = useState(false);
   const [isHoverExpansionSuppressed, setIsHoverExpansionSuppressed] =
     useState(false);
   const hoverExpandTimerRef = useRef<number | null>(null);
 
   const answerText = getQuestionAnswerText(question);
   const isExpanded = expanded ?? defaultExpanded;
-  const showDetails = expandOnHover
-    ? isHoverExpanded
+  const showDetails = expandOnClick
+    ? isClickExpanded || isExpanded
+    : expandOnHover
+      ? isHoverExpanded
     : mode === "detailed"
       ? isExpanded
       : defaultExpanded;
@@ -488,6 +516,19 @@ export function QuestionPreviewCard({
   };
 
   const handleClick: HTMLAttributes<HTMLDivElement>["onClick"] = (event) => {
+    const target = event.target;
+    const isInteractive =
+      target instanceof HTMLElement &&
+      Boolean(
+        target.closest(
+          "button,a,input,textarea,select,[role='button'],[data-no-card-toggle='true']",
+        ),
+      );
+
+    if (expandOnClick && !isInteractive) {
+      setIsClickExpanded((current) => !current);
+    }
+
     if (expandOnHover) {
       if (hoverExpandTimerRef.current) {
         window.clearTimeout(hoverExpandTimerRef.current);
@@ -523,6 +564,19 @@ export function QuestionPreviewCard({
             {typeLabel}
           </span>
         ) : null}
+        {(() => {
+          const meta = QUESTION_SOURCE_META[question.source ?? "manual"];
+          return (
+            <span
+              className={cn(
+                "inline-flex shrink-0 items-center whitespace-nowrap rounded-md px-2 py-0.5 text-xs font-medium",
+                meta.className,
+              )}
+            >
+              {meta.label}
+            </span>
+          );
+        })()}
         {headerKnowledge ? (
           <span className="hidden min-w-0 truncate text-xs text-muted-foreground sm:inline">
             {headerKnowledge}

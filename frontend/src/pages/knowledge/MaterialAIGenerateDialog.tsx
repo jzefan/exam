@@ -99,6 +99,19 @@ function getAnswerText(answer: GeneratedQuestion["answer"] | null | undefined) {
   return "";
 }
 
+function inferCourseNameFromKnowledgePath(
+  knowledgePointPath: string,
+  knowledgePointName: string,
+) {
+  const parts = knowledgePointPath
+    .split("/")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length >= 3) return parts[2];
+  if (parts.length >= 2) return parts[0];
+  return knowledgePointName;
+}
+
 export interface MaterialAIGenerateDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -218,7 +231,7 @@ export function MaterialAIGenerateDialog({
     essay: 0,
     code: 0,
   });
-  const [model, setModel] = useState<AIModelProvider>("qwen");
+  const [model, setModel] = useState<AIModelProvider>("deepseek");
   const [customPrompt, setCustomPrompt] = useState("");
 
   const [questions, setQuestions] = useState<GeneratedQuestion[]>([]);
@@ -282,6 +295,10 @@ export function MaterialAIGenerateDialog({
       type_distribution:
         Object.keys(typeDistribution).length > 0 ? typeDistribution : undefined,
       knowledge_point_ids: [knowledgePointId],
+      course_name: inferCourseNameFromKnowledgePath(
+        knowledgePointPath,
+        knowledgePointName,
+      ),
       prompt: `${customPrompt.trim()}${codePrompt}`.trim() || undefined,
       material_text: materialSourceText,
       material_images: materialImages,
@@ -528,7 +545,7 @@ export function MaterialAIGenerateDialog({
     async ({ title, studentIds }: GeneratedAssignmentDialogSubmitPayload) => {
       setIsSaving(true);
       try {
-        const saveOutcome = await buildAndSaveSelectedQuestions("发布作业失败");
+        const saveOutcome = await buildAndSaveSelectedQuestions("发布练习失败");
         if (!saveOutcome) return;
 
         const createdQuestionIds =
@@ -571,7 +588,7 @@ export function MaterialAIGenerateDialog({
         toast({
           title: isPermissionError
             ? "当前知识点暂不允许保存题目"
-            : "发布作业失败",
+            : "发布练习失败",
           description: isPermissionError
             ? getSavePermissionErrorDescription()
             : message,
@@ -799,7 +816,7 @@ export function MaterialAIGenerateDialog({
                   配置题型数量后点击「开始生成」
                 </p>
                 <p className="mt-1 text-xs">
-                  生成的题目会先作为草稿展示，可勾选后保存或发布作业。
+                  生成的题目会先作为草稿展示，可勾选后保存或发布练习。
                 </p>
               </div>
             </div>
@@ -988,7 +1005,7 @@ export function MaterialAIGenerateDialog({
               disabled={!canCreateAssignment}
             >
               <ClipboardList size={14} className="mr-1.5" />
-              生成作业
+              生成练习
             </Button>
             <Button
               onClick={() => void saveToCourseBank()}
@@ -1024,10 +1041,10 @@ export function MaterialAIGenerateDialog({
             <div className="mb-2 flex size-11 items-center justify-center rounded-full bg-primary/10 text-primary">
               <CheckCircle2 className="size-6" />
             </div>
-            <DialogTitle>作业已发布</DialogTitle>
+            <DialogTitle>练习已发布</DialogTitle>
             <DialogDescription>
               已发布 {createdAssignment?.questionCount ?? 0}{" "}
-              道题的练习作业，可以立即进入作业详情查看。
+              道题的练习，可以立即进入练习详情查看。
             </DialogDescription>
           </DialogHeader>
 
@@ -1039,7 +1056,7 @@ export function MaterialAIGenerateDialog({
             <Button variant="outline" onClick={closeCreatedAssignmentDialog}>
               稍后查看
             </Button>
-            <Button onClick={viewCreatedAssignment}>查看作业</Button>
+            <Button onClick={viewCreatedAssignment}>查看练习</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

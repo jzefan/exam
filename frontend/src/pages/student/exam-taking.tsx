@@ -10,6 +10,7 @@ import {
   Loader2,
   Send,
   Map,
+  TimerOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -63,6 +64,22 @@ function isAnswered(ans: Record<string, unknown> | undefined): boolean {
   );
 }
 
+function getExamDeadlineMs(examData: Pick<IExamTaking, "started_at" | "duration_minutes" | "end_time">): number | null {
+  const started = new Date(examData.started_at).getTime();
+  if (!Number.isFinite(started) || examData.duration_minutes <= 0) return null;
+  const durationDeadline = started + examData.duration_minutes * 60_000;
+  if (!examData.end_time) return durationDeadline;
+  const end = new Date(examData.end_time).getTime();
+  return Number.isFinite(end) ? Math.min(durationDeadline, end) : durationDeadline;
+}
+
+function isExamTimeExhaustedOnEntry(examData: Pick<IExamTaking, "started_at" | "duration_minutes" | "end_time">): boolean {
+  const deadline = getExamDeadlineMs(examData);
+  const examEnd = examData.end_time ? new Date(examData.end_time).getTime() : Number.NaN;
+  if (Number.isFinite(examEnd) && examEnd <= Date.now()) return false;
+  return deadline !== null && deadline <= Date.now();
+}
+
 /* ------------------------------------------------------------------ */
 /*  Main component                                                     */
 /* ------------------------------------------------------------------ */
@@ -97,6 +114,7 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
   const [isSubmittingAction, setIsSubmittingAction] = useState(false);
   const [divergedDraft, setDivergedDraft] = useState<DivergedQuestion[]>([]);
   const [showRecovery, setShowRecovery] = useState(false);
+  const [timeExhaustedOnEntry, setTimeExhaustedOnEntry] = useState(false);
   const handleSubmitRef = useRef<((reason?: "time-up" | "switch-limit") => Promise<void>) | null>(null);
   const submitInFlightRef = useRef(false);
   const isMobile = useIsMobile();
@@ -115,6 +133,7 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
         .then((res) => {
           if (!cancelled) {
             setExamData(res.data);
+            setTimeExhaustedOnEntry(isExamTimeExhaustedOnEntry(res.data));
             setIsLoading(false);
           }
         })
@@ -384,6 +403,28 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
           <Button variant="outline" size="sm" onClick={() => navigate("/my-exams")}>
             返回考试列表
           </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (timeExhaustedOnEntry) {
+    return (
+      <div className="fixed inset-0 flex items-center justify-center bg-background px-6">
+        <div className="w-full max-w-md text-center">
+          <div className="mx-auto mb-5 flex size-14 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+            <TimerOff className="size-7" />
+          </div>
+          <h1 className="text-lg font-semibold text-foreground">本次考试答题时间已用完</h1>
+          <p className="mt-3 text-sm leading-6 text-muted-foreground">
+            系统从你第一次进入考试时开始计时。当前已超过本次考试的答题时长，因此不能继续作答。
+          </p>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            如果你认为这是异常情况，请联系老师处理。
+          </p>
+          <div className="mt-6 flex justify-center">
+            <Button onClick={() => navigate("/my-exams")}>返回我的考试</Button>
+          </div>
         </div>
       </div>
     );

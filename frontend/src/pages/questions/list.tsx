@@ -940,7 +940,7 @@ export function QuestionList() {
     if (selectedQuestionIds.length === 0) {
       toast({
         title: "请先选择题目",
-        description: "勾选至少一道题目后再发起考试/作业。",
+        description: "勾选至少一道题目后再发起考试/练习。",
         variant: "destructive",
       });
       return;
@@ -1465,7 +1465,7 @@ export function QuestionList() {
                       onClick={openCreateFromSelectionDialog}
                     >
                       <FilePlus2 size={13} />
-                      发起考试/作业
+                      发起考试/练习
                     </Button>
                     <Button
                       type="button"
@@ -1521,7 +1521,7 @@ export function QuestionList() {
                     question={question}
                     index={globalIndex}
                     className="cursor-pointer transition-all hover:border-primary hover:shadow-md"
-                    expandOnHover
+                    expandOnClick
                     hideAnswer
                     highlightKeyword={search}
                     trailing={

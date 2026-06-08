@@ -300,7 +300,7 @@ describe("question import helpers", () => {
 
   it("preserves ordered list items as [OL] markers for backend parsing", () => {
     const html = `
-      <p>1. 请提交今日课堂作业：</p>
+      <p>1. 请提交今日课堂练习：</p>
       <ol>
         <li>提交 PDM 截图；</li>
         <li>提交 MySQL 脚本截图；</li>
@@ -309,7 +309,7 @@ describe("question import helpers", () => {
       <p>[答案]</p>
       <p>[难度] 简单</p>
       <p>[预计时间]</p>
-      <p>2. 请提交今日课堂作业：</p>
+      <p>2. 请提交今日课堂练习：</p>
       <ol>
         <li>提交功能模块图；</li>
         <li>提交概念数据模型 E-R 图；</li>
@@ -320,10 +320,10 @@ describe("question import helpers", () => {
 
     const text = htmlToImportText(html);
 
-    expect(text).toContain("1. 请提交今日课堂作业：");
+    expect(text).toContain("1. 请提交今日课堂练习：");
     expect(text).toContain("[OL] 提交 PDM 截图；");
     expect(text).toContain("[OL] 提交 MySQL 脚本截图；");
-    expect(text).toContain("\n\n2. 请提交今日课堂作业：");
+    expect(text).toContain("\n\n2. 请提交今日课堂练习：");
     expect(text).not.toContain("提交 PDM 截图；提交 MySQL 脚本截图；");
   });
 

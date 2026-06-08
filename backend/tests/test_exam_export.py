@@ -85,7 +85,8 @@ def test_score_note_varies_when_scores_differ() -> None:
         ]
     )
     section = assemble_sections(exam, with_answers=False)[0]
-    assert section.score_note == "共25分"
+    # Predominant score + the differing question called out explicitly.
+    assert section.score_note == "每小题10分，共25分，其中第2题15分"
 
 
 @pytest.mark.parametrize("with_answers", [True, False])
@@ -147,25 +148,101 @@ def _docx_document_xml(with_answers: bool) -> str:
     return archive.read("word/document.xml").decode("utf-8")
 
 
-def test_score_table_uses_diagonal_corner_and_drops_school_name() -> None:
+def test_question_line_has_no_inline_score() -> None:
+    # Per-question scores live in the section heading, not before each question.
+    xml = _docx_document_xml(with_answers=False)
+    assert "1. 题干" in xml
+    assert "1.（" not in xml
+
+
+def _code_question_docx_xml(with_answers: bool) -> str:
+    import io
+    import zipfile
+
+    from app.exams.paper_export.model import ExamPaper
+
+    question = _question(
+        QuestionType.CODE,
+        content={"text": "请编写程序。要求：\n1. 输入\n2. 输出"},
+        answer={"text": "示例答案"},
+        score=10.0,
+    )
+    paper = ExamPaper(
+        school_name="x",
+        semester_name=None,
+        course_name="c",
+        exam_title="期末考试",
+        class_label=None,
+        duration_minutes=90,
+        exam_form="闭卷笔试",
+        total_score=10.0,
+        with_answers=with_answers,
+        sections=assemble_sections(_exam_with([question]), with_answers=with_answers),
+    )
+    return zipfile.ZipFile(io.BytesIO(render_docx(paper))).read("word/document.xml").decode("utf-8")
+
+
+def test_subitems_indented_and_blank_variant_leaves_writing_space() -> None:
+    blank = _code_question_docx_xml(with_answers=False)
+    answered = _code_question_docx_xml(with_answers=True)
+    # Continuation (sub-requirement) lines are indented two characters (21pt = 420 twips).
+    assert 'w:left="420"' in blank
+    # The no-answer variant leaves extra blank paragraphs to write 编程 answers in.
+    assert blank.count("</w:p>") > answered.count("</w:p>")
+
+
+def test_score_table_uses_diagonal_corner() -> None:
     xml = _docx_document_xml(with_answers=False)
     # 得分统计表: diagonal 题号/得分 corner + 核查人签名 column + 阅卷教师 row.
     assert "w:tl2br" in xml
     assert "核查人签名" in xml
     assert "阅卷教师" in xml
-    # Header no longer prints the school name.
-    assert "测试学院" not in xml
 
 
-def test_answer_key_docx_highlights_answers_blank_does_not() -> None:
+def test_answer_key_docx_uses_blue_text_without_background() -> None:
     answered = _docx_document_xml(with_answers=True)
     blank = _docx_document_xml(with_answers=False)
-    # Answer key: blue font on a light-blue shaded background.
-    assert 'w:fill="EAF1FF"' in answered
+    # Answer key: blue font, and no shaded background fill anywhere.
     assert "1D4ED8" in answered
+    assert 'w:fill="EAF1FF"' not in answered
     # Blank paper carries no answer highlight.
-    assert 'w:fill="EAF1FF"' not in blank
     assert "1D4ED8" not in blank
+
+
+def test_paper_header_lines_formats_and_defaults() -> None:
+    from app.exams.paper_export.model import ExamPaper, paper_header_lines
+
+    def header(**kw) -> tuple[str, str, str]:
+        base = dict(
+            school_name="江苏卫生健康职业学院",
+            semester_name=None,
+            course_name="数据可视化",
+            exam_title="数据可视化期末考试",
+            class_label=None,
+            duration_minutes=90,
+            exam_form="闭卷笔试",
+            total_score=0.0,
+            with_answers=False,
+            sections=(),
+        )
+        base.update(kw)
+        return paper_header_lines(ExamPaper(**base))
+
+    # Defaults: fixed semester + major, exam type parsed from the name.
+    line1, line2, line3 = header()
+    assert line1 == "江苏卫生健康职业学院2025-2026学年第一学期"
+    assert line2 == "《数据可视化》期末考试试卷"
+    assert line3 == "（智能医疗装备技术专业）"
+
+    # Semester from the exam; major from the class label; midterm parsed.
+    line1, line2, line3 = header(
+        semester_name="2025～2026学年第一学期",
+        exam_title="期中测验",
+        class_label="2024级健康大数据",
+    )
+    assert line1 == "江苏卫生健康职业学院2025～2026学年第一学期"
+    assert line2 == "《数据可视化》期中考试试卷"
+    assert line3 == "（2024级健康大数据专业）"
 
 
 async def _make_teacher_with_exam(db_session) -> tuple[object, Exam]:

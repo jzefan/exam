@@ -80,6 +80,22 @@ type AIGeneratePrefill = {
   course_name?: string;
 };
 
+function inferCourseNameForAIGeneration(
+  selectedKPs: SelectedKnowledgePoint[],
+  explicitCourseName: string,
+): string | undefined {
+  const explicit = explicitCourseName.trim();
+  if (explicit) return explicit;
+
+  const slashPath = selectedKPs.find((kp) => kp.path.includes("/"))?.path;
+  if (!slashPath) return undefined;
+  const parts = slashPath
+    .split("/")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return parts.length >= 2 ? parts[0] : undefined;
+}
+
 function rootKnowledgeQuestionBankName(rootName: string | undefined) {
   const normalized = rootName?.trim();
   return normalized ? `${normalized.slice(0, 197)}-题库` : "主知识对应题库";
@@ -332,8 +348,9 @@ export function AIGeneratePage() {
     essay: 0,
     code: 0,
   });
-  const [model, setModel] = useState<AIModelProvider>("qwen");
+  const [model, setModel] = useState<AIModelProvider>("deepseek");
   const [selectedKPs, setSelectedKPs] = useState<SelectedKnowledgePoint[]>([]);
+  const [generationCourseName, setGenerationCourseName] = useState("");
   const [customPrompt, setCustomPrompt] = useState("");
 
   // Generation state
@@ -382,6 +399,7 @@ export function AIGeneratePage() {
     sessionStorage.removeItem(AI_GENERATE_PREFILL_KEY);
     try {
       const prefill = JSON.parse(raw) as AIGeneratePrefill;
+      setGenerationCourseName(prefill.course_name?.trim() ?? "");
       if (prefill.kind === "course_material" && prefill.node_id) {
         const nodeName = prefill.node_name?.trim() || "课程节点";
         const path = [prefill.course_name, nodeName]
@@ -437,6 +455,10 @@ export function AIGeneratePage() {
         Object.keys(typeDistribution).length > 0 ? typeDistribution : undefined,
       knowledge_point_ids:
         selectedKPs.length > 0 ? selectedKPs.map((kp) => kp.id) : undefined,
+      course_name: inferCourseNameForAIGeneration(
+        selectedKPs,
+        generationCourseName,
+      ),
       prompt: customPrompt.trim() || undefined,
       model,
     };
@@ -535,6 +557,7 @@ export function AIGeneratePage() {
     difficulty,
     typeAlloc,
     selectedKPs,
+    generationCourseName,
     customPrompt,
     model,
     toast,
@@ -675,6 +698,7 @@ export function AIGeneratePage() {
         analysis: q.analysis,
         difficulty: q.difficulty,
         score: 10,
+        source: "ai_generated",
         tag_ids: [],
         knowledge_point_ids: [],
         question_bank_id: bankId,

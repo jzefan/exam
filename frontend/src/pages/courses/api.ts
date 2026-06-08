@@ -329,7 +329,9 @@ export function archiveExamToSemester(
 }
 
 export function listCourseQuestions(courseId: string) {
-  return dedupedGet<IQuestion[]>(`/teacher/courses/${courseId}/questions`);
+  // 题目 tab 会一次性加载课程全部题目，再在前端按知识点/搜索过滤，
+  // 因此需要请求足够大的上限覆盖整门课程的题量（避免按知识点筛选时漏题）。
+  return dedupedGet<IQuestion[]>(`/teacher/courses/${courseId}/questions?limit=5000`);
 }
 
 export function clearCourseQuestions(courseId: string) {

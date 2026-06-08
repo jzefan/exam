@@ -1,9 +1,18 @@
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen } from "@/test/test-utils";
 
 import { QuestionEdit } from "./edit";
+
+function renderQuestionEdit() {
+  return render(
+    <MemoryRouter>
+      <QuestionEdit />
+    </MemoryRouter>,
+  );
+}
 
 const { mutateMock, navigateMock, toastMock, useUpdateMock, useOneMock, useListMock, paramsMock } = vi.hoisted(() => ({
   mutateMock: vi.fn(),
@@ -19,6 +28,7 @@ vi.mock("@refinedev/core", () => ({
   useUpdate: () => useUpdateMock(),
   useOne: (...args: unknown[]) => useOneMock(...args),
   useList: (...args: unknown[]) => useListMock(...args),
+  useGetIdentity: () => ({ data: null }),
 }));
 
 vi.mock("react-router-dom", async () => {
@@ -157,7 +167,7 @@ describe("QuestionEdit", () => {
 
   it("loads program mode code question details and preserves mode on submit", async () => {
     const user = userEvent.setup();
-    render(<QuestionEdit />);
+    renderQuestionEdit();
 
     expect(screen.getByText("作答模式")).toBeInTheDocument();
     expect(screen.getByText("完整程序题（推荐）")).toBeInTheDocument();
@@ -220,7 +230,7 @@ describe("QuestionEdit", () => {
       },
     });
 
-    render(<QuestionEdit />);
+    renderQuestionEdit();
 
     expect(screen.getByText("题目内容已锁定")).toBeInTheDocument();
     expect(screen.getByText(/系统会自动重新评分受影响的已提交答卷/)).toBeInTheDocument();

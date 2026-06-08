@@ -121,4 +121,55 @@ describe("WrongAnswerDetailPage", () => {
     expect(screen.getByText("注意左右边界更新。")).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "二分查找示意图" })).toBeInTheDocument();
   });
+
+  it("renders choice question options in wrong answer detail", async () => {
+    useOneMock.mockReturnValue({
+      query: {
+        isLoading: false,
+        data: {
+          data: {
+            id: "wa-choice",
+            question_id: "q-choice",
+            question_title: "Python中列表的索引",
+            question_type: "choice",
+            exam_title: "Python模拟试卷",
+            wrong_count: 1,
+            last_wrong_at: "2026-06-07T08:57:00.000Z",
+            tags: [],
+            mastered: false,
+            question_content: {
+              text: "在Python中，给定列表 lst = [10, 20, 30, 40, 50]，请问 lst[2] 的值是多少？",
+            },
+            question_options: {
+              A: "10",
+              B: "20",
+              C: "30",
+              D: "40",
+            },
+            standard_answer: { correct: "C" },
+            analysis: null,
+            student_answer: {},
+            feedback: { strengths: [], deductions: [], suggestions: [] },
+          },
+        },
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/wrong-answers/wa-choice"]}>
+        <Routes>
+          <Route path="/wrong-answers/:id" element={<WrongAnswerDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("A")).toBeInTheDocument();
+    expect(screen.getByText("10")).toBeInTheDocument();
+    expect(screen.getByText("B")).toBeInTheDocument();
+    expect(screen.getByText("20")).toBeInTheDocument();
+    expect(screen.getAllByText("C").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("30")).toBeInTheDocument();
+    expect(screen.getByText("D")).toBeInTheDocument();
+    expect(screen.getByText("40")).toBeInTheDocument();
+  });
 });

@@ -50,18 +50,18 @@ interface SettingsPayload {
 
 const PROVIDERS = [
   {
+    value: "deepseek",
+    title: "DeepSeek",
+    providerLabel: "DeepSeek",
+    defaultModel: "deepseek-v4-flash",
+    capabilityTags: ["工具调用"],
+  },
+  {
     value: "qwen",
     title: "阿里百炼",
     providerLabel: "阿里百炼",
     defaultModel: "qwen-plus",
     capabilityTags: ["工具调用", "推理模式"],
-  },
-  {
-    value: "deepseek",
-    title: "DeepSeek",
-    providerLabel: "DeepSeek",
-    defaultModel: "deepseek-v4-pro",
-    capabilityTags: ["工具调用"],
   },
   {
     value: "claude",
@@ -78,7 +78,7 @@ export function ModelConfigPage() {
   const [saving, setSaving] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [providers, setProviders] = useState<SettingsData["providers"]>([]);
-  const [priority, setPriority] = useState<string[]>(["qwen", "deepseek", "claude"]);
+  const [priority, setPriority] = useState<string[]>(["deepseek", "qwen", "claude"]);
   const [apiKey, setApiKey] = useState("");
   const [modelName, setModelName] = useState("");
   const [baseUrl, setBaseUrl] = useState("");

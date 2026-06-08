@@ -86,6 +86,28 @@ describe("QuestionPreviewCard", () => {
     expect(screen.queryByText("解析")).not.toBeInTheDocument();
   });
 
+  it("expands and collapses details on click when click expansion is enabled", async () => {
+    const user = userEvent.setup();
+    render(<QuestionPreviewCard question={sampleQuestion} expandOnClick hideAnswer />);
+
+    const card = screen.getByText("下面关于 TCP 三次握手的说法，正确的是？")
+      .closest(".group");
+    expect(card).not.toBeNull();
+    expect(screen.getByTestId("question-preview-details")).toHaveClass(
+      "grid-rows-[0fr]",
+    );
+
+    await user.click(card as HTMLElement);
+    expect(screen.getByTestId("question-preview-details")).toHaveClass(
+      "grid-rows-[1fr]",
+    );
+
+    await user.click(card as HTMLElement);
+    expect(screen.getByTestId("question-preview-details")).toHaveClass(
+      "grid-rows-[0fr]",
+    );
+  });
+
   it("renders shorthand badge for legacy true false type values", () => {
     const legacyTrueFalseQuestion = {
       ...sampleQuestion,

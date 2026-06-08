@@ -131,7 +131,22 @@ vi.mock("./PositionSelector", () => ({
 }));
 
 vi.mock("./QuestionSelector", () => ({
-  QuestionSelector: () => <div data-testid="question-selector" />,
+  QuestionSelector: ({
+    selectedIds,
+    onChange,
+  }: {
+    selectedIds: string[];
+    onChange: (ids: string[]) => void;
+  }) => (
+    <div data-testid="question-selector">
+      <span>已选 {selectedIds.length} 题</span>
+      {selectedIds.length > 0 && (
+        <button type="button" onClick={() => onChange([])}>
+          清空选择
+        </button>
+      )}
+    </div>
+  ),
 }));
 
 vi.mock("./StudentSelector", () => ({
@@ -296,6 +311,66 @@ describe("ExamWizardForm", () => {
     // 预览卡片展示题干（content.text）与解析，而非内部 title 字段。
     expect(screen.getByText("下面哪个选项正确？")).toBeInTheDocument();
     expect(screen.getByText("解析内容")).toBeInTheDocument();
+  });
+
+  it("keeps generated questions when switching from auto mode to manual mode", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ExamWizardForm
+        mode="create"
+        initialValues={{
+          ...createInitialValues(),
+          question_mode: "auto",
+          question_ids: ["question-1"],
+          question_items: [{ question_id: "question-1", order: 0, score_override: 10 }],
+        }}
+        isPending={false}
+        submitError={null}
+        onSubmit={vi.fn()}
+        initialStep={1}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /精确控制题目内容/ }));
+    expect(screen.getByText(/已加入考试的题目会保留/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "确认切换" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "清空选择" })).toBeInTheDocument();
+    });
+  });
+
+  it("clears selected questions only when switching from manual mode to AI mode", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ExamWizardForm
+        mode="create"
+        initialValues={{
+          ...createInitialValues(),
+          question_mode: "manual",
+          question_ids: ["question-1"],
+          question_items: [{ question_id: "question-1", order: 0, score_override: 10 }],
+        }}
+        isPending={false}
+        submitError={null}
+        onSubmit={vi.fn()}
+        initialStep={1}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /AI出题/i }));
+    expect(screen.getByText(/当前已选题目会被清空/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "确认切换" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "确认切换" })).not.toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /精确控制题目内容/ }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "清空选择" })).not.toBeInTheDocument();
+    });
   });
 
   it("infers AI question mode for legacy exams whose questions all come from AI题库", async () => {
@@ -469,12 +544,24 @@ describe("ExamWizardForm", () => {
     const user = userEvent.setup();
     const kp1 = { id: "kp-1", name: "Python程序设计导论", path: "Python程序设计导论" };
     const kp2 = { id: "kp-2", name: "程序流程控制", path: "程序流程控制" };
+    const questionTexts: Record<string, string> = {
+      "choice-1": "在 Python 交互式环境中执行 print('hello') 后，控制台会输出什么内容？",
+      "choice-2": "下列哪个命令可以查看当前安装的 Python 解释器版本？",
+      "choice-3": "当 if 条件表达式为 False 时，程序会优先执行哪个分支？",
+      "choice-4": "for 循环遍历 range(3) 时，循环变量会依次取得哪些值？",
+      "code-1": "编写 Python 程序，读取用户姓名并输出一行欢迎语。",
+      "code-2": "编写 Python 程序，输入一个整数，判断它是否为正数。",
+      "code-3": "编写 Python 程序，统计列表中大于 10 的元素个数。",
+    };
     const makeQuestion = (id: string, type: "choice" | "code", kp: typeof kp1) => ({
       id,
       type,
       title: `${type}-${id}`,
-      content: { text: `${type}-${id}` },
-      options: type === "choice" ? { A: "A", B: "B" } : null,
+      content: { text: questionTexts[id] },
+      options:
+        type === "choice"
+          ? { A: "选项 A", B: "选项 B", C: "选项 C", D: "选项 D" }
+          : null,
       answer: type === "choice" ? { correct: "A" } : { text: "print('ok')" },
       analysis: null,
       difficulty: 3,

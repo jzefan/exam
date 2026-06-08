@@ -159,6 +159,62 @@ describe("ExamTaking", () => {
     expect(navigateMock).toHaveBeenCalledWith("/my-exams");
   });
 
+  it("explains that the personal exam time is exhausted instead of auto-submitting on re-entry", async () => {
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(new Date("2026-04-09T11:00:01.000Z").getTime());
+    const submitExam = vi.fn();
+
+    useExamTakingMock.mockReturnValue({
+      answers: {},
+      currentIndex: 0,
+      setCurrentIndex: vi.fn(),
+      showAll: false,
+      setShowAll: vi.fn(),
+      updateAnswer: vi.fn(),
+      flushAnswers: vi.fn(),
+      flushQuestion: vi.fn().mockResolvedValue(undefined),
+      saveState: "idle",
+      saveMessage: "",
+      submitExam,
+      reportSwitch: vi.fn(),
+    });
+
+    axiosPostMock.mockResolvedValue({
+      data: {
+        exam_id: "exam-1",
+        title: "abc",
+        duration_minutes: 60,
+        max_switch_count: 0,
+        allow_retake: false,
+        started_at: "2026-04-09T10:00:00.000Z",
+        end_time: "2026-04-09T12:00:00.000Z",
+        questions: [],
+        saved_answers: {},
+        switch_count: 0,
+      },
+    });
+
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={["/my-exams/exam-1/take"]}>
+        <Routes>
+          <Route path="/my-exams/:id/take" element={<ExamTaking />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("本次考试答题时间已用完")).toBeInTheDocument();
+    expect(screen.getByText("系统从你第一次进入考试时开始计时。当前已超过本次考试的答题时长，因此不能继续作答。")).toBeInTheDocument();
+    expect(screen.getByText("如果你认为这是异常情况，请联系老师处理。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "触发时间到" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "查看考试结果" })).not.toBeInTheDocument();
+    expect(submitExam).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "返回我的考试" }));
+    expect(navigateMock).toHaveBeenCalledWith("/my-exams");
+    dateNowSpy.mockRestore();
+  });
+
   it("saves the current question before moving to the next one", async () => {
     const user = userEvent.setup();
     const flushQuestion = vi.fn().mockResolvedValue(undefined);

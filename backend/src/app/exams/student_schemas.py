@@ -137,6 +137,7 @@ class WrongAnswerListItem(BaseModel):
 
 class WrongAnswerDetailResponse(WrongAnswerListItem):
     question_content: dict[str, Any]
+    question_options: dict[str, Any] | None = None
     standard_answer: dict[str, Any]
     analysis: str | None = None
     student_answer: dict[str, Any] = Field(default_factory=dict)

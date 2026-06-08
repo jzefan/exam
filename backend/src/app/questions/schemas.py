@@ -8,7 +8,7 @@ from typing import Any
 from pydantic import BaseModel, Field, model_validator
 
 from app.common.data_visibility import VisibilityScope
-from app.questions.models import QuestionImportJobStatus, QuestionType, TagType
+from app.questions.models import QuestionImportJobStatus, QuestionSource, QuestionType, TagType
 
 
 # --- Tag ---
@@ -84,6 +84,7 @@ class QuestionCreate(BaseModel):
     analysis: str | None = None
     difficulty: int = Field(ge=1, le=5)
     score: float = 10.0
+    source: QuestionSource = QuestionSource.MANUAL
     tag_ids: list[uuid.UUID] = Field(default_factory=list)
     knowledge_point_ids: list[uuid.UUID] = Field(default_factory=list)
     question_bank_id: uuid.UUID | None = None
@@ -137,6 +138,7 @@ class QuestionResponse(BaseModel):
     analysis: str | None
     difficulty: int
     score: float
+    source: QuestionSource = QuestionSource.MANUAL
     usage_count: int
     created_by: uuid.UUID
     created_by_name: str
@@ -166,6 +168,7 @@ class QuestionResponse(BaseModel):
             analysis=question.analysis,
             difficulty=question.difficulty,
             score=question.score,
+            source=getattr(question, "source", None) or QuestionSource.MANUAL,
             usage_count=question.usage_count,
             created_by=question.created_by,
             created_by_name=question.creator.full_name,

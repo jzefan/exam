@@ -35,11 +35,11 @@ export interface CreateFromSelectionDialogProps {
   selected: SelectedQuestionSummary[];
   /** 成功创建后的回调，通常由宿主页做跳转（如 navigate("/exams")）。 */
   onPublished?: (examId: string, category: CreateFromSelectionCategory) => void;
-  /** 从课程工作台发起时，把考试/作业直接归属到当前课程。 */
+  /** 从课程工作台发起时，把考试/练习直接归属到当前课程。 */
   courseKpId?: string | null;
   /** 从课程某个学期发起时，创建后直接归档到该学期。 */
   courseSemesterId?: string | null;
-  /** 默认类型，默认为作业/练习（老师日常场景更常见）。 */
+  /** 默认类型，默认为练习（老师日常场景更常见）。 */
   defaultCategory?: CreateFromSelectionCategory;
   /** 名称的默认值，通常由宿主生成，例如 "2026-05-11 练习"。 */
   defaultTitle?: string;
@@ -83,7 +83,7 @@ function extractErrorMessage(error: unknown, fallback: string): string {
 }
 
 /**
- * 从题目列表一步到位发起"考试 / 作业"的小对话框。
+ * 从题目列表一步到位发起"考试 / 练习"的小对话框。
  *
  * 不再进入多步向导 —— 内嵌了学生选择器，默认值（时长、总分、开放期）由前端自动
  * 给出，合理即发布。创建后把控制权交还宿主（如跳转到考试列表）。
@@ -122,8 +122,8 @@ export function CreateFromSelectionDialog({
     selected.length > 0 && trimmedTitle.length > 0 && studentIds.length > 0 && !submitting;
 
   const isExam = category === "exam";
-  const submitLabel = isExam ? "创建考试" : "发布作业";
-  const actionNoun = isExam ? "考试" : "作业";
+  const submitLabel = isExam ? "创建考试" : "发布练习";
+  const actionNoun = isExam ? "考试" : "练习";
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -159,14 +159,14 @@ export function CreateFromSelectionDialog({
       const response = await apiClient.post<{ id: string }>("/api/exams", payload);
 
       toast({
-        title: isExam ? "考试已创建" : "作业已发布",
+        title: isExam ? "考试已创建" : "练习已发布",
         description: `${trimmedTitle}（${studentIds.length} 名学生）`,
       });
       onOpenChange(false);
       onPublished?.(response.data.id, category);
     } catch (error) {
       toast({
-        title: isExam ? "创建考试失败" : "发布作业失败",
+        title: isExam ? "创建考试失败" : "发布练习失败",
         description: extractErrorMessage(error, "请稍后重试"),
         variant: "destructive",
       });
@@ -187,7 +187,7 @@ export function CreateFromSelectionDialog({
         <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <FilePlus2 className="h-5 w-5 text-primary" />
-            从已选题目{isExam ? "创建考试" : "发布作业"}
+            从已选题目{isExam ? "创建考试" : "发布练习"}
           </DialogTitle>
           <DialogDescription>
             共 {selected.length} 道题目{typesSummary ? `（${typesSummary}）` : ""}，总分{" "}
@@ -208,7 +208,7 @@ export function CreateFromSelectionDialog({
               <TabsList className="grid w-full grid-cols-2">
                 <TabsTrigger value="practice">
                   <NotebookPen data-icon className="h-4 w-4" />
-                  作业 / 练习
+                  练习
                 </TabsTrigger>
                 <TabsTrigger value="exam">
                   <GraduationCap data-icon className="h-4 w-4" />
@@ -218,7 +218,7 @@ export function CreateFromSelectionDialog({
             </Tabs>
             <p className="text-xs text-muted-foreground">
               {category === "practice"
-                ? "日常布置的练习/作业，可按知识点反馈学习情况。"
+                ? "日常布置的练习，可按知识点反馈学习情况。"
                 : "正式评测场景，默认不立即公开成绩，支持时间和切屏限制。"}
             </p>
           </div>
@@ -251,7 +251,7 @@ export function CreateFromSelectionDialog({
             onChange={setStudentIds}
             summaryLabel={isExam ? "名考生" : "名学生"}
             emptySummaryText={
-              isExam ? "请选择至少一名考生即可创建考试。" : "请选择至少一名学生即可发布作业。"
+              isExam ? "请选择至少一名考生即可创建考试。" : "请选择至少一名学生即可发布练习。"
             }
             defaultSupplementCollapsed
           />

@@ -46,6 +46,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
@@ -77,6 +78,10 @@ import { writeExamSeed } from "@/lib/exam-seed";
 import { cn } from "@/lib/utils";
 import type { IQuestion, QuestionType } from "@/types";
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
+import {
+  normalizeQuestionType,
+  questionTypeFullLabel,
+} from "@/components/questions/question-preview-utils";
 import {
   CreateFromSelectionDialog,
   type CreateFromSelectionCategory,
@@ -129,6 +134,8 @@ import {
   ExamCard,
   ExamCardEmptyState,
 } from "@/pages/exams/components/ExamCard";
+import { examStatusOptions } from "@/pages/exams/components/ExamStatusBadge";
+import { getEffectiveExamStatus } from "@/pages/exams/utils";
 import {
   buildAssignmentLinksByNodeId,
   filterAssignmentsForKnowledgeNode,
@@ -149,6 +156,14 @@ const AI_PREFILL_KEY = "ai_generate_prefill_v1";
 
 const ALL_SEMESTERS = "__all__";
 const ALL_QUESTION_KNOWLEDGE = "__all_question_knowledge__";
+const QUESTION_TYPE_FILTERS: QuestionType[] = [
+  "choice",
+  "true_false",
+  "fill_in",
+  "short_answer",
+  "essay",
+  "code",
+];
 type CourseTab =
   | "materials"
   | "exams"
@@ -192,6 +207,13 @@ type CourseMaterialAIGenerateState = CourseMaterialExtractedContent & {
   knowledgePointPath: string;
 };
 
+type ExamMockGenerateResponse = {
+  exam_id: string;
+  generated_question_count: number;
+  reused_source_question_count: number;
+  reused_bank_question_count: number;
+};
+
 const PENDING_TONE = "text-[oklch(0.55_0.09_70)]"; // ochre
 
 function formatDate(value: string | null) {
@@ -199,6 +221,26 @@ function formatDate(value: string | null) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "未设置";
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function formatDateTime(value: string | null) {
+  if (!value) return "未设置";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "未设置";
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function readableApiError(error: unknown, fallback: string) {
+  const message = error instanceof Error ? error.message : fallback;
+  try {
+    const parsed = JSON.parse(message) as { detail?: unknown; message?: unknown };
+    if (typeof parsed.detail === "string" && parsed.detail.trim()) return parsed.detail;
+    if (typeof parsed.message === "string" && parsed.message.trim()) return parsed.message;
+  } catch {
+    // apiRequest can throw either plain text or serialized FastAPI error JSON.
+  }
+  return message || fallback;
 }
 
 function formatScore(value: number | null | undefined, digits = 1) {
@@ -209,6 +251,17 @@ function formatScore(value: number | null | undefined, digits = 1) {
 function formatPercent(value: number | null | undefined) {
   if (value == null || Number.isNaN(value)) return "-";
   return `${Number(value).toFixed(1).replace(/\.0$/, "")}%`;
+}
+
+function normalizePercentScore(value: number | null | undefined) {
+  if (value == null || Number.isNaN(value)) return null;
+  const numeric = Number(value);
+  return Math.abs(numeric) <= 1 ? numeric * 100 : numeric;
+}
+
+function formatRoutineScore(value: number | null | undefined) {
+  const score = normalizePercentScore(value);
+  return score == null ? "-" : formatScore(score);
 }
 
 function escapeCsvCell(value: string | number | null | undefined) {
@@ -744,7 +797,7 @@ function MaterialsTab({
                             onClick={() => onPublishAssignment(material)}
                           >
                             <FilePlus2 size={14} className="mr-2" />
-                            发布作业
+                            发布练习
                           </DropdownMenuItem>
                         </>
                       ) : null}
@@ -1486,6 +1539,14 @@ function AssignmentScoreSummaryDialog({
   onOpenChange: (open: boolean) => void;
   onRefresh: () => void | Promise<void>;
 }) {
+  const [routineScoreEdits, setRoutineScoreEdits] = useState<
+    Record<string, string>
+  >({});
+
+  useEffect(() => {
+    setRoutineScoreEdits({});
+  }, [summary?.generated_at, summary?.course_id, summary?.semester_id, open]);
+
   const assignedTotal = useMemo(
     () =>
       summary?.students.reduce(
@@ -1504,6 +1565,26 @@ function AssignmentScoreSummaryDialog({
   );
   const completionPercent =
     assignedTotal > 0 ? (submittedTotal / assignedTotal) * 100 : null;
+  const getStudentRoutineScore = (
+    student: CourseAssignmentScoreSummary["students"][number],
+  ) => {
+    const edited = routineScoreEdits[student.student_id];
+    if (edited != null) {
+      const trimmed = edited.trim();
+      if (!trimmed) return null;
+      const parsed = Number(trimmed);
+      return Number.isFinite(parsed) ? Math.max(0, Math.min(100, parsed)) : null;
+    }
+    return normalizePercentScore(student.average_percent);
+  };
+  const classAverageRoutineScore = useMemo(() => {
+    if (!summary) return null;
+    const scores = summary.students
+      .map((student) => getStudentRoutineScore(student))
+      .filter((score): score is number => score != null);
+    if (scores.length === 0) return null;
+    return scores.reduce((total, score) => total + score, 0) / scores.length;
+  }, [routineScoreEdits, summary]);
 
   const exportCsv = () => {
     if (!summary) return;
@@ -1531,9 +1612,9 @@ function AssignmentScoreSummaryDialog({
         student.username ?? "",
         student.phone ?? "",
         `${student.submitted_count}/${student.assignment_count}`,
-        student.average_percent == null
+        getStudentRoutineScore(student) == null
           ? ""
-          : Number(student.average_percent).toFixed(2),
+          : Number(getStudentRoutineScore(student)).toFixed(2),
         Number(student.total_score).toFixed(2),
         Number(student.max_score).toFixed(2),
         ...summary.assignments.map((assignment) => {
@@ -1599,28 +1680,28 @@ function AssignmentScoreSummaryDialog({
         <DialogHeader>
           <DialogTitle>平时成绩汇总</DialogTitle>
           <DialogDescription>
-            {courseName} · {semesterLabel} · 作业成绩按学生已布置范围汇总
+            {courseName} · {semesterLabel} · 练习成绩按学生已布置范围汇总
           </DialogDescription>
         </DialogHeader>
 
         {loading ? (
           <div className="flex min-h-[360px] items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 text-sm text-muted-foreground">
             <LoaderCircle size={18} className="mr-2 animate-spin" />
-            正在汇总作业成绩...
+            正在汇总练习成绩...
           </div>
         ) : !summary || summary.assignment_count === 0 ? (
           <EmptyPanel
             icon={<ClipboardList size={22} />}
-            title="暂无可汇总的作业"
-            description="当前课程或学期下还没有作业成绩。"
+            title="暂无可汇总的练习"
+            description="当前课程或学期下还没有练习成绩。"
           />
         ) : (
           <div className="min-h-0 flex-1 space-y-4 overflow-hidden">
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {[
-                ["作业数", summary.assignment_count],
+                ["练习数", summary.assignment_count],
                 ["学生数", summary.student_count],
-                ["平均平时成绩", formatPercent(summary.class_average_percent)],
+                ["平均平时成绩", formatRoutineScore(classAverageRoutineScore)],
                 ["提交率", formatPercent(completionPercent)],
               ].map(([label, value]) => (
                 <div
@@ -1643,7 +1724,7 @@ function AssignmentScoreSummaryDialog({
                       学生
                     </th>
                     <th className="w-28 px-3 py-2 font-medium">完成</th>
-                    <th className="w-32 px-3 py-2 font-medium">平时成绩</th>
+                    <th className="w-32 px-3 py-2 font-medium">平时成绩(分)</th>
                     <th className="w-28 px-3 py-2 font-medium">总分</th>
                     {summary.assignments.map((assignment) => (
                       <th
@@ -1687,9 +1768,43 @@ function AssignmentScoreSummaryDialog({
                         {student.submitted_count}/{student.assignment_count}
                       </td>
                       <td className="px-3 py-2 align-top">
-                        <span className="font-sans text-sm font-semibold lining-nums tabular-nums text-foreground">
-                          {formatPercent(student.average_percent)}
-                        </span>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={100}
+                          step="0.1"
+                          value={
+                            routineScoreEdits[student.student_id] ??
+                            (normalizePercentScore(student.average_percent) == null
+                              ? ""
+                              : formatScore(
+                                  normalizePercentScore(
+                                    student.average_percent,
+                                  ),
+                                ))
+                          }
+                          className="h-8 w-24 font-sans text-sm font-semibold lining-nums tabular-nums"
+                          aria-label={`修改${student.full_name || student.username || "学生"}的平时成绩`}
+                          onChange={(event) => {
+                            const nextValue = event.target.value;
+                            setRoutineScoreEdits((current) => ({
+                              ...current,
+                              [student.student_id]: nextValue,
+                            }));
+                          }}
+                          onBlur={(event) => {
+                            const trimmed = event.target.value.trim();
+                            if (!trimmed) return;
+                            const parsed = Number(trimmed);
+                            if (!Number.isFinite(parsed)) return;
+                            setRoutineScoreEdits((current) => ({
+                              ...current,
+                              [student.student_id]: formatScore(
+                                Math.max(0, Math.min(100, parsed)),
+                              ),
+                            }));
+                          }}
+                        />
                       </td>
                       <td className="px-3 py-2 align-top font-sans lining-nums tabular-nums">
                         {formatScore(student.total_score)}/
@@ -1759,6 +1874,7 @@ function ExamRows({
   onNewSemester,
   onClose,
   onDelete,
+  onGenerateMock,
   onCreate,
   onExport,
 }: {
@@ -1771,6 +1887,7 @@ function ExamRows({
   onNewSemester: () => void;
   onClose: (exam: TeacherCourseExam) => void;
   onDelete: (exam: TeacherCourseExam) => void;
+  onGenerateMock?: (exam: TeacherCourseExam) => void;
   onCreate: () => void;
   onExport?: (
     exam: TeacherCourseExam,
@@ -1791,7 +1908,7 @@ function ExamRows({
         {canWrite ? (
           <Button size="sm" onClick={onCreate}>
             <Plus size={14} className="mr-1.5" />
-            新建{kind === "exam" ? "考试" : "作业"}
+            新建{kind === "exam" ? "考试" : "练习"}
           </Button>
         ) : null}
       </div>
@@ -1801,11 +1918,11 @@ function ExamRows({
       <div className="flex flex-col gap-3">
         {header}
         <ExamCardEmptyState
-          title={kind === "exam" ? "暂无考试" : "暂无作业"}
+          title={kind === "exam" ? "暂无考试" : "暂无练习"}
           description={
             kind === "exam"
               ? "从课程进入创建考试时，会默认带入当前课程。"
-              : "教师侧显示为作业，底层仍复用 practice。"
+              : "教师侧显示为练习，底层仍复用 practice。"
           }
         />
       </div>
@@ -1832,20 +1949,8 @@ function ExamRows({
             未归档
           </Badge>
         );
-        const archiveMenu = canWrite ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold"
-                aria-label="归档到学期"
-              >
-                <CalendarRange size={14} />
-                <span>归档</span>
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
+        const archiveMenuItems = canWrite ? (
+          <>
               <DropdownMenuItem
                 disabled
                 className="text-[11px] uppercase tracking-wider text-muted-foreground/70"
@@ -1885,8 +1990,7 @@ function ExamRows({
                   </DropdownMenuItem>
                 </>
               ) : null}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          </>
         ) : null;
         return (
           <ExamCard
@@ -1901,6 +2005,11 @@ function ExamRows({
               )
             }
             onAnalysis={() => navigate(`/exams/${item.id}/analysis`)}
+            onGenerateMock={
+              kind === "exam" && onGenerateMock
+                ? () => onGenerateMock(item)
+                : undefined
+            }
             onClose={() => onClose(item)}
             onDelete={() => onDelete(item)}
             onExport={
@@ -1909,7 +2018,8 @@ function ExamRows({
                 : undefined
             }
             extraBadges={semesterBadge}
-            extraActions={archiveMenu}
+            moreActions={archiveMenuItems}
+            collapseSecondaryActions
             canManage={canWrite}
           />
         );
@@ -1961,6 +2071,10 @@ function QuestionsTab({
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [createFromSelectionOpen, setCreateFromSelectionOpen] = useState(false);
+  const [allQuestionsExpanded, setAllQuestionsExpanded] = useState(false);
+  const [selectedQuestionTypes, setSelectedQuestionTypes] = useState<
+    Set<QuestionType>
+  >(new Set());
 
   useEffect(() => {
     const questionIds = new Set(questions.map((question) => question.id));
@@ -1970,7 +2084,45 @@ function QuestionsTab({
     });
   }, [questions]);
 
+  const questionTypeCounts = useMemo(() => {
+    const counts = new Map<QuestionType, number>();
+    for (const question of questions) {
+      const type = normalizeQuestionType(question.type);
+      if (!type) continue;
+      counts.set(type, (counts.get(type) ?? 0) + 1);
+    }
+    return counts;
+  }, [questions]);
+
+  const availableQuestionTypes = QUESTION_TYPE_FILTERS.filter((type) =>
+    questionTypeCounts.has(type),
+  );
+  const questionTypeFilterLabel =
+    selectedQuestionTypes.size === 0
+      ? "全部题型"
+      : selectedQuestionTypes.size === 1
+        ? questionTypeFullLabel[[...selectedQuestionTypes][0]]
+        : `${selectedQuestionTypes.size} 种题型`;
+
+  const toggleQuestionTypeFilter = (type: QuestionType) => {
+    setSelectedQuestionTypes((current) => {
+      const next = new Set(current);
+      if (next.has(type)) {
+        next.delete(type);
+      } else {
+        next.add(type);
+      }
+      return next;
+    });
+  };
+
   const filtered = questions.filter((question) => {
+    const normalizedType = normalizeQuestionType(question.type);
+    const matchesType =
+      selectedQuestionTypes.size === 0 ||
+      (normalizedType ? selectedQuestionTypes.has(normalizedType) : false);
+    if (!matchesType) return false;
+
     const text =
       `${question.title} ${question.knowledge_points.map((kp) => kp.name).join(" ")}`.toLowerCase();
     return !query.trim() || text.includes(query.trim().toLowerCase());
@@ -2179,9 +2331,57 @@ function QuestionsTab({
               onClick={() => setCreateFromSelectionOpen(true)}
             >
               <FilePlus2 size={13} className="mr-1.5" />
-              发起考试/作业
+              发起考试/练习
             </Button>
           ) : null}
+          <div className="flex-1" />
+          {availableQuestionTypes.length > 0 ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-9 px-3 text-xs"
+                >
+                  题型：{questionTypeFilterLabel}
+                  <ChevronDown size={13} className="ml-1.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuItem
+                  onClick={() => setSelectedQuestionTypes(new Set())}
+                >
+                  全部题型
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                {availableQuestionTypes.map((type) => (
+                  <DropdownMenuCheckboxItem
+                    key={type}
+                    checked={selectedQuestionTypes.has(type)}
+                    onCheckedChange={() => toggleQuestionTypeFilter(type)}
+                    onSelect={(event) => event.preventDefault()}
+                  >
+                    <span className="flex flex-1 items-center justify-between gap-3">
+                      <span>{questionTypeFullLabel[type]}</span>
+                      <span className="font-sans text-xs tabular-nums text-muted-foreground">
+                        {questionTypeCounts.get(type)}
+                      </span>
+                    </span>
+                  </DropdownMenuCheckboxItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-9 px-3 text-xs"
+            onClick={() => setAllQuestionsExpanded((expanded) => !expanded)}
+          >
+            {allQuestionsExpanded ? "全部收起" : "全部展开"}
+          </Button>
         </div>
       ) : null}
       {filtered.length === 0 ? (
@@ -2198,8 +2398,9 @@ function QuestionsTab({
                 key={question.id}
                 question={question}
                 index={index + 1}
-                expandOnHover
+                expanded={allQuestionsExpanded}
                 hideAnswer
+                markChoiceAnswer
                 className="cursor-pointer transition-all hover:border-primary hover:shadow-md"
                 trailing={
                   canWrite ? (
@@ -3199,14 +3400,14 @@ function KnowledgeTreeRow({
           <button
             type="button"
             className="inline-flex shrink-0 items-center gap-1 rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 font-sans text-[11px] font-semibold text-primary transition hover:border-primary/45 hover:bg-primary/15"
-            title={`查看「${node.name}」相关作业`}
+            title={`查看「${node.name}」相关练习`}
             onClick={(event) => {
               event.stopPropagation();
               onViewAssignments(node);
             }}
           >
             <ListChecks size={11} />
-            作业 {linkedAssignments.length}
+            练习 {linkedAssignments.length}
           </button>
         ) : null}
         <span className="flex-1" />
@@ -3244,7 +3445,7 @@ function KnowledgeTreeRow({
                       }}
                     >
                       <FilePlus2 size={14} className="mr-2" />
-                      发布作业
+                      发布练习
                     </DropdownMenuItem>
                   ) : null}
                 </DropdownMenuContent>
@@ -3322,7 +3523,7 @@ function KnowledgeTreeRow({
                   }}
                 >
                   <FilePlus2 size={13} className="mr-1" />
-                  发布作业
+                  发布练习
                 </Button>
               </>
             ) : null}
@@ -3520,8 +3721,8 @@ function TodoRail({
       tone: "warn",
     },
     {
-      title: "作业待批改",
-      detail: `${pendingAssignments} 项作业需要关注`,
+      title: "练习待批改",
+      detail: `${pendingAssignments} 项练习需要关注`,
       icon: <ListChecks size={15} />,
       tone: "warn",
     },
@@ -3669,6 +3870,12 @@ export function CourseDetailPage() {
   const [examToDelete, setExamToDelete] = useState<TeacherCourseExam | null>(
     null,
   );
+  const [mockExamTarget, setMockExamTarget] =
+    useState<TeacherCourseExam | null>(null);
+  const [mockQuestionCount, setMockQuestionCount] = useState("");
+  const [mockReuseRate, setMockReuseRate] = useState("80");
+  const [mockTitle, setMockTitle] = useState("");
+  const [mockSubmitting, setMockSubmitting] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [tabLoading, setTabLoading] = useState<CourseTab | null>(null);
@@ -3686,6 +3893,22 @@ export function CourseDetailPage() {
     activeSemesterId === ALL_SEMESTERS
       ? "全部学期"
       : (selectedSemester?.name ?? "当前学期");
+  const mockExamQuestionCount = mockExamTarget?.total_questions ?? 0;
+  const mockExamStartDate = mockExamTarget?.start_time
+    ? new Date(mockExamTarget.start_time)
+    : null;
+  const mockExamEndDate =
+    mockExamStartDate && Number.isFinite(mockExamStartDate.getTime())
+      ? new Date(mockExamStartDate.getTime() - 60_000)
+      : null;
+  const examToCloseStatus = examToClose ? getEffectiveExamStatus(examToClose) : null;
+  const examToCloseStatusLabel =
+    examToCloseStatus
+      ? examStatusOptions.find((option) => option.value === examToCloseStatus)?.label ?? examToCloseStatus
+      : "—";
+  const examToCloseNotSubmitted = examToClose
+    ? Math.max(0, examToClose.total_students - examToClose.submitted_count)
+    : 0;
   const shouldShowCreateSemesterHint =
     Boolean(course?.can_write) &&
     !course?.is_deleted &&
@@ -4574,10 +4797,11 @@ export function CourseDetailPage() {
         total_count: count,
         difficulty: 3,
         knowledge_point_ids: [material.node_id],
+        course_name: course?.name ?? undefined,
         prompt: `请优先依据上传的学习资料「${material.title}」，为知识点「${knowledgePointName}」批量生成题目。题目应覆盖资料中的核心概念、关键步骤和易错点。`,
         material_text: extracted.sourceText,
         material_images: extracted.images,
-        model: "qwen",
+        model: "deepseek",
       };
 
       const token = localStorage.getItem("access_token");
@@ -5107,6 +5331,72 @@ export function CourseDetailPage() {
     [id, semesterFilter],
   );
 
+  const normalizeMockNumber = useCallback(
+    (value: string, fallback: number, min: number, max: number) => {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return fallback;
+      return Math.min(max, Math.max(min, Math.trunc(parsed)));
+    },
+    [],
+  );
+
+  const openMockExamDialog = useCallback((exam: TeacherCourseExam) => {
+    setMockExamTarget(exam);
+    setMockQuestionCount(String(exam.total_questions));
+    setMockReuseRate("80");
+    setMockTitle(`${exam.title} - 模拟试卷`);
+  }, []);
+
+  const handleGenerateMockExam = useCallback(async () => {
+    if (!mockExamTarget) return;
+    const questionCount = normalizeMockNumber(
+      mockQuestionCount,
+      mockExamQuestionCount,
+      mockExamQuestionCount,
+      500,
+    );
+    const sourceReuseRate = normalizeMockNumber(mockReuseRate, 80, 0, 100);
+    setMockQuestionCount(String(questionCount));
+    setMockReuseRate(String(sourceReuseRate));
+    setMockSubmitting(true);
+    try {
+      const result = await apiRequest<ExamMockGenerateResponse>(
+        `/exams/${mockExamTarget.id}/mock-generate`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            question_count: questionCount,
+            source_reuse_rate: sourceReuseRate,
+            title: mockTitle.trim() || undefined,
+          }),
+        },
+      );
+      toast({
+        title: "模拟试卷已生成",
+        description: `复用原题 ${result.reused_source_question_count} 道，题库抽取 ${result.reused_bank_question_count} 道，AI 生成 ${result.generated_question_count} 道。`,
+      });
+      setMockExamTarget(null);
+      await refreshExamList("exam");
+    } catch (err) {
+      toast({
+        title: "生成失败",
+        description: readableApiError(err, "生成模拟试卷失败，请稍后重试。"),
+        variant: "destructive",
+      });
+    } finally {
+      setMockSubmitting(false);
+    }
+  }, [
+    mockExamQuestionCount,
+    mockExamTarget,
+    mockQuestionCount,
+    mockReuseRate,
+    mockTitle,
+    normalizeMockNumber,
+    refreshExamList,
+    toast,
+  ]);
+
   const handlePublishedFromSelection = useCallback(
     async (category: CreateFromSelectionCategory) => {
       if (!id) return;
@@ -5295,7 +5585,7 @@ export function CourseDetailPage() {
                     }
                   >
                     <ListChecks size={14} className="mr-2" />
-                    发布作业
+                    发布练习
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
@@ -5338,7 +5628,7 @@ export function CourseDetailPage() {
 
       {course.is_deleted ? (
         <div className="mx-auto w-full max-w-[1320px] rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-          这门课程已删除。当前仅支持查看课程资料、考试、作业、题目和课程目录，不能新增、编辑或删除内容。
+          这门课程已删除。当前仅支持查看课程资料、考试、练习、题目和课程目录，不能新增、编辑或删除内容。
         </div>
       ) : null}
 
@@ -5350,7 +5640,7 @@ export function CourseDetailPage() {
           <div className="min-w-0 flex-1">
             <div className="font-medium text-foreground">建议先创建学期</div>
             <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-              当前课程还没有资料、题目、考试或作业。创建学期后，后续发起的考试和作业可以归档到对应学期；这不是必填步骤。
+              当前课程还没有资料、题目、考试或练习。创建学期后，后续发起的考试和练习可以归档到对应学期；这不是必填步骤。
             </div>
           </div>
           <Button
@@ -5607,6 +5897,108 @@ export function CourseDetailPage() {
       </AlertDialog>
 
       <AlertDialog
+        open={mockExamTarget !== null}
+        onOpenChange={(next) => {
+          if (!next && !mockSubmitting) setMockExamTarget(null);
+        }}
+      >
+        <AlertDialogContent className="max-w-xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>生成模拟试卷</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-4 text-sm">
+                <p>
+                  系统会按原考试的题型比例和知识点分布组卷，优先从题库抽取，不足部分再由 AI 自动生成。
+                </p>
+                <div className="rounded-xl border bg-muted/40 p-4 text-muted-foreground">
+                  <div>原考试题目：{mockExamQuestionCount} 题</div>
+                  <div>模拟卷开始时间：不设置，生成后可直接开始</div>
+                  <div>
+                    模拟卷结束时间：
+                    {mockExamEndDate && mockExamEndDate.getTime() > Date.now()
+                      ? formatDateTime(mockExamEndDate.toISOString())
+                      : "不限制结束时间，生成后可按需调整"}
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="course-mock-title">模拟卷名称</Label>
+                  <Input
+                    id="course-mock-title"
+                    value={mockTitle}
+                    maxLength={200}
+                    onChange={(event) => setMockTitle(event.target.value)}
+                    placeholder={`${mockExamTarget?.title ?? "考试"} - 模拟试卷`}
+                  />
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="course-mock-question-count">题目数</Label>
+                    <Input
+                      id="course-mock-question-count"
+                      type="number"
+                      min={mockExamQuestionCount}
+                      max={500}
+                      value={mockQuestionCount}
+                      onChange={(event) => setMockQuestionCount(event.target.value)}
+                      onBlur={() =>
+                        setMockQuestionCount(
+                          String(
+                            normalizeMockNumber(
+                              mockQuestionCount,
+                              mockExamQuestionCount,
+                              mockExamQuestionCount,
+                              500,
+                            ),
+                          ),
+                        )
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">不能少于原考试的 {mockExamQuestionCount} 题。</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="course-mock-reuse-rate">与原考试重复率</Label>
+                    <div className="relative">
+                      <Input
+                        id="course-mock-reuse-rate"
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={mockReuseRate}
+                        onChange={(event) => setMockReuseRate(event.target.value)}
+                        onBlur={() => setMockReuseRate(String(normalizeMockNumber(mockReuseRate, 80, 0, 100)))}
+                        className="pr-10"
+                      />
+                      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground">
+                        %
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">默认 80%，其余题目优先从题库抽取。</p>
+                  </div>
+                </div>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={mockSubmitting}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={mockSubmitting}
+              onClick={(event) => {
+                event.preventDefault();
+                void handleGenerateMockExam();
+              }}
+            >
+              {mockSubmitting ? (
+                <LoaderCircle size={14} className="mr-1.5 animate-spin" />
+              ) : (
+                <Sparkles size={14} className="mr-1.5" />
+              )}
+              生成模拟卷
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
         open={examToClose !== null}
         onOpenChange={(next) => {
           if (!next) setExamToClose(null);
@@ -5617,9 +6009,49 @@ export function CourseDetailPage() {
             <AlertDialogTitle>
               关闭{examToClose?.category === "practice" ? "练习" : "考试"}
             </AlertDialogTitle>
-            <AlertDialogDescription>
-              将「{examToClose?.title}
-              」标记为已关闭。关闭后学生不再可参与，本操作不可撤销。
+            <AlertDialogDescription asChild>
+              <div className="space-y-4 text-sm">
+                <p>
+                  确定要关闭「{examToClose?.title}」吗？关闭后考生将无法进入或继续作答。
+                </p>
+                <div className="rounded-lg border border-border/70 bg-muted/30 p-3 text-foreground">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <div>
+                      <span className="text-muted-foreground">当前状态：</span>
+                      <span className="font-medium">{examToCloseStatusLabel}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">考生人数：</span>
+                      <span className="font-medium">{examToClose?.total_students ?? 0} 人</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">已提交：</span>
+                      <span className="font-medium">{examToClose?.submitted_count ?? 0} 人</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">未提交：</span>
+                      <span className="font-medium">{examToCloseNotSubmitted} 人</span>
+                    </div>
+                  </div>
+                  <div className="mt-3 border-t border-border/60 pt-3">
+                    <span className="text-muted-foreground">进入/作答记录：</span>
+                    <span
+                      className={cn(
+                        "font-medium",
+                        examToClose?.has_student_history ? "text-amber-600" : "text-emerald-600",
+                      )}
+                    >
+                      {examToClose?.has_student_history ? "已有考生进入或产生作答记录" : "暂无考生进入记录"}
+                    </span>
+                  </div>
+                </div>
+                {examToClose?.has_student_history || examToCloseNotSubmitted > 0 ? (
+                  <p className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-amber-700">
+                    关闭会立即中止未完成考生的作答入口，请确认这是主动结束本次
+                    {examToClose?.category === "practice" ? "练习" : "考试"}。
+                  </p>
+                ) : null}
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -5695,7 +6127,7 @@ export function CourseDetailPage() {
             </SelectContent>
           </Select>
           <span className="text-[11px] text-muted-foreground">
-            题目跟课程走；作业 / 考试按学期归档
+            题目跟课程走；练习 / 考试按学期归档
           </span>
           <div className="flex-1" />
           {course.can_write ? (
@@ -5739,7 +6171,7 @@ export function CourseDetailPage() {
                     ],
                     [
                       "assignments",
-                      "作业",
+                      "练习",
                       course.assignment_count,
                       <ListChecks key="i" size={14} />,
                     ],
@@ -5827,6 +6259,7 @@ export function CourseDetailPage() {
                     onNewSemester={() => setNewSemesterOpen(true)}
                     onClose={(exam) => setExamToClose(exam)}
                     onDelete={(exam) => setExamToDelete(exam)}
+                    onGenerateMock={openMockExamDialog}
                     onCreate={() => goCreateExamOrAssignment("exam")}
                     onExport={handleExportExam}
                   />
@@ -5834,14 +6267,14 @@ export function CourseDetailPage() {
               </TabsContent>
               <TabsContent value="assignments" className="mt-0">
                 {tabLoading === "assignments" ? (
-                  <LoadingPanel label="正在加载作业..." />
+                  <LoadingPanel label="正在加载练习..." />
                 ) : (
                   <div className="space-y-3">
                     {assignmentFilterNode ? (
                       <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/20 bg-primary/10 px-3 py-2 text-sm text-primary">
                         <ListChecks size={15} />
                         <span className="font-medium">
-                          正在查看「{assignmentFilterNode.name}」相关作业
+                          正在查看「{assignmentFilterNode.name}」相关练习
                         </span>
                         <span className="text-primary/75">
                           共 {filteredAssignments.length} 项

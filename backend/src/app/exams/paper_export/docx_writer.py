@@ -11,13 +11,17 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
 
-from app.exams.paper_export.model import ExamPaper, PaperSection
+from app.exams.paper_export.model import ExamPaper, PaperSection, paper_header_lines
 
 _CN_FONT = "宋体"
 _GRID_CHUNK = 10  # choice answer grid: columns per row block
-# Answer-key emphasis: blue text on a light-blue shaded background.
+# Answer-key emphasis: blue text (no background fill).
 _ANSWER_COLOR = RGBColor(0x1D, 0x4E, 0xD8)
-_ANSWER_FILL = "EAF1FF"
+# Two-character indent for in-stem continuation lines (sub-requirement lists).
+_SUBITEM_INDENT = Pt(21)
+# Blank writing space (number of empty lines) left after a question in the
+# no-answer variant, by question type.
+_BLANK_LINES = {"short_answer": 4, "essay": 7, "code": 7}
 
 
 def _style_run(run, *, size: float, bold: bool = False, color: RGBColor | None = None) -> None:
@@ -34,17 +38,6 @@ def _style_run(run, *, size: float, bold: bool = False, color: RGBColor | None =
     rfonts.set(qn("w:eastAsia"), _CN_FONT)
 
 
-def _apply_shading(properties, fill: str) -> None:
-    """Add a `w:shd` fill to a pPr/tcPr element (paragraph or table-cell)."""
-    shd = properties.find(qn("w:shd"))
-    if shd is None:
-        shd = OxmlElement("w:shd")
-        properties.append(shd)
-    shd.set(qn("w:val"), "clear")
-    shd.set(qn("w:color"), "auto")
-    shd.set(qn("w:fill"), fill)
-
-
 def _line(
     doc,
     text: str,
@@ -54,7 +47,6 @@ def _line(
     align=WD_ALIGN_PARAGRAPH.LEFT,
     space_after: float = 4.0,
     color: RGBColor | None = None,
-    shade: str | None = None,
 ):
     paragraph = doc.add_paragraph()
     paragraph.alignment = align
@@ -62,8 +54,6 @@ def _line(
     paragraph.paragraph_format.space_before = Pt(0)
     if text:
         _style_run(paragraph.add_run(text), size=size, bold=bold, color=color)
-    if shade is not None:
-        _apply_shading(paragraph._p.get_or_add_pPr(), shade)
     return paragraph
 
 
@@ -75,15 +65,12 @@ def _set_cell(
     bold: bool = False,
     align=WD_ALIGN_PARAGRAPH.CENTER,
     color: RGBColor | None = None,
-    shade: str | None = None,
 ) -> None:
     paragraph = cell.paragraphs[0]
     paragraph.alignment = align
     if cell.text:
         paragraph.clear()
     _style_run(paragraph.add_run(text), size=size, bold=bold, color=color)
-    if shade is not None:
-        _apply_shading(cell._tc.get_or_add_tcPr(), shade)
 
 
 def _add_page_footer(doc) -> None:
@@ -183,22 +170,29 @@ def _choice_answer_grid(doc, section: PaperSection) -> None:
                 question.answer_text or "",
                 size=10,
                 color=_ANSWER_COLOR if has_answer else None,
-                shade=_ANSWER_FILL if has_answer else None,
             )
 
 
-def _render_question(doc, section: PaperSection, question) -> None:
-    stem = f"{question.number}. {question.stem}".rstrip()
-    if not section.is_choice:
-        stem = f"{stem}  （{_fmt(question.score)}分）"
-    para = _line(doc, stem, size=10.5, space_after=2)
+def _render_question(doc, question, *, with_answers: bool) -> None:
+    # Per-question scores live in the section heading (每小题X分…), so the stem
+    # carries only the number — no inline （X分）.
+    stem_lines = question.stem.split("\n")
+    first = stem_lines[0] if stem_lines else ""
+    head = f"{question.number}. {first}".rstrip()
+    para = _line(doc, head, size=10.5, space_after=2)
     para.paragraph_format.space_before = Pt(4)
+
+    # Continuation lines (sub-requirement list / extra description) are indented so
+    # their numbering reads as nested under the question's own number.
+    for extra in stem_lines[1:]:
+        sub = _line(doc, extra, size=10.5, space_after=1)
+        sub.paragraph_format.left_indent = _SUBITEM_INDENT
 
     for option in question.options:
         _line(doc, f"    {option.label}. {option.text}", size=10.5, space_after=1)
 
     # Answer-key variant annotates every question (including choice) inline
-    # with blue text on a light-blue shaded band; the grid stays as a summary.
+    # with blue text; the grid stays as a summary.
     if question.answer_text is not None:
         _line(
             doc,
@@ -206,12 +200,11 @@ def _render_question(doc, section: PaperSection, question) -> None:
             size=10.5,
             space_after=2,
             color=_ANSWER_COLOR,
-            shade=_ANSWER_FILL,
         )
-
-
-def _fmt(value: float) -> str:
-    return str(int(value)) if float(value).is_integer() else str(value)
+    elif not with_answers:
+        # Leave blank lines for the student to write 简答/论述/编程 answers.
+        for _ in range(_BLANK_LINES.get(question.type, 0)):
+            _line(doc, "", size=10.5, space_after=2)
 
 
 def render_docx(paper: ExamPaper) -> bytes:
@@ -227,20 +220,17 @@ def render_docx(paper: ExamPaper) -> bytes:
     rfonts.set(qn("w:eastAsia"), _CN_FONT)
 
     # --- header block ---
-    # Line 1: 《course》exam title.
-    course = f"《{paper.course_name}》" if paper.course_name else ""
-    _line(doc, f"{course}{paper.exam_title}试卷", size=16, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2)
+    # Line 1: 学校名称 + 学期; Line 2: 《课程名》考试类型试卷; Line 3: （专业）.
+    line1, line2, line3 = paper_header_lines(paper)
+    _line(doc, line1, size=14, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2)
+    _line(doc, line2, size=16, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2)
+    _line(doc, line3, size=14, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2)
 
-    # Line 2: semester + class.
-    sub_parts = [part for part in (paper.semester_name, paper.class_label) if part]
-    if sub_parts:
-        _line(doc, "  ".join(sub_parts), size=14, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2)
-
-    # Line 3: time limit + exam form.
+    # Line 4: time limit + exam form.
     info = f"答题时限：{paper.duration_minutes} 分钟    考试形式：{paper.exam_form}"
     _line(doc, info, size=12, align=WD_ALIGN_PARAGRAPH.CENTER, space_after=4)
 
-    # Line 4: class / id / name / score, centered.
+    # Line 5: class / id / name / score, centered.
     _line(
         doc,
         "班级__________ 学号__________ 姓名__________ 得分__________",
@@ -269,7 +259,7 @@ def render_docx(paper: ExamPaper) -> bytes:
         if section.is_choice and section.questions:
             _choice_answer_grid(doc, section)
         for question in section.questions:
-            _render_question(doc, section, question)
+            _render_question(doc, question, with_answers=paper.with_answers)
 
     buffer = io.BytesIO()
     doc.save(buffer)

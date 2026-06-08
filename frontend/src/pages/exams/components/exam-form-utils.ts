@@ -2,6 +2,8 @@ export interface ExamQuestionFormItem {
   question_id: string;
   order: number;
   score_override: number | null;
+  source_exam_id?: string | null;
+  source_question_id?: string | null;
 }
 
 export interface ExamFormValues {

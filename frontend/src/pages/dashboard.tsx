@@ -269,7 +269,7 @@ export function Dashboard() {
               />
               <QuickAction
                 title="我的课程"
-                description="维护课程知识点、资料、考试与作业"
+                description="维护课程知识点、资料、考试与练习"
                 icon={<LibraryBig size={18} />}
                 onClick={() => navigate("/courses")}
               />
@@ -286,8 +286,8 @@ export function Dashboard() {
                 onClick={() => navigate("/exams/create")}
               />
               <QuickAction
-                title="发布作业"
-                description="按知识点发布练习作业"
+                title="发布练习"
+                description="按知识点发布练习"
                 icon={<Send size={18} />}
                 onClick={() => navigate("/exams/practice/create")}
               />

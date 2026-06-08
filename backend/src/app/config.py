@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     database_warm_pool: bool = True
     deepseek_api_key: str | None = None
     deepseek_base_url: str = "https://api.deepseek.com/v1"
-    deepseek_model_name: str = "deepseek-v4-pro"
+    deepseek_model_name: str = "deepseek-v4-flash"
     qwen_api_key: str | None = None
     qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     qwen_model_name: str = "qwen-plus"

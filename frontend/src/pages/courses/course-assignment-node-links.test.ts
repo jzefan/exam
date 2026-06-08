@@ -26,7 +26,7 @@ const tree: KnowledgeNodeLinkable = {
 const assignments: AssignmentLinkable[] = [
   {
     id: "assignment-a",
-    title: "1.1 课后作业",
+    title: "1.1 课后练习",
     course_kp_id: null,
     knowledge_points: [{ id: "section-1-1", name: "1.1 程序设计语言" }],
   },

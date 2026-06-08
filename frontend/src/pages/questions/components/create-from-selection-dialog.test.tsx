@@ -51,10 +51,10 @@ describe("CreateFromSelectionDialog", () => {
     expect(screen.getByDisplayValue("2026-05-11 练习")).toBeInTheDocument();
   });
 
-  it("默认类型为作业，点击 '正式考试' 后切换", async () => {
+  it("默认类型为练习，点击 '正式考试' 后切换", async () => {
     const { user } = setup({});
 
-    expect(screen.getByRole("tab", { name: /作业/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: /练习/ })).toHaveAttribute("aria-selected", "true");
     await user.click(screen.getByRole("tab", { name: /正式考试/ }));
     expect(screen.getByRole("tab", { name: /正式考试/ })).toHaveAttribute("aria-selected", "true");
   });
@@ -64,7 +64,7 @@ describe("CreateFromSelectionDialog", () => {
       selected: [],
       defaultTitle: "有标题",
     });
-    expect(screen.getByRole("button", { name: /发布作业/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /发布练习/ })).toBeDisabled();
 
     rerender(
       <CreateFromSelectionDialog
@@ -75,7 +75,7 @@ describe("CreateFromSelectionDialog", () => {
         defaultTitle=""
       />,
     );
-    expect(screen.getByRole("button", { name: /发布作业/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /发布练习/ })).toBeDisabled();
   });
 
   it("提交成功后调用 onPublished 回调", async () => {

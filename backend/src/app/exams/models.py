@@ -80,9 +80,11 @@ class ExamQuestion(Base, TimestampMixin):
     )
     order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     score_override: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source_exam_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("exams.id", ondelete="SET NULL"), nullable=True)
+    source_question_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("questions.id", ondelete="SET NULL"), nullable=True)
 
     question: Mapped["app.questions.models.Question"] = relationship(  # type: ignore[name-defined]
-        "Question", lazy="joined"
+        "Question", foreign_keys=[question_id], lazy="joined"
     )
 
 
@@ -272,7 +274,10 @@ class Exam(OwnerMixin, BaseModel):
         "Position", foreign_keys=[position_id], lazy="joined"
     )
     exam_questions: Mapped[list[ExamQuestion]] = relationship(
-        "ExamQuestion", cascade="all, delete-orphan", lazy="selectin"
+        "ExamQuestion",
+        cascade="all, delete-orphan",
+        foreign_keys=[ExamQuestion.exam_id],
+        lazy="selectin",
     )
     exam_students: Mapped[list[ExamStudent]] = relationship(
         "ExamStudent", cascade="all, delete-orphan", lazy="selectin"

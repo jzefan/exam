@@ -87,7 +87,7 @@ const roleLabel: Record<RoleName, string> = {
 
 const examKindLabel: Record<ExamKind, string> = {
   exam: "考试",
-  practice: "作业",
+  practice: "练习",
 };
 
 const questionTypeLabel: Record<RegradingQuestionType, string> = {
@@ -301,7 +301,7 @@ function OperationsRegradingDialog({
       );
       setExams(data);
     } catch (caught) {
-      setError(extractErrorMessage(caught, "加载考试和作业失败"));
+      setError(extractErrorMessage(caught, "加载考试和练习失败"));
     } finally {
       setLoadingExams(false);
     }
@@ -428,7 +428,7 @@ function OperationsRegradingDialog({
         <DialogHeader className="gap-2 px-7 pb-4 pt-6 text-left">
           <DialogTitle>选择归属题目</DialogTitle>
           <DialogDescription>
-            归属评估者 → 关联的考试或作业 → 具体题目（仅填空 / 简答）
+            归属评估者 → 关联的考试或练习 → 具体题目（仅填空 / 简答）
           </DialogDescription>
           <div className="flex min-w-0 items-center gap-2 pt-3 text-xs text-muted-foreground">
             <span
@@ -471,7 +471,7 @@ function OperationsRegradingDialog({
                 selectedExam && "font-medium text-primary",
               )}
             >
-              {selectedExam?.title || "请选择考试 / 作业"}
+              {selectedExam?.title || "请选择考试 / 练习"}
             </span>
             <ChevronRight className="size-3.5 shrink-0" />
             <span
@@ -569,7 +569,7 @@ function OperationsRegradingDialog({
                       </span>
                     </span>
                     <span className="text-xs text-muted-foreground">
-                      考试 {item.exam_count} · 作业 {item.practice_count}
+                      考试 {item.exam_count} · 练习 {item.practice_count}
                     </span>
                   </span>
                 </button>
@@ -578,10 +578,10 @@ function OperationsRegradingDialog({
           </ColumnShell>
 
           <ColumnShell
-            title="考试 / 作业"
+            title="考试 / 练习"
             searchValue={examQuery}
             onSearchChange={setExamQuery}
-            searchPlaceholder="搜索考试或作业"
+            searchPlaceholder="搜索考试或练习"
             tabs={
               <FilterTabs
                 value={examKindFilter}
@@ -593,7 +593,7 @@ function OperationsRegradingDialog({
                   { value: "exam", label: "考试", count: examCounts.exam },
                   {
                     value: "practice",
-                    label: "作业",
+                    label: "练习",
                     count: examCounts.practice,
                   },
                 ]}
@@ -601,13 +601,13 @@ function OperationsRegradingDialog({
             }
           >
             {!selectedAssignee ? (
-              <ListEmpty>选择人员后显示考试和作业</ListEmpty>
+              <ListEmpty>选择人员后显示考试和练习</ListEmpty>
             ) : null}
             {loadingExams ? (
-              <ListLoading label="正在加载考试和作业..." />
+              <ListLoading label="正在加载考试和练习..." />
             ) : null}
             {selectedAssignee && !loadingExams && filteredExams.length === 0 ? (
-              <ListEmpty>暂无考试或作业</ListEmpty>
+              <ListEmpty>暂无考试或练习</ListEmpty>
             ) : null}
             {(["exam", "practice"] as const).map((kind) => {
               const items = filteredExams.filter((item) => item.kind === kind);
@@ -678,7 +678,7 @@ function OperationsRegradingDialog({
             }
           >
             {!selectedExam ? (
-              <ListEmpty>选择考试或作业后显示题目</ListEmpty>
+              <ListEmpty>选择考试或练习后显示题目</ListEmpty>
             ) : null}
             {loadingQuestions ? <ListLoading label="正在加载题目..." /> : null}
             {selectedExam &&
@@ -806,7 +806,7 @@ export function OperationsRegradingPage() {
               <div className="min-w-0">
                 <h1 className="text-lg font-semibold tracking-tight">重新批改</h1>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-                  面向平台管理员的运营工具。当前支持按归属评估者、考试或作业、具体题目发起重新评分。
+                  面向平台管理员的运营工具。当前支持按归属评估者、考试或练习、具体题目发起重新评分。
                 </p>
               </div>
             </div>

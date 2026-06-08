@@ -2422,6 +2422,7 @@ async def get_wrong_answer_detail(
         tags=[item.name for item in question.tags],
         mastered=progress.mastered,
         question_content=question.content,
+        question_options=question.options,
         standard_answer=question.answer,
         analysis=question.analysis,
         student_answer=latest_answer.answer_content if latest_answer else {},

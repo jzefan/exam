@@ -28,7 +28,9 @@ export function ExamSettingsPanel({
     <section className="space-y-4">
       <div className="space-y-1">
         <h3 className="text-sm font-semibold text-foreground">考试设置</h3>
-        <p className="text-xs text-muted-foreground">这里适合做轻量调整，结构性修改仍建议回到完整修改流程。</p>
+        <p className="text-xs text-muted-foreground">
+          适合做轻量调整，结构性修改仍建议回到完整修改流程。
+        </p>
       </div>
 
       <div className="space-y-4 rounded-2xl border border-border/60 bg-background/80 p-4">
@@ -52,8 +54,12 @@ export function ExamSettingsPanel({
 
         <div className="flex items-center justify-between gap-4">
           <div className="space-y-1">
-            <p className="text-sm font-medium text-foreground">允许查看考试结果</p>
-            <p className="text-xs text-muted-foreground">学生提交后是否可以查看成绩与结果信息。</p>
+            <p className="text-sm font-medium text-foreground">
+              允许查看考试结果
+            </p>
+            <p className="text-xs text-muted-foreground">
+              学生提交后是否可以查看成绩与结果信息。
+            </p>
           </div>
           <Switch
             checked={values.show_result}
@@ -69,7 +75,9 @@ export function ExamSettingsPanel({
         <div className="flex items-center justify-between gap-4">
           <div className="space-y-1">
             <p className="text-sm font-medium text-foreground">
-              {category === "exam" ? "允许已提交学生在考试期间重考" : "允许学生重做"}
+              {category === "exam"
+                ? "允许已提交学生在考试期间重考"
+                : "允许学生重做"}
             </p>
             <p className="text-xs text-muted-foreground">
               {category === "exam"

@@ -25,16 +25,17 @@ from reportlab.platypus import (
 )
 
 from app.config import settings
-from app.exams.paper_export.model import ExamPaper, PaperSection
+from app.exams.paper_export.model import ExamPaper, PaperSection, paper_header_lines
 
 # Reassigned by _ensure_font() to the actually-registered font name. Helpers and
 # the page-number canvas read this module global at call time.
 _FONT = "STSong-Light"
 _GRID_CHUNK = 10
 _font_ready = False
-# Answer-key emphasis: blue text on a light-blue shaded background.
+# Answer-key emphasis: blue text (no background fill).
 _ANSWER_COLOR = colors.HexColor("#1D4ED8")
-_ANSWER_FILL = colors.HexColor("#EAF1FF")
+# Blank writing space (cm) left after a question in the no-answer variant, by type.
+_BLANK_SPACE_CM = {"short_answer": 2.6, "essay": 5.0, "code": 5.0}
 
 
 def _ensure_font() -> None:
@@ -71,10 +72,6 @@ def _style(name: str, *, size: float, align: int = TA_LEFT, leading: float | Non
 def _esc(text: str) -> str:
     out = (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     return out.replace("\n", "<br/>")
-
-
-def _fmt(value: float) -> str:
-    return str(int(value)) if float(value).is_integer() else str(value)
 
 
 class _NumberedCanvas(canvas.Canvas):
@@ -196,8 +193,7 @@ def _choice_grid_flows(section: PaperSection, styles: dict) -> list:
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ]
         if any(q.answer_text for q in chunk):
-            # Highlight the answer row: blue text on a light-blue band.
-            style.append(("BACKGROUND", (0, 1), (-1, 1), _ANSWER_FILL))
+            # Highlight the answer row with blue text (no background fill).
             style.append(("TEXTCOLOR", (0, 1), (-1, 1), _ANSWER_COLOR))
         table.setStyle(TableStyle(style))
         flows.append(table)
@@ -207,38 +203,30 @@ def _choice_grid_flows(section: PaperSection, styles: dict) -> list:
 def render_pdf(paper: ExamPaper) -> bytes:
     _ensure_font()
     styles = {
+        "subtitle": _style("subtitle", size=14, align=TA_CENTER, leading=20),
         "title": _style("title", size=16, align=TA_CENTER, leading=22),
         "class": _style("class", size=14, align=TA_CENTER, leading=20),
         "info": _style("info", size=12, align=TA_CENTER, leading=18),
         "student": _style("student", size=12, align=TA_CENTER, leading=20),
         "section": _style("section", size=13, align=TA_LEFT, leading=18, spaceBefore=6, spaceAfter=2),
         "body": _style("body", size=10.5, align=TA_LEFT, leading=16),
+        "subitem": _style("subitem", size=10.5, align=TA_LEFT, leading=16, leftIndent=21),
         "option": _style("option", size=10.5, align=TA_LEFT, leading=16, leftIndent=18),
-        "answer": _style(
-            "answer",
-            size=10.5,
-            align=TA_LEFT,
-            leading=16,
-            textColor=_ANSWER_COLOR,
-            backColor=_ANSWER_FILL,
-            borderPadding=(2, 4, 2, 4),
-        ),
+        "answer": _style("answer", size=10.5, align=TA_LEFT, leading=16, textColor=_ANSWER_COLOR),
     }
 
     flows: list = []
-    # Line 1: 《course》exam title.
-    course = f"《{paper.course_name}》" if paper.course_name else ""
-    flows.append(Paragraph(_esc(f"{course}{paper.exam_title}试卷"), styles["title"]))
-    # Line 2: semester + class.
-    sub_parts = [part for part in (paper.semester_name, paper.class_label) if part]
-    if sub_parts:
-        flows.append(Paragraph(_esc("  ".join(sub_parts)), styles["class"]))
-    # Line 3: time limit + exam form.
+    # Line 1: 学校名称 + 学期; Line 2: 《课程名》考试类型试卷; Line 3: （专业）.
+    line1, line2, line3 = paper_header_lines(paper)
+    flows.append(Paragraph(_esc(line1), styles["subtitle"]))
+    flows.append(Paragraph(_esc(line2), styles["title"]))
+    flows.append(Paragraph(_esc(line3), styles["class"]))
+    # Line 4: time limit + exam form.
     flows.append(
         Paragraph(_esc(f"答题时限：{paper.duration_minutes} 分钟    考试形式：{paper.exam_form}"), styles["info"])
     )
     flows.append(Spacer(1, 0.2 * cm))
-    # Line 4: class / id / name / score, centered.
+    # Line 5: class / id / name / score, centered.
     flows.append(Paragraph("班级__________ 学号__________ 姓名__________ 得分__________", styles["student"]))
     flows.append(Spacer(1, 0.2 * cm))
 
@@ -257,15 +245,23 @@ def render_pdf(paper: ExamPaper) -> bytes:
         if section.is_choice and section.questions:
             flows.extend(_choice_grid_flows(section, styles))
         for question in section.questions:
-            stem = f"{question.number}. {question.stem}"
-            if not section.is_choice:
-                stem = f"{stem}  （{_fmt(question.score)}分）"
+            # Per-question scores live in the section heading (每小题X分…), so the
+            # stem carries only the number — no inline （X分）.
+            stem_lines = question.stem.split("\n")
+            first = stem_lines[0] if stem_lines else ""
+            head = f"{question.number}. {first}"
             flows.append(Spacer(1, 0.12 * cm))
-            flows.append(Paragraph(_esc(stem), styles["body"]))
+            flows.append(Paragraph(_esc(head), styles["body"]))
+            # Continuation lines indented so their numbering nests under the question.
+            for extra in stem_lines[1:]:
+                flows.append(Paragraph(_esc(extra) if extra.strip() else " ", styles["subitem"]))
             for option in question.options:
                 flows.append(Paragraph(_esc(f"{option.label}. {option.text}"), styles["option"]))
             if question.answer_text is not None:
                 flows.append(Paragraph(_esc(f"正确答案：{question.answer_text}"), styles["answer"]))
+            elif not paper.with_answers and question.type in _BLANK_SPACE_CM:
+                # Leave blank space for the student to write 简答/论述/编程 answers.
+                flows.append(Spacer(1, _BLANK_SPACE_CM[question.type] * cm))
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
