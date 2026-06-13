@@ -6,6 +6,17 @@ import { ExamBottomBar } from "./mobile/exam-bottom-bar";
 import { QuestionMapDrawer } from "./mobile/question-map-drawer";
 import { SubmitConfirmSheet } from "./mobile/submit-confirm-sheet";
 import { useConnectivity } from "@/hooks/use-connectivity";
+import { useSwipe } from "@/hooks/use-swipe";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 interface ExamTakingMobileProps {
   examData: IExamTaking;
@@ -39,6 +50,7 @@ export function ExamTakingMobile({
   const [mapOpen, setMapOpen] = useState(false);
   const [submitOpen, setSubmitOpen] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
+  const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
   const { online } = useConnectivity();
 
   const questions = examData.questions;
@@ -71,9 +83,15 @@ export function ExamTakingMobile({
     [currentQuestion, flushQuestion, isNavigating, questions, setCurrentIndex],
   );
 
+  const swipe = useSwipe({
+    onSwipeLeft: () => navigateToQuestion(currentIndex + 1),
+    onSwipeRight: () => navigateToQuestion(currentIndex - 1),
+  });
+
   return (
     <div
-      className="fixed inset-0 flex w-screen max-w-[100vw] flex-col overflow-hidden bg-background"
+      data-testid="mobile-exam-shell"
+      className="fixed inset-0 flex w-full max-w-full flex-col overflow-x-hidden overflow-y-hidden bg-background"
       style={{ touchAction: "pan-y" }}
     >
       {switchWarning && (
@@ -88,13 +106,19 @@ export function ExamTakingMobile({
         startedAt={examData.started_at}
         durationMinutes={examData.duration_minutes}
         saveState={saveState}
-        onBack={onBack}
+        onBack={() => setLeaveConfirmOpen(true)}
         onTimeUp={onTimeUp}
       />
 
-      <main className="flex-1 overflow-y-auto" style={{ overscrollBehavior: "contain" }}>
+      <main
+        data-testid="mobile-exam-content"
+        className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden"
+        style={{ overscrollBehavior: "contain" }}
+        onTouchStart={swipe.onTouchStart}
+        onTouchEnd={swipe.onTouchEnd}
+      >
         {currentQuestion && (
-          <div className="px-4 py-4">
+          <div className="min-w-0 max-w-full px-4 py-4">
             <div className="mb-3 flex items-center gap-2">
               <span className="text-xs font-medium text-muted-foreground">
                 第 {currentIndex + 1} 题 / 共 {questions.length} 题
@@ -141,6 +165,21 @@ export function ExamTakingMobile({
           onSubmitConfirm();
         }}
       />
+
+      <AlertDialog open={leaveConfirmOpen} onOpenChange={setLeaveConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认离开考试？</AlertDialogTitle>
+            <AlertDialogDescription>
+              离开考试页面可能被记录为切屏，切屏次数达到上限将导致自动交卷。确定要返回吗？
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>继续考试</AlertDialogCancel>
+            <AlertDialogAction onClick={onBack}>确认离开</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

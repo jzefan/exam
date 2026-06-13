@@ -32,6 +32,8 @@ class CourseSemester(OwnerMixin, BaseModel):
     class_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Teaching-target profile for this semester; used to prefill question-gen templates.
+    student_profile: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     __table_args__ = (
         Index("ix_course_semesters_course_id_deleted_at", "course_id", "deleted_at"),

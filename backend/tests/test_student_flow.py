@@ -8,7 +8,7 @@ from app.auth.security import create_access_token
 from app.auth.service import create_user
 from sqlalchemy import select
 
-from app.exams.models import Exam, ExamQuestion, ExamStudent, StudentExamSubmission, StudentExamSubmissionAnswer
+from app.exams.models import Exam, ExamAttemptState, ExamQuestion, ExamStudent, StudentExamSubmission, StudentExamSubmissionAnswer
 from app.questions.models import Question, QuestionType
 from app.rbac.models import Organization, Role
 
@@ -525,6 +525,107 @@ async def test_student_can_retake_ongoing_exam_when_teacher_allows_it_and_histor
     }
     assert answers_by_submission_id[str(submissions[0].id)] == {"selected": ["A"]}
     assert answers_by_submission_id[str(submissions[1].id)] == {"selected": ["B"]}
+
+
+@pytest.mark.asyncio
+async def test_student_can_retake_unsubmitted_exam_after_personal_duration_is_exhausted(
+    client: AsyncClient, db_session
+) -> None:
+    org = await _create_org_with_roles(db_session)
+
+    teacher = await create_user(
+        db_session,
+        UserCreate(
+            username="teacher_expired_retake",
+            email="teacher_expired_retake@example.com",
+            password="teacherpass123",
+            full_name="Teacher Expired Retake",
+            role_name="teacher",
+            org_id=org.id,
+        ),
+    )
+    student = await create_user(
+        db_session,
+        UserCreate(
+            username="student_expired_retake",
+            email="student_expired_retake@example.com",
+            password="studentpass123",
+            full_name="Student Expired Retake",
+            role_name="student",
+            org_id=org.id,
+        ),
+    )
+
+    question = Question(
+        type=QuestionType.CHOICE,
+        title="个人时长耗尽后重考",
+        content={"text": "<p>请选择正确答案。</p>"},
+        options={"A": "错误", "B": "正确"},
+        answer={"correct": "B"},
+        analysis="正确答案是 B。",
+        difficulty=1,
+        score=5,
+        usage_count=0,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    db_session.add(question)
+    await db_session.flush()
+
+    exam = Exam(
+        title="允许耗尽后重考练习",
+        description=None,
+        category="practice",
+        start_time=datetime.now(timezone.utc) - timedelta(minutes=10),
+        end_time=datetime.now(timezone.utc) + timedelta(minutes=50),
+        duration_minutes=1,
+        total_score=5,
+        status="ongoing",
+        max_switch_count=0,
+        allow_retake=True,
+        show_result=True,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    db_session.add(exam)
+    await db_session.flush()
+
+    previous_started_at = datetime.now(timezone.utc) - timedelta(minutes=2)
+    db_session.add_all(
+        [
+            ExamQuestion(exam_id=exam.id, question_id=question.id, order=0),
+            ExamStudent(
+                exam_id=exam.id,
+                student_id=student.id,
+                attempt_state=ExamAttemptState.IN_PROGRESS.value,
+                started_at=previous_started_at,
+                saved_answers={str(question.id): {"selected": ["A"]}},
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(student.id, '')}"})
+
+    restart = await client.post(f"/api/student/exams/{exam.id}/start", json={"retake": True})
+
+    assert restart.status_code == 200
+    restart_payload = restart.json()
+    assert restart_payload["category"] == "practice"
+    assert restart_payload["saved_answers"] == {}
+    restarted_at = datetime.fromisoformat(restart_payload["started_at"])
+    if restarted_at.tzinfo is None:
+        restarted_at = restarted_at.replace(tzinfo=timezone.utc)
+    assert restarted_at > previous_started_at
+
+    exam_student = (
+        await db_session.execute(
+            select(ExamStudent).where(ExamStudent.exam_id == exam.id, ExamStudent.student_id == student.id)
+        )
+    ).scalar_one()
+    assert exam_student.attempt_state == ExamAttemptState.IN_PROGRESS.value
+    assert exam_student.submitted_at is None
+    assert exam_student.saved_answers == {}
 
 
 @pytest.mark.asyncio

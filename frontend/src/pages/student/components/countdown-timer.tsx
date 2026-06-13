@@ -51,7 +51,7 @@ export function CountdownTimer({
       });
     }, 1000);
     return () => clearInterval(interval);
-  }, [remaining <= 0, onTimeUp]);
+  }, [remaining, onTimeUp]);
 
   const total = durationMinutes * 60;
   const pct = total > 0 ? remaining / total : 1;
@@ -60,7 +60,7 @@ export function CountdownTimer({
 
   return (
     <div
-      className={`flex items-center gap-2 font-mono text-sm tabular-nums transition-colors duration-700 ${
+      className={`flex shrink-0 items-center gap-1 font-mono text-xs tabular-nums transition-colors duration-700 sm:gap-2 sm:text-sm ${
         isCritical
           ? "text-red-600 dark:text-red-400"
           : isUrgent

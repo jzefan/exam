@@ -50,6 +50,13 @@ export interface TeacherCourseDetail extends TeacherCourseSummary {
   difficulty: string | null;
 }
 
+export interface MaterialKnowledgeFragment {
+  /** concept / term / formula / code_example / case / workflow / other */
+  type: string;
+  title: string;
+  content: string;
+}
+
 export interface TeacherCourseMaterial {
   id: string;
   node_id: string;
@@ -60,6 +67,10 @@ export interface TeacherCourseMaterial {
   description: string | null;
   source: string | null;
   file_path: string | null;
+  knowledge_fragments: MaterialKnowledgeFragment[];
+  /** 知识库入库状态：processing / ready / failed；null = 未入库 */
+  kb_status: string | null;
+  kb_chunk_count: number;
   created_at: string;
   updated_at: string;
 }
@@ -147,6 +158,7 @@ export interface CourseSemester {
   class_ids: string[];
   start_date: string | null;
   end_date: string | null;
+  student_profile: Record<string, unknown> | null;
   exam_count: number;
   assignment_count: number;
   created_at: string;
@@ -161,6 +173,7 @@ export interface CreateSemesterPayload {
   class_ids?: string[];
   start_date?: string | null;
   end_date?: string | null;
+  student_profile?: Record<string, unknown> | null;
 }
 
 export interface CreateTeacherCoursePayload {
@@ -235,6 +248,7 @@ export function createCourseSemester(courseId: string, payload: CreateSemesterPa
       class_ids: payload.class_ids ?? [],
       start_date: payload.start_date ?? null,
       end_date: payload.end_date ?? null,
+      student_profile: payload.student_profile ?? null,
     }),
   });
 }

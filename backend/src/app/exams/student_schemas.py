@@ -45,6 +45,7 @@ class StudentQuestionPayload(BaseModel):
 class StudentExamStartResponse(BaseModel):
     exam_id: uuid.UUID
     title: str
+    category: str = "exam"
     duration_minutes: int
     max_switch_count: int
     allow_retake: bool = False

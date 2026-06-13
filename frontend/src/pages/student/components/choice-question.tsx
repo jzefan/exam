@@ -35,10 +35,10 @@ export function ChoiceQuestion({ question, answer, onChange }: Props) {
   );
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-start gap-3">
+    <div className="min-w-0 max-w-full space-y-5 overflow-x-hidden">
+      <div className="flex min-w-0 max-w-full items-start gap-3">
         <div
-          className="prose prose-sm dark:prose-invert max-w-none leading-relaxed flex-1"
+          className="prose prose-sm dark:prose-invert min-w-0 max-w-none flex-1 break-words leading-relaxed [overflow-wrap:anywhere] [&_*]:max-w-full"
           dangerouslySetInnerHTML={{
             __html: renderLatexInHtml(
               (question.content as { text?: string }).text ?? question.title,
@@ -52,7 +52,7 @@ export function ChoiceQuestion({ question, answer, onChange }: Props) {
         )}
       </div>
 
-      <div className="space-y-2">
+      <div className="min-w-0 max-w-full space-y-2">
         {sortedOptions.map(([key, text]) => {
           const isSelected = selected.includes(key);
           return (
@@ -62,7 +62,7 @@ export function ChoiceQuestion({ question, answer, onChange }: Props) {
               aria-pressed={isSelected}
               onClick={() => toggle(key)}
               className={cn(
-                "group flex w-full items-start gap-3.5 rounded-xl border-2 px-4 py-3.5 text-left transition-colors",
+                "group flex w-full min-w-0 max-w-full items-start gap-3.5 overflow-hidden rounded-xl border-2 px-4 py-3.5 text-left transition-colors",
                 isSelected
                   ? "border-primary/50 bg-secondary text-secondary-foreground shadow-sm"
                   : "border-border bg-background hover:border-primary/20 hover:bg-accent/40",
@@ -81,7 +81,7 @@ export function ChoiceQuestion({ question, answer, onChange }: Props) {
               </span>
               <span
                 className={cn(
-                  "pt-0.5 text-sm leading-relaxed",
+                  "min-w-0 flex-1 break-words pt-0.5 text-sm leading-relaxed [overflow-wrap:anywhere] [&_*]:max-w-full",
                   isSelected ? "text-secondary-foreground" : "text-foreground/70",
                 )}
                 dangerouslySetInnerHTML={{ __html: renderLatexInHtml(text) }}

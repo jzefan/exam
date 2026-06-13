@@ -46,6 +46,7 @@ vi.mock("react-router-dom", async () => {
 });
 
 import { ExamTaking } from "./exam-taking";
+import { formatStudentDate } from "./utils";
 
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -144,7 +145,7 @@ describe("ExamTaking", () => {
     expect(screen.queryByText("右上角的答题卡可以快速跳转到任意题目，适合回看和检查未完成的题。")).not.toBeInTheDocument();
   });
 
-  it("lets students return to my exams from the exam header", async () => {
+  it("lets students return to my exams from the exam header after confirming", async () => {
     const user = userEvent.setup();
 
     render(
@@ -156,6 +157,8 @@ describe("ExamTaking", () => {
     );
 
     await user.click(await screen.findByRole("button", { name: /返回我的考试/i }));
+    expect(screen.getByText("确认离开考试？")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "确认离开" }));
     expect(navigateMock).toHaveBeenCalledWith("/my-exams");
   });
 
@@ -204,14 +207,56 @@ describe("ExamTaking", () => {
     );
 
     expect(await screen.findByText("本次考试答题时间已用完")).toBeInTheDocument();
-    expect(screen.getByText("系统从你第一次进入考试时开始计时。当前已超过本次考试的答题时长，因此不能继续作答。")).toBeInTheDocument();
+    expect(screen.getByText("上次进入")).toBeInTheDocument();
+    expect(screen.getByText(formatStudentDate("2026-04-09T10:00:00.000Z"))).toBeInTheDocument();
+    expect(screen.getByText("答题时长")).toBeInTheDocument();
+    expect(screen.getByText("60 分钟")).toBeInTheDocument();
+    expect(screen.getByText("本次答题截止")).toBeInTheDocument();
+    expect(screen.getByText(formatStudentDate("2026-04-09T11:00:00.000Z"))).toBeInTheDocument();
+    expect(screen.getByText("出现原因")).toBeInTheDocument();
+    expect(screen.getByText("系统从你上次进入考试时开始计时，当前已超过本次考试的个人答题时长。")).toBeInTheDocument();
     expect(screen.getByText("如果你认为这是异常情况，请联系老师处理。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重新开始考试" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "触发时间到" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "查看考试结果" })).not.toBeInTheDocument();
     expect(submitExam).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: "返回我的考试" }));
     expect(navigateMock).toHaveBeenCalledWith("/my-exams");
+    dateNowSpy.mockRestore();
+  });
+
+  it("offers a retake entry when the exhausted practice allows retakes", async () => {
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(new Date("2026-04-09T11:00:01.000Z").getTime());
+
+    axiosPostMock.mockResolvedValue({
+      data: {
+        exam_id: "exam-1",
+        title: "abc",
+        category: "practice",
+        duration_minutes: 60,
+        max_switch_count: 0,
+        allow_retake: true,
+        started_at: "2026-04-09T10:00:00.000Z",
+        end_time: "2026-04-09T12:00:00.000Z",
+        questions: [],
+        saved_answers: {},
+        switch_count: 0,
+      },
+    });
+
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={["/my-exams/exam-1/take"]}>
+        <Routes>
+          <Route path="/my-exams/:id/take" element={<ExamTaking />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "重新开始练习" }));
+    expect(navigateMock).toHaveBeenCalledWith("/my-exams/exam-1/take?retake=1", { replace: true });
     dateNowSpy.mockRestore();
   });
 

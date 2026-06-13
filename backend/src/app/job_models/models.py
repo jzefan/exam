@@ -174,6 +174,15 @@ class LearningResource(BaseModel):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str | None] = mapped_column(String(50), nullable=True)  # manual, bilibili, upload
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # AI-extracted knowledge fragments tied to THIS material (concepts, formulas,
+    # code examples, cases, workflows…). Each item: {type, title, content}.
+    # Intentionally NOT added to the course knowledge tree; meant for display
+    # beside the material and future RAG retrieval.
+    knowledge_fragments: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
+    # Course knowledge-base ingestion state (chunk → embed → store pipeline).
+    kb_status: Mapped[str | None] = mapped_column(String(20), nullable=True)  # processing/ready/failed
+    kb_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    kb_chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     uploaded_by: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

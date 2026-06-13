@@ -42,6 +42,43 @@ const registerSignatureHelpProvider = vi.fn(() => createDisposable());
 const registerDocumentSymbolProvider = vi.fn(() => createDisposable());
 const setModelMarkers = vi.fn();
 
+function mockMatchMedia(initialMatches: boolean) {
+  const listeners: Set<() => void> = new Set();
+  const mql = {
+    matches: initialMatches,
+    media: "(max-width: 767px)",
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn((_: string, cb: () => void) => listeners.add(cb)),
+    removeEventListener: vi.fn((_: string, cb: () => void) => listeners.delete(cb)),
+    dispatchEvent: vi.fn(),
+  };
+
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: vi.fn(() => mql),
+  });
+
+  return { mql, trigger: () => listeners.forEach((listener) => listener()) };
+}
+
+function mockMatchMediaByQuery(matchesByQuery: Record<string, boolean>) {
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: vi.fn((query: string) => ({
+      matches: matchesByQuery[query] ?? false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
+}
+
 vi.mock("@/components/ui/select", () => ({
   Select: ({
     value,
@@ -82,7 +119,7 @@ vi.mock("@/components/ui/latex-text", () => ({
 }));
 
 vi.mock("@monaco-editor/react", () => ({
-  default: ({
+  default: function MockMonacoEditor({
     language,
     value,
     onChange,
@@ -156,7 +193,7 @@ vi.mock("@monaco-editor/react", () => ({
       };
     }) => void;
     path?: string;
-  }) => {
+  }) {
     const valueRef = useRef(value ?? "");
     const versionRef = useRef(1);
     const listenerRef = useRef<(() => void) | null>(null);
@@ -322,6 +359,7 @@ function createDeferred<T>() {
 
 describe("CodeQuestion", () => {
   beforeEach(() => {
+    mockMatchMedia(false);
     axiosPostMock.mockReset();
     requestUseMock.mockReset();
     window.localStorage.removeItem("access_token");
@@ -362,6 +400,38 @@ describe("CodeQuestion", () => {
     expect(screen.getByLabelText("代码编辑器")).toHaveAttribute("data-font-size", "14");
     expect(screen.getByLabelText("代码编辑器")).toHaveAttribute("data-tab-size", "4");
     expect(screen.getByLabelText("代码编辑器")).toHaveAttribute("data-path", "file:///student-exam/code-1/solution.py");
+  });
+
+  it("uses a single-column segmented layout on mobile", async () => {
+    const user = userEvent.setup();
+    mockMatchMedia(true);
+
+    render(<CodeQuestionHarness />);
+
+    expect(screen.getByTestId("mobile-code-question")).toBeInTheDocument();
+    expect(screen.getByRole("tablist", { name: "编程题移动端分段" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "代码" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByLabelText("代码编辑器")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "调整左右区域宽度" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "题目" }));
+
+    expect(screen.getByRole("tab", { name: "题目" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("请完成函数。")).toBeInTheDocument();
+  });
+
+  it("uses compact mobile code editing on phone landscape", () => {
+    mockMatchMediaByQuery({
+      "(max-width: 767px)": false,
+      "(max-height: 500px) and (max-width: 950px)": true,
+    });
+
+    render(<CodeQuestionHarness />);
+
+    expect(screen.getByTestId("mobile-code-question")).toBeInTheDocument();
+    expect(screen.getByTestId("mobile-code-toolbar").className).toContain("landscape:py-2");
+    expect(screen.getByTestId("mobile-code-editor").className).toContain("landscape:h-[42vh]");
+    expect(screen.queryByRole("button", { name: "调整左右区域宽度" })).not.toBeInTheDocument();
   });
 
   it("renders program mode guidance without function signature metadata", () => {
@@ -420,6 +490,55 @@ describe("CodeQuestion", () => {
     expect(screen.getByRole("heading", { level: 1, name: "题目说明" })).toBeInTheDocument();
     expect(screen.getByText("Markdown")).toBeInTheDocument();
     expect(container.querySelector("code")?.textContent).toContain("代码片段");
+  });
+
+  it("renders inline <br /> tags in the problem description as line breaks", () => {
+    const { container } = render(
+      <CodeQuestionHarness
+        content={{
+          mode: "program",
+          description:
+            "编写一个 Python 程序，按以下格式输出：<br />和: a + b = c<br />差: a - b = d",
+          starter_code: {
+            python: "print('hello')\n",
+          },
+          sample_tests: [
+            {
+              input: "1 2\n",
+              expected_output: "3\n",
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(container.querySelectorAll("br").length).toBeGreaterThanOrEqual(2);
+    expect(container.textContent ?? "").not.toContain("<br />");
+  });
+
+  it("renders entity-encoded <br /> tags in the problem description as line breaks", () => {
+    const { container } = render(
+      <CodeQuestionHarness
+        content={{
+          mode: "program",
+          description:
+            "编写一个程序，按以下格式输出：&lt;br /&gt;第一行&lt;br /&gt;第二行",
+          starter_code: {
+            python: "print('hello')\n",
+          },
+          sample_tests: [
+            {
+              input: "1 2\n",
+              expected_output: "3\n",
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(container.querySelectorAll("br").length).toBeGreaterThanOrEqual(2);
+    expect(container.textContent ?? "").not.toContain("<br />");
+    expect(container.textContent ?? "").not.toContain("&lt;br");
   });
 
   it("renders standalone code-signature lines as code blocks in the prompt pane", () => {

@@ -64,6 +64,10 @@ const Dashboard = lazyNamed(() => import("./pages/dashboard"), "Dashboard");
 const KnowledgeManagementPage = lazyNamed(() => import("./pages/knowledge"), "KnowledgeManagementPage");
 const CourseListPage = lazyNamed(() => import("./pages/courses/list"), "CourseListPage");
 const CourseDetailPage = lazyNamed(() => import("./pages/courses/detail"), "CourseDetailPage");
+const QuestionGenTemplatesPage = lazyNamed(
+  () => import("./pages/courses/question-gen-templates"),
+  "QuestionGenTemplatesPage",
+);
 const MyExams = lazyNamed(() => import("./pages/student/my-exams"), "MyExams");
 const WrongAnswers = lazyNamed(() => import("./pages/student/wrong-answers"), "WrongAnswers");
 const WrongAnswerDetailPage = lazyNamed(
@@ -302,6 +306,7 @@ function App() {
                     <Route path="/courses">
                       <Route index element={<CourseListPage />} />
                       <Route path=":id" element={<CourseDetailPage />} />
+                      <Route path=":id/question-skills" element={<QuestionGenTemplatesPage />} />
                     </Route>
                     <Route path="/tags" element={<TagList />} />
                     <Route path="/knowledge" element={<KnowledgeManagementPage />} />

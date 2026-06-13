@@ -65,5 +65,14 @@ class Settings(BaseSettings):
     # viewers without Adobe-GB1 fonts). Empty -> built-in STSong-Light CID font.
     exam_export_pdf_font_path: str = ""
 
+    # Course knowledge base (material RAG). The embedder calls an OpenAI-compatible
+    # /embeddings endpoint; defaults reuse the Qwen/DashScope credentials above.
+    # Switching the model implies re-ingesting materials (vector dims must match).
+    kb_embedding_provider: str = "qwen"  # qwen | doubao | custom
+    kb_embedding_model: str = "text-embedding-v3"
+    kb_embedding_dim: int = 1024
+    kb_embedding_base_url: str = ""  # empty -> derived from provider above
+    kb_embedding_api_key: str = ""  # empty -> derived from provider above
+
 
 settings = Settings()

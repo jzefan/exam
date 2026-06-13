@@ -7,7 +7,7 @@ import os
 import re
 import uuid
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 import unicodedata
 
@@ -336,15 +336,48 @@ _FILL_IN_FORMULA_SPACING_RE = re.compile(r"\s*([{}_^=+\-*/(),;:])\s*")
 _FILL_IN_GRADING_CACHE_KEY = "_fill_in_grading_cache"
 
 
+def _split_fill_in_text(text: str) -> list[str]:
+    """Split a free-form fill-in answer string into per-blank items.
+
+    Uses the same separators as the import builder (`buildAnswerPayload`) so a
+    multi-blank standard answer written as one string (common for AI-generated
+    questions, whose answer is stored as ``{"text": "..."}``) is split into the
+    individual blanks. Falls back to the whole trimmed string when there is no
+    separator.
+    """
+    parts = [part.strip() for part in re.split(r"[;,；，\n]", text)]
+    parts = [part for part in parts if part]
+    if parts:
+        return parts
+    stripped = text.strip()
+    return [stripped] if stripped else []
+
+
 def _get_fill_in_expected_answers(answer: dict[str, Any]) -> list[str]:
     raw = answer.get("blanks")
     if raw is None:
         raw = answer.get("correct")
     if isinstance(raw, list):
         return [str(item) for item in raw]
-    if raw is None:
-        return []
-    return [str(raw)]
+    if isinstance(raw, str):
+        # A scalar string under blanks/correct: keep as a single expected answer
+        # (manual/import store lists; a lone string is treated as one blank).
+        stripped = raw.strip()
+        return [stripped] if stripped else []
+    if raw is not None:
+        return [str(raw)]
+
+    # Fallback: AI-generated fill-in questions store the answer as {"text": ...}
+    # (see ai_generate_prompt). Without this, expected answers come back empty
+    # and even an identical student answer scores 0 — and the AI equivalence
+    # path (gated on a non-empty expected list) never runs.
+    for key in ("text", "answer"):
+        value = answer.get(key)
+        if isinstance(value, str) and value.strip():
+            return _split_fill_in_text(value)
+        if isinstance(value, list) and value:
+            return [str(item) for item in value]
+    return []
 
 
 def _count_fill_in_placeholders(content: dict[str, Any]) -> int:
@@ -1585,9 +1618,23 @@ def _ensure_exam_attempt_in_progress_for_websocket(exam: Exam, exam_student: Exa
         raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Exam window closed")
 
 
+def _get_personal_attempt_deadline(exam: Exam, exam_student: ExamStudent) -> datetime | None:
+    started_at = _as_utc(exam_student.started_at)
+    if started_at is None or exam.duration_minutes <= 0:
+        return None
+    duration_deadline = started_at + timedelta(minutes=exam.duration_minutes)
+    end_time = _as_utc(exam.end_time)
+    if end_time is None:
+        return duration_deadline
+    return min(duration_deadline, end_time)
+
+
+def _is_personal_attempt_exhausted(exam: Exam, exam_student: ExamStudent) -> bool:
+    deadline = _get_personal_attempt_deadline(exam, exam_student)
+    return deadline is not None and deadline <= _utcnow()
+
+
 def _can_start_retake(exam: Exam, exam_student: ExamStudent) -> bool:
-    if exam_student.submitted_at is None:
-        return False
     if not exam.allow_retake:
         return False
     now = _utcnow()
@@ -1598,6 +1645,8 @@ def _can_start_retake(exam: Exam, exam_student: ExamStudent) -> bool:
     if start_time and start_time > now:
         return False
     if end_time and end_time < now:
+        return False
+    if exam_student.submitted_at is None and not _is_personal_attempt_exhausted(exam, exam_student):
         return False
     return True
 
@@ -1653,10 +1702,8 @@ async def start_exam(
     exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)
     _ensure_exam_open(exam)
     was_retake = False
-    if exam_student.submitted_at is not None:
-        wants_retake = bool(payload and payload.retake)
-        if not wants_retake:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exam already submitted")
+    wants_retake = bool(payload and payload.retake)
+    if wants_retake and (exam_student.started_at is not None or exam_student.submitted_at is not None):
         if not _can_start_retake(exam, exam_student):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Retake is not allowed")
 
@@ -1671,6 +1718,8 @@ async def start_exam(
         await db.commit()
         await db.refresh(exam)
         exam_student = next(item for item in exam.exam_students if item.student_id == user.id)
+    elif exam_student.submitted_at is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exam already submitted")
 
     started_fresh = False
     if exam_student.started_at is None:
@@ -1723,6 +1772,7 @@ async def start_exam(
     return StudentExamStartResponse(
         exam_id=exam.id,
         title=exam.title,
+        category=exam.category,
         duration_minutes=exam.duration_minutes,
         max_switch_count=exam.max_switch_count,
         allow_retake=exam.allow_retake,

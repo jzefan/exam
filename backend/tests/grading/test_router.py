@@ -189,6 +189,72 @@ async def test_confirm_grading_task_supports_legacy_exam_submission_locator(admi
 
 
 @pytest.mark.asyncio
+async def test_confirmed_candidate_status_persists_after_workspace_reload(
+    admin_client,
+    db_session: AsyncSession,
+) -> None:
+    create_response = await admin_client.post(
+        "/api/grading/tasks",
+        json={
+            "source_type": "exam_submission",
+            "source_business_id": "exam-java-midterm:essay-q3:A-102",
+            "question_type": "short_answer",
+            "question_content": "什么是幂等性？",
+            "max_score": 20,
+            "student_answer_raw": "重复执行结果一致",
+            "standard_answers": [{"summary": "重复执行结果一致"}],
+            "rubric_definition": {"dimensions": [{"key": "coverage", "weight": 1}]},
+            "role_binding_version": 1,
+        },
+    )
+    task_id = uuid.UUID(create_response.json()["id"])
+    task = await db_session.get(GradingTask, task_id)
+    snapshot = GradingResultSnapshot(
+        task_id=task.id,
+        snapshot_type="final",
+        score_total=16,
+        dimension_scores={"coverage": 16},
+        dimension_comments={},
+        deduction_reasons=[],
+        strengths=["核心含义正确"],
+        improvement_suggestions=[],
+        evidence_summary={},
+        risk_flags=[],
+        prompt_template_version=task.prompt_template_version,
+        role_binding_version=task.role_binding_version,
+        created_by="system",
+    )
+    db_session.add(snapshot)
+    await db_session.flush()
+    task.latest_final_snapshot = snapshot
+    task.status = "completed"
+    await db_session.commit()
+
+    before_response = await admin_client.get(
+        "/api/grading/inbox/questions/exam-java-midterm/essay-q3"
+    )
+    assert before_response.json()["candidates"][0]["status"] == "已完成"
+
+    inbox_before = await admin_client.get("/api/grading/inbox")
+    question_before = inbox_before.json()["exams"][0]["questions"][0]
+    assert question_before["pending_count"] == 1
+    assert question_before["completed_count"] == 0
+
+    confirm_response = await admin_client.post(f"/api/grading/tasks/{task_id}/confirm")
+    assert confirm_response.status_code == 200
+
+    after_response = await admin_client.get(
+        "/api/grading/inbox/questions/exam-java-midterm/essay-q3"
+    )
+    assert after_response.json()["candidates"][0]["status"] == "已确认"
+
+    inbox_after = await admin_client.get("/api/grading/inbox")
+    question_after = inbox_after.json()["exams"][0]["questions"][0]
+    assert question_after["pending_count"] == 0
+    assert question_after["completed_count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_get_grading_report_returns_manual_final_score(admin_client) -> None:
     create_response = await admin_client.post(
         "/api/grading/tasks",
@@ -834,12 +900,12 @@ async def test_grading_question_candidates_endpoint_returns_question_workspace(a
     assert payload["question_id"] == "essay-q3"
     assert payload["question_label"] == "主观题 3"
     assert payload["max_score"] == 20
-    assert [candidate["candidate_name"] for candidate in payload["candidates"]] == ["考生 A-115", "考生 A-102"]
-    assert payload["candidates"][0]["status"] == "人工改分"
-    assert payload["candidates"][1]["status"] == "待评分"
-    assert payload["candidates"][0]["score"] == 18
-    assert payload["candidates"][0]["manual_override"] is True
-    assert first_response.json()["id"] == payload["candidates"][1]["task_id"]
+    assert [candidate["candidate_name"] for candidate in payload["candidates"]] == ["考生 A-102", "考生 A-115"]
+    assert payload["candidates"][0]["status"] == "待评分"
+    assert payload["candidates"][1]["status"] == "人工改分"
+    assert payload["candidates"][1]["score"] == 18
+    assert payload["candidates"][1]["manual_override"] is True
+    assert first_response.json()["id"] == payload["candidates"][0]["task_id"]
 
 
 @pytest.mark.asyncio

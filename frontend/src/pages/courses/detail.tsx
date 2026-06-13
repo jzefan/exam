@@ -94,6 +94,8 @@ import {
 import { KnowledgeImportDialog } from "@/pages/knowledge/KnowledgeImportDialog";
 import { KnowledgeCatalogPhotoDialog } from "@/pages/knowledge/KnowledgeCatalogPhotoDialog";
 import { MaterialAIGenerateDialog } from "@/pages/knowledge/MaterialAIGenerateDialog";
+import { getSeedUsage, kbIngestMaterial, kbStatus } from "@/pages/courses/question-gen-templates/api";
+import type { SeedUsageMap } from "@/pages/courses/question-gen-templates/types";
 import { ResourcePreview } from "@/pages/job-models/editor/resource-preview";
 import {
   extractMaterialContent,
@@ -758,6 +760,25 @@ function MaterialsTab({
                     <span className="font-sans lining-nums tabular-nums">
                       {formatDate(material.created_at)}
                     </span>
+                    {material.kb_status === "ready" ? (
+                      <span
+                        className="inline-flex items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0 text-[11px] text-emerald-700 dark:text-emerald-300"
+                        title={`已切分为 ${material.kb_chunk_count} 个知识片段，可用于检索与出题`}
+                      >
+                        知识库 · {material.kb_chunk_count} 片段
+                      </span>
+                    ) : material.kb_status === "processing" ? (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-1.5 py-0 text-[11px] text-muted-foreground">
+                        知识库入库中…
+                      </span>
+                    ) : material.kb_status === "failed" ? (
+                      <span
+                        className="inline-flex items-center gap-1 rounded-full border border-destructive/25 bg-destructive/10 px-1.5 py-0 text-[11px] text-destructive"
+                        title="资料入库失败，可重新上传触发"
+                      >
+                        知识库入库失败
+                      </span>
+                    ) : null}
                   </div>
                 </div>
                 {canWrite && canGenerate ? (
@@ -2041,6 +2062,7 @@ function QuestionsTab({
   knowledgeTree,
   canWrite,
   showClearAllQuestions = true,
+  seedUsage,
   onPublishedExamOrAssignment,
   onClearAllQuestions,
 }: {
@@ -2062,6 +2084,8 @@ function QuestionsTab({
   knowledgeTree: CourseKnowledgeNode | null;
   canWrite: boolean;
   showClearAllQuestions?: boolean;
+  /** question_id -> 使用该题作为种子的出题技能（题库列表徽标） */
+  seedUsage?: SeedUsageMap;
   onPublishedExamOrAssignment: (
     category: CreateFromSelectionCategory,
   ) => void | Promise<void>;
@@ -2399,19 +2423,31 @@ function QuestionsTab({
                 question={question}
                 index={index + 1}
                 expanded={allQuestionsExpanded}
+                expandOnClick
                 hideAnswer
                 markChoiceAnswer
                 className="cursor-pointer transition-all hover:border-primary hover:shadow-md"
                 trailing={
-                  canWrite ? (
-                    <Checkbox
-                      checked={selected.has(question.id)}
-                      onCheckedChange={() => toggleSelect(question.id)}
-                      aria-label={
-                        selected.has(question.id) ? "取消选择题目" : "选择题目"
-                      }
-                    />
-                  ) : null
+                  <div className="flex items-center gap-2">
+                    {seedUsage?.[question.id]?.length ? (
+                      <Badge
+                        variant="outline"
+                        className="shrink-0 border-amber-500/30 bg-amber-500/10 text-[11px] text-amber-700 dark:text-amber-300"
+                        title={`该题是出题技能的种子题：${seedUsage[question.id].map((u) => u.name).join("、")}`}
+                      >
+                        种子 · {seedUsage[question.id].map((u) => u.name).join("、")}
+                      </Badge>
+                    ) : null}
+                    {canWrite ? (
+                      <Checkbox
+                        checked={selected.has(question.id)}
+                        onCheckedChange={() => toggleSelect(question.id)}
+                        aria-label={
+                          selected.has(question.id) ? "取消选择题目" : "选择题目"
+                        }
+                      />
+                    ) : null}
+                  </div>
                 }
                 actions={
                   <Button
@@ -3799,6 +3835,15 @@ export function CourseDetailPage() {
       : "knowledge";
   })();
   const [activeTab, setActiveTab] = useState<CourseTab>(initialTab);
+  // 题库列表的「出题技能种子」徽标数据（question_id -> 技能列表）。
+  const [seedUsage, setSeedUsage] = useState<SeedUsageMap>({});
+
+  useEffect(() => {
+    if (!id || activeTab !== "questions") return;
+    getSeedUsage(id)
+      .then(setSeedUsage)
+      .catch(() => setSeedUsage({}));
+  }, [id, activeTab]);
   const [course, setCourse] = useState<TeacherCourseDetail | null>(null);
   const [materials, setMaterials] = useState<TeacherCourseMaterial[]>([]);
   const [materialContentById, setMaterialContentById] = useState<
@@ -4374,14 +4419,16 @@ export function CourseDetailPage() {
   const uploadAndExtractMaterial = useCallback(
     async (nodeId: string, file: File) => {
       const material = await uploadCourseMaterialFile(nodeId, file);
+      let content: CourseMaterialExtractedContent | null = null;
       try {
         const extracted = await extractMaterialContent(file);
+        content = {
+          sourceText: extracted.text.trim().slice(0, MATERIAL_TEXT_LIMIT),
+          images: extracted.images,
+        };
         setMaterialContentById((current) => ({
           ...current,
-          [material.id]: {
-            sourceText: extracted.text.trim().slice(0, MATERIAL_TEXT_LIMIT),
-            images: extracted.images,
-          },
+          [material.id]: content as CourseMaterialExtractedContent,
         }));
         if (extracted.pageCount > MATERIAL_PAGE_LIMIT) {
           toast({
@@ -4403,7 +4450,7 @@ export function CourseDetailPage() {
           });
         }
       }
-      return material;
+      return { material, content };
     },
     [toast],
   );
@@ -4437,15 +4484,64 @@ export function CourseDetailPage() {
     [toast],
   );
 
+  // After upload, automatically build the course knowledge base from each
+  // material (ArkLoop-style): chunk → embed → store for course-level RAG
+  // retrieval. Fully automatic, no confirmation; the course tree is NOT modified
+  // and nothing is shown per-material — knowledge belongs to the course (KB).
+  const autoIngestMaterialsToKb = useCallback(
+    async (items: Array<{ resourceId: string; title: string; text: string }>) => {
+      if (!id || items.length === 0) return;
+      const ingesting: string[] = [];
+      for (const item of items) {
+        try {
+          await kbIngestMaterial(id, item.resourceId, item.text);
+          ingesting.push(item.resourceId);
+        } catch {
+          // Soft-fail: KB ingest must never block uploads.
+        }
+      }
+      if (ingesting.length === 0) return;
+      toast({
+        title: "资料正在进入课程知识库",
+        description: "正在切分并向量化资料内容，完成后即可用于检索与出题。",
+      });
+
+      // Poll ingest status briefly, then refresh so KB badges appear.
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        try {
+          const statuses = await Promise.all(ingesting.map((rid) => kbStatus(id, rid)));
+          if (statuses.every((s) => s.kb_status !== "processing")) break;
+        } catch {
+          break;
+        }
+      }
+      await refreshMaterialsAndTree();
+    },
+    [id, toast, refreshMaterialsAndTree],
+  );
+
   const handleUploadFiles = useCallback(
     async (nodeId: string, files: File[]) => {
       if (!nodeId || files.length === 0) return;
       setUploading(true);
       try {
         const failed: string[] = [];
+        const forKnowledgeExtraction: Array<{
+          resourceId: string;
+          title: string;
+          text: string;
+        }> = [];
         for (const file of files) {
           try {
-            await uploadAndExtractMaterial(nodeId, file);
+            const { material, content } = await uploadAndExtractMaterial(nodeId, file);
+            if (content?.sourceText.trim() && canGenerateQuestionsFromCourseMaterial(material)) {
+              forKnowledgeExtraction.push({
+                resourceId: material.id,
+                title: material.title,
+                text: content.sourceText,
+              });
+            }
           } catch (err) {
             failed.push(
               `${file.name}：${err instanceof Error ? err.message : "上传失败"}`,
@@ -4467,6 +4563,10 @@ export function CourseDetailPage() {
           setUploadDialogOpen(false);
           setMaterialUploadFiles([]);
           await refreshMaterialsAndTree();
+          // Fire-and-forget: auto-tag the new materials with their knowledge points.
+          if (forKnowledgeExtraction.length > 0) {
+            void autoIngestMaterialsToKb(forKnowledgeExtraction);
+          }
         }
       } catch (err) {
         toast({
@@ -4478,16 +4578,28 @@ export function CourseDetailPage() {
         setUploading(false);
       }
     },
-    [refreshMaterialsAndTree, toast, uploadAndExtractMaterial],
+    [autoIngestMaterialsToKb, refreshMaterialsAndTree, toast, uploadAndExtractMaterial],
   );
 
   const handleUploadFilesToNode = useCallback(
     async (nodeId: string, files: File[]) => {
       if (files.length === 0) return;
       const failed: string[] = [];
+      const forKnowledgeExtraction: Array<{
+        resourceId: string;
+        title: string;
+        text: string;
+      }> = [];
       for (const file of files) {
         try {
-          await uploadAndExtractMaterial(nodeId, file);
+          const { material, content } = await uploadAndExtractMaterial(nodeId, file);
+          if (content?.sourceText.trim() && canGenerateQuestionsFromCourseMaterial(material)) {
+            forKnowledgeExtraction.push({
+              resourceId: material.id,
+              title: material.title,
+              text: content.sourceText,
+            });
+          }
         } catch (err) {
           failed.push(
             `${file.name}：${err instanceof Error ? err.message : "上传失败"}`,
@@ -4507,9 +4619,12 @@ export function CourseDetailPage() {
       });
       if (successCount > 0) {
         await refreshMaterialsAndTree();
+        if (forKnowledgeExtraction.length > 0) {
+          void autoIngestMaterialsToKb(forKnowledgeExtraction);
+        }
       }
     },
-    [refreshMaterialsAndTree, toast, uploadAndExtractMaterial],
+    [autoIngestMaterialsToKb, refreshMaterialsAndTree, toast, uploadAndExtractMaterial],
   );
 
   const handleAddNodeMaterialLink = useCallback(
@@ -5527,100 +5642,110 @@ export function CourseDetailPage() {
           <div className="flex items-center gap-2">
             {headerBadges}
             {course.can_write ? (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button className="h-9 w-fit shrink-0 px-4 font-medium">
-                    <Plus size={16} className="mr-1.5" />
-                    新建内容
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-44">
-                  <DropdownMenuItem
-                    onClick={() => void handleOpenUploadDialog()}
-                  >
-                    <Upload size={14} className="mr-2" />
-                    上传资料
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setAddLinkOpen(true)}>
-                    <Link2 size={14} className="mr-2" />
-                    添加链接
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={() =>
-                      navigate("/exams/create", {
-                        state: {
-                          backTo: `/courses/${id}`,
-                          backLabel: "返回课程详情",
-                          successTo: `/courses/${id}?tab=exams`,
-                          courseKpId: id,
-                          courseName: course.name,
-                          existingExamTitles: exams.map((exam) => exam.title),
-                          defaultBankName: courseQuestionBankName(course.name),
-                          mainKnowledgePointId: tree?.id ?? id,
-                          mainKnowledgePointName: course.name,
-                          ...(semesterFilter
-                            ? { courseSemesterId: semesterFilter }
-                            : {}),
-                        },
-                      })
-                    }
-                  >
-                    <ClipboardList size={14} className="mr-2" />
-                    创建考试
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() =>
-                      navigate("/exams/practice/create", {
-                        state: {
-                          backTo: `/courses/${id}`,
-                          backLabel: "返回课程详情",
-                          successTo: `/courses/${id}?tab=assignments`,
-                          courseKpId: id,
-                          ...(semesterFilter
-                            ? { courseSemesterId: semesterFilter }
-                            : {}),
-                        },
-                      })
-                    }
-                  >
-                    <ListChecks size={14} className="mr-2" />
-                    发布练习
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={() =>
-                      navigate("/questions/create", {
-                        state: {
-                          backTo: `/courses/${id}?tab=questions`,
-                          backLabel: "返回课程详情",
-                          successTo: `/courses/${id}?tab=questions`,
-                          courseKpId: id,
-                        },
-                      })
-                    }
-                  >
-                    <BookOpen size={14} className="mr-2" />
-                    创建题目
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() =>
-                      navigate("/questions/import", {
-                        state: {
-                          backTo: `/courses/${id}?tab=questions`,
-                          backLabel: "返回课程详情",
-                          successTo: `/courses/${id}?tab=questions`,
-                          courseKpId: id,
-                          courseName: course.name,
-                        },
-                      })
-                    }
-                  >
-                    <Upload size={14} className="mr-2" />
-                    导入题目
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <>
+                <Button
+                  variant="outline"
+                  className="h-9 w-fit shrink-0 px-4 font-medium"
+                  onClick={() => navigate(`/courses/${id}/question-skills`)}
+                >
+                  <Sparkles size={16} className="mr-1.5" />
+                  智能出题
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button className="h-9 w-fit shrink-0 px-4 font-medium">
+                      <Plus size={16} className="mr-1.5" />
+                      新建内容
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-44">
+                    <DropdownMenuItem
+                      onClick={() => void handleOpenUploadDialog()}
+                    >
+                      <Upload size={14} className="mr-2" />
+                      上传资料
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setAddLinkOpen(true)}>
+                      <Link2 size={14} className="mr-2" />
+                      添加链接
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={() =>
+                        navigate("/exams/create", {
+                          state: {
+                            backTo: `/courses/${id}`,
+                            backLabel: "返回课程详情",
+                            successTo: `/courses/${id}?tab=exams`,
+                            courseKpId: id,
+                            courseName: course.name,
+                            existingExamTitles: exams.map((exam) => exam.title),
+                            defaultBankName: courseQuestionBankName(course.name),
+                            mainKnowledgePointId: tree?.id ?? id,
+                            mainKnowledgePointName: course.name,
+                            ...(semesterFilter
+                              ? { courseSemesterId: semesterFilter }
+                              : {}),
+                          },
+                        })
+                      }
+                    >
+                      <ClipboardList size={14} className="mr-2" />
+                      创建考试
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() =>
+                        navigate("/exams/practice/create", {
+                          state: {
+                            backTo: `/courses/${id}`,
+                            backLabel: "返回课程详情",
+                            successTo: `/courses/${id}?tab=assignments`,
+                            courseKpId: id,
+                            ...(semesterFilter
+                              ? { courseSemesterId: semesterFilter }
+                              : {}),
+                          },
+                        })
+                      }
+                    >
+                      <ListChecks size={14} className="mr-2" />
+                      发布练习
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={() =>
+                        navigate("/questions/create", {
+                          state: {
+                            backTo: `/courses/${id}?tab=questions`,
+                            backLabel: "返回课程详情",
+                            successTo: `/courses/${id}?tab=questions`,
+                            courseKpId: id,
+                          },
+                        })
+                      }
+                    >
+                      <BookOpen size={14} className="mr-2" />
+                      创建题目
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() =>
+                        navigate("/questions/import", {
+                          state: {
+                            backTo: `/courses/${id}?tab=questions`,
+                            backLabel: "返回课程详情",
+                            successTo: `/courses/${id}?tab=questions`,
+                            courseKpId: id,
+                            courseName: course.name,
+                          },
+                        })
+                      }
+                    >
+                      <Upload size={14} className="mr-2" />
+                      导入题目
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </>
             ) : null}
           </div>
         }
@@ -6344,6 +6469,7 @@ export function CourseDetailPage() {
                       knowledgeTree={tree}
                       canWrite={course.can_write}
                       showClearAllQuestions={!questionFilterNode}
+                      seedUsage={seedUsage}
                       onPublishedExamOrAssignment={handlePublishedFromSelection}
                       onClearAllQuestions={() => setClearQuestionsOpen(true)}
                     />

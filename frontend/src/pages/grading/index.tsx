@@ -188,18 +188,16 @@ function questionTypeLabel(questionType: "short_answer" | "code") {
   return questionType === "code" ? "代码题" : "主观题";
 }
 
-function statusDotClass(status: string) {
-  if (status === "待仲裁" || status === "人工改分") return "bg-rose-500";
-  if (status === "已完成") return "bg-emerald-500";
-  return "bg-blue-500";
+function isConfirmedCandidateStatus(status: string) {
+  return ["人工改分", "已确认", "已审核", "已复核"].includes(status);
 }
 
-function candidatePriority(status: string) {
-  if (status === "待仲裁") return 0;
-  if (status === "人工改分") return 1;
-  if (status === "评分中") return 2;
-  if (status === "待评分") return 3;
-  return 4;
+function statusDotClass(status: string) {
+  if (isConfirmedCandidateStatus(status)) {
+    return "bg-emerald-500";
+  }
+  if (status === "待仲裁" || status === "评估失败") return "bg-rose-500";
+  return "bg-slate-400";
 }
 
 function formatQuestionSummary(question: GradingQuestionDetailResponse | null) {
@@ -252,6 +250,9 @@ function getUiLocale(): string {
 export function GradingCenterPage() {
   const [searchText, setSearchText] = useState("");
   const [inbox, setInbox] = useState<GradingInboxResponse | null>(null);
+  const [questionCountOverrides, setQuestionCountOverrides] = useState<
+    Record<string, { pending_count: number; completed_count: number }>
+  >({});
   const [selectedQuestionRef, setSelectedQuestionRef] = useState<string | null>(null);
   const [questionDetail, setQuestionDetail] = useState<GradingQuestionDetailResponse | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -290,6 +291,7 @@ export function GradingCenterPage() {
     try {
       const payload = await apiRequest<GradingInboxResponse>("/grading/inbox");
       setInbox(payload);
+      setQuestionCountOverrides({});
       setReportError(null);
       return payload;
     } catch (error) {
@@ -378,15 +380,27 @@ export function GradingCenterPage() {
       (left, right) => new Date(right.exam_date).getTime() - new Date(left.exam_date).getTime(),
     );
 
-    const pending = sorted.filter((exam) => exam.questions.some((question) => question.pending_count > 0));
-    const completed = sorted.filter((exam) => exam.questions.every((question) => question.pending_count === 0));
+    const applyCountOverrides = (exam: GradingInboxExamGroup): GradingInboxExamGroup => ({
+      ...exam,
+      questions: exam.questions.map((question) => {
+        const override = questionCountOverrides[buildQuestionRef(exam.exam_id, question.question_id)];
+        return override ? { ...question, ...override } : question;
+      }),
+    });
+
+    const pending = sorted
+      .filter((exam) => exam.questions.some((question) => question.pending_count > 0))
+      .map(applyCountOverrides);
+    const completed = sorted
+      .filter((exam) => exam.questions.every((question) => question.pending_count === 0))
+      .map(applyCountOverrides);
 
     return {
       pending,
       completed,
       all: [...pending, ...completed],
     };
-  }, [filteredExamGroups]);
+  }, [filteredExamGroups, questionCountOverrides]);
 
   useEffect(() => {
     if (selectedQuestionRef || orderedExamGroups.all.length === 0) return;
@@ -432,9 +446,7 @@ export function GradingCenterPage() {
     const examId = examIdRaw === "standalone" ? null : examIdRaw;
     void loadQuestion(examId, questionId).then((payload) => {
       if (!payload) return;
-      const preferredCandidate = [...payload.candidates].sort(
-        (left, right) => candidatePriority(left.status) - candidatePriority(right.status),
-      )[0];
+      const preferredCandidate = payload.candidates[0];
       if (preferredCandidate) {
         setSelectedTaskId((current) =>
           payload.candidates.some((candidate) => candidate.task_id === current)
@@ -460,7 +472,13 @@ export function GradingCenterPage() {
   }, [selectedTaskId, showFollowUpWorkspace, candidateDetail]);
 
   const summaryStats = useMemo(() => {
-    const exams = inbox?.exams ?? [];
+    const exams = (inbox?.exams ?? []).map((exam) => ({
+      ...exam,
+      questions: exam.questions.map((question) => {
+        const override = questionCountOverrides[buildQuestionRef(exam.exam_id, question.question_id)];
+        return override ? { ...question, ...override } : question;
+      }),
+    }));
     const examCount = exams.length;
     const questionCount = exams.reduce((total, exam) => total + exam.questions.length, 0);
     const pendingCount = exams.reduce(
@@ -477,13 +495,11 @@ export function GradingCenterPage() {
     );
 
     return { examCount, questionCount, pendingCount, completedCount };
-  }, [inbox]);
+  }, [inbox, questionCountOverrides]);
 
   const sortedCandidates = useMemo(() => {
     if (!questionDetail) return [];
-    return [...questionDetail.candidates].sort(
-      (left, right) => candidatePriority(left.status) - candidatePriority(right.status),
-    );
+    return questionDetail.candidates;
   }, [questionDetail]);
 
   const activeCandidate = useMemo(
@@ -529,6 +545,10 @@ export function GradingCenterPage() {
 
   const finalizeCurrentScore = async () => {
     if (!selectedTaskId || !candidateDetail) return true;
+    const currentTaskId = selectedTaskId;
+    const wasAlreadyConfirmed = isConfirmedCandidateStatus(
+      activeCandidate?.status ?? candidateDetail.status,
+    );
     const scoreValue = Number(manualScore);
     if (Number.isNaN(scoreValue)) return false;
 
@@ -552,7 +572,49 @@ export function GradingCenterPage() {
         method: "POST",
       });
 
-      await refreshCurrentWorkspace();
+      const confirmedStatus = scoreChanged ? "人工改分" : "已确认";
+      setQuestionDetail((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          candidates: current.candidates.map((candidate) =>
+            candidate.task_id === currentTaskId
+              ? {
+                  ...candidate,
+                  status: confirmedStatus,
+                  score: scoreValue,
+                  manual_override: candidate.manual_override || scoreChanged,
+                }
+              : candidate,
+          ),
+        };
+      });
+      setCandidateDetail((current) =>
+        current?.task_id === currentTaskId
+          ? { ...current, status: confirmedStatus, suggested_score: scoreValue }
+          : current,
+      );
+      if (!wasAlreadyConfirmed && questionDetail) {
+        const questionRef = buildQuestionRef(questionDetail.exam_id, questionDetail.question_id);
+        const baseQuestion = inbox?.exams
+          .find((exam) => (exam.exam_id ?? "standalone") === (questionDetail.exam_id ?? "standalone"))
+          ?.questions.find((question) => question.question_id === questionDetail.question_id);
+        setQuestionCountOverrides((current) => {
+          const counts = current[questionRef] ?? {
+            pending_count: baseQuestion?.pending_count ?? 0,
+            completed_count: baseQuestion?.completed_count ?? 0,
+          };
+          return {
+            ...current,
+            [questionRef]: {
+              pending_count: Math.max(0, counts.pending_count - 1),
+              completed_count: counts.completed_count + 1,
+            },
+          };
+        });
+      }
+      setAutoScoreReason(null);
+      setActionLoading(null);
       return true;
     } catch (error) {
       setReportError(error instanceof Error ? error.message : "确定分数失败");
@@ -568,11 +630,8 @@ export function GradingCenterPage() {
     }
   };
 
-  const handleStepCandidate = async (offset: -1 | 1) => {
-    const confirmed = await finalizeCurrentScore();
-    if (confirmed) {
-      navigateCandidateByOffset(offset);
-    }
+  const handleStepCandidate = (offset: -1 | 1) => {
+    navigateCandidateByOffset(offset);
   };
 
   const refreshCurrentWorkspace = async () => {
@@ -1159,7 +1218,7 @@ export function GradingCenterPage() {
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => void handleStepCandidate(-1)}
+                        onClick={() => handleStepCandidate(-1)}
                         disabled={activeCandidateIndex <= 0}
                       >
                         上一个考生
@@ -1167,7 +1226,7 @@ export function GradingCenterPage() {
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => void handleStepCandidate(1)}
+                        onClick={() => handleStepCandidate(1)}
                         disabled={
                           activeCandidateIndex < 0 ||
                           activeCandidateIndex >= sortedCandidates.length - 1

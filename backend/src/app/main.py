@@ -32,6 +32,9 @@ from app.notifications.router import router as notifications_router
 from app.operations.router import router as operations_router
 from app.papers.router import router as papers_router
 from app.teacher_courses.router import router as teacher_courses_router
+from app.question_gen_templates.router import course_templates_router, template_router
+from app.knowledge_extract.router import router as knowledge_extract_router
+from app.course_kb.router import router as course_kb_router
 from app.activity_logs.middleware import ActivityContextMiddleware
 from app.activity_logs.router import router as activity_logs_router
 
@@ -138,6 +141,10 @@ app.include_router(ai_generate_router, prefix="/api/questions/ai-generate", tags
 app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"])
 app.include_router(papers_router, prefix="/api/papers", tags=["papers"])
 app.include_router(teacher_courses_router, prefix="/api/teacher/courses", tags=["teacher-courses"])
+app.include_router(course_templates_router)
+app.include_router(template_router)
+app.include_router(knowledge_extract_router)
+app.include_router(course_kb_router)
 app.include_router(operations_router, prefix="/api/operations", tags=["operations"])
 app.include_router(activity_logs_router, prefix="/api/operations/activity-logs", tags=["activity-logs"])
 

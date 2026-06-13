@@ -20,6 +20,7 @@ vi.mock("axios", () => ({
 const examData = {
   exam_id: "exam-1",
   title: "考试",
+  category: "exam" as const,
   duration_minutes: 60,
   max_switch_count: 0,
   allow_retake: false,

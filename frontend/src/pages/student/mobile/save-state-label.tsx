@@ -13,22 +13,28 @@ export function SaveStateLabel({ saveState, pendingCount = 0 }: SaveStateLabelPr
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    const scheduleDisplayState = (state: SaveState, delay = 0) => {
+      return setTimeout(() => {
+        setDisplayState(state);
+      }, delay);
+    };
+
     if (saveState === "saving") {
       syncingTimerRef.current = setTimeout(() => {
         setDisplayState("syncing");
       }, 400);
     } else if (saveState === "saved") {
       if (syncingTimerRef.current) clearTimeout(syncingTimerRef.current);
-      setDisplayState("synced");
+      syncingTimerRef.current = scheduleDisplayState("synced");
       fadeTimerRef.current = setTimeout(() => {
         setDisplayState("saved-local");
       }, 2000);
     } else if (saveState === "error" && pendingCount > 0) {
       if (syncingTimerRef.current) clearTimeout(syncingTimerRef.current);
-      setDisplayState("pending-sync");
+      syncingTimerRef.current = scheduleDisplayState("pending-sync");
     } else {
       if (syncingTimerRef.current) clearTimeout(syncingTimerRef.current);
-      setDisplayState("saved-local");
+      syncingTimerRef.current = scheduleDisplayState("saved-local");
     }
     return () => {
       if (syncingTimerRef.current) clearTimeout(syncingTimerRef.current);
@@ -44,7 +50,7 @@ export function SaveStateLabel({ saveState, pendingCount = 0 }: SaveStateLabelPr
   };
 
   return (
-    <span className="text-xs text-muted-foreground truncate max-w-[90px]">
+    <span className="max-w-[4.75rem] shrink-0 truncate text-right text-xs text-muted-foreground">
       {labelMap[displayState]}
     </span>
   );

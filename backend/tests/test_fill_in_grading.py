@@ -334,3 +334,49 @@ async def test_fill_in_grading_passes_knowledge_points_to_ai(monkeypatch) -> Non
 
     await _grade_question_with_ai(question, {"blanks": ["set_xlabel"]}, 2)
     assert captured["knowledge_points"] == ["Matplotlib 绘图", "图表注释"]
+
+
+@pytest.mark.asyncio
+async def test_fill_in_grading_exact_match_with_ai_generated_text_answer() -> None:
+    """AI-generated fill-in questions store the answer as {"text": ...}; an
+    identical student answer must still receive full marks (regression: the
+    expected-answer extraction previously ignored the text format and returned
+    an empty list, so even matching answers scored 0)."""
+    question = _build_fill_in_question({"text": "groupby；agg；transform"})
+
+    score, correct, feedback = await _grade_question_with_ai(
+        question,
+        {"blanks": ["groupby", "agg", "transform"]},
+        9,
+    )
+
+    assert score == 9
+    assert correct is True
+
+
+@pytest.mark.asyncio
+async def test_fill_in_grading_text_answer_triggers_ai_equivalence(monkeypatch) -> None:
+    """With a text-format answer, semantically equivalent answers must still be
+    routed through the AI equivalence check rather than silently scoring 0."""
+
+    async def fake_ai(*, question_text, expected_answers, student_answers, knowledge_points=None):
+        assert expected_answers == ["groupby", "agg", "transform"]
+        return [
+            {"score": 1.0, "is_correct": True, "reason": "group by 与 groupby 等价。"},
+            {"score": 1.0, "is_correct": True, "reason": "聚合等价。"},
+            {"score": 1.0, "is_correct": True, "reason": "完全一致。"},
+        ]
+
+    monkeypatch.setattr(
+        "app.exams.student_router._request_fill_in_equivalence_with_deepseek", fake_ai
+    )
+    question = _build_fill_in_question({"text": "groupby, agg, transform"})
+
+    score, correct, _ = await _grade_question_with_ai(
+        question,
+        {"blanks": ["group by", "agg", "transform"]},
+        9,
+    )
+
+    assert score == 9
+    assert correct is True

@@ -20,6 +20,7 @@ class CourseSemesterCreate(BaseModel):
     class_ids: list[uuid.UUID] = Field(default_factory=list)
     start_date: date | None = None
     end_date: date | None = None
+    student_profile: dict | None = None
 
 
 class CourseSemesterResponse(BaseModel):
@@ -32,6 +33,7 @@ class CourseSemesterResponse(BaseModel):
     class_ids: list[uuid.UUID] = Field(default_factory=list)
     start_date: date | None = None
     end_date: date | None = None
+    student_profile: dict | None = None
     exam_count: int = 0
     assignment_count: int = 0
     created_at: datetime
@@ -75,6 +77,14 @@ class TeacherCourseDetail(TeacherCourseSummary):
     difficulty: str | None = None
 
 
+class KnowledgeFragment(BaseModel):
+    """A typed knowledge fragment extracted from a material."""
+
+    type: str  # concept / term / formula / code_example / case / workflow / other
+    title: str
+    content: str = ""
+
+
 class TeacherCourseMaterial(BaseModel):
     id: uuid.UUID
     node_id: uuid.UUID
@@ -85,6 +95,9 @@ class TeacherCourseMaterial(BaseModel):
     description: str | None = None
     source: str | None = None
     file_path: str | None = None
+    knowledge_fragments: list[KnowledgeFragment] = Field(default_factory=list)
+    kb_status: str | None = None
+    kb_chunk_count: int = 0
     created_at: datetime
     updated_at: datetime
 

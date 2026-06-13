@@ -22,6 +22,23 @@ function mockMatchMedia(initialMatches: boolean) {
   return { mql, trigger: () => listeners.forEach((l) => l()) };
 }
 
+function mockMatchMediaByQuery(matchesByQuery: Record<string, boolean>) {
+  const listenersByQuery = new Map<string, Set<MqlListener>>();
+
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: vi.fn((query: string) => {
+      const listeners = listenersByQuery.get(query) ?? new Set<MqlListener>();
+      listenersByQuery.set(query, listeners);
+      return {
+        matches: matchesByQuery[query] ?? false,
+        addEventListener: vi.fn((_: string, cb: MqlListener) => listeners.add(cb)),
+        removeEventListener: vi.fn((_: string, cb: MqlListener) => listeners.delete(cb)),
+      };
+    }),
+  });
+}
+
 describe("useMediaQuery", () => {
   it("returns true when query matches", () => {
     mockMatchMedia(true);
@@ -68,5 +85,16 @@ describe("useIsMobile", () => {
     mockMatchMedia(false);
     const { result } = renderHook(() => useIsMobile());
     expect(result.current).toBe(false);
+  });
+
+  it("is true for phone landscape viewports", () => {
+    mockMatchMediaByQuery({
+      "(max-width: 767px)": false,
+      "(max-height: 500px) and (max-width: 950px)": true,
+    });
+
+    const { result } = renderHook(() => useIsMobile());
+
+    expect(result.current).toBe(true);
   });
 });

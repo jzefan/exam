@@ -44,6 +44,8 @@ export function QuestionSelector({
   initialBankName,
   initialKnowledgePointId,
   autoSelectAll = false,
+  initialType,
+  restrictKnowledgePointsToOptions = false,
 }: {
   selectedIds: string[];
   onChange: (ids: string[]) => void;
@@ -55,6 +57,10 @@ export function QuestionSelector({
   initialKnowledgePointId?: string;
   /** 进入时默认全选当前题库 + 知识点过滤下的全部题目（一次性）。 */
   autoSelectAll?: boolean;
+  /** 初始题型：进入时默认按该题型过滤，但保留题型下拉，用户可改。 */
+  initialType?: QuestionType;
+  /** 知识点下拉只展示传入的 knowledgePointOptions（用于限定课程相关知识点）。 */
+  restrictKnowledgePointsToOptions?: boolean;
 }) {
   const { data: identity } = useGetIdentity<{ primary_org?: { role_name?: string } | null }>();
   const showBankOwner = identity ? getUserRole(identity) === "platform_admin" : false;
@@ -62,7 +68,7 @@ export function QuestionSelector({
   const [search, setSearch] = useState("");
   const [bankFilter, setBankFilter] = useState<string | null>(null);
   const [bankNameInitialised, setBankNameInitialised] = useState(false);
-  const [typeFilter, setTypeFilter] = useState<QuestionType | null>(null);
+  const [typeFilter, setTypeFilter] = useState<QuestionType | null>(initialType ?? null);
   const [knowledgePointFilter, setKnowledgePointFilter] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [internalIsFullscreen, setInternalIsFullscreen] = useState(false);
@@ -105,14 +111,17 @@ export function QuestionSelector({
   const { query: knowledgePointQuery } = useList<SelectedKnowledgePoint>({
     resource: "knowledge-points",
     pagination: { currentPage: 1, pageSize: 500 },
+    queryOptions: { enabled: !restrictKnowledgePointsToOptions },
   });
-  const knowledgePoints = Array.from(
-    new Map(
-      [...(knowledgePointOptions ?? []), ...(knowledgePointQuery.data?.data ?? [])].map(
-        (item) => [item.id, item],
-      ),
-    ).values(),
-  );
+  const knowledgePoints = restrictKnowledgePointsToOptions
+    ? (knowledgePointOptions ?? [])
+    : Array.from(
+        new Map(
+          [...(knowledgePointOptions ?? []), ...(knowledgePointQuery.data?.data ?? [])].map(
+            (item) => [item.id, item],
+          ),
+        ).values(),
+      );
 
   useEffect(() => {
     if (!initialBankName || bankNameInitialised || banks.length === 0) return;

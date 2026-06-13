@@ -30,6 +30,7 @@ import { SwitchCounter } from "./components/switch-counter";
 import { QuestionNav } from "./components/question-nav";
 import { QuestionRenderer } from "./components/question-renderer";
 import { getStudentLocale, tStudent, translateStudentError } from "./i18n";
+import { formatStudentDate } from "./utils";
 import { useExamTaking } from "@/hooks/use-exam-taking";
 import { useVisibilityDetection } from "@/hooks/use-visibility-detection";
 import { useIsMobile } from "@/hooks/use-viewport";
@@ -80,6 +81,10 @@ function isExamTimeExhaustedOnEntry(examData: Pick<IExamTaking, "started_at" | "
   return deadline !== null && deadline <= Date.now();
 }
 
+function getExamCategoryLabel(examData: Pick<IExamTaking, "category"> | null): string {
+  return examData?.category === "practice" ? "练习" : "考试";
+}
+
 /* ------------------------------------------------------------------ */
 /*  Main component                                                     */
 /* ------------------------------------------------------------------ */
@@ -105,6 +110,7 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
   const [navOpen, setNavOpen] = useState(false);
   const [showNavHint, setShowNavHint] = useState(true);
   const [showSubmitDialog, setShowSubmitDialog] = useState(false);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const [switchWarning, setSwitchWarning] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
   const [submitStatusMessage, setSubmitStatusMessage] = useState("");
@@ -409,21 +415,50 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
   }
 
   if (timeExhaustedOnEntry) {
+    const categoryLabel = getExamCategoryLabel(examData);
+    const deadline = getExamDeadlineMs(examData);
+    const deadlineIso = deadline === null ? null : new Date(deadline).toISOString();
+    const reason = `系统从你上次进入${categoryLabel}时开始计时，当前已超过本次${categoryLabel}的个人答题时长。`;
+    const retakeLabel = `重新开始${categoryLabel}`;
+
     return (
       <div className="fixed inset-0 flex items-center justify-center bg-background px-6">
-        <div className="w-full max-w-md text-center">
+        <div className="w-full max-w-lg text-center">
           <div className="mx-auto mb-5 flex size-14 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300">
             <TimerOff className="size-7" />
           </div>
-          <h1 className="text-lg font-semibold text-foreground">本次考试答题时间已用完</h1>
+          <h1 className="text-lg font-semibold text-foreground">本次{categoryLabel}答题时间已用完</h1>
           <p className="mt-3 text-sm leading-6 text-muted-foreground">
-            系统从你第一次进入考试时开始计时。当前已超过本次考试的答题时长，因此不能继续作答。
+            下面是本次提示的具体原因。系统没有直接退出页面，是为了让你确认发生了什么。
           </p>
+          <dl className="mt-5 grid gap-3 rounded-md border border-border bg-muted/30 p-4 text-left">
+            <div className="grid gap-1 sm:grid-cols-[8rem_1fr] sm:items-start">
+              <dt className="text-xs font-medium text-muted-foreground">上次进入</dt>
+              <dd className="text-sm font-medium text-foreground">{formatStudentDate(examData.started_at)}</dd>
+            </div>
+            <div className="grid gap-1 sm:grid-cols-[8rem_1fr] sm:items-start">
+              <dt className="text-xs font-medium text-muted-foreground">答题时长</dt>
+              <dd className="text-sm font-medium text-foreground">{examData.duration_minutes} 分钟</dd>
+            </div>
+            <div className="grid gap-1 sm:grid-cols-[8rem_1fr] sm:items-start">
+              <dt className="text-xs font-medium text-muted-foreground">本次答题截止</dt>
+              <dd className="text-sm font-medium text-foreground">{formatStudentDate(deadlineIso)}</dd>
+            </div>
+            <div className="grid gap-1 sm:grid-cols-[8rem_1fr] sm:items-start">
+              <dt className="text-xs font-medium text-muted-foreground">出现原因</dt>
+              <dd className="text-sm leading-6 text-foreground">{reason}</dd>
+            </div>
+          </dl>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             如果你认为这是异常情况，请联系老师处理。
           </p>
-          <div className="mt-6 flex justify-center">
-            <Button onClick={() => navigate("/my-exams")}>返回我的考试</Button>
+          <div className="mt-6 flex flex-col-reverse justify-center gap-3 sm:flex-row">
+            <Button variant="outline" onClick={() => navigate("/my-exams")}>返回我的考试</Button>
+            {examData.allow_retake ? (
+              <Button onClick={() => navigate(`/my-exams/${examData.exam_id}/take?retake=1`, { replace: true })}>
+                {retakeLabel}
+              </Button>
+            ) : null}
           </div>
         </div>
       </div>
@@ -541,7 +576,7 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => navigate("/my-exams")}
+            onClick={() => setShowLeaveConfirm(true)}
             className="h-8 shrink-0 px-2.5 text-xs text-muted-foreground"
           >
             <ArrowLeft data-icon="inline-start" />
@@ -919,6 +954,22 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
                 "确认交卷"
               )}
             </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* ── Leave confirmation ── */}
+      <AlertDialog open={showLeaveConfirm} onOpenChange={setShowLeaveConfirm}>
+        <AlertDialogContent className="max-w-sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认离开考试？</AlertDialogTitle>
+            <AlertDialogDescription>
+              离开考试页面可能被记录为切屏，切屏次数达到上限将导致自动交卷。确定要返回吗？
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>继续考试</AlertDialogCancel>
+            <AlertDialogAction onClick={() => navigate("/my-exams")}>确认离开</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

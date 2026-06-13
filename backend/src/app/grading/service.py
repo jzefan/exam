@@ -76,6 +76,11 @@ def _task_display_status(task: GradingTask) -> str:
     result_source = _task_result_source(task)
     if result_source == "manual":
         return "人工改分"
+    if any(
+        event.event_type in {"grading.confirmed", "grading.exam_submission_confirmed"}
+        for event in task.audit_events
+    ):
+        return "已确认"
     if task.status == "pending":
         return "待评分"
     if task.status == "running":
@@ -352,6 +357,7 @@ async def _load_workspace_tasks(
             selectinload(GradingTask.snapshots).selectinload(GradingResultSnapshot.model_config),
             selectinload(GradingTask.audit_events),
         )
+        .execution_options(populate_existing=True)
         .order_by(GradingTask.updated_at.desc())
     )
     tasks = list(result.scalars().all())
@@ -742,7 +748,7 @@ async def get_grading_inbox(
             },
         )
         question_entry["candidate_count"] += 1
-        if _task_display_status(task) in {"已完成", "人工改分"}:
+        if _task_display_status(task) in {"人工改分", "已确认"}:
             question_entry["completed_count"] += 1
         else:
             question_entry["pending_count"] += 1
@@ -792,6 +798,14 @@ async def get_grading_question_candidates(
     if not matched:
         raise ValueError("grading question not found")
 
+    matched.sort(
+        key=lambda item: (
+            item[0].created_at or datetime.min.replace(tzinfo=timezone.utc),
+            item[1]["candidate_code"] or item[1]["candidate_name"] or "",
+            str(item[0].id),
+        )
+    )
+
     exemplar, locator = matched[0]
     candidates = [
         {
@@ -805,7 +819,6 @@ async def get_grading_question_candidates(
         }
         for task, task_locator in matched
     ]
-    candidates.sort(key=lambda item: (0 if item["status"] in {"待仲裁", "人工改分"} else 1, item["candidate_name"]))
 
     return {
         "exam_id": locator["exam_id"],

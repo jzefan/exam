@@ -16,4 +16,8 @@ export function useMediaQuery(query: string, ssrDefault = false): boolean {
   );
 }
 
-export const useIsMobile = () => useMediaQuery("(max-width: 767px)", false);
+export const useIsMobile = () => {
+  const narrowPhone = useMediaQuery("(max-width: 767px)", false);
+  const phoneLandscape = useMediaQuery("(max-height: 500px) and (max-width: 950px)", false);
+  return narrowPhone || phoneLandscape;
+};

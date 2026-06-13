@@ -27,6 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useIsMobile } from "@/hooks/use-viewport";
 
 interface Props {
   question: IExamQuestionForStudent;
@@ -329,13 +330,19 @@ function escapeHtml(value: string) {
     .replace(/'/g, "&#39;");
 }
 
+const SAFE_INLINE_HTML_TAG_RE = /&lt;(\/?(?:br|strong|em|b|i|u|code|sup|sub|mark|kbd|small))(\s*\/?)&gt;/gi;
+
+function restoreSafeInlineHtml(escaped: string) {
+  return escaped.replace(SAFE_INLINE_HTML_TAG_RE, (_, tag: string, trailing: string) => `<${tag}${trailing}>`);
+}
+
 function renderInlineMarkdown(text: string) {
-  const escaped = escapeHtml(text);
+  const escaped = restoreSafeInlineHtml(escapeHtml(text));
   return escaped
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/__([^_]+)__/g, "<strong>$1</strong>")
-    .replace(/(^|[^\*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>")
+    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>")
     .replace(/(^|[^_])_([^_\n]+)_(?!_)/g, "$1<em>$2</em>")
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
 }
@@ -439,7 +446,7 @@ function renderMarkdownToHtml(markdown: string) {
 }
 
 function renderPromptHtml(value: string) {
-  const raw = value.trim();
+  const raw = restoreSafeInlineHtml(value.trim());
   if (!raw) return "";
   const html = /<\/?[a-z][\s\S]*>/i.test(raw) ? raw : renderMarkdownToHtml(raw);
   return renderLatexInHtml(html);
@@ -515,6 +522,7 @@ function registerLanguageCompletions(monaco: MonacoNamespace) {
 
 export function CodeQuestion({ question, answer, onChange }: Props) {
   const { id: examId } = useParams<{ id: string }>();
+  const isMobile = useIsMobile();
   const content = (question.content ?? {}) as ICodeQuestionContent;
   const questionMode = content.mode === "function" ? "function" : "program";
   const normalized = normalizeAnswer(answer);
@@ -538,6 +546,7 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
   const [runResult, setRunResult] = useState<IStudentCodeRunResult | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [isRunResultStale, setIsRunResultStale] = useState(false);
+  const [mobileTab, setMobileTab] = useState<"prompt" | "code" | "tests" | "result">("code");
   const [leftPaneWidth, setLeftPaneWidth] = useState(34);
   const [isResizing, setIsResizing] = useState(false);
   const [bottomPaneHeight, setBottomPaneHeight] = useState(36);
@@ -807,6 +816,534 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
         Boolean(item) && typeof item === "object" && typeof item.name === "string" && typeof item.type === "string",
     )
     : [];
+
+  if (isMobile) {
+    const mobileTabs: { key: typeof mobileTab; label: string }[] = [
+      { key: "prompt", label: "题目" },
+      { key: "code", label: "代码" },
+      { key: "tests", label: "测试" },
+      { key: "result", label: "结果" },
+    ];
+
+    return (
+      <div
+        data-testid="mobile-code-question"
+        className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-[#f7f9fc]"
+      >
+        <div
+          data-testid="mobile-code-toolbar"
+          className="shrink-0 border-b border-[#e7ecf4] bg-white px-4 py-3 shadow-sm landscape:px-3 landscape:py-2"
+        >
+          <div className="flex items-start justify-between gap-3 landscape:hidden">
+            <div className="min-w-0">
+              <p className="text-[12px] font-medium text-[#94a3b8]">代码作答</p>
+              <p className="mt-0.5 truncate text-[15px] font-semibold text-[#111827]">
+                {LANGUAGE_LABELS[language]}
+                {questionMode === "function" && content.function_name ? ` · ${content.function_name}` : ""}
+              </p>
+            </div>
+            {questionMode === "program" ? (
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="查看标准输入参考代码"
+                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[#dbe3ef] bg-white text-[#64748b]"
+                  >
+                    <CircleHelp size={16} />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent
+                  align="end"
+                  sideOffset={10}
+                  className="w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-[#e7ecf4] p-0 shadow-xl"
+                >
+                  <div className="space-y-3 px-4 py-4">
+                    <div className="space-y-1">
+                      <p className="text-[13px] font-medium text-[#334155]">标准输入参考</p>
+                      <p className="text-[12px] leading-5 text-[#6b7280]">
+                        评测时，系统会把测试数据写入标准输入。下面是 {LANGUAGE_LABELS[language]} 的常见读取方式。
+                      </p>
+                    </div>
+                    <pre className="overflow-x-auto whitespace-pre-wrap rounded-xl border border-[#e7ecf4] bg-[#f8fafc] px-3 py-3 font-mono text-[12px] leading-6 text-[#334155]">
+                      {STDIN_REFERENCE_SNIPPETS[language]}
+                    </pre>
+                  </div>
+                </PopoverContent>
+              </Popover>
+            ) : null}
+          </div>
+
+          <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2 landscape:mt-0">
+            <Select
+              value={language}
+              disabled={isRunning}
+              onValueChange={(value) => handleLanguageChange(value as CodeLanguage)}
+            >
+              <SelectTrigger className="h-11 rounded-2xl border-[#d8deea] bg-white text-[13px] text-[#1f2937] landscape:h-9">
+                <SelectValue placeholder="选择语言" />
+              </SelectTrigger>
+              <SelectContent>
+                {supportedLanguages.map((item) => (
+                  <SelectItem key={item} value={item}>
+                    {LANGUAGE_LABELS[item]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <button
+              type="button"
+              onClick={handleResetCurrentLanguage}
+              disabled={isRunning}
+              className="inline-flex h-11 items-center gap-1.5 rounded-2xl border border-[#d8deea] bg-white px-3 text-[12px] font-medium text-[#4b5563] disabled:cursor-not-allowed disabled:opacity-60 landscape:h-9"
+            >
+              <RotateCcw size={14} />
+              模板
+            </button>
+
+            <button
+              type="button"
+              onClick={handleRun}
+              disabled={isRunning}
+              aria-busy={isRunning}
+              className="inline-flex h-11 items-center gap-1.5 rounded-2xl border border-[#cddcfb] bg-[#2563eb] px-3 text-[12px] font-medium text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-70 landscape:h-9"
+            >
+              <Play size={14} />
+              {isRunning ? "运行中" : "运行"}
+            </button>
+          </div>
+
+          <div
+            role="tablist"
+            aria-label="编程题移动端分段"
+            className="mt-3 grid grid-cols-4 rounded-2xl bg-[#eef2f7] p-1 landscape:mt-2"
+          >
+            {mobileTabs.map((tab) => {
+              const active = mobileTab === tab.key;
+              return (
+                <button
+                  key={tab.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setMobileTab(tab.key)}
+                  className={cn(
+                    "h-9 rounded-xl text-[13px] font-medium transition-colors",
+                    "landscape:h-8 landscape:text-[12px]",
+                    active
+                      ? "bg-white text-[#111827] shadow-sm"
+                      : "text-[#64748b] hover:text-[#111827]",
+                  )}
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {mobileTab === "prompt" ? (
+            <section role="tabpanel" className="space-y-4 px-4 py-4">
+              <div className="rounded-2xl border border-[#e7ecf4] bg-white px-4 py-4">
+                <div className="mb-3 flex items-center gap-2 text-[12px] uppercase tracking-[0.12em] text-[#94a3b8]">
+                  <Braces size={14} />
+                  题目说明
+                </div>
+                <div
+                  className={PRIMARY_MARKDOWN_PROSE_CLASS}
+                  dangerouslySetInnerHTML={{ __html: descriptionHtml }}
+                />
+              </div>
+
+              {questionMode === "program" && content.input_description ? (
+                <div className="rounded-2xl border border-[#ebeef5] bg-white px-4 py-3.5">
+                  <p className="text-[12px] text-[#94a3b8]">输入说明</p>
+                  <div
+                    className={SECONDARY_MARKDOWN_PROSE_CLASS}
+                    dangerouslySetInnerHTML={{ __html: inputDescriptionHtml }}
+                  />
+                </div>
+              ) : null}
+
+              {questionMode === "program" && content.output_description ? (
+                <div className="rounded-2xl border border-[#ebeef5] bg-white px-4 py-3.5">
+                  <p className="text-[12px] text-[#94a3b8]">输出说明</p>
+                  <div
+                    className={SECONDARY_MARKDOWN_PROSE_CLASS}
+                    dangerouslySetInnerHTML={{ __html: outputDescriptionHtml }}
+                  />
+                </div>
+              ) : null}
+
+              {questionMode === "function" && content.signature ? (
+                <div className="rounded-2xl border border-[#ebeef5] bg-white px-4 py-3.5">
+                  <p className="text-[12px] text-[#94a3b8]">函数签名</p>
+                  <pre className="mt-2 overflow-x-auto text-[13px] leading-6 text-[#2c2438]">
+                    {content.signature}
+                  </pre>
+                </div>
+              ) : null}
+
+              {questionMode === "function" && (content.function_name || functionParameters.length > 0 || content.return_type) ? (
+                <div className="rounded-2xl border border-[#ebeef5] bg-white px-4 py-3.5">
+                  <p className="text-[12px] text-[#94a3b8]">函数要求</p>
+                  <div className="mt-2 space-y-2 text-[13px] leading-6 text-[#2c2438]">
+                    {content.function_name ? (
+                      <p>
+                        <span className="text-[#94a3b8]">函数名：</span>
+                        <span>{content.function_name}</span>
+                      </p>
+                    ) : null}
+                    {functionParameters.length > 0 ? (
+                      <div>
+                        <p className="text-[#94a3b8]">参数</p>
+                        <ul className="mt-1 space-y-1">
+                          {functionParameters.map((item) => (
+                            <li key={`${item.name}-${item.type}`}>
+                              {item.name}: {item.type}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                    {content.return_type ? (
+                      <p>
+                        <span className="text-[#94a3b8]">返回值：</span>
+                        <span>{content.return_type}</span>
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+
+              {examples.length > 0 ? (
+                <div className="rounded-2xl border border-[#e8edf6] bg-white px-4 py-3.5">
+                  <p className="text-[13px] font-medium text-[#334155]">{questionMode === "program" ? "示例输入输出" : "示例测试"}</p>
+                  {questionMode === "program" ? (
+                    <div className="mt-3 space-y-3">
+                      {examples.map((item, index) => (
+                        <div key={`${item.input}-${item.output}-${index}`} className="rounded-xl border border-[#e7ecf4] bg-[#f8fafc] px-3 py-3">
+                          <p className="text-[12px] font-medium text-[#94a3b8]">示例 {index + 1}</p>
+                          <div className="mt-2 space-y-2 text-[13px] leading-6 text-[#334155]">
+                            <div className="space-y-1">
+                              <span className="text-[12px] font-medium text-[#94a3b8]">输入</span>
+                              <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-[#e7ecf4] bg-white px-3 py-2">{item.input}</pre>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[12px] font-medium text-[#94a3b8]">输出</span>
+                              <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-[#e7ecf4] bg-white px-3 py-2">{item.output}</pre>
+                            </div>
+                            {item.explanation ? (
+                              <div className="space-y-1">
+                                <span className="text-[12px] font-medium text-[#94a3b8]">说明</span>
+                                <div
+                                  className={MUTED_MARKDOWN_PROSE_CLASS}
+                                  dangerouslySetInnerHTML={{ __html: renderPromptHtml(item.explanation) }}
+                                />
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-1 text-[12px] leading-6 text-[#6b7280]">
+                      这道题已配置 {examples.length} 组示例，可在测试面板中查看输入与预期输出。
+                    </p>
+                  )}
+                </div>
+              ) : null}
+
+              {content.constraints?.length ? (
+                <div className="rounded-2xl border border-[#e8edf6] bg-white px-4 py-3.5">
+                  <p className="text-[13px] font-medium text-[#334155]">约束条件</p>
+                  <ul className="mt-2 space-y-2 text-[13px] leading-6 text-[#5d556a]">
+                    {content.constraints.map((item) => (
+                      <li key={item} className="flex gap-2">
+                        <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[#94a3b8]" />
+                        <span dangerouslySetInnerHTML={{ __html: renderPromptHtml(item) }} />
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+
+          {mobileTab === "code" ? (
+            <section role="tabpanel" className="flex min-h-full flex-col px-4 py-4 landscape:px-3 landscape:py-2">
+              <div className="overflow-hidden rounded-2xl border border-[#dfe6f1] bg-white shadow-sm">
+                <div className="flex items-center justify-between border-b border-[#e7ecf4] bg-white px-4 py-3 text-[12px] text-[#6b7280] landscape:px-3 landscape:py-2">
+                  <div className="flex items-center gap-2">
+                    <span className="h-2.5 w-2.5 rounded-full bg-[#f87171]" />
+                    <span className="h-2.5 w-2.5 rounded-full bg-[#fbbf24]" />
+                    <span className="h-2.5 w-2.5 rounded-full bg-[#34d399]" />
+                  </div>
+                  <span>{LANGUAGE_LABELS[language]}</span>
+                </div>
+                <div
+                  data-testid="mobile-code-editor"
+                  className="h-[58vh] min-h-[360px] bg-[#f7f9fc] landscape:h-[42vh] landscape:min-h-[220px]"
+                >
+                  <Editor
+                    height="100%"
+                    language={MONACO_LANGUAGE_MAP[language]}
+                    path={getMonacoModelPath(question.question_id, language)}
+                    theme="vs"
+                    value={currentCode}
+                    beforeMount={registerLanguageCompletions}
+                    onMount={(editor, monaco) => {
+                      setEditorInstance(editor as unknown as CodeQuestionLspEditor);
+                      setMonacoInstance(monaco as unknown as CodeQuestionLspMonaco);
+                    }}
+                    onChange={(value) => handleCodeChange(value ?? "")}
+                    options={{
+                      minimap: { enabled: false },
+                      fontSize: 14,
+                      lineHeight: 22,
+                      roundedSelection: true,
+                      scrollBeyondLastLine: false,
+                      automaticLayout: true,
+                      quickSuggestions: true,
+                      suggestOnTriggerCharacters: true,
+                      wordBasedSuggestions: "currentDocument",
+                      tabSize: LANGUAGE_TAB_SIZE[language],
+                      padding: { top: 16, bottom: 16 },
+                    }}
+                  />
+                </div>
+              </div>
+            </section>
+          ) : null}
+
+          {mobileTab === "tests" ? (
+            <section role="tabpanel" className="space-y-4 px-4 py-4">
+              <div className="sticky top-0 z-10 flex items-center justify-between rounded-2xl border border-[#e7ecf4] bg-white px-3 py-2 shadow-sm">
+                <div className="flex items-center gap-2 text-[12px] font-medium text-[#334155]">
+                  <TerminalSquare size={14} className="text-[#5b8def]" />
+                  测试面板
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("sample")}
+                    disabled={isRunning}
+                    className={`rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors ${
+                      activeTab === "sample"
+                        ? "bg-[#eef4ff] text-[#315dca]"
+                        : "text-[#6b7280]"
+                    } disabled:cursor-not-allowed disabled:opacity-60`}
+                  >
+                    用例
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("custom")}
+                    disabled={isRunning}
+                    className={`rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors ${
+                      activeTab === "custom"
+                        ? "bg-[#eef4ff] text-[#315dca]"
+                        : "text-[#6b7280]"
+                    } disabled:cursor-not-allowed disabled:opacity-60`}
+                  >
+                    自定义
+                  </button>
+                </div>
+              </div>
+
+              {activeTab === "sample" ? (
+                sampleTests.length > 0 ? (
+                  sampleTests.map((item, index) => (
+                    <div
+                      key={`${item.input}-${index}`}
+                      className="rounded-2xl border border-[#e6eaf2] bg-white px-4 py-3"
+                    >
+                      <p className="text-[12px] font-medium text-[#94a3b8]">测试 {index + 1}</p>
+                      <div className="mt-3 grid gap-2 text-[13px] leading-6 text-[#334155]">
+                        <div className="space-y-1">
+                          <span className="text-[12px] font-medium text-[#94a3b8]">输入</span>
+                          <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-[#e7ecf4] bg-[#f8fafc] px-3 py-2">{item.input}</pre>
+                        </div>
+                        <div className="space-y-1">
+                          <span className="text-[12px] font-medium text-[#94a3b8]">预期输出</span>
+                          <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-[#e7ecf4] bg-[#f8fafc] px-3 py-2">{item.expected_output}</pre>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <p className="rounded-2xl border border-[#e6eaf2] bg-white px-4 py-4 text-[13px] text-[#94a3b8]">
+                    当前题目尚未配置测试用例。
+                  </p>
+                )
+              ) : (
+                <div className="space-y-3 rounded-2xl border border-[#e6eaf2] bg-white px-4 py-4">
+                  <textarea
+                    aria-label="自定义输入"
+                    value={normalized.custom_input ?? ""}
+                    onChange={(event) => handleCustomInputChange(event.target.value)}
+                    disabled={isRunning}
+                    spellCheck={false}
+                    className="min-h-[160px] w-full rounded-2xl border border-[#dbe3ef] bg-white px-4 py-3 font-mono text-[13px] leading-6 text-[#1f2937] outline-none placeholder:text-[#94a3b8] focus:border-[#7aa2ff]"
+                    placeholder="输入你自己的测试用例"
+                  />
+                  <p className="text-[12px] leading-5 text-[#94a3b8]">
+                    自定义输入会随作答一起保存，并用于本次运行结果展示。
+                  </p>
+                </div>
+              )}
+            </section>
+          ) : null}
+
+          {mobileTab === "result" ? (
+            <section role="tabpanel" className="space-y-4 px-4 py-4">
+              <div className="rounded-2xl border border-dashed border-[#dbe3ef] bg-white px-4 py-4">
+                <div className="flex items-center gap-2 text-[12px] font-medium text-[#334155]">
+                  <TerminalSquare size={14} className="text-[#10b981]" />
+                  运行结果
+                </div>
+                <p className="mt-4 text-[13px] font-medium leading-6 text-[#1f2937]">
+                  {isRunning
+                    ? "正在运行代码..."
+                    : runFeedback
+                      || runSummary
+                      || (isRunResultStale ? "代码已更新，请重新运行以查看最新结果。" : normalized.last_run_output)
+                      || "点击“运行代码”后，这里会显示运行结果。"}
+                </p>
+
+                {runResult?.mode === "sample" && runResult.case_count > 0 ? (
+                  <div className="mt-4 grid grid-cols-2 gap-3">
+                    <div className="rounded-xl border border-[#e7ecf4] bg-[#f8fafc] px-3 py-2">
+                      <p className="text-[12px] text-[#94a3b8]">通过测试</p>
+                      <p className="mt-1 text-[14px] font-medium text-[#1f2937]">
+                        {runResult.passed_count} / {runResult.case_count}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-[#e7ecf4] bg-[#f8fafc] px-3 py-2">
+                      <p className="text-[12px] text-[#94a3b8]">未通过测试</p>
+                      <p className="mt-1 text-[14px] font-medium text-[#1f2937]">
+                        {Math.max(runResult.case_count - runResult.passed_count, 0)}
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              {runResult?.mode === "sample" && (runResult.stderr || runResult.compile_output) ? (
+                <div className="space-y-3 rounded-2xl border border-[#e6eaf2] bg-white px-4 py-4">
+                  {runResult.stderr ? (
+                    <div className="space-y-1">
+                      <span className="text-[12px] font-medium text-[#94a3b8]">错误输出</span>
+                      <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-[#e7ecf4] bg-[#f8fafc] px-3 py-2 font-mono text-[13px] leading-6 text-[#334155]">
+                        {runResult.stderr}
+                      </pre>
+                    </div>
+                  ) : null}
+                  {runResult.compile_output ? (
+                    <div className="space-y-1">
+                      <span className="text-[12px] font-medium text-[#94a3b8]">编译输出</span>
+                      <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-[#e7ecf4] bg-[#f8fafc] px-3 py-2 font-mono text-[13px] leading-6 text-[#334155]">
+                        {runResult.compile_output}
+                      </pre>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {runResult?.mode === "custom" ? (
+                <div className="space-y-3 rounded-2xl border border-[#e6eaf2] bg-white px-4 py-4">
+                  <div className="space-y-1">
+                    <span className="text-[12px] font-medium text-[#94a3b8]">执行结果</span>
+                    <p className="rounded-lg border border-[#e7ecf4] bg-[#f8fafc] px-3 py-2 text-[13px] leading-6 text-[#334155]">
+                      {runResult.status === "passed"
+                        ? (runResult.stdout ? "代码已成功执行，并产生了运行输出。" : "代码已成功执行，但没有产生标准输出。")
+                        : `执行失败：${getRunStatusLabel(runResult.status)}`}
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-[12px] font-medium text-[#94a3b8]">用户输入</span>
+                    <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-[#e7ecf4] bg-[#f8fafc] px-3 py-2 font-mono text-[13px] leading-6 text-[#334155]">
+                      {customRunInput || "无"}
+                    </pre>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-[12px] font-medium text-[#94a3b8]">运行输出</span>
+                    <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-[#e7ecf4] bg-[#f8fafc] px-3 py-2 font-mono text-[13px] leading-6 text-[#334155]">
+                      {runResult.stdout || "程序没有输出任何内容。"}
+                    </pre>
+                  </div>
+                  {runResult.stderr ? (
+                    <div className="space-y-1">
+                      <span className="text-[12px] font-medium text-[#94a3b8]">错误输出</span>
+                      <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-[#e7ecf4] bg-[#f8fafc] px-3 py-2 font-mono text-[13px] leading-6 text-[#334155]">
+                        {runResult.stderr}
+                      </pre>
+                    </div>
+                  ) : null}
+                  {runResult.compile_output ? (
+                    <div className="space-y-1">
+                      <span className="text-[12px] font-medium text-[#94a3b8]">编译输出</span>
+                      <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-[#e7ecf4] bg-[#f8fafc] px-3 py-2 font-mono text-[13px] leading-6 text-[#334155]">
+                        {runResult.compile_output}
+                      </pre>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {runResult?.mode === "sample" && runResult.cases.length > 0 ? (
+                <div className="space-y-3">
+                  {runResult.cases.map((item, index) => (
+                    <div
+                      key={`${item.name}-${index}`}
+                      className="rounded-2xl border border-[#e6eaf2] bg-white px-4 py-3"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-[13px] font-medium text-[#334155]">{item.name}</p>
+                        <span className="rounded-full bg-[#f1f5f9] px-2 py-0.5 text-[12px] text-[#475569]">
+                          {formatCaseStatusLabel(item.status)}
+                        </span>
+                      </div>
+                      <div className="mt-3 grid gap-3 text-[13px] leading-6 text-[#334155]">
+                        <div className="space-y-1">
+                          <span className="text-[12px] font-medium text-[#94a3b8]">输入</span>
+                          <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-[#e7ecf4] bg-[#f8fafc] px-3 py-2 font-mono text-[13px] leading-6 text-[#334155]">
+                            {item.input || "无"}
+                          </pre>
+                        </div>
+                        <div className="space-y-1">
+                          <span className="text-[12px] font-medium text-[#94a3b8]">预期输出</span>
+                          <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-[#e7ecf4] bg-[#f8fafc] px-3 py-2 font-mono text-[13px] leading-6 text-[#334155]">
+                            {item.expected_output || "无"}
+                          </pre>
+                        </div>
+                        <div className="space-y-1">
+                          <span className="text-[12px] font-medium text-[#94a3b8]">实际输出</span>
+                          <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-[#e7ecf4] bg-[#f8fafc] px-3 py-2 font-mono text-[13px] leading-6 text-[#334155]">
+                            {item.actual_output || "无输出"}
+                          </pre>
+                        </div>
+                        {item.message ? (
+                          <div className="space-y-1">
+                            <span className="text-[12px] font-medium text-[#94a3b8]">说明</span>
+                            <p className="rounded-lg border border-[#e7ecf4] bg-[#f8fafc] px-3 py-2 text-[13px] leading-6 text-[#334155]">
+                              {item.message}
+                            </p>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

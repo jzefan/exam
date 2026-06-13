@@ -1919,8 +1919,9 @@ def _build_document_ai_prompt(
 
 def _validate_ai_document_questions(data: dict) -> list[dict]:
     questions = data.get("questions")
-    if not isinstance(questions, list) or not questions:
+    if not isinstance(questions, list):
         raise RuntimeError("AI 分析结果格式异常，请重试")
+    # 空列表是合法结果：文档里确实没有可识别的题目（如只有答题卡/封面的试卷页）。
     validated: list[dict] = []
     for item in questions:
         if not isinstance(item, dict):
@@ -2122,6 +2123,10 @@ async def recognize_question_document_with_ai(
         data = await _request_deepseek_json(prompt)
     questions = _validate_ai_document_questions(data)
     ai_drafts = [_build_ai_import_draft(question, payload.images) for question in questions]
+    # 试卷导入场景下 AI 是权威（已被告知跳过封面/答题卡/得分栏）。它找不到题目即
+    # 文档确实没有真题，不要回退到由答题卡编号臆造出的规则草稿。
+    if _is_paper_import_context(payload) and not ai_drafts:
+        return []
     return merge_ai_and_rule_recognition(ai_drafts, baseline)
 
 
@@ -3608,6 +3613,42 @@ async def complete_question_answer_analysis(db: AsyncSession, question: Question
         await db.refresh(question)
 
     return question
+
+
+_SEED_QTYPE_LABEL = {
+    "choice": "选择题",
+    "true_false": "判断题",
+    "fill_in": "填空题",
+    "short_answer": "简答题",
+    "essay": "论述题",
+    "code": "编程题",
+}
+
+
+async def complete_seed_answer_analysis(qtype: str, content_text: str) -> dict[str, str]:
+    """为一道"种子题"（教师已选题型 + 粘贴题干）补全可读的参考答案与解析。
+
+    返回纯文本字符串，供出题技能作为风格样本展示与存储（不落库）。
+    """
+    label = _SEED_QTYPE_LABEL.get(qtype, qtype)
+    prompt = f"""你是教研助手。下面是一道{label}的题干，请补全参考答案和解析。
+
+题型：{qtype}
+题干：{content_text[:2000]}
+
+只返回合法 JSON：{{"answer":"参考答案（纯文本，可读）","analysis":"解析（纯文本）"}}
+答案要简明直接：选择题给出正确选项字母及其内容；判断题给出"正确"或"错误"；填空题按顺序给出每空答案；简答题/论述题给出关键要点；编程题给出参考代码。
+解析简明、可用于课堂讲解，不要重复题干。"""
+
+    try:
+        data = await _request_deepseek_json(prompt)
+    except Exception as exc:  # noqa: BLE001 - surface as a clean error to the caller
+        raise RuntimeError(f"AI 补全答案/解析失败：{exc}") from exc
+
+    return {
+        "answer": str(data.get("answer", "")).strip(),
+        "analysis": str(data.get("analysis", "")).strip(),
+    }
 
 
 async def enhance_import_drafts(

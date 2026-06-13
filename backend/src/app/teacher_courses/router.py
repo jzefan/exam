@@ -675,6 +675,9 @@ async def list_teacher_course_materials(course_id: uuid.UUID, db: DB, user: Curr
             description=resource.description,
             source=resource.source,
             file_path=resource.file_path,
+            knowledge_fragments=resource.knowledge_fragments or [],
+            kb_status=resource.kb_status,
+            kb_chunk_count=resource.kb_chunk_count or 0,
             created_at=resource.created_at,
             updated_at=resource.updated_at,
         )
@@ -1201,6 +1204,7 @@ def _semester_to_response(
         class_ids=semester.class_ids or [],
         start_date=semester.start_date,
         end_date=semester.end_date,
+        student_profile=semester.student_profile,
         exam_count=exam_count,
         assignment_count=assignment_count,
         created_at=semester.created_at,
@@ -1268,6 +1272,7 @@ async def create_course_semester(
         class_ids=[str(class_id) for class_id in payload.class_ids],
         start_date=payload.start_date,
         end_date=payload.end_date,
+        student_profile=payload.student_profile,
         owner_id=user.id,
     )
     db.add(semester)
