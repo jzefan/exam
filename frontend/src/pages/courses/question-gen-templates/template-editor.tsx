@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, Loader2, Sparkles, Target } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -72,14 +72,28 @@ function ChipGroup({
   );
 }
 
+/** 新建技能默认名：课程名 + 出题技能，重名则按序号递增（…出题技能2、3…）。 */
+function getNextSkillName(courseName: string | undefined, existingNames: string[] = []): string {
+  const base = `${courseName?.trim() || "课程"}出题技能`;
+  const existing = new Set(existingNames.map((n) => n.trim()));
+  if (!existing.has(base)) return base;
+  let i = 2;
+  while (existing.has(`${base}${i}`)) i += 1;
+  return `${base}${i}`;
+}
+
 export function TemplateEditor({
   courseId,
   templateId,
+  courseName,
+  existingNames,
   onSaved,
   onCancel,
 }: {
   courseId: string;
   templateId: string | null;
+  courseName?: string;
+  existingNames?: string[];
   onSaved: () => void;
   onCancel: () => void;
 }) {
@@ -108,6 +122,14 @@ export function TemplateEditor({
 
   // 可从中复制教学画像的学期（仅保留填写了画像的）。
   const [semesterSources, setSemesterSources] = useState<TeachingProfileSource[]>([]);
+
+  // 新建技能：等课程名就绪后，一次性填入默认名称（用户未改动时才填）。
+  const nameInitedRef = useRef(false);
+  useEffect(() => {
+    if (isEdit || nameInitedRef.current || !courseName) return;
+    nameInitedRef.current = true;
+    setName((current) => current || getNextSkillName(courseName, existingNames));
+  }, [isEdit, courseName, existingNames]);
 
   useEffect(() => {
     kbStats(courseId)

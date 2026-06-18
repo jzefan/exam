@@ -40,6 +40,7 @@ import { useTheme } from "./theme-provider";
 import { cn } from "@/lib/utils";
 import React, { useState } from "react";
 import { canAccessJobModels } from "@/utils/role-routing";
+import { OnboardingGuide } from "./onboarding-guide";
 
 /* ------------------------------------------------------------------ */
 /*  NavItem – 下拉面板中的导航项（用 div+onClick 避免 Radix nested <a>）     */
@@ -122,13 +123,30 @@ export function Layout() {
   const isQuestionImportPage = location.pathname === "/questions/import";
   const isPaperImportPage = location.pathname === "/papers/import";
   const isCoursesPage = location.pathname.startsWith("/courses");
+  // 课程详情：整屏左右两栏布局（侧栏 + 内容），自己管理滚动。
+  const isCourseDetailPage = /^\/courses\/[^/]+$/.test(location.pathname);
   const isExamWorkflowPage =
     location.pathname === "/exams/practice/create" ||
     location.pathname.startsWith("/exams/practice/edit/") ||
     /^\/exams\/[^/]+\/view$/.test(location.pathname) ||
     /^\/courses\/[^/]+\/question-skills$/.test(location.pathname);
-  const isFullScreenPage = isKnowledgePage || isGradingPage || isQuestionImportPage || isPaperImportPage;
+  const isFullScreenPage =
+    isKnowledgePage || isGradingPage || isQuestionImportPage || isPaperImportPage || isCourseDetailPage;
   const isAnalysisPage = /^\/exams\/[^/]+\/analysis/.test(location.pathname);
+  // 从「我的课程」进入的考试 / 练习相关页（创建、编辑、查看、分析）：顶部导航仍高亮
+  // 「我的课程」而非「考试管理」。来源通过导航 state 的 backTo(/courses…) 或 courseOrigin 判断。
+  const examNavState = (location.state ?? {}) as {
+    backTo?: string;
+    courseOrigin?: boolean;
+  };
+  const fromCoursesExamFlow =
+    (location.pathname.startsWith("/exams") ||
+      location.pathname.startsWith("/papers")) &&
+    (examNavState.courseOrigin === true ||
+      String(examNavState.backTo ?? "").startsWith("/courses/"));
+  const coursesNavActive = isCoursesPage || fromCoursesExamFlow;
+  const examsNavActive =
+    (isActive("/exams") || isActive("/papers")) && !fromCoursesExamFlow;
   const [examMenuOpen, setExamMenuOpen] = useState(false);
   const [questionMenuOpen, setQuestionMenuOpen] = useState(false);
 
@@ -187,9 +205,10 @@ export function Layout() {
                 {(canUseCourses || isAdmin) && (
                   <NavigationMenuItem>
                     <NavigationMenuLink
+                      data-onboarding="nav-courses"
                       className={cn(
                         navigationMenuTriggerStyle(),
-                        isCoursesPage ? "bg-accent/50 text-accent-foreground" : "",
+                        coursesNavActive ? "bg-accent/50 text-accent-foreground" : "",
                       )}
                       onClick={(e: React.MouseEvent) => {
                         e.preventDefault();
@@ -221,8 +240,8 @@ export function Layout() {
                   </NavigationMenuItem>
                 )}
 
-                {/* ---- 考试管理 (教师、管理员) ---- */}
-                {(isTeacher || isAdmin) && (
+                {/* ---- 考试管理 (评估员、管理员；教师改用「我的课程」内的考试/练习) ---- */}
+                {(role === "evaluator" || isAdmin) && (
                   <NavigationMenuItem className="relative">
                     <DropdownMenu open={examMenuOpen} onOpenChange={setExamMenuOpen}>
                       <DropdownMenuTrigger asChild>
@@ -230,7 +249,7 @@ export function Layout() {
                           type="button"
                           className={cn(
                             navigationMenuTriggerStyle(),
-                            isActive("/exams") || isActive("/papers") ? "bg-accent/50 text-accent-foreground" : "",
+                            examsNavActive ? "bg-accent/50 text-accent-foreground" : "",
                           )}
                         >
                           <ClipboardList size={16} className="mr-1.5" />
@@ -327,6 +346,7 @@ export function Layout() {
                       <DropdownMenuTrigger asChild>
                         <button
                           type="button"
+                          data-onboarding="nav-questions"
                           className={cn(
                             navigationMenuTriggerStyle(),
                             isActive("/questions") ||
@@ -396,6 +416,8 @@ export function Layout() {
           </div>
         </div>
       </header>
+
+      <OnboardingGuide enabled={role === "teacher" && identity?.persona !== "assessor"} />
 
       <main className={cn("flex-1", isFullScreenPage ? "min-h-0 overflow-hidden" : "overflow-y-auto overflow-x-hidden")}>
         <div

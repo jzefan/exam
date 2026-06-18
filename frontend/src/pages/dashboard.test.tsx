@@ -86,12 +86,11 @@ describe("Dashboard", () => {
     expect(navigateMock).toHaveBeenLastCalledWith("/questions")
 
     const actions = [
-      ["学生管理", "/students"],
-      ["我的课程", "/courses"],
-      ["导入题目", "/questions/import"],
-      ["创建考试", "/exams/create"],
-      ["发布练习", "/exams/practice/create"],
-      ["考试阅卷", "/grading"],
+      ["学生管理", ["/students"]],
+      ["我的课程", ["/courses"]],
+      ["创建课程", ["/courses", { state: { create: true } }]],
+      ["导入题目", ["/questions/import"]],
+      ["考试阅卷", ["/grading"]],
     ] as const
 
     const actionTitles = screen.getAllByRole("button").slice(-actions.length).map((button) => button.textContent)
@@ -99,9 +98,9 @@ describe("Dashboard", () => {
       actions.map(([title]) => expect.stringContaining(title)),
     )
 
-    for (const [title, path] of actions) {
+    for (const [title, args] of actions) {
       fireEvent.click(screen.getByText(title))
-      expect(navigateMock).toHaveBeenLastCalledWith(path)
+      expect(navigateMock).toHaveBeenLastCalledWith(...args)
     }
   })
 

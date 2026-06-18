@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useGetIdentity, useList, useOne, useUpdate } from "@refinedev/core";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { FilePenLine, ListOrdered, Loader2, Plus, Sparkles } from "lucide-react";
 
 import { PageIntroHeader } from "@/components/ui/page-intro-header";
@@ -134,6 +134,18 @@ function areQuestionItemsEqual(
 export function ExamPaperViewPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  // 从课程详情等来源跳转时带 backTo/backLabel，返回应回到来源页（默认回考试列表）。
+  const backState = (location.state ?? {}) as {
+    backTo?: string;
+    backLabel?: string;
+    courseOrigin?: boolean;
+  };
+  const backTo = backState.backTo ?? "/exams";
+  const backLabel = backState.backLabel ?? "返回考试列表";
+  // 本查看页是否处于「我的课程」上下文（用于进入编辑时继续保留顶部导航高亮）。
+  const fromCourses =
+    backState.courseOrigin === true || backTo.startsWith("/courses/");
   const { toast } = useToast();
   const { mutate: update, mutation } = useUpdate();
   const { data: identity } = useGetIdentity<{
@@ -189,6 +201,11 @@ export function ExamPaperViewPage() {
         : [],
     queryOptions: { enabled: questionIds.length > 0 },
   });
+  const examQuestionQuery = useList<IQuestion>({
+    resource: `exams/${id}/question-details`,
+    pagination: { currentPage: 1, pageSize: 500, mode: "server" },
+    queryOptions: { enabled: Boolean(id && exam && questionIds.length > 0) },
+  });
   const addQuestionQuery = useList<IQuestion>({
     resource: "questions",
     pagination: { currentPage: 1, pageSize: 500, mode: "server" },
@@ -214,14 +231,27 @@ export function ExamPaperViewPage() {
     setHydrated(true);
   }, [exam]);
 
+  const availableQuestions = useMemo(() => {
+    const questionMap = new Map<string, IQuestion>();
+    for (const question of examQuestionQuery.query.data?.data ?? []) {
+      questionMap.set(question.id, question);
+    }
+    for (const question of questionQuery.query.data?.data ?? []) {
+      questionMap.set(question.id, question);
+    }
+    for (const question of Object.values(questionOverrides)) {
+      questionMap.set(question.id, question);
+    }
+    return Array.from(questionMap.values());
+  }, [
+    examQuestionQuery.query.data?.data,
+    questionOverrides,
+    questionQuery.query.data?.data,
+  ]);
+
   const previewItems = useMemo(
-    () => {
-      const questions = (questionQuery.query.data?.data ?? []).map(
-        (question) => questionOverrides[question.id] ?? question,
-      );
-      return buildPaperPreviewItems(questionItems, questions);
-    },
-    [questionItems, questionOverrides, questionQuery.query.data?.data],
+    () => buildPaperPreviewItems(questionItems, availableQuestions),
+    [availableQuestions, questionItems],
   );
   const questionTypeSummaries = useMemo(
     () => buildQuestionTypeSummaries(previewItems),
@@ -277,7 +307,7 @@ export function ExamPaperViewPage() {
     () =>
       Array.from(
         new Map(
-          (questionQuery.query.data?.data ?? [])
+          availableQuestions
             .flatMap((question) => question.knowledge_points ?? [])
             .map((knowledgePoint) => [
               knowledgePoint.id,
@@ -289,7 +319,7 @@ export function ExamPaperViewPage() {
             ]),
         ).values(),
       ),
-    [questionQuery.query.data?.data],
+    [availableQuestions],
   );
 
   const totalScore = useMemo(
@@ -402,6 +432,16 @@ export function ExamPaperViewPage() {
         question,
       ]),
     );
+    setQuestionOverrides((prev) => {
+      const next = { ...prev };
+      for (const questionId of nextIds) {
+        const question = questionMap.get(questionId);
+        if (question) {
+          next[questionId] = question;
+        }
+      }
+      return next;
+    });
     setQuestionItems((prev) => {
       const seen = new Set(prev.map((item) => item.question_id));
       const additions = nextIds
@@ -685,7 +725,13 @@ export function ExamPaperViewPage() {
     savingTarget,
   ]);
 
-  if (query.isLoading || !exam || !hydrated || questionQuery.query.isLoading) {
+  if (
+    query.isLoading ||
+    !exam ||
+    !hydrated ||
+    questionQuery.query.isLoading ||
+    examQuestionQuery.query.isLoading
+  ) {
     return (
       <div className="flex items-center justify-center py-20">
         <Loader2 className="h-6 w-6 animate-spin text-primary" />
@@ -698,8 +744,8 @@ export function ExamPaperViewPage() {
       <PageIntroHeader
         title={exam.title}
         description={`${categoryLabel}查看 · 左侧按标准试卷格式查看完整内容，右侧适合做分数与设置的轻量调整。`}
-        onBack={() => navigate("/exams")}
-        backLabel="返回考试列表"
+        onBack={() => navigate(backTo)}
+        backLabel={backLabel}
         fullBleed
         actions={
           <div className="flex items-center gap-2">
@@ -720,6 +766,16 @@ export function ExamPaperViewPage() {
                   exam.category === "practice"
                     ? `/exams/practice/edit/${exam.id}`
                     : `/exams/edit/${exam.id}`,
+                  {
+                    // 从查看页进入编辑：返回（及保存后）回到查看页，而不是上一级列表。
+                    // courseOrigin 透传，保证编辑页顶部导航仍高亮「我的课程」。
+                    state: {
+                      backTo: `/exams/${exam.id}/view`,
+                      backLabel: "返回查看",
+                      successTo: `/exams/${exam.id}/view`,
+                      courseOrigin: fromCourses,
+                    },
+                  },
                 )
               }
             >

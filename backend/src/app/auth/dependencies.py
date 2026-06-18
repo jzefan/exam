@@ -32,7 +32,19 @@ async def _resolve_user_from_token(token: str, db: AsyncSession) -> User | None:
         except (TypeError, ValueError):
             return None
         result = await db.execute(select(User).where(User.id == user_id, User.deleted_at.is_(None)))
-        return result.scalar_one_or_none()
+        user = result.scalar_one_or_none()
+        # Single-session enforcement: a token carrying a `sid` claim (issued to
+        # students at login) is valid only while it matches the user's current
+        # session_token. A newer login elsewhere rotates session_token, so this
+        # older token is rejected — kicking the previously logged-in device.
+        if user is not None:
+            sid = payload.get("sid")
+            if sid is not None and sid != user.session_token:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="账号已在其他设备登录，请重新登录",
+                )
+        return user
 
     # ── Strategy 2: OIDC RS256 ──────────────────────────────────────────
     oidc = get_oidc_client()

@@ -41,6 +41,41 @@ class CourseSemester(OwnerMixin, BaseModel):
     )
 
 
+class CourseGradeWeight(BaseModel):
+    """课程成绩权重配置（课程级，每门课一条）。
+
+    weights 存各计分项的百分比，当前版本支持：章节任务点 / 章节测试 / 作业 / 考试。
+    表结构同时由 Alembic 管理，启动时的 ``create_all`` 仅作为开发环境兜底。
+    """
+
+    __tablename__ = "course_grade_weights"
+
+    course_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("knowledge_points.id"), nullable=False, unique=True, index=True
+    )
+    weights: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class CourseStudentGrade(BaseModel):
+    """Manual course-grade overrides, grouped by semester context per student."""
+
+    __tablename__ = "course_student_grades"
+
+    course_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("knowledge_points.id", ondelete="CASCADE"), nullable=False
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    semester_scores: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+    __table_args__ = (
+        UniqueConstraint("course_id", "student_id", name="uq_course_student_grade"),
+        Index("ix_course_student_grades_course_id", "course_id"),
+        Index("ix_course_student_grades_student_id", "student_id"),
+    )
+
+
 class ExamSemesterAssignment(Base, TimestampMixin):
     """Pin one Exam (or practice) into exactly one (course, semester) bucket."""
 

@@ -12,7 +12,6 @@ import {
   Briefcase,
   UserCog,
   LibraryBig,
-  Send,
   Upload,
 } from "lucide-react";
 import { apiRequest } from "@/pages/grading/api";
@@ -69,12 +68,14 @@ interface QuickActionProps {
   icon: React.ReactNode;
   onClick: () => void;
   variant?: "default" | "outline";
+  dataOnboarding?: string;
 }
 
-function QuickAction({ title, description, icon, onClick }: QuickActionProps) {
+function QuickAction({ title, description, icon, onClick, dataOnboarding }: QuickActionProps) {
   return (
     <button
       type="button"
+      data-onboarding={dataOnboarding}
       onClick={onClick}
       className="flex w-full items-center gap-4 rounded-lg border border-border bg-card p-4 text-left transition-all hover:border-primary/55 hover:bg-primary/[0.015] hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
@@ -266,6 +267,7 @@ export function Dashboard() {
                 description={`管理${personaCopy.person}账号、${personaCopy.group}与导入数据`}
                 icon={<Users size={18} />}
                 onClick={() => navigate("/students")}
+                dataOnboarding="qa-students"
               />
               <QuickAction
                 title="我的课程"
@@ -274,22 +276,16 @@ export function Dashboard() {
                 onClick={() => navigate("/courses")}
               />
               <QuickAction
+                title="创建课程"
+                description="新建一门课程，开始组织资料与题目"
+                icon={<Plus size={18} />}
+                onClick={() => navigate("/courses", { state: { create: true } })}
+              />
+              <QuickAction
                 title="导入题目"
                 description="从文档识别并导入题目"
                 icon={<Upload size={18} />}
                 onClick={() => navigate("/questions/import")}
-              />
-              <QuickAction
-                title="创建考试"
-                description="组卷、设置考试时间与规则"
-                icon={<Plus size={18} />}
-                onClick={() => navigate("/exams/create")}
-              />
-              <QuickAction
-                title="发布练习"
-                description="按知识点发布练习"
-                icon={<Send size={18} />}
-                onClick={() => navigate("/exams/practice/create")}
               />
               <QuickAction
                 title="考试阅卷"

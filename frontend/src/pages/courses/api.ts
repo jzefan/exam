@@ -253,6 +253,118 @@ export function createCourseSemester(courseId: string, payload: CreateSemesterPa
   });
 }
 
+/** 课程成绩权重（百分比）。当前版本：章节任务点 / 章节测试 / 作业 / 考试。 */
+export interface CourseGradeWeights {
+  chapter_task: number;
+  chapter_quiz: number;
+  assignment: number;
+  exam: number;
+}
+
+export function getCourseGradeWeights(courseId: string) {
+  return apiRequest<CourseGradeWeights>(`/teacher/courses/${courseId}/grade-weights`);
+}
+
+export function updateCourseGradeWeights(courseId: string, weights: CourseGradeWeights) {
+  return apiRequest<CourseGradeWeights>(`/teacher/courses/${courseId}/grade-weights`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(weights),
+  });
+}
+
+export type CourseGradeComponentKey =
+  | "chapter_task"
+  | "chapter_quiz"
+  | "assignment"
+  | "exam";
+
+export interface CourseGradeComponent {
+  score: number | null;
+  system_score: number | null;
+  manual_score: number | null;
+  source: "system" | "manual" | "none";
+}
+
+export interface CourseGradeClass {
+  id: string;
+  name: string;
+  student_count: number;
+}
+
+export interface CourseGradeStudent {
+  student_id: string;
+  student_no: string | null;
+  full_name: string | null;
+  username: string | null;
+  class_id: string;
+  class_name: string;
+  chapter_task: CourseGradeComponent;
+  chapter_quiz: CourseGradeComponent;
+  assignment: CourseGradeComponent;
+  exam: CourseGradeComponent;
+  comprehensive_score: number;
+}
+
+export interface CourseGradeSummary {
+  course_id: string;
+  semester_id: string | null;
+  weights: CourseGradeWeights;
+  class_average_score: number | null;
+  student_count: number;
+  classes: CourseGradeClass[];
+  distribution: {
+    excellent: number;
+    passing: number;
+    needs_attention: number;
+  };
+  students: CourseGradeStudent[];
+  generated_at: string;
+}
+
+export function getCourseGradeSummary(courseId: string, semesterId?: string | null) {
+  return apiRequest<CourseGradeSummary>(
+    `/teacher/courses/${courseId}/grade-summary${semesterQuery(semesterId)}`,
+  );
+}
+
+export function updateCourseStudentGrade(
+  courseId: string,
+  studentId: string,
+  payload: {
+    semester_id: string | null;
+    component: CourseGradeComponentKey;
+    score: number | null;
+  },
+) {
+  return apiRequest<{
+    student_id: string;
+    semester_id: string | null;
+    component: CourseGradeComponentKey;
+    manual_score: number | null;
+  }>(`/teacher/courses/${courseId}/grade-summary/${studentId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+/** 更新某个学期关联的班级（从学生管理的班级列表里选择）。 */
+export function updateCourseSemesterClasses(
+  courseId: string,
+  semesterId: string,
+  classIds: string[],
+) {
+  return apiRequest<CourseSemester>(
+    `/teacher/courses/${courseId}/semesters/${semesterId}/classes`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ class_ids: classIds }),
+    },
+  );
+}
+
 /** Add an external link material to a knowledge-point node (course or subnode).
  *  Reuses the existing job-models LearningResource endpoint that powers the
  *  knowledge management page. */

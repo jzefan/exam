@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload, selectinload
 
 from app.config import settings
 from app.auth.dependencies import CurrentUser, user_has_role
@@ -65,8 +66,9 @@ from app.exams.time_utils import (
     coerce_persisted_exam_datetime_to_utc,
 )
 from app.papers.service import generate_question_items_from_source_items
+from app.questions.schemas import QuestionResponse
 from app.questions.service import cleanup_soft_deleted_question_if_orphaned
-from app.questions.models import question_knowledge_points
+from app.questions.models import Question, question_knowledge_points
 from app.learning.models import KnowledgePoint
 
 router = APIRouter()
@@ -727,6 +729,42 @@ async def list_exam_questions(
         )
         for eq in sorted(exam.exam_questions, key=lambda x: x.order)
     ]
+
+
+@router.get("/{exam_id}/question-details", response_model=list[QuestionResponse])
+async def list_exam_question_details(
+    exam_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+) -> list[QuestionResponse]:
+    """Return full question data within the exam's write permission boundary."""
+    exam = await _get_writable_exam_or_404(db, exam_id, user)
+    exam_questions = sorted(exam.exam_questions, key=lambda item: item.order)
+    question_ids = [item.question_id for item in exam_questions]
+    if not question_ids:
+        return []
+
+    result = await db.execute(
+        select(Question)
+        .where(Question.id.in_(question_ids))
+        .options(
+            joinedload(Question.creator),
+            joinedload(Question.question_bank),
+            selectinload(Question.tags),
+            selectinload(Question.knowledge_points),
+        )
+    )
+    question_by_id = {
+        question.id: question for question in result.unique().scalars().all()
+    }
+
+    questions: list[QuestionResponse] = []
+    for exam_question in exam_questions:
+        question = question_by_id.get(exam_question.question_id)
+        if question is None:
+            continue
+        questions.append(QuestionResponse.from_question(question))
+    return questions
 
 
 @router.post("/{exam_id}/questions", status_code=status.HTTP_201_CREATED)

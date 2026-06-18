@@ -1,5 +1,5 @@
 import { type ChangeEvent, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   AlertCircle,
   ArrowLeft,
@@ -63,6 +63,14 @@ import {
 
 export function PaperImportPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  // 从课程详情「导入试卷」进入时：预置主知识点为该课程，并让返回回到课程详情。
+  const navState = (location.state ?? {}) as {
+    backTo?: string;
+    backLabel?: string;
+    rootKnowledgePointId?: string;
+    rootKnowledgePointName?: string;
+  };
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -72,8 +80,17 @@ export function PaperImportPage() {
     useState<ImportDocumentPayload | null>(null);
   const [paperTitle, setPaperTitle] = useState("");
   const [paperDescription, setPaperDescription] = useState("");
+  const presetRootKnowledgePoints: SelectedKnowledgePoint[] = navState.rootKnowledgePointId
+    ? [
+        {
+          id: navState.rootKnowledgePointId,
+          name: navState.rootKnowledgePointName ?? "课程",
+          path: navState.rootKnowledgePointName ?? "课程",
+        },
+      ]
+    : [];
   const [selectedRootKnowledgePoints, setSelectedRootKnowledgePoints] =
-    useState<SelectedKnowledgePoint[]>([]);
+    useState<SelectedKnowledgePoint[]>(presetRootKnowledgePoints);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
@@ -188,7 +205,7 @@ export function PaperImportPage() {
       const titleFromFile = file.name.replace(/\.[^.]+$/, "");
       setPaperTitle(titleFromFile || "导入试卷");
       setPaperDescription("");
-      setSelectedRootKnowledgePoints([]);
+      setSelectedRootKnowledgePoints(presetRootKnowledgePoints);
       await recognizePayload(payload);
     } catch (error) {
       setParseError(error instanceof Error ? error.message : "导入识别失败");
@@ -444,7 +461,7 @@ export function PaperImportPage() {
                   setParseError(null);
                   return;
                 }
-                navigate("/papers");
+                navigate(navState.backTo ?? "/papers");
               }}
               className="size-8 rounded-lg border-slate-200 p-0 transition-all hover:bg-slate-50"
             >

@@ -376,6 +376,7 @@ export function ExamWizardForm({
     mainKnowledgePointId?: string;
     mainKnowledgePointName?: string;
     initialStep?: number;
+    courseOrigin?: boolean;
   };
   const { toast } = useToast();
 
@@ -3203,7 +3204,11 @@ export function ExamWizardForm({
             ? "按步骤完成基本信息、组卷、选人和设置，最后一次性生成考试。"
             : "按步骤修改考试信息、题目、考生与考试设置。"
         }
-        onBack={() => navigate(navState.backTo ?? "/exams")}
+        onBack={() =>
+          navigate(navState.backTo ?? "/exams", {
+            state: { courseOrigin: navState.courseOrigin },
+          })
+        }
         backLabel={navState.backLabel ?? "返回考试列表"}
         fullBleed
       />

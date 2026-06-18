@@ -17,9 +17,13 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
 
 
-def create_access_token(user_id: uuid.UUID, role: str) -> str:
+def create_access_token(user_id: uuid.UUID, role: str, session_id: str | None = None) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
-    payload = {"sub": str(user_id), "role": role, "exp": expire}
+    payload: dict = {"sub": str(user_id), "role": role, "exp": expire}
+    # Only student logins pass a session_id; its presence opts the token into
+    # single-session enforcement in the auth dependency.
+    if session_id is not None:
+        payload["sid"] = session_id
     return jwt.encode(payload, settings.secret_key, algorithm=ALGORITHM)
 
 

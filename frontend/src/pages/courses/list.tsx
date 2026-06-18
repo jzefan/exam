@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   BookOpen,
   ClipboardList,
@@ -199,12 +199,16 @@ function CourseListLoading() {
 
 export function CourseListPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { toast } = useToast();
   const [courses, setCourses] = useState<TeacherCourseSummary[]>([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [createOpen, setCreateOpen] = useState(false);
+  // 工作台「创建课程」快捷操作通过导航 state 直接打开新建对话框。
+  const [createOpen, setCreateOpen] = useState<boolean>(
+    () => Boolean((location.state as { create?: boolean } | null)?.create),
+  );
   const [courseToDelete, setCourseToDelete] =
     useState<TeacherCourseSummary | null>(null);
   const [deletingCourse, setDeletingCourse] = useState(false);

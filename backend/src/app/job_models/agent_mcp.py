@@ -18,9 +18,28 @@ from typing import Any, Literal
 
 import httpx
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from app.auth.oidc_client import OIDCClient, OIDCError
 
+
+# When host is 127.0.0.1/localhost, FastMCP auto-enables DNS-rebinding protection
+# with an allowlist that only covers 127.0.0.1/localhost/::1. The ArkLoop worker runs
+# inside Docker and reaches this server via host.docker.internal, whose Host header is
+# then rejected with "Invalid Host header" — so the worker can't discover the exam
+# tools and silently falls back to local storage. Keep the protection on but extend
+# the allowlist with the docker-host alias (configurable via env).
+_extra_hosts = [
+    h.strip()
+    for h in os.environ.get("EXAM_AGENT_MCP_EXTRA_HOSTS", "host.docker.internal").split(",")
+    if h.strip()
+]
+_transport_security = TransportSecuritySettings(
+    enable_dns_rebinding_protection=True,
+    allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*"] + [f"{h}:*" for h in _extra_hosts],
+    allowed_origins=["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"]
+    + [f"http://{h}:*" for h in _extra_hosts],
+)
 
 mcp = FastMCP(
     "exam-agent",
@@ -31,6 +50,7 @@ mcp = FastMCP(
     host=os.environ.get("EXAM_AGENT_MCP_HOST", "127.0.0.1"),
     port=int(os.environ.get("EXAM_AGENT_MCP_PORT", "8001")),
     streamable_http_path=os.environ.get("EXAM_AGENT_MCP_PATH", "/mcp"),
+    transport_security=_transport_security,
 )
 
 
@@ -311,8 +331,19 @@ def _normalize_options(value: Any) -> dict[str, str] | None:
             key = chr(ord("A") + index)
             text = item
             if isinstance(item, dict):
-                key = str(item.get("key") or item.get("label") or key)
-                text = item.get("text") or item.get("value") or item.get("content")
+                explicit_text = item.get("text") or item.get("value") or item.get("content")
+                if explicit_text is not None:
+                    # Standard shape: {"key": "A", "text": "..."}
+                    key = str(item.get("key") or item.get("label") or key)
+                    text = explicit_text
+                elif len(item) == 1:
+                    # ArkLoop shape: {"A": "option text"} — letter key maps straight to text.
+                    only_key, only_value = next(iter(item.items()))
+                    key = str(only_key) or key
+                    text = only_value
+                else:
+                    key = str(item.get("key") or item.get("label") or key)
+                    text = None
             options[key] = str(text or "")
         return options or None
     return None
@@ -605,37 +636,67 @@ async def exam_list_reference_questions(
     return response
 
 
-@mcp.tool(description="Save teacher-confirmed AI questions to Exam through the backend bulk question API.")
+@mcp.tool(
+    description="Save teacher-confirmed AI questions into the teacher's default course bank. "
+    "Returns created_question_ids — pass those to exam_create_paper to assemble a paper."
+)
 async def exam_save_questions(
     questions: list[dict[str, Any]],
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    # ArkLoop-generated drafts must never be written into the national/reference
-    # bank. Always land them in the acting teacher's private course bank.
-    course_bank = await exam_ensure_course_question_bank(ctx=ctx)
-    target_bank_id = str(course_bank.get("id") or "") or None
-    normalized_questions = [
-        normalize_exam_question_payload(question, question_bank_id=target_bank_id)
-        for question in questions
-    ]
-    result = await request_agent_api(
+    normalized_questions = [normalize_exam_question_payload(question) for question in questions]
+    # ArkLoop KB knowledge-point ids (especially for standalone course KBs) are NOT
+    # Exam knowledge points; forwarding them rejects the batch with "Knowledge point
+    # not found". Drafts land in the teacher's private course bank where Exam-KP
+    # linkage is optional, so drop the unresolved ids here.
+    for normalized in normalized_questions:
+        normalized["knowledge_point_ids"] = []
+    # Purpose-built endpoint: lands questions in the teacher's default course bank AND
+    # returns created_question_ids (the generic /api/questions/bulk returns counts only,
+    # leaving the agent with no ids to build a paper from).
+    return await request_agent_api(
         "POST",
-        "/api/questions/bulk",
+        "/api/questions/save-generated-to-course-bank",
         ctx=ctx,
         json={"questions": normalized_questions},
         scopes=WRITE_SCOPES,
     )
-    if isinstance(result, dict):
-        result["question_bank_id"] = target_bank_id
-        result["question_bank_name"] = course_bank.get("name")
-    return result
 
 
-@mcp.tool(description="Create an Exam paper from an ordered question id list.")
+DEFAULT_PAPER_TITLE = "智能组卷试卷"
+
+
+async def _unique_paper_title(base: str | None, ctx: Context | None) -> str:
+    """Pick a paper title, appending （2）/（3）… when the base name already exists."""
+    base = (base or "").strip() or DEFAULT_PAPER_TITLE
+    try:
+        existing = await request_agent_api("GET", "/api/papers", ctx=ctx)
+    except Exception:
+        # If we can't list papers, fall back to the base name — a duplicate title
+        # is allowed by the backend and far better than failing the whole compose.
+        return base
+    items = existing.get("items") if isinstance(existing, dict) else existing
+    titles = {
+        str(item["title"])
+        for item in (items or [])
+        if isinstance(item, dict) and item.get("title")
+    }
+    if base not in titles:
+        return base
+    index = 2
+    while f"{base}（{index}）" in titles:
+        index += 1
+    return f"{base}（{index}）"
+
+
+@mcp.tool(
+    description="Create an Exam paper (试卷, not an exam) from an ordered question id list. "
+    "Leave name empty for a default title; duplicate names auto-increment （2）（3）…"
+)
 async def exam_create_paper(
-    name: str,
-    exam_scope_id: str | None,
     question_ids: list[str],
+    name: str | None = None,
+    exam_scope_id: str | None = None,
     spec: dict[str, Any] | None = None,
     description: str | None = None,
     ctx: Context | None = None,
@@ -643,12 +704,13 @@ async def exam_create_paper(
     paper_description = description
     if paper_description is None and spec and spec.get("summary"):
         paper_description = str(spec["summary"])
+    title = await _unique_paper_title(name, ctx)
     return await request_agent_api(
         "POST",
         "/api/papers",
         ctx=ctx,
         json={
-            "title": name,
+            "title": title,
             "description": paper_description,
             "source_type": "ai_generated",
             "root_knowledge_point_id": exam_scope_id,

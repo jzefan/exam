@@ -235,6 +235,7 @@ export function PracticeCreate() {
     mainKnowledgePointName?: string;
     defaultBankName?: string;
     initialStep?: number;
+    courseOrigin?: boolean;
   };
   const { toast } = useToast();
   const { mutate: create, mutation } = useCreate();
@@ -1377,7 +1378,11 @@ export function PracticeCreate() {
             ? "调整知识点、题目、发布对象与时间设置，让练习安排更贴合当前教学。"
             : "按步骤选择知识点、题目与学生，快速发布一场可追踪的课堂练习。"
         }
-        onBack={() => navigate(navState.backTo ?? "/exams")}
+        onBack={() =>
+          navigate(navState.backTo ?? "/exams", {
+            state: { courseOrigin: navState.courseOrigin },
+          })
+        }
         backLabel={navState.backLabel ?? "返回考试与练习"}
       />
 

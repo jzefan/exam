@@ -6,6 +6,19 @@ import type { ITokenResponse, IUser } from "../types";
 import { getUserRole } from "../types/rbac";
 
 const API_URL = "/api";
+export const ONBOARDING_REASON_STORAGE_KEY = "exam_onboarding_reason";
+
+function storeAuthSession(data: ITokenResponse) {
+  localStorage.setItem("access_token", data.access_token);
+  localStorage.setItem("user", JSON.stringify(data.user));
+  if (data.onboarding_reason) {
+    localStorage.setItem(ONBOARDING_REASON_STORAGE_KEY, data.onboarding_reason);
+  } else {
+    localStorage.removeItem(ONBOARDING_REASON_STORAGE_KEY);
+  }
+  notifyAuthChanged();
+  purgeOtherDrafts(data.user.id);
+}
 
 function getResponseDetail(error: unknown): string | undefined {
   if (axios.isAxiosError(error)) {
@@ -26,6 +39,17 @@ function getLoginErrorMessage(error: unknown): string {
   return detail;
 }
 
+function getRegisterErrorMessage(error: unknown): string {
+  const detail = getResponseDetail(error);
+  if (detail === "Username already exists") {
+    return "该用户名已存在，请更换后重试";
+  }
+  if (detail === "Email already exists") {
+    return "该邮箱已被注册，请更换邮箱或直接登录";
+  }
+  return detail ?? "注册失败，请稍后重试";
+}
+
 export const authProvider: AuthProvider = {
   login: async ({ username, password }) => {
     try {
@@ -33,10 +57,7 @@ export const authProvider: AuthProvider = {
         username,
         password,
       });
-      localStorage.setItem("access_token", data.access_token);
-      localStorage.setItem("user", JSON.stringify(data.user));
-      notifyAuthChanged();
-      purgeOtherDrafts(data.user.id);
+      storeAuthSession(data);
       const isStudent = data.user.organizations.some(
         (o) => o.role_name === "student" || o.role_name === "assessee",
       );
@@ -52,6 +73,7 @@ export const authProvider: AuthProvider = {
   logout: async () => {
     localStorage.removeItem("access_token");
     localStorage.removeItem("user");
+    localStorage.removeItem(ONBOARDING_REASON_STORAGE_KEY);
     notifyAuthChanged();
     purgeAllDrafts();
     return { success: true, redirectTo: "/login" };
@@ -96,19 +118,33 @@ export const authProvider: AuthProvider = {
   },
 
   register: async ({ username, email, password, full_name, role_name, persona }: Record<string, string>) => {
+    let accountCreated = false;
     try {
       const normalizedEmail = email?.trim();
+      const roleName = persona === "assessor" ? "evaluator" : "teacher";
       await axios.post(`${API_URL}/auth/register`, {
         username,
         email: normalizedEmail ? normalizedEmail : null,
         password,
         full_name,
-        role_name: role_name || "student",
+        role_name: role_name || roleName,
         persona: persona || "teacher",
       });
-      return { success: true, redirectTo: "/login" };
-    } catch {
-      return { success: false, error: { name: "Register Error", message: "Registration failed" } };
+      accountCreated = true;
+      const { data } = await axios.post<ITokenResponse>(`${API_URL}/auth/login`, {
+        username,
+        password,
+      });
+      storeAuthSession(data);
+      return { success: true, redirectTo: "/" };
+    } catch (error) {
+      if (accountCreated) {
+        return {
+          success: false,
+          error: { name: "自动登录失败", message: "账号已创建成功，请前往登录页登录" },
+        };
+      }
+      return { success: false, error: { name: "注册失败", message: getRegisterErrorMessage(error) } };
     }
   },
 };

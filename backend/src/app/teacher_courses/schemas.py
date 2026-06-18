@@ -5,6 +5,7 @@ In this UI, a course is an existing root knowledge point.
 
 import uuid
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -21,6 +22,87 @@ class CourseSemesterCreate(BaseModel):
     start_date: date | None = None
     end_date: date | None = None
     student_profile: dict | None = None
+
+
+class CourseGradeWeights(BaseModel):
+    """课程成绩权重（百分比）。当前版本支持：章节任务点 / 章节测试 / 作业 / 考试。"""
+
+    chapter_task: int = Field(default=0, ge=0, le=100)
+    chapter_quiz: int = Field(default=0, ge=0, le=100)
+    assignment: int = Field(default=0, ge=0, le=100)
+    exam: int = Field(default=0, ge=0, le=100)
+
+
+CourseGradeComponentKey = Literal[
+    "chapter_task",
+    "chapter_quiz",
+    "assignment",
+    "exam",
+]
+
+
+class CourseGradeComponent(BaseModel):
+    score: float | None = None
+    system_score: float | None = None
+    manual_score: float | None = None
+    source: Literal["system", "manual", "none"] = "none"
+
+
+class CourseGradeClass(BaseModel):
+    id: uuid.UUID
+    name: str
+    student_count: int = 0
+
+
+class CourseGradeStudent(BaseModel):
+    student_id: uuid.UUID
+    student_no: str | None = None
+    full_name: str | None = None
+    username: str | None = None
+    class_id: uuid.UUID
+    class_name: str
+    chapter_task: CourseGradeComponent
+    chapter_quiz: CourseGradeComponent
+    assignment: CourseGradeComponent
+    exam: CourseGradeComponent
+    comprehensive_score: float = 0
+
+
+class CourseGradeDistribution(BaseModel):
+    excellent: int = 0
+    passing: int = 0
+    needs_attention: int = 0
+
+
+class CourseGradeSummary(BaseModel):
+    course_id: uuid.UUID
+    semester_id: uuid.UUID | None = None
+    weights: CourseGradeWeights
+    class_average_score: float | None = None
+    student_count: int = 0
+    classes: list[CourseGradeClass] = Field(default_factory=list)
+    distribution: CourseGradeDistribution = Field(default_factory=CourseGradeDistribution)
+    students: list[CourseGradeStudent] = Field(default_factory=list)
+    generated_at: datetime
+
+
+class CourseStudentGradeUpdate(BaseModel):
+    semester_id: uuid.UUID | None = None
+    component: CourseGradeComponentKey
+    score: float | None = Field(default=None, ge=0, le=100)
+
+
+class CourseStudentGradeUpdateResponse(BaseModel):
+    student_id: uuid.UUID
+    semester_id: uuid.UUID | None = None
+    component: CourseGradeComponentKey
+    manual_score: float | None = None
+
+
+class CourseSemesterClassesUpdate(BaseModel):
+    """更新某个学期关联的班级（选学本课程的班级）。"""
+
+    class_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 class CourseSemesterResponse(BaseModel):

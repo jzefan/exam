@@ -24,6 +24,11 @@ class User(BaseModel):
     full_name: Mapped[str] = mapped_column(String(100), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Single active session for students: rotated on every login and embedded in
+    # the JWT as the `sid` claim. A token whose `sid` no longer matches is
+    # rejected, which kicks the previously logged-in device.
+    session_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     user_type: Mapped[str] = mapped_column(String(20), nullable=False, default="internal")
     persona: Mapped[str] = mapped_column(String(20), nullable=False, default="teacher")
     # OIDC SSO fields. provider="internal" means a local account; provider="arkloop"

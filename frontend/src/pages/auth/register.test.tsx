@@ -38,7 +38,34 @@ describe("RegisterPage", () => {
         role_name: "evaluator",
         persona: "assessor",
       }),
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+        onError: expect.any(Function),
+      }),
     );
+  });
+
+  it("shows the registration conflict returned by the auth provider", async () => {
+    const user = userEvent.setup();
+    registerMock.mockImplementationOnce((_values, options) => {
+      options.onSuccess({
+        success: false,
+        error: { name: "注册失败", message: "该用户名已存在，请更换后重试" },
+      });
+    });
+
+    render(
+      <MemoryRouter>
+        <RegisterPage />
+      </MemoryRouter>,
+    );
+
+    await user.type(screen.getByLabelText("用户名"), "jiang");
+    await user.type(screen.getByLabelText("密码"), "12345678");
+    await user.type(screen.getByLabelText("确认密码"), "12345678");
+    await user.click(screen.getByRole("button", { name: "注册" }));
+
+    expect(screen.getByText("该用户名已存在，请更换后重试")).toBeInTheDocument();
   });
 
   it("does not suggest phone-based account recovery before SMS is supported", () => {

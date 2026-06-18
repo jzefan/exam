@@ -9,7 +9,10 @@ import {
   type ReactNode,
 } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useList } from "@refinedev/core";
 import {
+  ArrowLeft,
+  BarChart3,
   BookOpen,
   CalendarRange,
   Calculator,
@@ -22,6 +25,7 @@ import {
   Edit3,
   ExternalLink,
   Eye,
+  FileStack,
   FileText,
   FilePlus2,
   Layers3,
@@ -33,16 +37,18 @@ import {
   Move,
   Plus,
   Search,
+  Settings,
   Sparkles,
   Trash2,
   Upload,
+  Users,
+  Wand2,
   Video,
   X,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
@@ -62,7 +68,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PageIntroHeader } from "@/components/ui/page-intro-header";
 import {
   Select,
   SelectContent,
@@ -76,7 +81,7 @@ import { useToast } from "@/hooks/use-toast";
 import { formatKnowledgeDisplayPath } from "@/lib/knowledge-display";
 import { writeExamSeed } from "@/lib/exam-seed";
 import { cn } from "@/lib/utils";
-import type { IQuestion, QuestionType } from "@/types";
+import type { IPaper, IQuestion, QuestionType } from "@/types";
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
 import {
   normalizeQuestionType,
@@ -132,6 +137,10 @@ import {
 } from "./api";
 import { AddLinkDialog } from "./AddLinkDialog";
 import { NewSemesterDialog } from "./NewSemesterDialog";
+import { AssociateClassesDialog } from "./AssociateClassesDialog";
+import { GradeWeightPanel } from "./GradeWeightPanel";
+import { CourseGradebook } from "./CourseGradebook";
+import { PaperListBody } from "@/pages/papers/PaperListBody";
 import {
   ExamCard,
   ExamCardEmptyState,
@@ -171,7 +180,10 @@ type CourseTab =
   | "exams"
   | "assignments"
   | "questions"
-  | "knowledge";
+  | "knowledge"
+  | "papers"
+  | "statistics"
+  | "manage";
 
 type CourseMaterialExtractedContent = {
   sourceText: string;
@@ -1717,8 +1729,8 @@ function AssignmentScoreSummaryDialog({
             description="当前课程或学期下还没有练习成绩。"
           />
         ) : (
-          <div className="min-h-0 flex-1 space-y-4 overflow-hidden">
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+            <div className="grid shrink-0 gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {[
                 ["练习数", summary.assignment_count],
                 ["学生数", summary.student_count],
@@ -1737,11 +1749,11 @@ function AssignmentScoreSummaryDialog({
               ))}
             </div>
 
-            <div className="min-h-0 overflow-auto rounded-lg border border-border">
+            <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-border">
               <table className="min-w-full border-collapse text-left text-sm">
-                <thead className="sticky top-0 z-10 bg-muted text-xs text-muted-foreground">
+                <thead className="sticky top-0 z-20 bg-muted text-xs text-muted-foreground">
                   <tr>
-                    <th className="sticky left-0 z-20 w-44 bg-muted px-3 py-2 font-medium">
+                    <th className="sticky left-0 z-30 w-44 bg-muted px-3 py-2 font-medium">
                       学生
                     </th>
                     <th className="w-28 px-3 py-2 font-medium">完成</th>
@@ -1888,6 +1900,7 @@ function AssignmentScoreSummaryDialog({
 function ExamRows({
   items,
   kind,
+  courseId,
   semesters,
   canWrite,
   onSummarize,
@@ -1901,6 +1914,7 @@ function ExamRows({
 }: {
   items: TeacherCourseExam[];
   kind: "exam" | "assignment";
+  courseId: string;
   semesters: CourseSemester[];
   canWrite: boolean;
   onSummarize?: () => void;
@@ -1917,6 +1931,13 @@ function ExamRows({
   ) => void;
 }) {
   const navigate = useNavigate();
+  // 从课程详情进入查看/修改时，让目标页的「返回」（及保存后跳转）回到课程详情对应模块。
+  const backTo = `/courses/${courseId}?tab=${kind === "assignment" ? "assignments" : "exams"}`;
+  const backState = {
+    backTo,
+    backLabel: "返回课程详情",
+    successTo: backTo,
+  };
   const header =
     kind === "assignment" || canWrite ? (
       <div className="flex flex-wrap items-center justify-end gap-2">
@@ -1924,6 +1945,16 @@ function ExamRows({
           <Button variant="outline" size="sm" onClick={onSummarize}>
             <Calculator size={14} className="mr-1.5" />
             平时成绩汇总
+          </Button>
+        ) : null}
+        {kind === "exam" ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => navigate(`/exams/students?courseId=${courseId}`, { state: backState })}
+          >
+            <Users size={14} className="mr-1.5" />
+            考试考生
           </Button>
         ) : null}
         {canWrite ? (
@@ -2017,15 +2048,16 @@ function ExamRows({
           <ExamCard
             key={item.id}
             exam={item}
-            onView={() => navigate(`/exams/${item.id}/view`)}
+            onView={() => navigate(`/exams/${item.id}/view`, { state: backState })}
             onEdit={() =>
               navigate(
                 item.category === "practice"
                   ? `/exams/practice/edit/${item.id}`
                   : `/exams/edit/${item.id}`,
+                { state: backState },
               )
             }
-            onAnalysis={() => navigate(`/exams/${item.id}/analysis`)}
+            onAnalysis={() => navigate(`/exams/${item.id}/analysis`, { state: backState })}
             onGenerateMock={
               kind === "exam" && onGenerateMock
                 ? () => onGenerateMock(item)
@@ -3783,39 +3815,30 @@ function TodoRail({
   };
 
   return (
-    <aside className="sticky top-20 hidden flex-col gap-3 lg:flex">
-      <div className="flex items-center gap-2">
-        <CheckCircle2 size={16} className="text-foreground" />
-        <h3 className="text-sm font-semibold text-foreground">教学待办</h3>
+    <div className="rounded-lg border border-border bg-muted/30 p-3">
+      <div className="mb-2.5 flex items-center gap-2">
+        <CheckCircle2 size={15} className="text-primary" />
+        <span className="text-[13px] font-semibold text-foreground">教学待办</span>
       </div>
-      {todos.map((todo) => (
-        <Card
-          key={todo.title}
-          className="rounded-lg border border-border bg-card shadow-none"
-        >
-          <CardContent className="p-3">
-            <div className="flex items-start gap-3">
-              <div
-                className={cn(
-                  "flex size-8 shrink-0 items-center justify-center rounded-md",
-                  toneClass[todo.tone],
-                )}
-              >
-                {todo.icon}
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-foreground">
-                  {todo.title}
-                </p>
-                <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
-                  {todo.detail}
-                </p>
-              </div>
+      <ul className="space-y-2.5 text-xs">
+        {todos.map((todo) => (
+          <li key={todo.title} className="flex items-start gap-2">
+            <span
+              className={cn(
+                "mt-0.5 flex size-5 shrink-0 items-center justify-center rounded",
+                toneClass[todo.tone],
+              )}
+            >
+              {todo.icon}
+            </span>
+            <div className="min-w-0">
+              <p className="font-medium text-foreground">{todo.title}</p>
+              <p className="mt-0.5 leading-4 text-muted-foreground">{todo.detail}</p>
             </div>
-          </CardContent>
-        </Card>
-      ))}
-    </aside>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -3830,13 +3853,26 @@ export function CourseDetailPage() {
       t === "exams" ||
       t === "assignments" ||
       t === "questions" ||
-      t === "knowledge"
+      t === "knowledge" ||
+      t === "papers" ||
+      t === "statistics" ||
+      t === "manage"
       ? t
       : "knowledge";
   })();
   const [activeTab, setActiveTab] = useState<CourseTab>(initialTab);
   // 题库列表的「出题技能种子」徽标数据（question_id -> 技能列表）。
   const [seedUsage, setSeedUsage] = useState<SeedUsageMap>({});
+  // 班级名映射（id -> 名称），用于「班级」模块展示本课程各学期关联的班级。
+  const [classNameMap, setClassNameMap] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    apiRequest<{ id: string; name: string }[]>("/rbac/students/classes")
+      .then((rows) => {
+        setClassNameMap(Object.fromEntries(rows.map((c) => [c.id, c.name])));
+      })
+      .catch(() => setClassNameMap({}));
+  }, []);
 
   useEffect(() => {
     if (!id || activeTab !== "questions") return;
@@ -3872,6 +3908,8 @@ export function CourseDetailPage() {
   const [activeSemesterId, setActiveSemesterId] =
     useState<string>(ALL_SEMESTERS);
   const [newSemesterOpen, setNewSemesterOpen] = useState(false);
+  const [associateClassesOpen, setAssociateClassesOpen] = useState(false);
+  const [manageSubTab, setManageSubTab] = useState<"classes" | "weights">("classes");
   const [semesterHintDismissed, setSemesterHintDismissed] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [catalogPhotoOpen, setCatalogPhotoOpen] = useState(false);
@@ -3938,6 +3976,40 @@ export function CourseDetailPage() {
     activeSemesterId === ALL_SEMESTERS
       ? "全部学期"
       : (selectedSemester?.name ?? "当前学期");
+  // 「班级」模块：当前学期（或全部学期）关联的班级，即选学本课程的班级。
+  const semesterClasses = useMemo(() => {
+    const source = selectedSemester ? [selectedSemester] : semesters;
+    const out: { id: string; name: string; semesterName: string }[] = [];
+    const seen = new Set<string>();
+    for (const sem of source) {
+      for (const classId of sem.class_ids ?? []) {
+        const key = `${sem.id}:${classId}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({
+          id: classId,
+          name: classNameMap[classId] ?? "未命名班级",
+          semesterName: sem.name,
+        });
+      }
+    }
+    return out;
+  }, [selectedSemester, semesters, classNameMap]);
+
+  // 「试卷」模块数量徽标：本课程（主知识点）的试卷数。与 PaperListBody 的查询参数
+  // 一致，React Query 去重，不会重复请求。
+  const { query: coursePapersQuery } = useList<IPaper>({
+    resource: "papers",
+    pagination: { currentPage: 1, pageSize: 500, mode: "server" },
+    sorters: [{ field: "created_at", order: "desc" }],
+  });
+  const coursePaperCount = useMemo(() => {
+    const rootId = tree?.id ?? id;
+    return (coursePapersQuery.data?.data ?? []).filter(
+      (paper: IPaper) => paper.root_knowledge_point_id === rootId,
+    ).length;
+  }, [coursePapersQuery.data, tree?.id, id]);
+
   const mockExamQuestionCount = mockExamTarget?.total_questions ?? 0;
   const mockExamStartDate = mockExamTarget?.start_time
     ? new Date(mockExamTarget.start_time)
@@ -4208,6 +4280,8 @@ export function CourseDetailPage() {
         })
         .catch(fail)
         .finally(finishTabLoading);
+    } else {
+      finishTabLoading();
     }
     refreshSummary();
     return () => {
@@ -5632,164 +5706,113 @@ export function CourseDetailPage() {
   );
 
   return (
-    <div className="space-y-5">
-      <PageIntroHeader
-        title={course.name}
-        description={formatKnowledgeDisplayPath(course.display_path)}
-        onBack={() => navigate("/courses")}
-        backLabel="返回我的课程"
-        actions={
-          <div className="flex items-center gap-2">
-            {headerBadges}
-            {course.can_write ? (
-              <>
-                <Button
-                  variant="outline"
-                  className="h-9 w-fit shrink-0 px-4 font-medium"
-                  onClick={() => navigate(`/courses/${id}/question-skills`)}
-                >
-                  <Sparkles size={16} className="mr-1.5" />
-                  智能出题
-                </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button className="h-9 w-fit shrink-0 px-4 font-medium">
-                      <Plus size={16} className="mr-1.5" />
-                      新建内容
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-44">
-                    <DropdownMenuItem
-                      onClick={() => void handleOpenUploadDialog()}
-                    >
-                      <Upload size={14} className="mr-2" />
-                      上传资料
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setAddLinkOpen(true)}>
-                      <Link2 size={14} className="mr-2" />
-                      添加链接
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onClick={() =>
-                        navigate("/exams/create", {
-                          state: {
-                            backTo: `/courses/${id}`,
-                            backLabel: "返回课程详情",
-                            successTo: `/courses/${id}?tab=exams`,
-                            courseKpId: id,
-                            courseName: course.name,
-                            existingExamTitles: exams.map((exam) => exam.title),
-                            defaultBankName: courseQuestionBankName(course.name),
-                            mainKnowledgePointId: tree?.id ?? id,
-                            mainKnowledgePointName: course.name,
-                            ...(semesterFilter
-                              ? { courseSemesterId: semesterFilter }
-                              : {}),
-                          },
-                        })
-                      }
-                    >
-                      <ClipboardList size={14} className="mr-2" />
-                      创建考试
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() =>
-                        navigate("/exams/practice/create", {
-                          state: {
-                            backTo: `/courses/${id}`,
-                            backLabel: "返回课程详情",
-                            successTo: `/courses/${id}?tab=assignments`,
-                            courseKpId: id,
-                            ...(semesterFilter
-                              ? { courseSemesterId: semesterFilter }
-                              : {}),
-                          },
-                        })
-                      }
-                    >
-                      <ListChecks size={14} className="mr-2" />
-                      发布练习
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onClick={() =>
-                        navigate("/questions/create", {
-                          state: {
-                            backTo: `/courses/${id}?tab=questions`,
-                            backLabel: "返回课程详情",
-                            successTo: `/courses/${id}?tab=questions`,
-                            courseKpId: id,
-                          },
-                        })
-                      }
-                    >
-                      <BookOpen size={14} className="mr-2" />
-                      创建题目
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() =>
-                        navigate("/questions/import", {
-                          state: {
-                            backTo: `/courses/${id}?tab=questions`,
-                            backLabel: "返回课程详情",
-                            successTo: `/courses/${id}?tab=questions`,
-                            courseKpId: id,
-                            courseName: course.name,
-                          },
-                        })
-                      }
-                    >
-                      <Upload size={14} className="mr-2" />
-                      导入题目
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </>
-            ) : null}
-          </div>
-        }
-      />
-
-      {course.is_deleted ? (
-        <div className="mx-auto w-full max-w-[1320px] rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-          这门课程已删除。当前仅支持查看课程资料、考试、练习、题目和课程目录，不能新增、编辑或删除内容。
-        </div>
-      ) : null}
-
-      {shouldShowCreateSemesterHint ? (
-        <div className="mx-auto flex w-full max-w-[1320px] flex-wrap items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm">
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-            <CalendarRange size={18} />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="font-medium text-foreground">建议先创建学期</div>
-            <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-              当前课程还没有资料、题目、考试或练习。创建学期后，后续发起的考试和练习可以归档到对应学期；这不是必填步骤。
+    <div className="flex h-full min-h-0 bg-background">
+      {/* ===== 左侧栏：课程标识 + AI 入口 + 功能导航 + 教学待办 ===== */}
+      <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-card">
+        <div className="border-b border-border px-4 py-4">
+          <div className="flex items-center gap-2.5">
+            <Button
+              variant="outline"
+              size="icon"
+              className="size-9 shrink-0"
+              onClick={() => navigate("/courses")}
+              title="返回我的课程"
+            >
+              <ArrowLeft size={16} />
+            </Button>
+            <div className="min-w-0">
+              <h1 className="truncate text-[15px] font-bold leading-tight">
+                {course.name}
+              </h1>
+              <p className="truncate text-xs leading-tight text-muted-foreground">
+                {formatKnowledgeDisplayPath(course.display_path)}
+              </p>
             </div>
           </div>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="shrink-0"
-            onClick={() => setNewSemesterOpen(true)}
-          >
-            <Plus size={14} className="mr-1.5" />
-            新建学期
-          </Button>
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            className="size-8 shrink-0 text-muted-foreground hover:text-foreground"
-            aria-label="关闭学期创建提醒"
-            onClick={() => setSemesterHintDismissed(true)}
-          >
-            <X size={15} />
-          </Button>
+          <div className="mt-2.5 flex flex-wrap gap-1.5 empty:hidden">
+            {headerBadges}
+          </div>
+          {course.can_write ? (
+            <div className="mt-3 flex flex-col gap-2">
+              <Button
+                className="w-full justify-center"
+                onClick={() => navigate(`/courses/${id}/question-skills`)}
+              >
+                <Sparkles size={16} className="mr-1.5" />
+                智能出题
+              </Button>
+              <Button
+                variant="outline"
+                className="w-full justify-center"
+                onClick={() =>
+                  navigate(`/courses/${id}/question-skills`, {
+                    state: { createSkill: true },
+                  })
+                }
+              >
+                <Wand2 size={16} className="mr-1.5" />
+                创建出题技能
+              </Button>
+            </div>
+          ) : null}
         </div>
-      ) : null}
+
+        <div className="flex-1 overflow-y-auto px-3 py-4">
+          <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            课程功能
+          </p>
+          <nav className="flex flex-col gap-0.5">
+            {(
+              [
+                ["knowledge", "目录", <Layers3 key="i" size={17} />, tree?.children?.length ?? null],
+                ["materials", "资料", <FileText key="i" size={17} />, course.material_count],
+                ["exams", "考试", <ClipboardList key="i" size={17} />, course.exam_count],
+                ["assignments", "练习", <ListChecks key="i" size={17} />, course.assignment_count],
+                ["questions", "题目", <BookOpen key="i" size={17} />, course.question_count],
+                ["papers", "试卷", <FileStack key="i" size={17} />, coursePaperCount],
+                ["statistics", "统计", <BarChart3 key="i" size={17} />, null],
+                ["manage", "管理", <Settings key="i" size={17} />, null],
+              ] as const
+            ).map(([key, label, icon, count]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setActiveTab(key)}
+                className={cn(
+                  "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                  activeTab === key
+                    ? "bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+              >
+                <span className="shrink-0">{icon}</span>
+                <span>{label}</span>
+                {count != null ? (
+                  <span
+                    className={cn(
+                      "ml-auto rounded-full px-1.5 py-0.5 text-[11px] font-semibold tabular-nums",
+                      activeTab === key
+                        ? "bg-primary/15 text-primary"
+                        : "bg-muted text-muted-foreground",
+                    )}
+                  >
+                    {count}
+                  </span>
+                ) : null}
+              </button>
+            ))}
+          </nav>
+
+          <div className="mt-5">
+            <TodoRail
+              exams={exams}
+              assignments={assignments}
+              materials={materials}
+              questions={questions}
+            />
+          </div>
+        </div>
+      </aside>
 
       <NewSemesterDialog
         courseId={course.id}
@@ -5801,6 +5824,19 @@ export function CourseDetailPage() {
             ...current.filter((item) => item.id !== semester.id),
           ]);
           setActiveSemesterId(semester.id);
+        }}
+      />
+
+      <AssociateClassesDialog
+        courseId={course.id}
+        semesters={semesters}
+        open={associateClassesOpen}
+        onOpenChange={setAssociateClassesOpen}
+        defaultSemesterId={semesterFilter}
+        onUpdated={(updated) => {
+          setSemesters((current) =>
+            current.map((item) => (item.id === updated.id ? updated : item)),
+          );
         }}
       />
 
@@ -6231,100 +6267,88 @@ export function CourseDetailPage() {
         </div>
       ) : null}
 
-      {!shouldShowCreateSemesterHint ? (
-      <div className="mx-auto w-full max-w-[1320px]">
-        <div className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card px-3 py-2">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <CalendarRange size={14} />
-            学期
+      {/* ===== 右侧：学期顶栏 + 滚动内容 ===== */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="shrink-0 border-b border-border bg-card px-6 py-3">
+          <div className="flex items-center gap-3">
+            <div className="flex shrink-0 items-center gap-2 text-sm font-medium">
+              <CalendarRange size={16} className="text-muted-foreground" />
+              <span>学期</span>
+            </div>
+            <Select value={activeSemesterId} onValueChange={setActiveSemesterId}>
+              <SelectTrigger className="h-9 w-[220px] text-sm">
+                <SelectValue placeholder="选择学期" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_SEMESTERS}>全部学期</SelectItem>
+                {semesters.map((semester) => (
+                  <SelectItem key={semester.id} value={semester.id}>
+                    {semester.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <span className="text-xs text-muted-foreground">
+              题目跟课程走；练习 / 考试按学期归档
+            </span>
+            <div className="flex-1" />
+            {course.can_write ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setNewSemesterOpen(true)}
+              >
+                <Plus size={14} className="mr-1.5" />
+                新建学期
+              </Button>
+            ) : null}
           </div>
-          <Select value={activeSemesterId} onValueChange={setActiveSemesterId}>
-            <SelectTrigger className="h-8 w-[200px] text-sm">
-              <SelectValue placeholder="选择学期" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL_SEMESTERS}>全部学期</SelectItem>
-              {semesters.map((semester) => (
-                <SelectItem key={semester.id} value={semester.id}>
-                  {semester.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <span className="text-[11px] text-muted-foreground">
-            题目跟课程走；练习 / 考试按学期归档
-          </span>
-          <div className="flex-1" />
-          {course.can_write ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setNewSemesterOpen(true)}
-            >
-              <Plus size={14} className="mr-1.5" />
-              新建学期
-            </Button>
-          ) : null}
         </div>
 
-        <div className="grid gap-5 lg:grid-cols-[1fr_312px]">
-          <main className="min-w-0">
+        <main className="min-w-0 flex-1 overflow-y-auto p-6">
+          {course.is_deleted ? (
+            <div className="mb-5 rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+              这门课程已删除。当前仅支持查看课程资料、考试、练习、题目和课程目录，不能新增、编辑或删除内容。
+            </div>
+          ) : null}
+          {shouldShowCreateSemesterHint ? (
+            <div className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm">
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                <CalendarRange size={18} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="font-medium text-foreground">建议先创建学期</div>
+                <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                  当前课程还没有资料、题目、考试或练习。创建学期后，后续发起的考试和练习可以归档到对应学期；这不是必填步骤。
+                </div>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="shrink-0"
+                onClick={() => setNewSemesterOpen(true)}
+              >
+                <Plus size={14} className="mr-1.5" />
+                新建学期
+              </Button>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="size-8 shrink-0 text-muted-foreground hover:text-foreground"
+                aria-label="关闭学期创建提醒"
+                onClick={() => setSemesterHintDismissed(true)}
+              >
+                <X size={15} />
+              </Button>
+            </div>
+          ) : null}
             <Tabs
               value={activeTab}
               onValueChange={(value) => setActiveTab(value as CourseTab)}
             >
-              <TabsList className="mb-4 h-auto w-full flex-wrap justify-start gap-1 rounded-none border-b border-border bg-transparent p-0">
-                {(
-                  [
-                    [
-                      "knowledge",
-                      "课程目录",
-                      null,
-                      <Layers3 key="i" size={14} />,
-                    ],
-                    [
-                      "materials",
-                      "课程资料",
-                      course.material_count,
-                      <FileText key="i" size={14} />,
-                    ],
-                    [
-                      "exams",
-                      "考试",
-                      course.exam_count,
-                      <ClipboardList key="i" size={14} />,
-                    ],
-                    [
-                      "assignments",
-                      "练习",
-                      course.assignment_count,
-                      <ListChecks key="i" size={14} />,
-                    ],
-                    [
-                      "questions",
-                      "题目",
-                      course.question_count,
-                      <BookOpen key="i" size={14} />,
-                    ],
-                  ] as const
-                ).map(([key, label, count, icon]) => (
-                  <TabsTrigger
-                    key={key}
-                    value={key}
-                    className="group inline-flex items-center gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-3 py-2 text-muted-foreground data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
-                  >
-                    <span className="text-muted-foreground/70 group-data-[state=active]:text-foreground">
-                      {icon}
-                    </span>
-                    <span className="font-medium">{label}</span>
-                    {count != null ? (
-                      <span className="ml-0.5 rounded-full bg-muted px-1.5 py-0.5 font-sans text-[11px] font-semibold lining-nums tabular-nums text-muted-foreground group-data-[state=active]:bg-foreground/10 group-data-[state=active]:text-foreground">
-                        {count}
-                      </span>
-                    ) : null}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
+              {/* 导航已移到左侧栏，这里只保留各模块内容面板。 */}
               <TabsContent value="materials" className="mt-0">
                 {tabLoading === "materials" ? (
                   <LoadingPanel label="正在加载课程资料..." />
@@ -6378,6 +6402,7 @@ export function CourseDetailPage() {
                   <ExamRows
                     items={exams}
                     kind="exam"
+                    courseId={id ?? ""}
                     semesters={semesters}
                     canWrite={course.can_write}
                     onArchive={handleArchive}
@@ -6418,6 +6443,7 @@ export function CourseDetailPage() {
                     <ExamRows
                       items={filteredAssignments}
                       kind="assignment"
+                      courseId={id ?? ""}
                       semesters={semesters}
                       canWrite={course.can_write}
                       onSummarize={handleOpenAssignmentScoreSummary}
@@ -6505,15 +6531,132 @@ export function CourseDetailPage() {
                   />
                 )}
               </TabsContent>
+              <TabsContent value="papers" className="mt-0">
+                <PaperListBody
+                  rootKnowledgePointId={tree?.id ?? id}
+                  rightSlot={
+                    course.can_write ? (
+                      <Button
+                        size="sm"
+                        onClick={() =>
+                          navigate("/papers/import", {
+                            state: {
+                              backTo: `/courses/${id}?tab=papers`,
+                              backLabel: "返回课程详情",
+                              successTo: `/courses/${id}?tab=papers`,
+                              courseOrigin: true,
+                              rootKnowledgePointId: tree?.id ?? id,
+                              rootKnowledgePointName: course.name,
+                            },
+                          })
+                        }
+                      >
+                        <Upload size={14} className="mr-1.5" />
+                        导入试卷
+                      </Button>
+                    ) : null
+                  }
+                />
+              </TabsContent>
+              <TabsContent value="statistics" className="mt-0">
+                <CourseGradebook
+                  courseId={id ?? ""}
+                  courseName={course.name}
+                  semesterId={semesterFilter}
+                  semesterLabel={selectedSemesterLabel}
+                  canWrite={course.can_write}
+                />
+              </TabsContent>
+              <TabsContent value="manage" className="mt-0">
+                {/* 子标签：班级管理 / 成绩权重（未来可扩展更多） */}
+                <div className="mb-5 flex items-center gap-1 border-b border-border">
+                  {(
+                    [
+                      ["classes", "班级管理"],
+                      ["weights", "成绩权重"],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setManageSubTab(key)}
+                      className={cn(
+                        "relative px-4 py-2.5 text-sm font-medium transition-colors",
+                        manageSubTab === key
+                          ? "text-primary"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      {label}
+                      {manageSubTab === key ? (
+                        <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-primary" />
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
+
+                {manageSubTab === "classes" ? (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <p className="text-sm text-muted-foreground">
+                        选学本课程的班级（来自学期关联），发布练习 / 考试时按班级选择对象
+                      </p>
+                      {course.can_write ? (
+                        <Button size="sm" onClick={() => setAssociateClassesOpen(true)}>
+                          <Plus size={14} className="mr-1.5" />
+                          关联班级
+                        </Button>
+                      ) : null}
+                    </div>
+                    {semesterClasses.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center rounded-lg border border-border bg-card px-6 py-16 text-center">
+                        <div className="mb-3 flex size-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                          <Users size={24} />
+                        </div>
+                        <p className="font-medium">暂无关联班级</p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          从学生管理的班级里选择，关联到对应学期
+                        </p>
+                        {course.can_write ? (
+                          <Button
+                            size="sm"
+                            className="mt-4"
+                            onClick={() => setAssociateClassesOpen(true)}
+                          >
+                            <Plus size={14} className="mr-1.5" />
+                            关联班级
+                          </Button>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                        {semesterClasses.map((cls) => (
+                          <div
+                            key={`${cls.semesterName}-${cls.id}`}
+                            className="rounded-lg border border-border bg-card p-4"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                                <Users size={20} />
+                              </div>
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-semibold">{cls.name}</p>
+                                <p className="truncate text-xs text-muted-foreground">
+                                  {cls.semesterName}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <GradeWeightPanel courseId={id ?? ""} canWrite={course.can_write} />
+                )}
+              </TabsContent>
             </Tabs>
           </main>
-          <TodoRail
-            exams={exams}
-            assignments={assignments}
-            materials={materials}
-            questions={questions}
-          />
-        </div>
 
         <CourseKnowledgeNodeDialog
           open={selectedKnowledgeNode !== null}
@@ -6586,7 +6729,6 @@ export function CourseDetailPage() {
           />
         ) : null}
       </div>
-      ) : null}
     </div>
   );
 }

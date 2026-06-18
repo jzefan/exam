@@ -1,15 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useGetIdentity, useList } from "@refinedev/core";
-import { CalendarClock, CheckCircle2, Clock3, Loader2, Search, UserCheck, Users } from "lucide-react";
+import { ArrowLeft, CalendarClock, CheckCircle2, Clock3, Loader2, Search, UserCheck, Users } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { apiRequest } from "@/pages/grading/api";
+import { listCourseExams } from "@/pages/courses/api";
 import { cn } from "@/lib/utils";
 import type { IExam, IExamStudent } from "@/types";
 import { ExternalCandidateImport } from "./components/ExternalCandidateImport";
+
+/** Minimal shape shared by the global exam list (IExam) and course exams. */
+type ExamPickerItem = Pick<IExam, "id" | "title" | "start_time" | "created_at" | "total_students">;
 
 function formatDateTime(iso: string | null) {
   if (!iso) return "—";
@@ -24,6 +28,13 @@ function getPrimaryStudentTime(student: IExamStudent) {
 
 export function ExamStudentsPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  // 从课程详情进入时带 ?courseId=，将考生范围限定为该课程的考试。
+  const courseId = searchParams.get("courseId");
+  const scoped = Boolean(courseId);
+  const backState = (location.state ?? {}) as { backTo?: string; backLabel?: string };
+
   const [selectedExamId, setSelectedExamId] = useState<string | null>(null);
   const [students, setStudents] = useState<IExamStudent[]>([]);
   const [studentsLoading, setStudentsLoading] = useState(false);
@@ -31,20 +42,45 @@ export function ExamStudentsPage() {
   const [refreshSeed, setRefreshSeed] = useState(0);
   const { data: identity } = useGetIdentity<{ primary_org?: { org_type?: string } | null }>();
 
+  // 全局视角拉取该教师的全部考试；课程视角下禁用，改用课程-考试关联。
   const { query } = useList<IExam>({
     resource: "exams",
     pagination: { currentPage: 1, pageSize: 100 },
     sorters: [{ field: "start_time", order: "desc" }],
+    queryOptions: { enabled: !scoped },
   });
 
-  const exams = useMemo(() => {
-    const items = query.data?.data ?? [];
+  const [courseExams, setCourseExams] = useState<ExamPickerItem[] | null>(null);
+  // Starts true when scoped (initial mount fetches once); the .finally below clears it.
+  const [courseExamsLoading, setCourseExamsLoading] = useState(scoped);
+  useEffect(() => {
+    if (!courseId) return;
+    let alive = true;
+    void listCourseExams(courseId)
+      .then((data) => {
+        if (alive) setCourseExams(data);
+      })
+      .catch(() => {
+        if (alive) setCourseExams([]);
+      })
+      .finally(() => {
+        if (alive) setCourseExamsLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [courseId]);
+
+  const exams = useMemo<ExamPickerItem[]>(() => {
+    const items: ExamPickerItem[] = scoped ? courseExams ?? [] : query.data?.data ?? [];
     return [...items].sort((left, right) => {
       const leftTime = new Date(left.start_time ?? left.created_at).getTime();
       const rightTime = new Date(right.start_time ?? right.created_at).getTime();
       return rightTime - leftTime;
     });
-  }, [query.data?.data]);
+  }, [scoped, courseExams, query.data?.data]);
+
+  const listLoading = scoped ? courseExamsLoading : query.isLoading;
 
   const selectedExam = exams.find((exam) => exam.id === selectedExamId) ?? exams[0] ?? null;
 
@@ -96,14 +132,25 @@ export function ExamStudentsPage() {
   const isEnterprise = identity?.primary_org?.org_type === "enterprise";
 
   return (
-    <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
+    <div className="space-y-4">
+      {backState.backTo ? (
+        <button
+          type="button"
+          onClick={() => navigate(backState.backTo!)}
+          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          {backState.backLabel ?? "返回课程"}
+        </button>
+      ) : null}
+      <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
       <Card className="border-border/50 bg-card/95 xl:h-[calc(100vh-10.5rem)]">
         <CardHeader className="pb-4">
           <CardTitle className="text-base font-bold">考试考生</CardTitle>
           <p className="text-sm text-muted-foreground">按考试时间由近到远查看每场考试的考生列表。</p>
         </CardHeader>
         <CardContent className="space-y-3 overflow-y-auto exam-students-nav-scroll xl:max-h-[calc(100vh-17rem)]">
-          {query.isLoading ? (
+          {listLoading ? (
             <div className="flex items-center gap-2 rounded-xl border border-border/50 bg-muted/20 px-4 py-6 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
               正在加载考试...
@@ -260,7 +307,7 @@ export function ExamStudentsPage() {
           </Tabs>
         </CardContent>
       </Card>
-
+      </div>
     </div>
   );
 }

@@ -27,11 +27,26 @@ from app.questions.service import (
     get_or_create_root_knowledge_question_bank,
     soft_delete_question,
 )
-from app.teacher_courses.models import CourseSemester, ExamSemesterAssignment
+from app.rbac.models import Class, Role, TeacherStudent, UserOrganization
+from app.teacher_courses.models import (
+    CourseGradeWeight,
+    CourseSemester,
+    CourseStudentGrade,
+    ExamSemesterAssignment,
+)
 from app.teacher_courses.schemas import (
+    CourseGradeClass,
+    CourseGradeComponent,
+    CourseGradeDistribution,
+    CourseGradeStudent,
+    CourseGradeSummary,
+    CourseGradeWeights,
     CourseKnowledgeNode,
+    CourseSemesterClassesUpdate,
     CourseSemesterCreate,
     CourseSemesterResponse,
+    CourseStudentGradeUpdate,
+    CourseStudentGradeUpdateResponse,
     ExamSemesterArchiveRequest,
     TeacherCourseAssignmentScoreCell,
     TeacherCourseAssignmentScoreColumn,
@@ -1279,6 +1294,405 @@ async def create_course_semester(
     await db.commit()
     await db.refresh(semester)
     return _semester_to_response(semester, 0, 0)
+
+
+@router.patch(
+    "/{course_id}/semesters/{semester_id}/classes",
+    response_model=CourseSemesterResponse,
+)
+async def update_course_semester_classes(
+    course_id: uuid.UUID,
+    semester_id: uuid.UUID,
+    payload: CourseSemesterClassesUpdate,
+    db: DB,
+    user: CurrentUser,
+) -> CourseSemesterResponse:
+    """更新某个学期关联的班级（从学生管理的班级列表里选择）。"""
+    is_admin = await _is_course_admin(db, user)
+    course, *_ = await _get_visible_course(db, course_id, user=user, is_admin=is_admin)
+    if not is_admin and course.owner_id != user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权修改该课程的学期")
+
+    stmt = select(CourseSemester).where(
+        CourseSemester.id == semester_id,
+        CourseSemester.course_id == course_id,
+        CourseSemester.deleted_at.is_(None),
+    )
+    semester = (await db.execute(stmt)).scalar_one_or_none()
+    if semester is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="学期不存在")
+
+    semester.class_ids = [str(class_id) for class_id in payload.class_ids]
+    await db.commit()
+    await db.refresh(semester)
+    exam_count, assignment_count = await _semester_counts(db, semester.id)
+    return _semester_to_response(semester, exam_count, assignment_count)
+
+
+COURSE_GRADE_COMPONENTS = (
+    "chapter_task",
+    "chapter_quiz",
+    "assignment",
+    "exam",
+)
+
+
+def _course_grade_context_key(semester_id: uuid.UUID | None) -> str:
+    return str(semester_id) if semester_id is not None else "all"
+
+
+async def _get_course_grade_students(
+    *,
+    db: AsyncSession,
+    course_id: uuid.UUID,
+    semester_id: uuid.UUID | None,
+    user: User,
+    is_admin: bool,
+) -> tuple[KnowledgePoint, list[CourseSemester], list[tuple[User, Class]]]:
+    course, *_ = await _get_visible_course(
+        db,
+        course_id,
+        user=user,
+        is_admin=is_admin,
+        include_deleted=True,
+    )
+    if not is_admin and course.owner_id != user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权查看该课程的学生成绩")
+
+    semester_stmt = select(CourseSemester).where(
+        CourseSemester.course_id == course_id,
+        CourseSemester.deleted_at.is_(None),
+    )
+    if semester_id is not None:
+        semester_stmt = semester_stmt.where(CourseSemester.id == semester_id)
+    semesters = list((await db.execute(semester_stmt)).scalars().all())
+    if semester_id is not None and not semesters:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="学期不存在")
+
+    class_ids: set[uuid.UUID] = set()
+    for semester in semesters:
+        for raw_class_id in semester.class_ids or []:
+            try:
+                class_ids.add(uuid.UUID(str(raw_class_id)))
+            except ValueError:
+                continue
+    if not class_ids:
+        return course, semesters, []
+
+    student_stmt = (
+        select(User, Class)
+        .join(Class, User.class_id == Class.id)
+        .join(UserOrganization, UserOrganization.user_id == User.id)
+        .join(Role, Role.id == UserOrganization.role_id)
+        .where(
+            User.class_id.in_(class_ids),
+            User.deleted_at.is_(None),
+            Class.deleted_at.is_(None),
+            Role.name.in_(("student", "assessee")),
+            UserOrganization.org_id == Class.org_id,
+        )
+        .order_by(Class.name, User.full_name, User.student_id, User.username)
+    )
+    if not is_admin:
+        student_stmt = student_stmt.join(
+            TeacherStudent,
+            (TeacherStudent.student_id == User.id)
+            & (TeacherStudent.teacher_id == user.id),
+        )
+    student_rows = list((await db.execute(student_stmt)).unique().all())
+    return course, semesters, student_rows
+
+
+async def _build_course_grade_summary(
+    *,
+    db: AsyncSession,
+    course_id: uuid.UUID,
+    semester_id: uuid.UUID | None,
+    user: User,
+    is_admin: bool,
+) -> CourseGradeSummary:
+    course, _semesters, student_rows = await _get_course_grade_students(
+        db=db,
+        course_id=course_id,
+        semester_id=semester_id,
+        user=user,
+        is_admin=is_admin,
+    )
+    weight_row = (
+        await db.execute(
+            select(CourseGradeWeight).where(CourseGradeWeight.course_id == course_id)
+        )
+    ).scalar_one_or_none()
+    weights = CourseGradeWeights(**((weight_row.weights if weight_row else {}) or {}))
+
+    students_by_id = {student.id: (student, class_row) for student, class_row in student_rows}
+    student_ids = list(students_by_id)
+    system_totals: dict[uuid.UUID, dict[str, list[float]]] = {
+        student_id: {"assignment": [0.0, 0.0], "exam": [0.0, 0.0]}
+        for student_id in student_ids
+    }
+
+    if student_ids:
+        subtree = _course_subtree_cte(
+            course_id,
+            include_deleted_root=course.deleted_at is not None,
+        )
+        has_kp_in_subtree = exists().where(
+            ExamQuestion.exam_id == Exam.id,
+            ExamQuestion.question_id == question_knowledge_points.c.question_id,
+            question_knowledge_points.c.knowledge_point_id.in_(select(subtree.c.id)),
+        )
+        exam_stmt = (
+            select(Exam)
+            .outerjoin(ExamSemesterAssignment, ExamSemesterAssignment.exam_id == Exam.id)
+            .where(
+                Exam.deleted_at.is_(None),
+                Exam.category.in_(("practice", "exam")),
+                or_(Exam.course_kp_id.in_(select(subtree.c.id)), has_kp_in_subtree),
+            )
+            .options(selectinload(Exam.exam_students))
+        )
+        if semester_id is not None:
+            exam_stmt = exam_stmt.where(
+                ExamSemesterAssignment.course_semester_id == semester_id
+            )
+        if not is_admin:
+            exam_stmt = exam_stmt.where(teacher_owned_resource_filter(Exam, user.id))
+        course_exams = list((await db.execute(exam_stmt)).scalars().unique().all())
+
+        for exam in course_exams:
+            component = "assignment" if exam.category == "practice" else "exam"
+            possible_score = max(float(exam.total_score or 0), 0.0)
+            if possible_score <= 0:
+                continue
+            for exam_student in exam.exam_students:
+                if exam_student.student_id not in system_totals:
+                    continue
+                earned_score = float(exam_student.score or 0)
+                system_totals[exam_student.student_id][component][0] += earned_score
+                system_totals[exam_student.student_id][component][1] += possible_score
+
+    manual_by_student: dict[uuid.UUID, dict[str, float]] = {}
+    if student_ids:
+        manual_rows = list(
+            (
+                await db.execute(
+                    select(CourseStudentGrade).where(
+                        CourseStudentGrade.course_id == course_id,
+                        CourseStudentGrade.student_id.in_(student_ids),
+                    )
+                )
+            ).scalars().all()
+        )
+        context_key = _course_grade_context_key(semester_id)
+        for row in manual_rows:
+            context_scores = (row.semester_scores or {}).get(context_key, {})
+            if isinstance(context_scores, dict):
+                manual_by_student[row.student_id] = context_scores
+
+    grade_students: list[CourseGradeStudent] = []
+    class_counts: dict[uuid.UUID, tuple[str, int]] = {}
+    for student, class_row in student_rows:
+        class_name, class_count = class_counts.get(class_row.id, (class_row.name, 0))
+        class_counts[class_row.id] = (class_name, class_count + 1)
+        manual_scores = manual_by_student.get(student.id, {})
+        component_values: dict[str, CourseGradeComponent] = {}
+        for component in COURSE_GRADE_COMPONENTS:
+            system_score = None
+            if component in ("assignment", "exam"):
+                earned, possible = system_totals[student.id][component]
+                if possible > 0:
+                    system_score = round(earned / possible * 100, 2)
+            manual_value = manual_scores.get(component)
+            manual_score = (
+                round(float(manual_value), 2)
+                if isinstance(manual_value, (int, float))
+                else None
+            )
+            effective_score = manual_score if manual_score is not None else system_score
+            component_values[component] = CourseGradeComponent(
+                score=effective_score,
+                system_score=system_score,
+                manual_score=manual_score,
+                source=(
+                    "manual"
+                    if manual_score is not None
+                    else "system"
+                    if system_score is not None
+                    else "none"
+                ),
+            )
+
+        comprehensive_score = round(
+            sum(
+                (component_values[component].score or 0)
+                * float(getattr(weights, component))
+                / 100
+                for component in COURSE_GRADE_COMPONENTS
+            ),
+            2,
+        )
+        grade_students.append(
+            CourseGradeStudent(
+                student_id=student.id,
+                student_no=student.student_id,
+                full_name=student.full_name,
+                username=student.username,
+                class_id=class_row.id,
+                class_name=class_row.name,
+                chapter_task=component_values["chapter_task"],
+                chapter_quiz=component_values["chapter_quiz"],
+                assignment=component_values["assignment"],
+                exam=component_values["exam"],
+                comprehensive_score=comprehensive_score,
+            )
+        )
+
+    scores = [student.comprehensive_score for student in grade_students]
+    class_average = round(sum(scores) / len(scores), 2) if scores else None
+    distribution = CourseGradeDistribution(
+        excellent=sum(1 for score in scores if score >= 80),
+        passing=sum(1 for score in scores if 60 <= score < 80),
+        needs_attention=sum(1 for score in scores if score < 60),
+    )
+    classes = [
+        CourseGradeClass(id=class_id, name=name, student_count=count)
+        for class_id, (name, count) in sorted(
+            class_counts.items(), key=lambda item: item[1][0]
+        )
+    ]
+    return CourseGradeSummary(
+        course_id=course_id,
+        semester_id=semester_id,
+        weights=weights,
+        class_average_score=class_average,
+        student_count=len(grade_students),
+        classes=classes,
+        distribution=distribution,
+        students=grade_students,
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
+@router.get("/{course_id}/grade-summary", response_model=CourseGradeSummary)
+async def get_course_grade_summary(
+    course_id: uuid.UUID,
+    db: DB,
+    user: CurrentUser,
+    semester_id: Annotated[uuid.UUID | None, Query()] = None,
+) -> CourseGradeSummary:
+    is_admin = await _is_course_admin(db, user)
+    return await _build_course_grade_summary(
+        db=db,
+        course_id=course_id,
+        semester_id=semester_id,
+        user=user,
+        is_admin=is_admin,
+    )
+
+
+@router.put(
+    "/{course_id}/grade-summary/{student_id}",
+    response_model=CourseStudentGradeUpdateResponse,
+)
+async def update_course_student_grade(
+    course_id: uuid.UUID,
+    student_id: uuid.UUID,
+    payload: CourseStudentGradeUpdate,
+    db: DB,
+    user: CurrentUser,
+) -> CourseStudentGradeUpdateResponse:
+    is_admin = await _is_course_admin(db, user)
+    _course, _semesters, student_rows = await _get_course_grade_students(
+        db=db,
+        course_id=course_id,
+        semester_id=payload.semester_id,
+        user=user,
+        is_admin=is_admin,
+    )
+    if student_id not in {student.id for student, _class_row in student_rows}:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="学生不在当前课程班级中")
+
+    grade_row = (
+        await db.execute(
+            select(CourseStudentGrade).where(
+                CourseStudentGrade.course_id == course_id,
+                CourseStudentGrade.student_id == student_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if grade_row is None:
+        grade_row = CourseStudentGrade(
+            course_id=course_id,
+            student_id=student_id,
+            semester_scores={},
+        )
+        db.add(grade_row)
+
+    context_key = _course_grade_context_key(payload.semester_id)
+    semester_scores = dict(grade_row.semester_scores or {})
+    context_scores = dict(semester_scores.get(context_key, {}) or {})
+    if payload.score is None:
+        context_scores.pop(payload.component, None)
+    else:
+        context_scores[payload.component] = round(float(payload.score), 2)
+    if context_scores:
+        semester_scores[context_key] = context_scores
+    else:
+        semester_scores.pop(context_key, None)
+    grade_row.semester_scores = semester_scores
+    await db.commit()
+
+    return CourseStudentGradeUpdateResponse(
+        student_id=student_id,
+        semester_id=payload.semester_id,
+        component=payload.component,
+        manual_score=(round(float(payload.score), 2) if payload.score is not None else None),
+    )
+
+
+@router.get("/{course_id}/grade-weights", response_model=CourseGradeWeights)
+async def get_course_grade_weights(
+    course_id: uuid.UUID, db: DB, user: CurrentUser
+) -> CourseGradeWeights:
+    """读取课程成绩权重；未设置时返回全 0 默认值。"""
+    is_admin = await _is_course_admin(db, user)
+    await _get_visible_course(db, course_id, user=user, is_admin=is_admin, include_deleted=True)
+    row = (
+        await db.execute(
+            select(CourseGradeWeight).where(CourseGradeWeight.course_id == course_id)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return CourseGradeWeights()
+    return CourseGradeWeights(**(row.weights or {}))
+
+
+@router.put("/{course_id}/grade-weights", response_model=CourseGradeWeights)
+async def update_course_grade_weights(
+    course_id: uuid.UUID,
+    payload: CourseGradeWeights,
+    db: DB,
+    user: CurrentUser,
+) -> CourseGradeWeights:
+    """保存课程成绩权重（章节任务点 / 章节测试 / 作业 / 考试）。"""
+    is_admin = await _is_course_admin(db, user)
+    course, *_ = await _get_visible_course(db, course_id, user=user, is_admin=is_admin)
+    if not is_admin and course.owner_id != user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权修改该课程的成绩权重")
+
+    row = (
+        await db.execute(
+            select(CourseGradeWeight).where(CourseGradeWeight.course_id == course_id)
+        )
+    ).scalar_one_or_none()
+    weights = payload.model_dump()
+    if row is None:
+        db.add(CourseGradeWeight(course_id=course_id, weights=weights))
+    else:
+        row.weights = weights
+    await db.commit()
+    return payload
 
 
 @router.post(

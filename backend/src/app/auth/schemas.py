@@ -74,6 +74,7 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
+    onboarding_reason: Literal["first_login", "returning_after_week"] | None = None
 
 
 class ForgotPasswordRequest(BaseModel):

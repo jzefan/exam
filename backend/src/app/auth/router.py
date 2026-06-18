@@ -1,12 +1,16 @@
 from typing import Annotated
 import logging
+import uuid
+from datetime import datetime, timedelta, timezone
 from time import perf_counter
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.activity_logs.service import CATEGORY_AUTH, log_event
 from app.auth.dependencies import CurrentUser
+from app.auth.models import User
 from app.auth.schemas import (
     ForgotPasswordRequest,
     ForgotPasswordResponse,
@@ -64,7 +68,7 @@ async def register(
             metadata={"reason": "username_exists"},
             request=request,
         )
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already exists")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该用户名已存在，请更换后重试")
     if data.email and await get_user_by_email(db, data.email):
         await log_event(
             db,
@@ -75,7 +79,7 @@ async def register(
             metadata={"reason": "email_exists"},
             request=request,
         )
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already exists")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该邮箱已被注册，请更换邮箱或直接登录")
     user = await create_user(db, data)
     await log_event(
         db,
@@ -124,6 +128,10 @@ async def login(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="External guests must use invitation links to access exams",
         )
+    user_id = user.id
+    previous_login_at = (
+        await db.execute(select(User.last_login_at).where(User.id == user_id))
+    ).scalar_one_or_none()
     await log_event(
         db,
         event_category=CATEGORY_AUTH,
@@ -131,9 +139,32 @@ async def login(
         user=user,
         request=request,
     )
-    token = create_access_token(user.id, "")
+    now = datetime.now(timezone.utc)
+    if previous_login_at is not None and previous_login_at.tzinfo is None:
+        previous_login_at = previous_login_at.replace(tzinfo=timezone.utc)
+    onboarding_reason = None
+    if previous_login_at is None:
+        onboarding_reason = "first_login"
+    elif now - previous_login_at >= timedelta(days=7):
+        onboarding_reason = "returning_after_week"
+    # Students are limited to a single active session: each login mints a fresh
+    # session id, stored on the user and embedded in the JWT. Teachers/admins are
+    # unaffected and may stay logged in on multiple devices.
+    is_student = await user_has_role(db, user_id, "student")
+    session_id = uuid.uuid4().hex if is_student else None
+    token = create_access_token(user_id, "", session_id=session_id)
     token_created_at = perf_counter()
     user_response = await build_user_response(db, user, include_relationship_metadata=False)
+    update_values: dict = {"last_login_at": now}
+    if session_id is not None:
+        update_values["session_token"] = session_id
+    await db.execute(
+        update(User)
+        .where(User.id == user_id)
+        .values(**update_values)
+        .execution_options(synchronize_session=False)
+    )
+    await db.flush()
     finished_at = perf_counter()
     if finished_at - started_at >= 0.5:
         logger.warning(
@@ -144,7 +175,7 @@ async def login(
             (finished_at - token_created_at) * 1000,
             (finished_at - started_at) * 1000,
         )
-    return TokenResponse(access_token=token, user=user_response)
+    return TokenResponse(access_token=token, user=user_response, onboarding_reason=onboarding_reason)
 
 
 @router.post("/forgot-password", response_model=ForgotPasswordResponse)

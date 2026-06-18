@@ -48,6 +48,7 @@ export interface ITokenResponse {
   access_token: string;
   token_type: string;
   user: IUser;
+  onboarding_reason?: "first_login" | "returning_after_week" | null;
 }
 
 export type QuestionType = "choice" | "true_false" | "fill_in" | "short_answer" | "essay" | "code";

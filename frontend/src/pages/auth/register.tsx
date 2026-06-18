@@ -84,17 +84,32 @@ export function RegisterPage() {
     if (nextPasswordError) {
       return;
     }
-    register({
-      username: form.username.trim(),
-      email: form.email.trim(),
-      password: form.password,
-      full_name: form.username.trim(),
-      role_name: "evaluator",
-      persona: form.persona,
-    });
+    register(
+      {
+        username: form.username.trim(),
+        email: form.email.trim(),
+        password: form.password,
+        full_name: form.username.trim(),
+        role_name: form.persona === "assessor" ? "evaluator" : "teacher",
+        persona: form.persona,
+      },
+      {
+        onSuccess: (result) => {
+          if (!result.success) {
+            setError(result.error?.message || "注册失败，请检查填写内容后重试");
+          }
+        },
+        onError: (registerError) => {
+          setError(registerError.message || "注册服务暂时不可用，请稍后重试");
+        },
+      },
+    );
   };
 
   const updateField = (field: string, value: string) => {
+    if (error) {
+      setError("");
+    }
     setForm((prev) => {
       const next = { ...prev, [field]: value };
       if (field === "password" && confirmPasswordError) {
