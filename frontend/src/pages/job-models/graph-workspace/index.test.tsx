@@ -6,6 +6,47 @@ import { MemoryRouter } from "react-router-dom"
 import { JobModelGraphWorkspace } from "./index"
 import type { JobModelGraphOverview } from "./types"
 
+// React Flow needs a sized container + ResizeObserver that jsdom lacks, so we
+// mock it: nodes render as buttons exposing their label and forwarding clicks.
+vi.mock("@xyflow/react", async () => {
+  const React = await import("react")
+  return {
+    ReactFlow: ({
+      nodes,
+      onNodeClick,
+    }: {
+      nodes: Array<{ id: string; data: { label: string } }>
+      onNodeClick?: (event: unknown, node: unknown) => void
+    }) => (
+      <div data-testid="rf-canvas">
+        {nodes.map((node) => (
+          <button
+            key={node.id}
+            type="button"
+            data-node-id={node.id}
+            onClick={(event) => onNodeClick?.(event, node)}
+          >
+            {node.data.label}
+          </button>
+        ))}
+      </div>
+    ),
+    Background: () => null,
+    Controls: () => null,
+    Handle: () => null,
+    Position: { Left: "left", Right: "right", Top: "top", Bottom: "bottom" },
+    BackgroundVariant: { Dots: "dots", Lines: "lines", Cross: "cross" },
+    useNodesState: (initial: unknown[]) => {
+      const [value, setValue] = React.useState(initial)
+      return [value, setValue, () => {}]
+    },
+    useEdgesState: (initial: unknown[]) => {
+      const [value, setValue] = React.useState(initial)
+      return [value, setValue, () => {}]
+    },
+  }
+})
+
 const fetchMock = vi.fn()
 
 const overview: JobModelGraphOverview = {
@@ -88,13 +129,15 @@ describe("JobModelGraphWorkspace", () => {
     )
 
     expect(await screen.findByRole("heading", { name: "岗位-课程图谱" })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "切换到列表" })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "标准岗位库" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "返回岗位列表" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "企业快速生成" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "保存布局" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "自动排版" })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: /后端工程师/ })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: /Java 微服务/ })).toBeInTheDocument()
+    // Jobs live in the categorized tree; the focused job's mapped course is on the canvas.
+    const tree = await screen.findByTestId("job-tree")
+    expect(await within(tree).findByRole("button", { name: /后端工程师/ })).toBeInTheDocument()
+    const canvas = screen.getByTestId("rf-canvas")
+    expect(await within(canvas).findByRole("button", { name: /Java 微服务/ })).toBeInTheDocument()
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/job-models/graph/overview",
@@ -113,14 +156,16 @@ describe("JobModelGraphWorkspace", () => {
       </MemoryRouter>,
     )
 
-    await userEvent.click(await screen.findByRole("button", { name: /后端工程师/ }))
+    const tree = await screen.findByTestId("job-tree")
+    await userEvent.click(await within(tree).findByRole("button", { name: /后端工程师/ }))
 
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: "岗位详情" })).toBeInTheDocument(),
     )
     expect(screen.getAllByText("服务端架构").length).toBeGreaterThan(0)
 
-    await userEvent.click(screen.getByRole("button", { name: /Java 微服务/ }))
+    const canvas = screen.getByTestId("rf-canvas")
+    await userEvent.click(await within(canvas).findByRole("button", { name: /Java 微服务/ }))
 
     const detail = screen.getByRole("heading", { name: "课程详情" }).closest("aside")
     expect(detail).not.toBeNull()
@@ -138,7 +183,8 @@ describe("JobModelGraphWorkspace", () => {
       </MemoryRouter>,
     )
 
-    await screen.findByRole("button", { name: /后端工程师/ })
+    const canvas = await screen.findByTestId("rf-canvas")
+    await within(canvas).findByRole("button", { name: /后端工程师/ })
     await userEvent.click(screen.getByRole("button", { name: "保存布局" }))
 
     await waitFor(() => expect(screen.getByText("布局已保存")).toBeInTheDocument())

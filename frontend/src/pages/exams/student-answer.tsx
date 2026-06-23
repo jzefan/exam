@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { Brain, Check, ChevronLeft, ChevronRight, CircleAlert, Loader2, Pencil, Sparkles, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ import {
 import { getStudentQuestionTypeLabel } from "@/pages/student/i18n";
 import type { IExamResult, IExamStudent } from "@/types";
 import { cn } from "@/lib/utils";
+import { dimensionLabel } from "@/lib/dimension-display";
 
 function getPrimaryStudentTime(student: IExamStudent) {
   return student.submitted_at ?? student.started_at ?? null;
@@ -37,6 +38,18 @@ interface ManualQuestionScoreResponse {
 
 export function StudentAnswerPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  // 返回目标：从结果分析进入则回到结果分析；从考试考生进入则回到考试考生。
+  // backState 用于把上一级（如课程详情/考试管理）的返回信息继续向上带。
+  const answerNavState = (location.state ?? {}) as {
+    backTo?: string;
+    backLabel?: string;
+    backState?: unknown;
+  };
+  const goBack = () =>
+    navigate(answerNavState.backTo ?? "/exams/students", {
+      state: answerNavState.backState,
+    });
   const { examId, studentId } = useParams<{
     examId: string;
     studentId: string;
@@ -264,7 +277,10 @@ export function StudentAnswerPage() {
   const navigateToStudent = (targetStudentId: string) => {
     if (!examId) return;
     preserveQuestionIndexRef.current = true;
-    navigate(`/exams/${examId}/students/${targetStudentId}/result`);
+    // 保留返回信息，切换上一/下一位考生后「返回」仍指向正确来源。
+    navigate(`/exams/${examId}/students/${targetStudentId}/result`, {
+      state: answerNavState,
+    });
   };
 
   if (loading) {
@@ -540,7 +556,7 @@ export function StudentAnswerPage() {
                 {question.feedback.dimensions?.map((dim) => (
                   <div key={dim.name} className="rounded-xl bg-background p-4">
                     <div className="flex items-center justify-between text-[14px] font-medium">
-                      <span>{dim.name}</span>
+                      <span>{dimensionLabel(dim.name)}</span>
                       <span className="text-primary">
                         {dim.score} / {dim.max_score}
                       </span>
@@ -750,11 +766,11 @@ export function StudentAnswerPage() {
         <div className="flex min-w-0 items-center gap-2 text-[13px]">
           <button
             type="button"
-            onClick={() => navigate("/exams/students")}
+            onClick={goBack}
             className="flex shrink-0 items-center gap-0.5 text-muted-foreground transition-colors hover:text-foreground"
           >
             <ChevronLeft size={15} />
-            返回
+            {answerNavState.backLabel ?? "返回"}
           </button>
           <span className="text-muted-foreground/40">|</span>
           <span className="font-medium text-foreground">答卷详情</span>

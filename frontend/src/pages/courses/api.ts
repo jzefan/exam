@@ -95,6 +95,7 @@ export interface TeacherCourseExam {
   submitted_count: number;
   pending_count: number;
   has_student_history: boolean;
+  has_gradable_questions?: boolean;
   knowledge_points: TeacherCourseExamKnowledgePoint[];
   semester_id: string | null;
   semester_name: string | null;
@@ -325,6 +326,81 @@ export interface CourseGradeSummary {
 export function getCourseGradeSummary(courseId: string, semesterId?: string | null) {
   return apiRequest<CourseGradeSummary>(
     `/teacher/courses/${courseId}/grade-summary${semesterQuery(semesterId)}`,
+  );
+}
+
+export interface CourseMasteryUnit {
+  id: string;
+  name: string;
+  parent_id: string | null;
+  parent_name: string | null;
+  depth: number;
+  is_leaf: boolean;
+  question_count: number;
+  attempt_count: number;
+  score_total: number;
+  max_score_total: number;
+  accuracy: number | null;
+  practice_accuracy: number | null;
+  exam_accuracy: number | null;
+  trend_delta: number | null;
+  variance: number | null;
+  sample_insufficient: boolean;
+}
+
+export interface CourseMasteryQuestion {
+  id: string;
+  title: string;
+  question_type: string;
+  unit_id: string | null;
+  unit_name: string | null;
+  attempt_count: number;
+  score_total: number;
+  max_score_total: number;
+  accuracy: number | null;
+  discrimination: number | null;
+}
+
+export interface CourseMasteryMatrixCell {
+  unit_id: string;
+  accuracy: number | null;
+  practice_accuracy: number | null;
+  exam_accuracy: number | null;
+  trend_delta: number | null;
+  attempt_count: number;
+  sample_insufficient: boolean;
+}
+
+export interface CourseMasteryStudent {
+  student_id: string;
+  student_no: string | null;
+  full_name: string | null;
+  username: string | null;
+  class_name: string | null;
+  average_accuracy: number | null;
+  weak_units: string[];
+  consistency_alerts: string[];
+  cluster_label: string | null;
+  cells: CourseMasteryMatrixCell[];
+}
+
+export interface CourseMasterySummary {
+  course_id: string;
+  semester_id: string | null;
+  sample_threshold: number;
+  student_count: number;
+  question_count: number;
+  overall_accuracy: number | null;
+  units: CourseMasteryUnit[];
+  questions: CourseMasteryQuestion[];
+  matrix_columns: CourseMasteryUnit[];
+  students: CourseMasteryStudent[];
+  generated_at: string;
+}
+
+export function getCourseMasterySummary(courseId: string, semesterId?: string | null) {
+  return apiRequest<CourseMasterySummary>(
+    `/teacher/courses/${courseId}/mastery-summary${semesterQuery(semesterId)}`,
   );
 }
 

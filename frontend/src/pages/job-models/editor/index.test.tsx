@@ -94,7 +94,7 @@ describe("EditorPage", () => {
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        "/api/job-models/models/model-1",
+        "/api/job-models/models/model-1/versions/ver-1",
         expect.objectContaining({ headers: expect.any(Object) }),
       )
     })

@@ -20,6 +20,7 @@ from app.auth.models import User
 from app.config import settings
 from app.exams.models import (
     Exam,
+    ExamQuestion,
     ExamStudent,
     GradingStatus,
     StudentExamAnswer,
@@ -90,6 +91,16 @@ def _task_display_status(task: GradingTask) -> str:
     if task.status == "arbitration_required":
         return "待仲裁"
     return "已完成"
+
+
+def _task_viewed_by(task: GradingTask, user_id: uuid.UUID | None) -> bool:
+    if user_id is None:
+        return any(event.event_type == "grading.viewed" for event in task.audit_events)
+    operator_id = str(user_id)
+    return any(
+        event.event_type == "grading.viewed" and event.operator_id == operator_id
+        for event in task.audit_events
+    )
 
 
 def _humanize_exam_id(exam_id: str | None) -> str:
@@ -772,6 +783,193 @@ async def get_grading_inbox(
     return {"exams": exams}
 
 
+def _export_question_type_label(question_type: str) -> str:
+    if question_type == "code":
+        return "代码题"
+    if question_type == "short_answer":
+        return "主观题"
+    return question_type
+
+
+async def list_grading_export_exams(
+    db: AsyncSession,
+    *,
+    current_user_id: uuid.UUID | None = None,
+    is_platform_admin: bool = True,
+) -> dict[str, Any]:
+    tasks = await _load_workspace_tasks(
+        db,
+        current_user_id=current_user_id,
+        is_platform_admin=is_platform_admin,
+    )
+    locators = await _hydrate_task_locators(db, tasks)
+
+    exams: dict[str, dict[str, Any]] = {}
+    for task in tasks:
+        locator = locators[task.id]
+        exam_id = locator["exam_id"]
+        if not exam_id:
+            continue
+        entry = exams.setdefault(
+            exam_id,
+            {
+                "exam_id": exam_id,
+                "exam_label": locator["exam_label"],
+                "exam_date": task.updated_at.isoformat(),
+                "question_ids": set(),
+                "candidate_ids": set(),
+            },
+        )
+        if task.updated_at.isoformat() > entry["exam_date"]:
+            entry["exam_date"] = task.updated_at.isoformat()
+        entry["exam_label"] = locator["exam_label"] or entry["exam_label"]
+        entry["question_ids"].add(locator["question_id"])
+        entry["candidate_ids"].add(locator["candidate_code"] or locator["candidate_name"] or str(task.id))
+
+    payload = [
+        {
+            "exam_id": entry["exam_id"],
+            "exam_label": entry["exam_label"],
+            "exam_date": entry["exam_date"],
+            "question_count": len(entry["question_ids"]),
+            "candidate_count": len(entry["candidate_ids"]),
+        }
+        for entry in exams.values()
+    ]
+    payload.sort(key=lambda item: item["exam_date"], reverse=True)
+    return {"exams": payload}
+
+
+async def get_grading_exam_score_export(
+    db: AsyncSession,
+    exam_id: str,
+    *,
+    current_user_id: uuid.UUID | None = None,
+    is_platform_admin: bool = True,
+) -> dict[str, Any]:
+    tasks = await _load_workspace_tasks(
+        db,
+        current_user_id=current_user_id,
+        is_platform_admin=is_platform_admin,
+    )
+    locators = await _hydrate_task_locators(db, tasks)
+    matched = [
+        (task, locators[task.id])
+        for task in tasks
+        if locators[task.id]["exam_id"] == exam_id
+    ]
+    if not matched:
+        raise ValueError("grading export exam not found")
+
+    exam_uuid = _try_parse_uuid(exam_id)
+    question_order: dict[str, int] = {}
+    exam_student_scores: dict[uuid.UUID, dict[str, float | None]] = {}
+    if exam_uuid is not None:
+        rows = (
+            await db.execute(
+                select(ExamQuestion.question_id, ExamQuestion.order).where(ExamQuestion.exam_id == exam_uuid)
+            )
+        ).all()
+        question_order = {str(question_id): order for question_id, order in rows}
+        exam_student_rows = (
+            await db.execute(
+                select(
+                    ExamStudent.student_id,
+                    ExamStudent.objective_score,
+                    ExamStudent.subjective_score,
+                    ExamStudent.score,
+                ).where(ExamStudent.exam_id == exam_uuid)
+            )
+        ).all()
+        exam_student_scores = {
+            student_id: {
+                "objective_score": objective_score,
+                "subjective_score": subjective_score,
+                "total_score": total_score,
+            }
+            for student_id, objective_score, subjective_score, total_score in exam_student_rows
+        }
+
+    questions: dict[str, dict[str, Any]] = {}
+    students: dict[str, dict[str, Any]] = {}
+    exam_label = matched[0][1]["exam_label"]
+    exam_date = max(task.updated_at.isoformat() for task, _ in matched)
+
+    for task, locator in matched:
+        question_id = locator["question_id"] or str(task.id)
+        questions.setdefault(
+            question_id,
+            {
+                "question_id": question_id,
+                "question_label": locator["question_label"],
+                "question_type": task.question_type,
+                "question_type_label": _export_question_type_label(task.question_type),
+                "max_score": float(task.max_score),
+                "_order": question_order.get(question_id, 10_000),
+                "_created_at": task.created_at.isoformat() if task.created_at else "",
+            },
+        )
+
+        raw_locator = _parse_task_locator(task)
+        raw_student_id = _try_parse_uuid(raw_locator["candidate_code"])
+        student_key = str(raw_student_id) if raw_student_id is not None else (locator["candidate_code"] or locator["candidate_name"] or str(task.id))
+        exam_student_score = exam_student_scores.get(raw_student_id) if raw_student_id is not None else None
+        student = students.setdefault(
+            student_key,
+            {
+                "candidate_name": locator["candidate_name"],
+                "candidate_code": locator["candidate_code"],
+                "objective_score": float(exam_student_score["objective_score"] or 0.0) if exam_student_score else 0.0,
+                "subjective_score": float(exam_student_score["subjective_score"] or 0.0) if exam_student_score else 0.0,
+                "scores": {},
+                "type_totals": {},
+                "total_score": float(exam_student_score["total_score"] or 0.0) if exam_student_score else 0.0,
+            },
+        )
+        score = task.latest_final_snapshot.score_total if task.latest_final_snapshot else None
+        student["scores"][question_id] = score
+        if score is not None:
+            score_value = float(score)
+            student["type_totals"][task.question_type] = (
+                student["type_totals"].get(task.question_type, 0.0) + score_value
+            )
+            if exam_student_score is None or exam_student_score["subjective_score"] is None:
+                student["subjective_score"] += score_value
+            if exam_student_score is None or exam_student_score["total_score"] is None:
+                student["total_score"] = student["objective_score"] + student["subjective_score"]
+
+    sorted_questions = sorted(
+        questions.values(),
+        key=lambda item: (item["_order"], item["_created_at"], item["question_label"], item["question_id"]),
+    )
+    question_payload = [
+        {key: value for key, value in question.items() if not key.startswith("_")}
+        for question in sorted_questions
+    ]
+
+    for student in students.values():
+        for question in question_payload:
+            student["scores"].setdefault(question["question_id"], None)
+        for question_type in {question["question_type"] for question in question_payload}:
+            student["type_totals"].setdefault(question_type, 0.0)
+        student["objective_score"] = round(float(student["objective_score"]), 2)
+        student["subjective_score"] = round(float(student["subjective_score"]), 2)
+        student["total_score"] = round(float(student["total_score"]), 2)
+
+    student_payload = sorted(
+        students.values(),
+        key=lambda item: (item["candidate_code"] or "", item["candidate_name"] or ""),
+    )
+
+    return {
+        "exam_id": exam_id,
+        "exam_label": exam_label,
+        "exam_date": exam_date,
+        "questions": question_payload,
+        "students": student_payload,
+    }
+
+
 async def get_grading_question_candidates(
     db: AsyncSession,
     exam_id: str,
@@ -816,6 +1014,7 @@ async def get_grading_question_candidates(
             "score": task.latest_final_snapshot.score_total if task.latest_final_snapshot else None,
             "arbitration_required": task.latest_arbitration_snapshot_id is not None,
             "manual_override": _task_result_source(task) == "manual",
+            "viewed": _task_viewed_by(task, current_user_id),
         }
         for task, task_locator in matched
     ]
@@ -1060,6 +1259,7 @@ async def get_grading_candidate_detail(
         "candidate_name": locator["candidate_name"],
         "candidate_code": locator["candidate_code"],
         "status": _task_display_status(task),
+        "viewed": _task_viewed_by(task, current_user_id),
         "evaluation_note": evaluation_note,
         "suggested_score": task.latest_final_snapshot.score_total if task.latest_final_snapshot else None,
         "max_score": task.max_score,
@@ -1072,7 +1272,50 @@ async def get_grading_candidate_detail(
         "feedback_created_at": feedback["feedback_created_at"] if feedback else None,
         "models": models,
         "follow_ups": follow_up_rounds,
+        "feedback": (
+            _build_exam_submission_feedback(task.latest_final_snapshot)
+            if task.latest_final_snapshot is not None
+            else None
+        ),
     }
+
+
+async def mark_grading_task_viewed(
+    db: AsyncSession,
+    task_id: str,
+    *,
+    current_user_id: uuid.UUID | None = None,
+    is_platform_admin: bool = True,
+) -> dict[str, bool]:
+    result = await db.execute(
+        select(GradingTask)
+        .options(selectinload(GradingTask.audit_events))
+        .where(GradingTask.id == uuid.UUID(task_id))
+    )
+    task = result.scalar_one_or_none()
+    if task is None:
+        raise ValueError("grading task not found")
+
+    await _ensure_task_access(
+        db,
+        task,
+        current_user_id=current_user_id,
+        is_platform_admin=is_platform_admin,
+    )
+
+    if not _task_viewed_by(task, current_user_id):
+        db.add(
+            GradingAuditEvent(
+                task_id=task.id,
+                event_type="grading.viewed",
+                event_payload={},
+                operator_type="teacher",
+                operator_id=str(current_user_id) if current_user_id is not None else "system",
+            )
+        )
+        await db.commit()
+
+    return {"viewed": True}
 
 
 async def run_grading_prompt_follow_up(

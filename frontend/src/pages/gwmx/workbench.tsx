@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useGetIdentity } from "@refinedev/core"
-import { Briefcase, Layers, Sparkles, ArrowRight, Clock, GitBranch, Factory, ClipboardList } from "lucide-react"
+import { Briefcase, Sparkles, ArrowRight, Clock, GitBranch, Factory, ClipboardList } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { zhCN } from "date-fns/locale"
 import { Card, CardContent } from "@/components/ui/card"
@@ -166,12 +166,6 @@ export function GwmxWorkbench() {
               description="输入 JD 或上传说明书，AI 推荐并定制岗位"
               icon={<Sparkles className="h-4 w-4" />}
               onClick={() => navigate("/gwmx/job-models/fast-create")}
-            />
-            <QuickAction
-              title="标准岗位库"
-              description="浏览平台标准岗位，选择作为基底"
-              icon={<Layers className="h-4 w-4" />}
-              onClick={() => navigate("/gwmx/job-models/standard-library")}
             />
             <QuickAction
               title="我的岗位"

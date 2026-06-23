@@ -37,6 +37,18 @@ export interface GradingInboxResponse {
   exams: GradingInboxExamGroup[];
 }
 
+export interface GradingExportExam {
+  exam_id: string;
+  exam_label: string;
+  exam_date: string;
+  question_count: number;
+  candidate_count: number;
+}
+
+export interface GradingExportExamListResponse {
+  exams: GradingExportExam[];
+}
+
 export interface GradingQuestionCandidate {
   task_id: string;
   candidate_name: string;
@@ -45,6 +57,7 @@ export interface GradingQuestionCandidate {
   score: number | null;
   arbitration_required: boolean;
   manual_override: boolean;
+  viewed: boolean;
 }
 
 export interface GradingQuestionDetailResponse {
@@ -61,6 +74,51 @@ export interface GradingQuestionDetailResponse {
   candidates: GradingQuestionCandidate[];
 }
 
+// 按考生阅卷：一名考生在某场考试下的「按题 task」单元（前端聚合，无新增后端接口）
+export interface CandidateTaskCell {
+  questionId: string;
+  questionLabel: string;
+  questionContent: string;
+  questionType: "short_answer" | "code";
+  maxScore: number;
+  task: GradingQuestionCandidate; // 含 task_id / status / viewed / score
+}
+
+export interface CandidateGroup {
+  candidateKey: string; // candidate_code ?? candidate_name
+  candidateName: string;
+  candidateCode: string | null;
+  cells: CandidateTaskCell[];
+  pendingCount: number;
+  completedCount: number;
+}
+
+export interface GradingExportQuestion {
+  question_id: string;
+  question_label: string;
+  question_type: "short_answer" | "code" | string;
+  question_type_label: string;
+  max_score: number;
+}
+
+export interface GradingExportStudentScore {
+  candidate_name: string;
+  candidate_code: string | null;
+  objective_score: number;
+  subjective_score: number;
+  scores: Record<string, number | null>;
+  type_totals: Record<string, number>;
+  total_score: number;
+}
+
+export interface GradingExportScoreResponse {
+  exam_id: string;
+  exam_label: string;
+  exam_date: string;
+  questions: GradingExportQuestion[];
+  students: GradingExportStudentScore[];
+}
+
 export interface GradingCandidateModelComment {
   stage: "primary" | "review" | "arbiter";
   model_label: string;
@@ -70,11 +128,29 @@ export interface GradingCandidateModelComment {
   risk_flags: string[];
 }
 
+export interface GradingFeedbackDimension {
+  name: string;
+  score: number;
+  max_score: number | null;
+  comment: string;
+}
+
+// 汇总（终评 snapshot）结构化反馈，与答卷详情页一致
+export interface GradingCandidateFeedback {
+  dimensions: GradingFeedbackDimension[];
+  strengths: string[];
+  deductions: string[];
+  suggestions: string[];
+  risk_flags: string[];
+  evidence_lines: string[];
+}
+
 export interface GradingCandidateDetailResponse {
   task_id: string;
   candidate_name: string;
   candidate_code: string | null;
   status: string;
+  viewed: boolean;
   evaluation_note?: string | null;
   suggested_score: number | null;
   max_score: number;
@@ -93,6 +169,7 @@ export interface GradingCandidateDetailResponse {
     prompt: string;
     models: GradingCandidateModelComment[];
   }>;
+  feedback?: GradingCandidateFeedback | null;
 }
 
 export interface GradingPromptFollowUpModel {

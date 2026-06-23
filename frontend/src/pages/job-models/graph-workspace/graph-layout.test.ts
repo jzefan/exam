@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { buildGraphWorkspaceLayout } from "./graph-layout"
+import { buildFocusedJobLayout } from "./graph-layout"
 import type { JobModelGraphOverview } from "./types"
 
 const overview: JobModelGraphOverview = {
@@ -102,9 +102,16 @@ const overview: JobModelGraphOverview = {
   layout: null,
 }
 
-describe("buildGraphWorkspaceLayout", () => {
-  it("places jobs on the left and courses on the right", () => {
-    const graph = buildGraphWorkspaceLayout(overview)
+describe("buildFocusedJobLayout", () => {
+  it("returns an empty graph when no job is selected", () => {
+    const graph = buildFocusedJobLayout(overview, { jobId: null })
+
+    expect(graph.nodes).toHaveLength(0)
+    expect(graph.edges).toHaveLength(0)
+  })
+
+  it("places the focused job on the left and its mapped courses on the right", () => {
+    const graph = buildFocusedJobLayout(overview, { jobId: "job-1" })
 
     const job = graph.nodes.find((node) => node.id === "job-job-1")
     const course = graph.nodes.find((node) => node.id === "course-course-1")
@@ -114,23 +121,48 @@ describe("buildGraphWorkspaceLayout", () => {
     expect(job?.position.x).toBeLessThan(course?.position.x ?? 0)
   })
 
-  it("expands selected job skills between jobs and courses", () => {
-    const graph = buildGraphWorkspaceLayout(overview, { selectedJobId: "job-1" })
+  it("shows only the focused job's skills and the courses they map to", () => {
+    const graph = buildFocusedJobLayout(overview, { jobId: "job-1" })
+    const nodeIds = graph.nodes.map((node) => node.id)
 
-    expect(graph.nodes.map((node) => node.id)).toContain("skill-skill-1")
-    expect(graph.nodes.map((node) => node.id)).toContain("skill-skill-2")
-    expect(graph.nodes.map((node) => node.id)).not.toContain("skill-skill-3")
+    expect(nodeIds).toContain("job-job-1")
+    expect(nodeIds).toContain("skill-skill-1")
+    expect(nodeIds).toContain("skill-skill-2")
+    expect(nodeIds).not.toContain("skill-skill-3")
+    expect(nodeIds).toContain("course-course-1")
+    // course-2 is mapped to skill-3 (a different job) so it must not appear.
+    expect(nodeIds).not.toContain("course-course-2")
+    // other jobs are never rendered on the focused canvas.
+    expect(nodeIds).not.toContain("job-job-2")
+
     expect(graph.edges.map((edge) => edge.id)).toContain("job-job-1__skill-skill-1")
     expect(graph.edges.map((edge) => edge.id)).toContain("skill-skill-1__course-course-1")
   })
 
-  it("marks unrelated courses muted when a job is selected", () => {
-    const graph = buildGraphWorkspaceLayout(overview, { selectedJobId: "job-1" })
+  it("mutes courses other than the selected one", () => {
+    const overviewWithTwoCourses: JobModelGraphOverview = {
+      ...overview,
+      skill_course_mappings: [
+        ...overview.skill_course_mappings,
+        {
+          id: "mapping-3",
+          skill_id: "skill-2",
+          course_root_knowledge_point_id: "course-2",
+          relation_type: "recommended",
+          match_type: "manual",
+          status: "active",
+          source_type: "skill",
+          target_type: "course",
+        },
+      ],
+    }
 
-    const relatedCourse = graph.nodes.find((node) => node.id === "course-course-1")
-    const unrelatedCourse = graph.nodes.find((node) => node.id === "course-course-2")
+    const graph = buildFocusedJobLayout(overviewWithTwoCourses, {
+      jobId: "job-1",
+      selectedCourseId: "course-1",
+    })
 
-    expect(relatedCourse?.muted).toBe(false)
-    expect(unrelatedCourse?.muted).toBe(true)
+    expect(graph.nodes.find((node) => node.id === "course-course-1")?.muted).toBe(false)
+    expect(graph.nodes.find((node) => node.id === "course-course-2")?.muted).toBe(true)
   })
 })

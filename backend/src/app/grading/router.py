@@ -12,10 +12,13 @@ from app.auth.dependencies import CurrentUser, user_has_role
 from app.database import get_db
 from app.grading.schemas import (
     FinalGradingReportRead,
+    GradingExportExamListRead,
+    GradingExportScoreRead,
     GradingInboxCandidateDetailRead,
     GradingInboxQuestionDetailRead,
     GradingInboxRead,
     GradingTaskConfirmRead,
+    GradingTaskViewedRead,
     GradingPromptFollowUpCreate,
     GradingPromptFollowUpRead,
     GradingSnapshotRead,
@@ -31,9 +34,12 @@ from app.grading.service import (
     create_grading_task,
     create_manual_score_override,
     get_final_report,
+    get_grading_exam_score_export,
     get_grading_candidate_detail,
     get_grading_inbox,
     get_grading_question_candidates,
+    list_grading_export_exams,
+    mark_grading_task_viewed,
     run_grading_prompt_follow_up,
     stream_grading_prompt_follow_up,
     list_grading_tasks,
@@ -102,6 +108,43 @@ async def get_grading_candidate_detail_endpoint(
                 await get_grading_candidate_detail(
                     db,
                     task_id,
+                    current_user_id=user.id,
+                    is_platform_admin=await _is_grading_admin(db, user),
+                )
+            )
+        )
+    except ValueError as exc:
+        raise _not_found(exc) from exc
+
+
+@router.get("/export/exams", response_model=GradingExportExamListRead)
+async def list_grading_export_exams_endpoint(
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> GradingExportExamListRead:
+    return GradingExportExamListRead(
+        **(
+            await list_grading_export_exams(
+                db,
+                current_user_id=user.id,
+                is_platform_admin=await _is_grading_admin(db, user),
+            )
+        )
+    )
+
+
+@router.get("/export/exams/{exam_id}/scores", response_model=GradingExportScoreRead)
+async def get_grading_exam_score_export_endpoint(
+    exam_id: str,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> GradingExportScoreRead:
+    try:
+        return GradingExportScoreRead(
+            **(
+                await get_grading_exam_score_export(
+                    db,
+                    exam_id,
                     current_user_id=user.id,
                     is_platform_admin=await _is_grading_admin(db, user),
                 )
@@ -225,6 +268,27 @@ async def confirm_grading_task_endpoint(
             )
         )
     )
+
+
+@router.post("/tasks/{task_id}/viewed", response_model=GradingTaskViewedRead)
+async def mark_grading_task_viewed_endpoint(
+    task_id: str,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> GradingTaskViewedRead:
+    try:
+        return GradingTaskViewedRead(
+            **(
+                await mark_grading_task_viewed(
+                    db,
+                    task_id,
+                    current_user_id=user.id,
+                    is_platform_admin=await _is_grading_admin(db, user),
+                )
+            )
+        )
+    except ValueError as exc:
+        raise _not_found(exc) from exc
 
 
 @router.get("/tasks/{task_id}/report", response_model=FinalGradingReportRead)

@@ -5,7 +5,6 @@ import { normalizeJobModelsResponse } from "./list-utils"
 import {
   Edit2,
   Trash2,
-  Layers,
   GitBranch,
   Clock,
   Briefcase,
@@ -14,10 +13,12 @@ import {
   ChevronDown,
   LayoutGrid,
   List,
+  Network,
 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { zhCN } from "date-fns/locale"
 import { cn } from "@/lib/utils"
+import { PageIntroHeader } from "@/components/ui/page-intro-header"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -261,7 +262,7 @@ export function JobModelList() {
   }
 
   const renderEntryActions = () => (
-    <div className="flex flex-wrap gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       <div className="inline-flex items-center rounded-lg border border-border bg-background p-1">
         <Button
           variant={viewMode === "list" ? "secondary" : "ghost"}
@@ -284,10 +285,10 @@ export function JobModelList() {
       </div>
       <Button
         variant="outline"
-        onClick={() => navigate("/gwmx/job-models/standard-library")}
+        onClick={() => navigate("/gwmx/job-models/graph")}
       >
-        <Layers className="mr-2 h-4 w-4" />
-        标准岗位库
+        <Network className="mr-2 h-4 w-4" />
+        岗位-课程图谱
       </Button>
       <Button onClick={() => navigate("/gwmx/job-models/fast-create")}>
         <Sparkles className="mr-2 h-4 w-4" />
@@ -299,13 +300,11 @@ export function JobModelList() {
   if (isLoading && facets.length === 0 && models.length === 0) {
     return (
       <div className="space-y-6">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h1 className="text-base font-bold text-foreground">岗位模型管理</h1>
-            <p className="mt-1 text-sm text-muted-foreground">标准岗位库与企业快速生成统一入口</p>
-          </div>
-          {renderEntryActions()}
-        </div>
+        <PageIntroHeader
+          title="岗位模型管理"
+          description="企业快速生成与岗位-课程图谱统一入口"
+          actions={renderEntryActions()}
+        />
         <div className="grid gap-4">
           {[1, 2, 3].map((i) => (
             <div
@@ -329,13 +328,11 @@ export function JobModelList() {
   if (!isLoading && totalCount === 0 && facets.length === 0) {
     return (
       <div className="space-y-6">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h1 className="text-base font-bold text-foreground">岗位模型管理</h1>
-            <p className="mt-1 text-sm text-muted-foreground">标准岗位库与企业快速生成统一入口</p>
-          </div>
-          {renderEntryActions()}
-        </div>
+        <PageIntroHeader
+          title="岗位模型管理"
+          description="企业快速生成与岗位-课程图谱统一入口"
+          actions={renderEntryActions()}
+        />
 
         <div className="rounded-[var(--radius)] border border-dashed border-border bg-card p-6">
           <div className="flex flex-col items-center py-14 px-6 text-center">
@@ -343,10 +340,10 @@ export function JobModelList() {
               <Briefcase className="h-8 w-8 text-primary" />
             </div>
             <h3 className="text-base font-semibold text-foreground">
-              还没有模型，先从标准岗位库开始
+              还没有岗位模型
             </h3>
             <p className="text-sm text-muted-foreground mt-1.5 max-w-md">
-              进入标准岗位库浏览平台标准岗位，再通过企业快速生成创建你的企业版岗位模型。
+              通过企业快速生成创建你的第一个企业版岗位模型。
             </p>
             <div className="mt-8">{renderEntryActions()}</div>
           </div>
@@ -357,16 +354,11 @@ export function JobModelList() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-base font-bold text-foreground">岗位模型管理</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            标准岗位库与企业快速生成统一入口，共 {totalCount} 个模型
-          </p>
-        </div>
-        {renderEntryActions()}
-      </div>
+      <PageIntroHeader
+        title="岗位模型管理"
+        description={`企业快速生成与岗位-课程图谱统一入口，共 ${totalCount} 个模型`}
+        actions={renderEntryActions()}
+      />
 
       {/* Left-Right Layout */}
       <div className="grid grid-cols-[280px_1fr] gap-6 items-start">

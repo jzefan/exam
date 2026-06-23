@@ -149,6 +149,10 @@ class GradingTaskConfirmRead(BaseModel):
     grading_status: str
 
 
+class GradingTaskViewedRead(BaseModel):
+    viewed: bool
+
+
 class GradingInboxQuestionRead(BaseModel):
     question_key: str
     question_id: str
@@ -174,6 +178,18 @@ class GradingInboxRead(BaseModel):
     exams: list[GradingInboxExamGroupRead] = Field(default_factory=list)
 
 
+class GradingExportExamRead(BaseModel):
+    exam_id: str
+    exam_label: str
+    exam_date: str
+    question_count: int
+    candidate_count: int
+
+
+class GradingExportExamListRead(BaseModel):
+    exams: list[GradingExportExamRead] = Field(default_factory=list)
+
+
 class GradingInboxCandidateRead(BaseModel):
     task_id: str
     candidate_name: str
@@ -182,6 +198,7 @@ class GradingInboxCandidateRead(BaseModel):
     score: float | None = None
     arbitration_required: bool = False
     manual_override: bool = False
+    viewed: bool = False
 
 
 class GradingInboxQuestionDetailRead(BaseModel):
@@ -198,6 +215,32 @@ class GradingInboxQuestionDetailRead(BaseModel):
     candidates: list[GradingInboxCandidateRead] = Field(default_factory=list)
 
 
+class GradingExportQuestionRead(BaseModel):
+    question_id: str
+    question_label: str
+    question_type: str
+    question_type_label: str
+    max_score: float
+
+
+class GradingExportStudentScoreRead(BaseModel):
+    candidate_name: str
+    candidate_code: str | None = None
+    objective_score: float = 0.0
+    subjective_score: float = 0.0
+    scores: dict[str, float | None] = Field(default_factory=dict)
+    type_totals: dict[str, float] = Field(default_factory=dict)
+    total_score: float
+
+
+class GradingExportScoreRead(BaseModel):
+    exam_id: str
+    exam_label: str
+    exam_date: str
+    questions: list[GradingExportQuestionRead] = Field(default_factory=list)
+    students: list[GradingExportStudentScoreRead] = Field(default_factory=list)
+
+
 class GradingInboxModelCommentRead(BaseModel):
     stage: str
     model_label: str
@@ -207,11 +250,32 @@ class GradingInboxModelCommentRead(BaseModel):
     risk_flags: list[str] = Field(default_factory=list)
 
 
+class GradingFeedbackDimensionRead(BaseModel):
+    name: str
+    score: float
+    max_score: float | None = None
+    comment: str = ""
+
+
+class GradingCandidateFeedbackRead(BaseModel):
+    """Consolidated (final-snapshot) structured feedback, mirroring the exam
+    result page's ``StudentExamAnswer.feedback`` so the grading center can show
+    the same dimension breakdown."""
+
+    dimensions: list[GradingFeedbackDimensionRead] = Field(default_factory=list)
+    strengths: list[str] = Field(default_factory=list)
+    deductions: list[str] = Field(default_factory=list)
+    suggestions: list[str] = Field(default_factory=list)
+    risk_flags: list[str] = Field(default_factory=list)
+    evidence_lines: list[str] = Field(default_factory=list)
+
+
 class GradingInboxCandidateDetailRead(BaseModel):
     task_id: str
     candidate_name: str
     candidate_code: str | None = None
     status: str
+    viewed: bool = False
     evaluation_note: str | None = None
     suggested_score: float | None = None
     max_score: int
@@ -224,6 +288,7 @@ class GradingInboxCandidateDetailRead(BaseModel):
     feedback_created_at: str | None = None
     models: list[GradingInboxModelCommentRead] = Field(default_factory=list)
     follow_ups: list[GradingPromptFollowUpHistoryRead] = Field(default_factory=list)
+    feedback: GradingCandidateFeedbackRead | None = None
 
 
 class GradingPromptFollowUpCreate(BaseModel):

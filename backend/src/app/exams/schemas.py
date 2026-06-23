@@ -141,6 +141,7 @@ class ExamResponse(BaseModel):
     total_students: int = 0
     submitted_count: int = 0
     has_student_history: bool = False
+    has_gradable_questions: bool = False
     knowledge_points: list[KnowledgePointResponse] = Field(default_factory=list)
     participated: bool | None = None
     started_at: datetime | None = None

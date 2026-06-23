@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -17,7 +17,13 @@ from app.auth.models import User
 from app.common.data_visibility import VisibilityScope
 from app.common.resource_access import can_write_owned_resource, teacher_owned_resource_filter, teacher_visible_resource_filter
 from app.database import get_db
-from app.exams.models import Exam, ExamQuestion, ExamStudent, GradingStatus
+from app.exams.models import (
+    Exam,
+    ExamQuestion,
+    ExamStudent,
+    GradingStatus,
+    StudentExamSubmissionAnswer,
+)
 from app.job_models.models import LearningResource
 from app.learning.models import Direction, KnowledgePoint, Major
 from app.questions.models import Question, question_knowledge_points
@@ -42,6 +48,11 @@ from app.teacher_courses.schemas import (
     CourseGradeSummary,
     CourseGradeWeights,
     CourseKnowledgeNode,
+    CourseMasteryMatrixCell,
+    CourseMasteryQuestion,
+    CourseMasteryStudent,
+    CourseMasterySummary,
+    CourseMasteryUnit,
     CourseSemesterClassesUpdate,
     CourseSemesterCreate,
     CourseSemesterResponse,
@@ -68,6 +79,20 @@ DEFAULT_DIRECT_DIRECTION_NAMES = {"通用", "默认", "专业直属"}
 # Cross-major shared pool. A new course goes here unless the teacher later moves it.
 DEFAULT_MAJOR_NAME = "default-prof"
 DEFAULT_DIRECTION_NAME = "通用"
+_GRADABLE_QUESTION_TYPES = {"short_answer", "essay", "code"}
+
+
+def _exam_has_gradable_questions(exam: Exam) -> bool:
+    return any(
+        exam_question.question is not None
+        and (
+            exam_question.question.type.value
+            if hasattr(exam_question.question.type, "value")
+            else str(exam_question.question.type)
+        )
+        in _GRADABLE_QUESTION_TYPES
+        for exam_question in exam.exam_questions
+    )
 
 
 async def _ensure_default_direction(db: AsyncSession, user: User) -> Direction:
@@ -786,6 +811,7 @@ async def _list_course_exams(
                 submitted_count=submitted_count,
                 pending_count=pending_count,
                 has_student_history=has_student_history,
+                has_gradable_questions=_exam_has_gradable_questions(exam),
                 knowledge_points=list(knowledge_points_by_id.values()),
                 semester_id=semester.id if semester else None,
                 semester_name=semester.name if semester else None,
@@ -1583,6 +1609,586 @@ async def get_course_grade_summary(
 ) -> CourseGradeSummary:
     is_admin = await _is_course_admin(db, user)
     return await _build_course_grade_summary(
+        db=db,
+        course_id=course_id,
+        semester_id=semester_id,
+        user=user,
+        is_admin=is_admin,
+    )
+
+
+MASTERY_SAMPLE_THRESHOLD = 3
+MASTERY_WEAK_ACCURACY = 60.0
+MASTERY_CONSISTENCY_GAP = 25.0
+
+
+def _percent(score: float, maximum: float) -> float | None:
+    if maximum <= 0:
+        return None
+    return round(score / maximum * 100, 2)
+
+
+def _variance(values: list[float]) -> float | None:
+    if len(values) < 2:
+        return None
+    mean = sum(values) / len(values)
+    return round(sum((value - mean) ** 2 for value in values) / len(values), 2)
+
+
+def _empty_mastery_bucket() -> dict[str, object]:
+    return {
+        "score": 0.0,
+        "max": 0.0,
+        "attempts": 0,
+        "questions": set(),
+        "practice_score": 0.0,
+        "practice_max": 0.0,
+        "exam_score": 0.0,
+        "exam_max": 0.0,
+    }
+
+
+def _add_mastery_attempt(
+    bucket: dict[str, object],
+    *,
+    score: float,
+    maximum: float,
+    category: str,
+    question_id: uuid.UUID | None = None,
+) -> None:
+    bucket["score"] = float(bucket["score"]) + score
+    bucket["max"] = float(bucket["max"]) + maximum
+    bucket["attempts"] = int(bucket["attempts"]) + 1
+    if question_id is not None:
+        questions = bucket["questions"]
+        if isinstance(questions, set):
+            questions.add(question_id)
+    if category == "practice":
+        bucket["practice_score"] = float(bucket["practice_score"]) + score
+        bucket["practice_max"] = float(bucket["practice_max"]) + maximum
+    else:
+        bucket["exam_score"] = float(bucket["exam_score"]) + score
+        bucket["exam_max"] = float(bucket["exam_max"]) + maximum
+
+
+def _bucket_question_count(bucket: dict[str, object]) -> int:
+    questions = bucket["questions"]
+    return len(questions) if isinstance(questions, set) else 0
+
+
+def _bucket_snapshot(bucket: dict[str, object]) -> dict[str, object]:
+    accuracy = _percent(float(bucket["score"]), float(bucket["max"]))
+    practice_accuracy = _percent(float(bucket["practice_score"]), float(bucket["practice_max"]))
+    exam_accuracy = _percent(float(bucket["exam_score"]), float(bucket["exam_max"]))
+    trend_delta = (
+        round(exam_accuracy - practice_accuracy, 2)
+        if exam_accuracy is not None and practice_accuracy is not None
+        else None
+    )
+    return {
+        "score": round(float(bucket["score"]), 2),
+        "max": round(float(bucket["max"]), 2),
+        "attempts": int(bucket["attempts"]),
+        "question_count": _bucket_question_count(bucket),
+        "accuracy": accuracy,
+        "practice_accuracy": practice_accuracy,
+        "exam_accuracy": exam_accuracy,
+        "trend_delta": trend_delta,
+    }
+
+
+async def _build_course_mastery_summary(
+    *,
+    db: AsyncSession,
+    course_id: uuid.UUID,
+    semester_id: uuid.UUID | None,
+    user: User,
+    is_admin: bool,
+) -> CourseMasterySummary:
+    course, _semesters, roster_rows = await _get_course_grade_students(
+        db=db,
+        course_id=course_id,
+        semester_id=semester_id,
+        user=user,
+        is_admin=is_admin,
+    )
+
+    subtree = _course_subtree_cte(
+        course_id,
+        include_deleted_root=course.deleted_at is not None,
+    )
+    subtree_ids = select(subtree.c.id)
+    nodes = list(
+        (
+            await db.execute(
+                select(KnowledgePoint)
+                .where(KnowledgePoint.id.in_(subtree_ids))
+                .order_by(KnowledgePoint.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    node_by_id = {node.id: node for node in nodes}
+    node_ids = set(node_by_id)
+    children_map: dict[uuid.UUID | None, list[KnowledgePoint]] = {}
+    for node in nodes:
+        children_map.setdefault(node.parent_id, []).append(node)
+
+    depth_by_id: dict[uuid.UUID, int] = {}
+
+    def mark_depth(node: KnowledgePoint, depth: int) -> None:
+        depth_by_id[node.id] = depth
+        for child in children_map.get(node.id, []):
+            mark_depth(child, depth + 1)
+
+    if course.id in node_by_id:
+        mark_depth(node_by_id[course.id], 0)
+
+    has_kp_in_subtree = exists().where(
+        ExamQuestion.exam_id == Exam.id,
+        ExamQuestion.question_id == question_knowledge_points.c.question_id,
+        question_knowledge_points.c.knowledge_point_id.in_(select(subtree.c.id)),
+    )
+    exam_stmt = (
+        select(Exam)
+        .outerjoin(ExamSemesterAssignment, ExamSemesterAssignment.exam_id == Exam.id)
+        .where(
+            Exam.deleted_at.is_(None),
+            Exam.category.in_(("practice", "exam")),
+            or_(Exam.course_kp_id.in_(select(subtree.c.id)), has_kp_in_subtree),
+        )
+        .options(selectinload(Exam.exam_questions))
+    )
+    if semester_id is not None:
+        exam_stmt = exam_stmt.where(ExamSemesterAssignment.course_semester_id == semester_id)
+    if not is_admin:
+        exam_stmt = exam_stmt.where(teacher_owned_resource_filter(Exam, user.id))
+    course_exams = list((await db.execute(exam_stmt)).scalars().unique().all())
+    exam_ids = [exam.id for exam in course_exams]
+
+    student_profiles: dict[uuid.UUID, dict[str, str | None]] = {
+        student.id: {
+            "student_no": student.student_id,
+            "full_name": student.full_name,
+            "username": student.username,
+            "class_name": class_row.name,
+        }
+        for student, class_row in roster_rows
+    }
+
+    direct_unit_totals: dict[uuid.UUID, dict[str, object]] = {}
+    student_unit_totals: dict[uuid.UUID, dict[uuid.UUID, dict[str, object]]] = {}
+    student_overall: dict[uuid.UUID, dict[str, object]] = {}
+    question_totals: dict[uuid.UUID, dict[str, object]] = {}
+    question_student_totals: dict[uuid.UUID, dict[uuid.UUID, dict[str, object]]] = {}
+    question_unit: dict[uuid.UUID, uuid.UUID] = {}
+    overall_bucket = _empty_mastery_bucket()
+
+    if exam_ids:
+        answer_rows = (
+            await db.execute(
+                select(
+                    StudentExamSubmissionAnswer,
+                    Exam.category,
+                    Exam.course_kp_id,
+                    ExamQuestion.score_override,
+                    Question,
+                    User,
+                    Class,
+                )
+                .join(
+                    ExamStudent,
+                    and_(
+                        ExamStudent.exam_id == StudentExamSubmissionAnswer.exam_id,
+                        ExamStudent.student_id == StudentExamSubmissionAnswer.student_id,
+                        ExamStudent.latest_submission_id == StudentExamSubmissionAnswer.submission_id,
+                    ),
+                )
+                .join(Exam, Exam.id == StudentExamSubmissionAnswer.exam_id)
+                .join(
+                    ExamQuestion,
+                    and_(
+                        ExamQuestion.exam_id == StudentExamSubmissionAnswer.exam_id,
+                        ExamQuestion.question_id == StudentExamSubmissionAnswer.question_id,
+                    ),
+                )
+                .join(Question, Question.id == StudentExamSubmissionAnswer.question_id)
+                .join(User, User.id == StudentExamSubmissionAnswer.student_id)
+                .outerjoin(Class, Class.id == User.class_id)
+                .where(
+                    StudentExamSubmissionAnswer.exam_id.in_(exam_ids),
+                    Question.deleted_at.is_(None),
+                )
+                .options(selectinload(Question.knowledge_points))
+            )
+        ).all()
+
+        for answer, category, exam_course_kp_id, score_override, question, student, class_row in answer_rows:
+            maximum = float(score_override if score_override is not None else question.score or 0)
+            if maximum <= 0:
+                continue
+            score = max(0.0, min(float(answer.score_awarded or 0), maximum))
+            linked_unit_ids = [
+                kp.id
+                for kp in question.knowledge_points or []
+                if kp.id in node_ids
+            ]
+            if not linked_unit_ids and exam_course_kp_id in node_ids:
+                linked_unit_ids = [exam_course_kp_id]
+            if not linked_unit_ids and course_id in node_ids:
+                linked_unit_ids = [course_id]
+
+            student_profiles.setdefault(
+                student.id,
+                {
+                    "student_no": student.student_id,
+                    "full_name": student.full_name,
+                    "username": student.username,
+                    "class_name": class_row.name if class_row else None,
+                },
+            )
+            _add_mastery_attempt(
+                overall_bucket,
+                score=score,
+                maximum=maximum,
+                category=category,
+                question_id=question.id,
+            )
+            _add_mastery_attempt(
+                student_overall.setdefault(student.id, _empty_mastery_bucket()),
+                score=score,
+                maximum=maximum,
+                category=category,
+                question_id=question.id,
+            )
+            question_bucket = question_totals.setdefault(
+                question.id,
+                {
+                    **_empty_mastery_bucket(),
+                    "title": question.title,
+                    "question_type": question.type.value if hasattr(question.type, "value") else str(question.type),
+                },
+            )
+            _add_mastery_attempt(
+                question_bucket,
+                score=score,
+                maximum=maximum,
+                category=category,
+                question_id=question.id,
+            )
+            _add_mastery_attempt(
+                question_student_totals.setdefault(question.id, {}).setdefault(
+                    student.id,
+                    _empty_mastery_bucket(),
+                ),
+                score=score,
+                maximum=maximum,
+                category=category,
+                question_id=question.id,
+            )
+
+            for unit_id in linked_unit_ids:
+                question_unit.setdefault(question.id, unit_id)
+                _add_mastery_attempt(
+                    direct_unit_totals.setdefault(unit_id, _empty_mastery_bucket()),
+                    score=score,
+                    maximum=maximum,
+                    category=category,
+                    question_id=question.id,
+                )
+                _add_mastery_attempt(
+                    student_unit_totals.setdefault(student.id, {}).setdefault(
+                        unit_id,
+                        _empty_mastery_bucket(),
+                    ),
+                    score=score,
+                    maximum=maximum,
+                    category=category,
+                    question_id=question.id,
+                )
+
+    student_accuracy_rank = {
+        student_id: _percent(float(bucket["score"]), float(bucket["max"]))
+        for student_id, bucket in student_overall.items()
+        if float(bucket["max"]) > 0
+    }
+    ranked_student_ids = [
+        student_id
+        for student_id, _accuracy in sorted(
+            student_accuracy_rank.items(),
+            key=lambda item: item[1] if item[1] is not None else -1,
+            reverse=True,
+        )
+    ]
+    split_size = max(1, round(len(ranked_student_ids) * 0.27)) if len(ranked_student_ids) >= 2 else 0
+    high_student_ids = set(ranked_student_ids[:split_size])
+    low_student_ids = set(ranked_student_ids[-split_size:]) if split_size else set()
+
+    def group_question_accuracy(question_id: uuid.UUID, student_ids: set[uuid.UUID]) -> float | None:
+        score = 0.0
+        maximum = 0.0
+        for student_id in student_ids:
+            bucket = question_student_totals.get(question_id, {}).get(student_id)
+            if not bucket:
+                continue
+            score += float(bucket["score"])
+            maximum += float(bucket["max"])
+        return _percent(score, maximum)
+
+    question_models: list[CourseMasteryQuestion] = []
+    question_accuracies_by_unit: dict[uuid.UUID, list[float]] = {}
+    for question_id, bucket in question_totals.items():
+        unit_id = question_unit.get(question_id)
+        unit = node_by_id.get(unit_id) if unit_id is not None else None
+        snapshot = _bucket_snapshot(bucket)
+        accuracy = snapshot["accuracy"]
+        if unit_id is not None and isinstance(accuracy, float):
+            question_accuracies_by_unit.setdefault(unit_id, []).append(accuracy)
+        high_accuracy = group_question_accuracy(question_id, high_student_ids)
+        low_accuracy = group_question_accuracy(question_id, low_student_ids)
+        discrimination = (
+            round(high_accuracy - low_accuracy, 2)
+            if high_accuracy is not None and low_accuracy is not None
+            else None
+        )
+        question_models.append(
+            CourseMasteryQuestion(
+                id=question_id,
+                title=str(bucket.get("title") or "未命名题目"),
+                question_type=str(bucket.get("question_type") or ""),
+                unit_id=unit_id,
+                unit_name=unit.name if unit else None,
+                attempt_count=int(snapshot["attempts"]),
+                score_total=float(snapshot["score"]),
+                max_score_total=float(snapshot["max"]),
+                accuracy=accuracy if isinstance(accuracy, float) else None,
+                discrimination=discrimination,
+            )
+        )
+
+    unit_cache: dict[uuid.UUID, dict[str, object]] = {}
+
+    def weighted(items: list[dict[str, object]], key: str) -> float | None:
+        total_weight = 0
+        total_value = 0.0
+        for item in items:
+            value = item.get(key)
+            if not isinstance(value, (int, float)):
+                continue
+            weight = int(item.get("question_count") or item.get("attempts") or 0)
+            if weight <= 0:
+                continue
+            total_weight += weight
+            total_value += float(value) * weight
+        return round(total_value / total_weight, 2) if total_weight > 0 else None
+
+    def unit_aggregate(unit_id: uuid.UUID) -> dict[str, object]:
+        if unit_id in unit_cache:
+            return unit_cache[unit_id]
+        direct = _bucket_snapshot(
+            direct_unit_totals.get(unit_id, _empty_mastery_bucket())
+        )
+        child_items = [
+            unit_aggregate(child.id)
+            for child in children_map.get(unit_id, [])
+        ]
+        child_items_with_data = [
+            item
+            for item in child_items
+            if float(item.get("max") or 0) > 0 or int(item.get("question_count") or 0) > 0
+        ]
+        if child_items_with_data:
+            accuracy = weighted(child_items_with_data, "accuracy")
+            practice_accuracy = weighted(child_items_with_data, "practice_accuracy")
+            exam_accuracy = weighted(child_items_with_data, "exam_accuracy")
+            trend_delta = (
+                round(exam_accuracy - practice_accuracy, 2)
+                if exam_accuracy is not None and practice_accuracy is not None
+                else None
+            )
+            child_accuracies = [
+                float(item["accuracy"])
+                for item in child_items_with_data
+                if isinstance(item.get("accuracy"), (int, float))
+            ]
+            aggregate = {
+                "score": round(sum(float(item.get("score") or 0) for item in child_items_with_data), 2),
+                "max": round(sum(float(item.get("max") or 0) for item in child_items_with_data), 2),
+                "attempts": sum(int(item.get("attempts") or 0) for item in child_items_with_data),
+                "question_count": sum(int(item.get("question_count") or 0) for item in child_items_with_data),
+                "accuracy": accuracy,
+                "practice_accuracy": practice_accuracy,
+                "exam_accuracy": exam_accuracy,
+                "trend_delta": trend_delta,
+                "variance": _variance(child_accuracies),
+            }
+        else:
+            direct_accuracies = question_accuracies_by_unit.get(unit_id, [])
+            aggregate = {
+                **direct,
+                "variance": _variance(direct_accuracies),
+            }
+        unit_cache[unit_id] = aggregate
+        return aggregate
+
+    def unit_model(unit_id: uuid.UUID) -> CourseMasteryUnit:
+        node = node_by_id[unit_id]
+        parent = node_by_id.get(node.parent_id)
+        aggregate = unit_aggregate(unit_id)
+        question_count = int(aggregate.get("question_count") or 0)
+        return CourseMasteryUnit(
+            id=node.id,
+            name=node.name,
+            parent_id=node.parent_id,
+            parent_name=parent.name if parent else None,
+            depth=depth_by_id.get(node.id, 0),
+            is_leaf=len(children_map.get(node.id, [])) == 0,
+            question_count=question_count,
+            attempt_count=int(aggregate.get("attempts") or 0),
+            score_total=float(aggregate.get("score") or 0),
+            max_score_total=float(aggregate.get("max") or 0),
+            accuracy=aggregate.get("accuracy") if isinstance(aggregate.get("accuracy"), float) else None,
+            practice_accuracy=aggregate.get("practice_accuracy") if isinstance(aggregate.get("practice_accuracy"), float) else None,
+            exam_accuracy=aggregate.get("exam_accuracy") if isinstance(aggregate.get("exam_accuracy"), float) else None,
+            trend_delta=aggregate.get("trend_delta") if isinstance(aggregate.get("trend_delta"), float) else None,
+            variance=aggregate.get("variance") if isinstance(aggregate.get("variance"), float) else None,
+            sample_insufficient=question_count < MASTERY_SAMPLE_THRESHOLD,
+        )
+
+    display_unit_ids = [node.id for node in nodes if node.id != course_id] or [course_id]
+    unit_models = [unit_model(unit_id) for unit_id in display_unit_ids]
+    unit_models.sort(
+        key=lambda item: (
+            item.accuracy is None,
+            item.accuracy if item.accuracy is not None else 101,
+            item.depth,
+            item.name,
+        )
+    )
+
+    def report_columns_for(unit_id: uuid.UUID) -> list[uuid.UUID]:
+        children = children_map.get(unit_id, [])
+        if not children:
+            return [unit_id]
+        result: list[uuid.UUID] = []
+        for child in children:
+            child_columns = report_columns_for(child.id)
+            child_has_data = any(float(unit_aggregate(column_id).get("max") or 0) > 0 for column_id in child_columns)
+            if child_has_data:
+                result.extend(child_columns)
+            elif float(unit_aggregate(child.id).get("max") or 0) > 0:
+                result.append(child.id)
+            else:
+                result.extend(child_columns)
+        return result
+
+    matrix_column_ids = report_columns_for(course_id) if course_id in node_by_id else display_unit_ids
+    if not matrix_column_ids:
+        matrix_column_ids = display_unit_ids
+    seen_columns: set[uuid.UUID] = set()
+    matrix_column_ids = [
+        unit_id
+        for unit_id in matrix_column_ids
+        if unit_id in node_by_id and not (unit_id in seen_columns or seen_columns.add(unit_id))
+    ]
+    matrix_columns = [unit_model(unit_id) for unit_id in matrix_column_ids]
+
+    students: list[CourseMasteryStudent] = []
+    for student_id, profile in student_profiles.items():
+        cells: list[CourseMasteryMatrixCell] = []
+        cell_accuracies: list[float] = []
+        weak_units: list[tuple[str, float]] = []
+        consistency_alerts: list[str] = []
+        for unit in matrix_columns:
+            bucket = student_unit_totals.get(student_id, {}).get(unit.id, _empty_mastery_bucket())
+            snapshot = _bucket_snapshot(bucket)
+            accuracy = snapshot["accuracy"]
+            practice_accuracy = snapshot["practice_accuracy"]
+            exam_accuracy = snapshot["exam_accuracy"]
+            trend_delta = snapshot["trend_delta"]
+            question_count = int(snapshot["question_count"])
+            if isinstance(accuracy, float):
+                cell_accuracies.append(accuracy)
+                if accuracy < MASTERY_WEAK_ACCURACY:
+                    weak_units.append((unit.name, accuracy))
+            if isinstance(trend_delta, float) and abs(trend_delta) >= MASTERY_CONSISTENCY_GAP:
+                consistency_alerts.append(unit.name)
+            cells.append(
+                CourseMasteryMatrixCell(
+                    unit_id=unit.id,
+                    accuracy=accuracy if isinstance(accuracy, float) else None,
+                    practice_accuracy=practice_accuracy if isinstance(practice_accuracy, float) else None,
+                    exam_accuracy=exam_accuracy if isinstance(exam_accuracy, float) else None,
+                    trend_delta=trend_delta if isinstance(trend_delta, float) else None,
+                    attempt_count=int(snapshot["attempts"]),
+                    sample_insufficient=question_count < MASTERY_SAMPLE_THRESHOLD,
+                )
+            )
+        weak_unit_names = [
+            name
+            for name, _accuracy in sorted(weak_units, key=lambda item: item[1])[:3]
+        ]
+        average_accuracy = round(sum(cell_accuracies) / len(cell_accuracies), 2) if cell_accuracies else None
+        cluster_label = " / ".join(weak_unit_names[:2]) if weak_unit_names else None
+        students.append(
+            CourseMasteryStudent(
+                student_id=student_id,
+                student_no=profile.get("student_no"),
+                full_name=profile.get("full_name"),
+                username=profile.get("username"),
+                class_name=profile.get("class_name"),
+                average_accuracy=average_accuracy,
+                weak_units=weak_unit_names,
+                consistency_alerts=consistency_alerts[:3],
+                cluster_label=cluster_label,
+                cells=cells,
+            )
+        )
+
+    students.sort(
+        key=lambda item: (
+            item.average_accuracy is None,
+            item.average_accuracy if item.average_accuracy is not None else 101,
+            item.full_name or item.username or "",
+        )
+    )
+    question_models.sort(
+        key=lambda item: (
+            item.accuracy is None,
+            item.accuracy if item.accuracy is not None else 101,
+            item.discrimination is None,
+            item.discrimination if item.discrimination is not None else 101,
+        )
+    )
+
+    return CourseMasterySummary(
+        course_id=course_id,
+        semester_id=semester_id,
+        sample_threshold=MASTERY_SAMPLE_THRESHOLD,
+        student_count=len(students),
+        question_count=len(question_models),
+        overall_accuracy=_percent(
+            float(overall_bucket["score"]),
+            float(overall_bucket["max"]),
+        ),
+        units=unit_models,
+        questions=question_models,
+        matrix_columns=matrix_columns,
+        students=students,
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
+@router.get("/{course_id}/mastery-summary", response_model=CourseMasterySummary)
+async def get_course_mastery_summary(
+    course_id: uuid.UUID,
+    db: DB,
+    user: CurrentUser,
+    semester_id: Annotated[uuid.UUID | None, Query()] = None,
+) -> CourseMasterySummary:
+    is_admin = await _is_course_admin(db, user)
+    return await _build_course_mastery_summary(
         db=db,
         course_id=course_id,
         semester_id=semester_id,

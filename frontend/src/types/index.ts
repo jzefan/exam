@@ -116,6 +116,7 @@ export interface IExam {
   total_students: number;
   submitted_count: number;
   has_student_history: boolean;
+  has_gradable_questions?: boolean;
   knowledge_points: IKnowledgePoint[];
   participated?: boolean | null;
   started_at?: string | null;

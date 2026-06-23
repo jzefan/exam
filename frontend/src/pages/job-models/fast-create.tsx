@@ -1,9 +1,10 @@
 import { useCallback, useId, useState, type ChangeEvent } from "react"
 import { useNavigate } from "react-router-dom"
-import { ArrowLeft, FileText, LoaderCircle, Sparkles, UploadCloud, X } from "lucide-react"
+import { FileText, LoaderCircle, Sparkles, UploadCloud, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
+import { PageIntroHeader } from "@/components/ui/page-intro-header"
 import { Textarea } from "@/components/ui/textarea"
 
 import { RecommendStandardCard } from "./components/recommend-standard-card"
@@ -275,190 +276,168 @@ export function JobModelFastCreate() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-muted/30">
-      <header className="shrink-0 border-b bg-background">
-        <div className="flex min-h-14 items-center justify-between gap-4 px-6 py-2">
-          <div className="flex items-center gap-3">
-            <Button
-              aria-label="返回"
-              className="rounded-full"
-              onClick={() => {
-                if (step === "match") setStep("calibrate")
-                else if (step === "calibrate") setStep("upload")
-                else navigate("/gwmx/job-models")
-              }}
-              size="icon"
-              variant="outline"
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-            <div>
-              <h1 className="text-base font-semibold tracking-tight text-foreground">
-                {step === "upload"
-                  ? "企业快速生成"
-                  : step === "calibrate"
-                    ? "校准标准岗位"
-                    : "对照技能清单"}
-              </h1>
-              <p className="text-xs text-muted-foreground">
-                {step === "upload"
-                  ? "粘贴或上传 JD，AI 推荐最接近的标准岗位，再生成企业版岗位模型"
-                  : step === "calibrate"
-                    ? "确认后 AI 将逐一对照标准岗位的技能与 JD 要求，方便你裁剪与补充"
-                    : "勾选保留的标准技能、补充 JD 中缺失的技能，一键生成企业版"}
-              </p>
-            </div>
-          </div>
-          {step !== "upload" ? (
-            <Button onClick={() => navigate("/gwmx/job-models")} size="sm" variant="outline">
+    <div className="space-y-6">
+      <PageIntroHeader
+        title={
+          step === "upload"
+            ? "企业快速生成"
+            : step === "calibrate"
+              ? "校准标准岗位"
+              : "对照技能清单"
+        }
+        description={
+          step === "upload"
+            ? "粘贴或上传 JD，AI 推荐最接近的标准岗位，再生成企业版岗位模型"
+            : step === "calibrate"
+              ? "确认后 AI 将逐一对照标准岗位的技能与 JD 要求，方便你裁剪与补充"
+              : "勾选保留的标准技能、补充 JD 中缺失的技能，一键生成企业版"
+        }
+        onBack={() => {
+          if (step === "match") setStep("calibrate")
+          else if (step === "calibrate") setStep("upload")
+          else navigate("/gwmx/job-models")
+        }}
+        backLabel={step === "upload" ? "返回岗位列表" : "返回上一步"}
+        actions={
+          step !== "upload" ? (
+            <Button onClick={() => navigate("/gwmx/job-models")} variant="outline">
               取消
             </Button>
+          ) : undefined
+        }
+      />
+
+      {step === "match" ? (
+        <div className="mx-auto w-full max-w-3xl">
+          {isMatching ? (
+            <div className="flex flex-col items-center justify-center gap-3 rounded-[var(--radius)] border border-border bg-card p-10">
+              <LoaderCircle className="h-6 w-6 animate-spin text-primary" />
+              <p className="text-sm font-medium text-foreground">AI 正在对照技能…</p>
+              <p className="max-w-md text-center text-xs text-muted-foreground">
+                正在把标准岗位「{recommended?.jobRole}」的每一项技能与你上传的 JD 做语义对照，通常需要 10–30 秒，请稍候。
+              </p>
+            </div>
+          ) : recommended ? (
+            <SkillMatchPanel
+              dimensions={matchDimensions}
+              isSubmitting={isCreating}
+              jobRole={recommended.jobRole}
+              missingKnowledgePoints={missingKnowledgePoints}
+              missingSkills={missingSkills}
+              onBack={() => setStep("calibrate")}
+              onSubmit={handleConfirmCreate}
+            />
+          ) : null}
+          {error ? (
+            <p className="mt-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive" role="alert">
+              {error}
+            </p>
           ) : null}
         </div>
-      </header>
-
-      <main className="flex-1 min-h-0 overflow-hidden">
-        {step === "match" ? (
-          <div className="h-full overflow-y-auto px-6 py-6">
-            <div className="mx-auto w-full max-w-3xl pb-16">
-              {isMatching ? (
-                <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border bg-card p-10 shadow-sm">
-                  <LoaderCircle className="h-6 w-6 animate-spin text-primary" />
-                  <p className="text-sm font-medium text-foreground">AI 正在对照技能…</p>
-                  <p className="max-w-md text-center text-xs text-muted-foreground">
-                    正在把标准岗位「{recommended?.jobRole}」的每一项技能与你上传的 JD 做语义对照，通常需要 10–30 秒，请稍候。
-                  </p>
-                </div>
-              ) : recommended ? (
-                <SkillMatchPanel
-                  dimensions={matchDimensions}
-                  isSubmitting={isCreating}
-                  jobRole={recommended.jobRole}
-                  missingKnowledgePoints={missingKnowledgePoints}
-                  missingSkills={missingSkills}
-                  onBack={() => setStep("calibrate")}
-                  onSubmit={handleConfirmCreate}
-                />
-              ) : null}
-              {error ? (
-                <p className="mt-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive" role="alert">
-                  {error}
-                </p>
-              ) : null}
-            </div>
+      ) : step === "upload" ? (
+        <section aria-labelledby="jd-input-heading" className="mx-auto w-full max-w-3xl space-y-5">
+          <div className="space-y-1">
+            <h2 className="text-base font-semibold text-foreground" id="jd-input-heading">
+              输入岗位信息
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              AI 会从标准岗位库中匹配最接近的一个，并给出推荐理由。
+            </p>
           </div>
-        ) : step === "upload" ? (
-          <div className="flex h-full items-start justify-center px-6 py-6">
-            <section
-              aria-labelledby="jd-input-heading"
-              className="w-full max-w-3xl space-y-4 rounded-2xl border bg-card p-6 shadow-sm"
-            >
-              <div className="space-y-1">
-                <h2 className="text-base font-semibold text-foreground" id="jd-input-heading">
-                  输入岗位信息
-                </h2>
-                <p className="text-sm text-muted-foreground">
-                  AI 会从标准岗位库中匹配最接近的一个，并给出推荐理由。
-                </p>
-              </div>
 
-              <div className="space-y-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button asChild disabled={isParsingFile} size="sm" type="button" variant="outline">
-                    <label className="cursor-pointer" htmlFor={fileInputId}>
-                      {isParsingFile ? (
-                        <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
-                      ) : (
-                        <UploadCloud className="mr-2 h-4 w-4" />
-                      )}
-                      上传 JD 文件
-                    </label>
-                  </Button>
-                  <input
-                    accept=".pdf,.txt,.md,text/plain"
-                    className="hidden"
-                    id={fileInputId}
-                    onChange={handleFileChange}
-                    type="file"
-                  />
-                  <span className="text-xs text-muted-foreground">
-                    支持 PDF / TXT（图片与 Word 暂不支持）
-                  </span>
-                </div>
-                {uploadedFileName ? (
-                  <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                    <FileText className="h-4 w-4 text-primary" />
-                    <span className="truncate">{uploadedFileName}</span>
-                    <Button
-                      aria-label="清除已上传文件"
-                      className="ml-auto h-6 w-6 shrink-0"
-                      onClick={clearUploadedFile}
-                      size="icon"
-                      type="button"
-                      variant="ghost"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor={jdTextareaId}>岗位描述</Label>
-                <Textarea
-                  className="min-h-[200px]"
-                  id={jdTextareaId}
-                  onChange={(event) => setJdText(event.target.value)}
-                  placeholder="例如：负责 Java 后端开发，熟悉 Spring Boot、MySQL 和接口设计"
-                  value={jdText}
-                />
-                {error ? (
-                  <p className="text-sm text-destructive" role="alert">
-                    {error}
-                  </p>
-                ) : null}
-              </div>
-
-              <Button
-                className="w-full sm:w-auto"
-                disabled={!jdText.trim() || isAnalyzing || isParsingFile}
-                onClick={handleParse}
-                type="button"
-              >
-                {isAnalyzing ? (
-                  <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Sparkles className="mr-2 h-4 w-4" />
-                )}
-                {isAnalyzing ? "AI 正在匹配…" : "立即解析文本"}
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button asChild disabled={isParsingFile} size="sm" type="button" variant="outline">
+                <label className="cursor-pointer" htmlFor={fileInputId}>
+                  {isParsingFile ? (
+                    <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <UploadCloud className="mr-2 h-4 w-4" />
+                  )}
+                  上传 JD 文件
+                </label>
               </Button>
-            </section>
-          </div>
-        ) : (
-          <div className="h-full overflow-y-auto px-6 py-6">
-            <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 pb-16">
-              {recommended ? (
-                <RecommendStandardCard
-                  confidence={recommended.confidence}
-                  directionName={recommended.directionName}
-                  industryName={recommended.industryName}
-                  isCreating={isMatching}
-                  jobFamily={recommended.jobFamily}
-                  jobRole={recommended.jobRole}
-                  matchedKeywords={recommended.matchedKeywords}
-                  onUseStandard={handleUseStandard}
-                  rationale={recommended.rationale}
-                />
-              ) : null}
-              {error ? (
-                <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive" role="alert">
-                  {error}
-                </p>
-              ) : null}
+              <input
+                accept=".pdf,.txt,.md,text/plain"
+                className="hidden"
+                id={fileInputId}
+                onChange={handleFileChange}
+                type="file"
+              />
+              <span className="text-xs text-muted-foreground">
+                支持 PDF / TXT（图片与 Word 暂不支持）
+              </span>
             </div>
+            {uploadedFileName ? (
+              <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                <FileText className="h-4 w-4 text-primary" />
+                <span className="truncate">{uploadedFileName}</span>
+                <Button
+                  aria-label="清除已上传文件"
+                  className="ml-auto h-6 w-6 shrink-0"
+                  onClick={clearUploadedFile}
+                  size="icon"
+                  type="button"
+                  variant="ghost"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ) : null}
           </div>
-        )}
-      </main>
+
+          <div className="space-y-2">
+            <Label htmlFor={jdTextareaId}>岗位描述</Label>
+            <Textarea
+              className="min-h-[200px]"
+              id={jdTextareaId}
+              onChange={(event) => setJdText(event.target.value)}
+              placeholder="例如：负责 Java 后端开发，熟悉 Spring Boot、MySQL 和接口设计"
+              value={jdText}
+            />
+            {error ? (
+              <p className="text-sm text-destructive" role="alert">
+                {error}
+              </p>
+            ) : null}
+          </div>
+
+          <Button
+            className="w-full sm:w-auto"
+            disabled={!jdText.trim() || isAnalyzing || isParsingFile}
+            onClick={handleParse}
+            type="button"
+          >
+            {isAnalyzing ? (
+              <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Sparkles className="mr-2 h-4 w-4" />
+            )}
+            {isAnalyzing ? "AI 正在匹配…" : "立即解析文本"}
+          </Button>
+        </section>
+      ) : (
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+          {recommended ? (
+            <RecommendStandardCard
+              confidence={recommended.confidence}
+              directionName={recommended.directionName}
+              industryName={recommended.industryName}
+              isCreating={isMatching}
+              jobFamily={recommended.jobFamily}
+              jobRole={recommended.jobRole}
+              matchedKeywords={recommended.matchedKeywords}
+              onUseStandard={handleUseStandard}
+              rationale={recommended.rationale}
+            />
+          ) : null}
+          {error ? (
+            <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive" role="alert">
+              {error}
+            </p>
+          ) : null}
+        </div>
+      )}
     </div>
   )
 }

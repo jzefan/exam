@@ -125,13 +125,15 @@ export function Layout() {
   const isCoursesPage = location.pathname.startsWith("/courses");
   // 课程详情：整屏左右两栏布局（侧栏 + 内容），自己管理滚动。
   const isCourseDetailPage = /^\/courses\/[^/]+$/.test(location.pathname);
+  // 岗位-课程图谱：整屏画布（React Flow），需要占满浏览器宽高、自管理布局。
+  const isJobGraphPage = location.pathname === "/gwmx/job-models/graph";
   const isExamWorkflowPage =
     location.pathname === "/exams/practice/create" ||
     location.pathname.startsWith("/exams/practice/edit/") ||
     /^\/exams\/[^/]+\/view$/.test(location.pathname) ||
     /^\/courses\/[^/]+\/question-skills$/.test(location.pathname);
   const isFullScreenPage =
-    isKnowledgePage || isGradingPage || isQuestionImportPage || isPaperImportPage || isCourseDetailPage;
+    isKnowledgePage || isGradingPage || isQuestionImportPage || isPaperImportPage || isCourseDetailPage || isJobGraphPage;
   const isAnalysisPage = /^\/exams\/[^/]+\/analysis/.test(location.pathname);
   // 从「我的课程」进入的考试 / 练习相关页（创建、编辑、查看、分析）：顶部导航仍高亮
   // 「我的课程」而非「考试管理」。来源通过导航 state 的 backTo(/courses…) 或 courseOrigin 判断。

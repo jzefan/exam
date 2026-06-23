@@ -86,6 +86,75 @@ class CourseGradeSummary(BaseModel):
     generated_at: datetime
 
 
+class CourseMasteryUnit(BaseModel):
+    id: uuid.UUID
+    name: str
+    parent_id: uuid.UUID | None = None
+    parent_name: str | None = None
+    depth: int = 0
+    is_leaf: bool = False
+    question_count: int = 0
+    attempt_count: int = 0
+    score_total: float = 0
+    max_score_total: float = 0
+    accuracy: float | None = None
+    practice_accuracy: float | None = None
+    exam_accuracy: float | None = None
+    trend_delta: float | None = None
+    variance: float | None = None
+    sample_insufficient: bool = False
+
+
+class CourseMasteryQuestion(BaseModel):
+    id: uuid.UUID
+    title: str
+    question_type: str
+    unit_id: uuid.UUID | None = None
+    unit_name: str | None = None
+    attempt_count: int = 0
+    score_total: float = 0
+    max_score_total: float = 0
+    accuracy: float | None = None
+    discrimination: float | None = None
+
+
+class CourseMasteryMatrixCell(BaseModel):
+    unit_id: uuid.UUID
+    accuracy: float | None = None
+    practice_accuracy: float | None = None
+    exam_accuracy: float | None = None
+    trend_delta: float | None = None
+    attempt_count: int = 0
+    sample_insufficient: bool = False
+
+
+class CourseMasteryStudent(BaseModel):
+    student_id: uuid.UUID
+    student_no: str | None = None
+    full_name: str | None = None
+    username: str | None = None
+    class_name: str | None = None
+    average_accuracy: float | None = None
+    weak_units: list[str] = Field(default_factory=list)
+    consistency_alerts: list[str] = Field(default_factory=list)
+    cluster_label: str | None = None
+    cells: list[CourseMasteryMatrixCell] = Field(default_factory=list)
+
+
+class CourseMasterySummary(BaseModel):
+    course_id: uuid.UUID
+    semester_id: uuid.UUID | None = None
+    sample_threshold: int = 3
+    student_count: int = 0
+    question_count: int = 0
+    overall_accuracy: float | None = None
+    units: list[CourseMasteryUnit] = Field(default_factory=list)
+    questions: list[CourseMasteryQuestion] = Field(default_factory=list)
+    matrix_columns: list[CourseMasteryUnit] = Field(default_factory=list)
+    students: list[CourseMasteryStudent] = Field(default_factory=list)
+    generated_at: datetime
+
+
 class CourseStudentGradeUpdate(BaseModel):
     semester_id: uuid.UUID | None = None
     component: CourseGradeComponentKey
@@ -204,6 +273,7 @@ class TeacherCourseExam(BaseModel):
     submitted_count: int = 0
     pending_count: int = 0
     has_student_history: bool = False
+    has_gradable_questions: bool = False
     knowledge_points: list[TeacherCourseExamKnowledgePoint] = Field(default_factory=list)
     semester_id: uuid.UUID | None = None
     semester_name: str | None = None

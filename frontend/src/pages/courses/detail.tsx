@@ -140,6 +140,7 @@ import { NewSemesterDialog } from "./NewSemesterDialog";
 import { AssociateClassesDialog } from "./AssociateClassesDialog";
 import { GradeWeightPanel } from "./GradeWeightPanel";
 import { CourseGradebook } from "./CourseGradebook";
+import { CourseMasteryAnalytics } from "./CourseMasteryAnalytics";
 import { PaperListBody } from "@/pages/papers/PaperListBody";
 import {
   ExamCard,
@@ -2058,6 +2059,18 @@ function ExamRows({
               )
             }
             onAnalysis={() => navigate(`/exams/${item.id}/analysis`, { state: backState })}
+            onGrade={
+              item.submitted_count > 0 && item.has_gradable_questions
+                ? () => {
+                    const params = new URLSearchParams({
+                      examId: item.id,
+                      backTo,
+                      backLabel: "返回课程详情",
+                    });
+                    navigate(`/grading?${params.toString()}`, { state: backState });
+                  }
+                : undefined
+            }
             onGenerateMock={
               kind === "exam" && onGenerateMock
                 ? () => onGenerateMock(item)
@@ -2074,6 +2087,7 @@ function ExamRows({
             moreActions={archiveMenuItems}
             collapseSecondaryActions
             canManage={canWrite}
+            revealActionsOnHover
           />
         );
       })}
@@ -3910,6 +3924,7 @@ export function CourseDetailPage() {
   const [newSemesterOpen, setNewSemesterOpen] = useState(false);
   const [associateClassesOpen, setAssociateClassesOpen] = useState(false);
   const [manageSubTab, setManageSubTab] = useState<"classes" | "weights">("classes");
+  const [statisticsSubTab, setStatisticsSubTab] = useState<"grades" | "mastery">("grades");
   const [semesterHintDismissed, setSemesterHintDismissed] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [catalogPhotoOpen, setCatalogPhotoOpen] = useState(false);
@@ -5377,6 +5392,11 @@ export function CourseDetailPage() {
             ? { existingExamTitles: exams.map((exam) => exam.title) }
             : {}),
           ...(semesterFilter ? { courseSemesterId: semesterFilter } : {}),
+          // 从课程详情进入、且选中了具体学期时，默认带入该学期关联班级的学生，
+          // 第 3 步「选择考生」无需再手动选班级。
+          ...(selectedSemester?.class_ids?.length
+            ? { defaultClassIds: selectedSemester.class_ids }
+            : {}),
           ...(options?.knowledgePointId
             ? {
                 knowledgePointId: options.knowledgePointId,
@@ -5399,7 +5419,7 @@ export function CourseDetailPage() {
         },
       });
     },
-    [course?.name, exams, id, navigate, semesterFilter],
+    [course?.name, exams, id, navigate, semesterFilter, selectedSemester],
   );
 
   const handlePublishAssignmentForKnowledgeNode = useCallback(
@@ -6559,13 +6579,48 @@ export function CourseDetailPage() {
                 />
               </TabsContent>
               <TabsContent value="statistics" className="mt-0">
-                <CourseGradebook
-                  courseId={id ?? ""}
-                  courseName={course.name}
-                  semesterId={semesterFilter}
-                  semesterLabel={selectedSemesterLabel}
-                  canWrite={course.can_write}
-                />
+                <div className="mb-5 flex items-center gap-1 border-b border-border">
+                  {(
+                    [
+                      ["grades", "学生成绩"],
+                      ["mastery", "掌握情况"],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setStatisticsSubTab(key)}
+                      className={cn(
+                        "relative px-4 py-2.5 text-sm font-medium transition-colors",
+                        statisticsSubTab === key
+                          ? "text-primary"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      {label}
+                      {statisticsSubTab === key ? (
+                        <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-primary" />
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
+
+                {statisticsSubTab === "grades" ? (
+                  <CourseGradebook
+                    courseId={id ?? ""}
+                    courseName={course.name}
+                    semesterId={semesterFilter}
+                    semesterLabel={selectedSemesterLabel}
+                    canWrite={course.can_write}
+                  />
+                ) : (
+                  <CourseMasteryAnalytics
+                    courseId={id ?? ""}
+                    courseName={course.name}
+                    semesterId={semesterFilter}
+                    semesterLabel={selectedSemesterLabel}
+                  />
+                )}
               </TabsContent>
               <TabsContent value="manage" className="mt-0">
                 {/* 子标签：班级管理 / 成绩权重（未来可扩展更多） */}

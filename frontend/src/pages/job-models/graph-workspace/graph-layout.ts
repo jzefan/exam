@@ -27,8 +27,8 @@ export interface GraphWorkspaceEdge {
   mapping?: SkillCourseMapping
 }
 
-export interface BuildGraphWorkspaceLayoutOptions {
-  selectedJobId?: string | null
+export interface BuildFocusedJobLayoutOptions {
+  jobId: string | null
   selectedCourseId?: string | null
   layout?: GraphLayoutSnapshot | null
 }
@@ -42,13 +42,12 @@ export interface GraphWorkspaceLayout {
   }
 }
 
-const JOB_X = 40
-const SKILL_X = 410
-const COURSE_X = 790
-const TOP_Y = 52
-const JOB_GAP = 132
-const COURSE_GAP = 126
-const SKILL_GAP = 92
+const JOB_X = 0
+const SKILL_X = 420
+const COURSE_X = 840
+const TOP_Y = 40
+const COURSE_GAP = 140
+const SKILL_GAP = 120
 
 function layoutPosition(
   layout: GraphLayoutSnapshot | null | undefined,
@@ -58,114 +57,92 @@ function layoutPosition(
   return layout?.nodes?.[id] ?? fallback
 }
 
-function getSkillsForJob(skills: SkillCard[], jobId: string) {
-  return skills.filter((skill) => skill.job_model_id === jobId)
-}
-
-function getMappedCourseIdsForSkills(
-  mappings: SkillCourseMapping[],
-  skillIds: Set<string>,
-) {
-  const courseIds = new Set<string>()
-  for (const mapping of mappings) {
-    if (skillIds.has(mapping.skill_id)) {
-      courseIds.add(mapping.course_root_knowledge_point_id)
-    }
-  }
-  return courseIds
-}
-
-export function buildGraphWorkspaceLayout(
+/**
+ * Build the focused subgraph for a single job: the job on the left, its skills
+ * in the middle, and only the courses those skills map to on the right. Keeping
+ * one job in view (instead of every job at once) keeps the canvas readable.
+ */
+export function buildFocusedJobLayout(
   overview: JobModelGraphOverview,
-  options: BuildGraphWorkspaceLayoutOptions = {},
+  options: BuildFocusedJobLayoutOptions,
 ): GraphWorkspaceLayout {
   const nodes: GraphWorkspaceNode[] = []
   const edges: GraphWorkspaceEdge[] = []
-  const selectedJobId = options.selectedJobId ?? null
-  const selectedCourseId = options.selectedCourseId ?? null
   const layout = options.layout ?? overview.layout
+  const selectedCourseId = options.selectedCourseId ?? null
 
-  const selectedSkills = selectedJobId
-    ? getSkillsForJob(overview.skills, selectedJobId)
-    : []
-  const selectedSkillIds = new Set(selectedSkills.map((skill) => skill.id))
-  const relatedCourseIds = selectedJobId
-    ? getMappedCourseIdsForSkills(overview.skill_course_mappings, selectedSkillIds)
-    : new Set<string>()
+  const job = options.jobId ? overview.jobs.find((item) => item.id === options.jobId) : null
+  if (!job) {
+    return { nodes, edges, bounds: { width: COURSE_X + 320, height: 480 } }
+  }
 
-  overview.jobs.forEach((job, index) => {
-    const nodeId = `job-${job.id}`
+  const skills = overview.skills.filter((skill) => skill.job_model_id === job.id)
+  const skillIds = new Set(skills.map((skill) => skill.id))
+  const mappings = overview.skill_course_mappings.filter((mapping) => skillIds.has(mapping.skill_id))
+  const courseIds = new Set(mappings.map((mapping) => mapping.course_root_knowledge_point_id))
+  const courses = overview.courses.filter((course) => courseIds.has(course.id))
+
+  const skillsSpan = Math.max(0, (skills.length - 1) * SKILL_GAP)
+  const coursesSpan = Math.max(0, (courses.length - 1) * COURSE_GAP)
+  const centerY = TOP_Y + Math.max(skillsSpan, coursesSpan) / 2
+
+  const jobNodeId = `job-${job.id}`
+  nodes.push({
+    id: jobNodeId,
+    kind: "job",
+    label: job.job_role,
+    position: layoutPosition(layout, jobNodeId, { x: JOB_X, y: centerY }),
+    data: job,
+    muted: false,
+  })
+
+  const skillStartY = centerY - skillsSpan / 2
+  skills.forEach((skill, index) => {
+    const nodeId = `skill-${skill.id}`
     nodes.push({
       id: nodeId,
-      kind: "job",
-      label: job.job_role,
-      position: layoutPosition(layout, nodeId, { x: JOB_X, y: TOP_Y + index * JOB_GAP }),
-      data: job,
-      muted: Boolean(selectedJobId && selectedJobId !== job.id),
+      kind: "skill",
+      label: skill.name,
+      position: layoutPosition(layout, nodeId, { x: SKILL_X, y: skillStartY + index * SKILL_GAP }),
+      data: skill,
+      muted: false,
+    })
+    edges.push({
+      id: `${jobNodeId}__${nodeId}`,
+      source: jobNodeId,
+      target: nodeId,
+      kind: "job-skill",
+      muted: false,
     })
   })
 
-  if (selectedJobId) {
-    const selectedJobIndex = Math.max(0, overview.jobs.findIndex((job) => job.id === selectedJobId))
-    const selectedJobY = TOP_Y + selectedJobIndex * JOB_GAP
-    const skillStartY = selectedJobY - ((selectedSkills.length - 1) * SKILL_GAP) / 2
-
-    selectedSkills.forEach((skill, index) => {
-      const nodeId = `skill-${skill.id}`
-      nodes.push({
-        id: nodeId,
-        kind: "skill",
-        label: skill.name,
-        position: layoutPosition(layout, nodeId, { x: SKILL_X, y: skillStartY + index * SKILL_GAP }),
-        data: skill,
-        muted: false,
-      })
-      edges.push({
-        id: `job-${selectedJobId}__${nodeId}`,
-        source: `job-${selectedJobId}`,
-        target: nodeId,
-        kind: "job-skill",
-        muted: false,
-      })
-    })
-  }
-
-  overview.courses.forEach((course, index) => {
+  const courseStartY = centerY - coursesSpan / 2
+  courses.forEach((course, index) => {
     const nodeId = `course-${course.id}`
-    const isUnrelated = Boolean(selectedJobId && !relatedCourseIds.has(course.id))
     nodes.push({
       id: nodeId,
       kind: "course",
       label: course.name,
-      position: layoutPosition(layout, nodeId, { x: COURSE_X, y: TOP_Y + index * COURSE_GAP }),
+      position: layoutPosition(layout, nodeId, { x: COURSE_X, y: courseStartY + index * COURSE_GAP }),
       data: course,
-      muted: isUnrelated || Boolean(selectedCourseId && selectedCourseId !== course.id),
+      muted: Boolean(selectedCourseId && selectedCourseId !== course.id),
     })
   })
 
-  if (selectedJobId) {
-    for (const mapping of overview.skill_course_mappings) {
-      if (!selectedSkillIds.has(mapping.skill_id)) continue
-      edges.push({
-        id: `skill-${mapping.skill_id}__course-${mapping.course_root_knowledge_point_id}`,
-        source: `skill-${mapping.skill_id}`,
-        target: `course-${mapping.course_root_knowledge_point_id}`,
-        kind: "skill-course",
-        muted: false,
-        mapping,
-      })
-    }
+  for (const mapping of mappings) {
+    const sourceId = `skill-${mapping.skill_id}`
+    const targetId = `course-${mapping.course_root_knowledge_point_id}`
+    if (!courseIds.has(mapping.course_root_knowledge_point_id)) continue
+    edges.push({
+      id: `${sourceId}__${targetId}`,
+      source: sourceId,
+      target: targetId,
+      kind: "skill-course",
+      muted: false,
+      mapping,
+    })
   }
 
-  return {
-    nodes,
-    edges,
-    bounds: {
-      width: 1120,
-      height: Math.max(
-        560,
-        TOP_Y + Math.max(overview.jobs.length * JOB_GAP, overview.courses.length * COURSE_GAP),
-      ),
-    },
-  }
+  const height = Math.max(480, TOP_Y * 2 + Math.max(skillsSpan, coursesSpan))
+  return { nodes, edges, bounds: { width: COURSE_X + 320, height } }
 }

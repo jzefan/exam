@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useOne } from "@refinedev/core";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { AlertTriangle, ChevronLeft, CheckCircle2, Download, Loader2, Minus, PieChart, UserX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -477,6 +477,20 @@ function DistRow({
 export function ExamAnalysisPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  // 返回目标：从课程详情进入时带 backTo（课程的考试/练习 tab）；从考试管理进入则回到考试列表。
+  const analysisNavState = (location.state ?? {}) as {
+    backTo?: string;
+    backLabel?: string;
+  };
+  const goBack = () => navigate(analysisNavState.backTo ?? "/exams");
+  // 进入学生答卷详情时携带返回信息：返回到本结果分析页，并把本页自己的返回目标
+  // （课程 / 考试管理）一并带回，保证「答卷详情 → 结果分析 → 上一级」整条链路正确。
+  const resultNavState = {
+    backTo: `/exams/${id}/analysis`,
+    backLabel: "返回结果分析",
+    backState: analysisNavState,
+  };
   const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
 
   const { result, query } = useOne<ExamAnalysis>({
@@ -588,8 +602,9 @@ export function ExamAnalysisPage() {
       <div className="flex w-full items-center gap-3 border-b border-border bg-background px-6 py-2.5">
         <button
           type="button"
-          aria-label="返回"
-          onClick={() => navigate(-1)}
+          aria-label={analysisNavState.backLabel ?? "返回"}
+          title={analysisNavState.backLabel ?? "返回"}
+          onClick={goBack}
           className="flex size-8 shrink-0 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition-colors hover:border-border/80 hover:bg-muted/40"
         >
           <ChevronLeft size={15} />
@@ -939,11 +954,11 @@ export function ExamAnalysisPage() {
                         )}
                         role="button"
                         tabIndex={0}
-                        onClick={() => navigate(`/exams/${id}/students/${s.student_id}/result`)}
+                        onClick={() => navigate(`/exams/${id}/students/${s.student_id}/result`, { state: resultNavState })}
                         onKeyDown={(event) => {
                           if (event.key === "Enter" || event.key === " ") {
                             event.preventDefault();
-                            navigate(`/exams/${id}/students/${s.student_id}/result`);
+                            navigate(`/exams/${id}/students/${s.student_id}/result`, { state: resultNavState });
                           }
                         }}
                       >

@@ -12,7 +12,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { ArrowLeft, Loader2 } from "lucide-react"
+import { Loader2 } from "lucide-react"
+import { PageIntroHeader } from "@/components/ui/page-intro-header"
 import { useToast } from "@/hooks/use-toast"
 import { Toaster } from "@/components/ui/toaster"
 
@@ -87,20 +88,13 @@ export function JobModelCreate() {
   }
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-base font-bold text-foreground tracking-tight">创建标准岗位模型</h1>
-          <p className="mt-1 text-xs text-muted-foreground">标准创建模式 · 直接创建岗位模型与初始版本</p>
-        </div>
-        <button
-          onClick={() => navigate("/gwmx/job-models")}
-          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors shrink-0"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          返回列表
-        </button>
-      </div>
+    <div className="space-y-6">
+      <PageIntroHeader
+        title="创建标准岗位模型"
+        description="标准创建模式 · 直接创建岗位模型与初始版本"
+        onBack={() => navigate("/gwmx/job-models")}
+        backLabel="返回岗位列表"
+      />
       <Card>
         <CardHeader></CardHeader>
         <CardContent>

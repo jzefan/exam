@@ -859,6 +859,93 @@ async def test_grading_inbox_endpoint_returns_exam_grouped_questions(admin_clien
 
 
 @pytest.mark.asyncio
+async def test_grading_export_exam_scores_returns_candidate_score_matrix(admin_client) -> None:
+    first_essay = await admin_client.post(
+        "/api/grading/tasks",
+        json={
+            "source_type": "exam_submission",
+            "source_business_id": "exam-java-midterm:essay-q3:A-102",
+            "question_type": "short_answer",
+            "question_content": "什么是幂等性？",
+            "max_score": 20,
+            "student_answer_raw": "重复执行结果一致",
+            "standard_answers": [{"summary": "重复执行结果一致"}],
+            "rubric_definition": {"dimensions": [{"key": "coverage", "weight": 1}]},
+            "role_binding_version": 1,
+        },
+    )
+    first_code = await admin_client.post(
+        "/api/grading/tasks",
+        json={
+            "source_type": "exam_submission",
+            "source_business_id": "exam-java-midterm:code-q5:A-102",
+            "question_type": "code",
+            "question_content": "实现 two sum",
+            "max_score": 30,
+            "student_answer_raw": "def two_sum(): pass",
+            "standard_answers": [{"summary": "返回两个下标"}],
+            "rubric_definition": {"dimensions": [{"key": "coverage", "weight": 1}]},
+            "role_binding_version": 1,
+        },
+    )
+    second_essay = await admin_client.post(
+        "/api/grading/tasks",
+        json={
+            "source_type": "exam_submission",
+            "source_business_id": "exam-java-midterm:essay-q3:B-208",
+            "question_type": "short_answer",
+            "question_content": "什么是幂等性？",
+            "max_score": 20,
+            "student_answer_raw": "重复执行不会改变结果",
+            "standard_answers": [{"summary": "重复执行结果一致"}],
+            "rubric_definition": {"dimensions": [{"key": "coverage", "weight": 1}]},
+            "role_binding_version": 1,
+        },
+    )
+    await admin_client.post(
+        f"/api/grading/tasks/{first_essay.json()['id']}/manual-score",
+        json={"score_total": 16, "reason": "确认"},
+    )
+    await admin_client.post(
+        f"/api/grading/tasks/{first_code.json()['id']}/manual-score",
+        json={"score_total": 24, "reason": "确认"},
+    )
+    await admin_client.post(
+        f"/api/grading/tasks/{second_essay.json()['id']}/manual-score",
+        json={"score_total": 12, "reason": "确认"},
+    )
+
+    exams_response = await admin_client.get("/api/grading/export/exams")
+    assert exams_response.status_code == 200
+    exam = exams_response.json()["exams"][0]
+    assert exam["exam_id"] == "exam-java-midterm"
+    assert exam["question_count"] == 2
+    assert exam["candidate_count"] == 2
+
+    scores_response = await admin_client.get("/api/grading/export/exams/exam-java-midterm/scores")
+    assert scores_response.status_code == 200
+    payload = scores_response.json()
+    assert [question["question_id"] for question in payload["questions"]] == ["essay-q3", "code-q5"]
+    assert payload["questions"][0]["question_type_label"] == "主观题"
+    assert payload["questions"][1]["question_type_label"] == "代码题"
+
+    first_student = payload["students"][0]
+    assert first_student["candidate_code"] == "A-102"
+    assert first_student["objective_score"] == 0.0
+    assert first_student["subjective_score"] == 40.0
+    assert first_student["scores"] == {"essay-q3": 16.0, "code-q5": 24.0}
+    assert first_student["type_totals"] == {"short_answer": 16.0, "code": 24.0}
+    assert first_student["total_score"] == 40.0
+
+    second_student = payload["students"][1]
+    assert second_student["candidate_code"] == "B-208"
+    assert second_student["objective_score"] == 0.0
+    assert second_student["subjective_score"] == 12.0
+    assert second_student["scores"] == {"essay-q3": 12.0, "code-q5": None}
+    assert second_student["total_score"] == 12.0
+
+
+@pytest.mark.asyncio
 async def test_grading_question_candidates_endpoint_returns_question_workspace(admin_client) -> None:
     first_response = await admin_client.post(
         "/api/grading/tasks",
@@ -906,6 +993,45 @@ async def test_grading_question_candidates_endpoint_returns_question_workspace(a
     assert payload["candidates"][1]["score"] == 18
     assert payload["candidates"][1]["manual_override"] is True
     assert first_response.json()["id"] == payload["candidates"][0]["task_id"]
+
+
+@pytest.mark.asyncio
+async def test_mark_grading_candidate_viewed_does_not_change_grading_status(admin_client) -> None:
+    create_response = await admin_client.post(
+        "/api/grading/tasks",
+        json={
+            "source_type": "exam_submission",
+            "source_business_id": "exam-java-midterm:essay-viewed:A-102",
+            "question_type": "short_answer",
+            "question_content": "什么是事务隔离？",
+            "max_score": 10,
+            "student_answer_raw": "",
+            "standard_answers": [{"summary": "避免并发事务互相干扰"}],
+            "rubric_definition": {"dimensions": [{"key": "coverage", "weight": 1}]},
+            "role_binding_version": 1,
+        },
+    )
+    task_id = create_response.json()["id"]
+
+    before_response = await admin_client.get("/api/grading/inbox/questions/exam-java-midterm/essay-viewed")
+    assert before_response.status_code == 200
+    before_candidate = before_response.json()["candidates"][0]
+    assert before_candidate["status"] == "待评分"
+    assert before_candidate["viewed"] is False
+
+    viewed_response = await admin_client.post(f"/api/grading/tasks/{task_id}/viewed")
+    assert viewed_response.status_code == 200
+    assert viewed_response.json()["viewed"] is True
+
+    after_response = await admin_client.get("/api/grading/inbox/questions/exam-java-midterm/essay-viewed")
+    after_candidate = after_response.json()["candidates"][0]
+    assert after_candidate["status"] == "待评分"
+    assert after_candidate["viewed"] is True
+
+    detail_response = await admin_client.get(f"/api/grading/inbox/tasks/{task_id}")
+    assert detail_response.status_code == 200
+    assert detail_response.json()["status"] == "待评分"
+    assert detail_response.json()["viewed"] is True
 
 
 @pytest.mark.asyncio

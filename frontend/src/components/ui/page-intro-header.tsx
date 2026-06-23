@@ -14,6 +14,11 @@ interface PageIntroHeaderProps {
   actions?: ReactNode;
   className?: string;
   fullBleed?: boolean;
+  /**
+   * Render as a plain full-width bar without the negative-margin breakout.
+   * Use inside full-screen pages that already manage their own layout/width.
+   */
+  embedded?: boolean;
 }
 
 export function PageIntroHeader({
@@ -23,11 +28,13 @@ export function PageIntroHeader({
   backLabel,
   actions,
   className,
+  embedded = false,
 }: PageIntroHeaderProps) {
   return (
     <div
       className={cn(
-        "relative left-1/2 -ml-[50vw] -mt-6 flex min-h-12 w-screen items-center justify-between gap-4 border-b border-border bg-card px-4 py-3 sm:px-6",
+        "flex min-h-12 items-center justify-between gap-4 border-b border-border bg-card px-4 py-3 sm:px-6",
+        embedded ? "w-full" : "relative left-1/2 -ml-[50vw] -mt-6 w-screen",
         className,
       )}
     >

@@ -1,18 +1,26 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowLeft,
   ArrowUp,
+  Brain,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ChevronUp,
+  CircleAlert,
+  FileDown,
+  List,
   PanelLeftClose,
   PanelLeftOpen,
   Paperclip,
   RefreshCw,
   Search,
   FileText,
+  Users,
   X,
 } from "lucide-react";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { CodeBlock } from "@/components/ui/code-block";
@@ -23,16 +31,22 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
 import { LatexText } from "@/components/ui/latex-text";
 import { cn } from "@/lib/utils";
+import { dimensionLabel } from "@/lib/dimension-display";
 import type { IQuestion } from "@/types";
 import {
   apiRequest,
+  type CandidateGroup,
   type GradingCandidateDetailResponse,
   type GradingConfirmResponse,
+  type GradingExportExam,
+  type GradingExportExamListResponse,
+  type GradingExportScoreResponse,
   type GradingInboxExamGroup,
   type GradingInboxQuestionItem,
   type GradingInboxResponse,
@@ -46,6 +60,38 @@ type GradingAttachment = {
   name: string;
   url: string;
 };
+type SpreadsheetCell = string | number | null | undefined;
+type GradingRouteState = {
+  backTo?: string;
+  backLabel?: string;
+} | null;
+
+function sanitizeFileName(value: string): string {
+  return value.replace(/[\\/:*?"<>|]/g, "-").replace(/\s+/g, " ").trim() || "阅卷成绩";
+}
+
+function safeSpreadsheetText(value: string | number | null | undefined): string {
+  let text = value === null || value === undefined ? "" : String(value);
+  if (/^[=+\-@]/.test(text)) {
+    text = `'${text}`;
+  }
+  return text;
+}
+
+function spreadsheetCellWidth(value: SpreadsheetCell): number {
+  const text = value === null || value === undefined ? "" : String(value);
+  return Math.min(
+    36,
+    Math.max(
+      10,
+      [...text].reduce((width, char) => width + (/[\u3400-\u9fff\uf900-\ufaff]/.test(char) ? 2 : 1), 0) + 2,
+    ),
+  );
+}
+
+function exportDateStamp() {
+  return new Date().toISOString().slice(0, 10);
+}
 
 function getAttachmentExtension(nameOrUrl: string) {
   const match = nameOrUrl.match(/\.([a-zA-Z0-9]+)(?:\?.*)?$/);
@@ -200,6 +246,10 @@ function statusDotClass(status: string) {
   return "bg-slate-400";
 }
 
+function isViewedIntermediateStatus(status: string, viewed: boolean) {
+  return viewed && !isConfirmedCandidateStatus(status);
+}
+
 function formatQuestionSummary(question: GradingQuestionDetailResponse | null) {
   if (!question) return "";
   return question.question_content;
@@ -247,7 +297,24 @@ function getUiLocale(): string {
   return "zh-CN";
 }
 
+function safeInternalBackTo(value: string | null): string | null {
+  if (!value?.startsWith("/") || value.startsWith("//")) return null;
+  return value;
+}
+
 export function GradingCenterPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const scopedExamId = searchParams.get("examId")?.trim() || null;
+  const routeState = (location.state ?? null) as GradingRouteState;
+  const backTo = safeInternalBackTo(
+    typeof routeState?.backTo === "string" ? routeState.backTo : searchParams.get("backTo"),
+  );
+  const backLabel =
+    typeof routeState?.backLabel === "string"
+      ? routeState.backLabel
+      : (searchParams.get("backLabel") ?? "返回");
   const [searchText, setSearchText] = useState("");
   const [inbox, setInbox] = useState<GradingInboxResponse | null>(null);
   const [questionCountOverrides, setQuestionCountOverrides] = useState<
@@ -274,6 +341,12 @@ export function GradingCenterPage() {
   const [candidateTransitionDirection, setCandidateTransitionDirection] = useState<"prev" | "next" | "neutral">("neutral");
   const [expandedExamGroups, setExpandedExamGroups] = useState<Set<string>>(new Set());
   const [previewAttachment, setPreviewAttachment] = useState<GradingAttachment | null>(null);
+  const [exportPanelOpen, setExportPanelOpen] = useState(false);
+  const [exportExamSearch, setExportExamSearch] = useState("");
+  const [exportExams, setExportExams] = useState<GradingExportExam[]>([]);
+  const [loadingExportExams, setLoadingExportExams] = useState(false);
+  const [exportingExamId, setExportingExamId] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   const [loadingInbox, setLoadingInbox] = useState(false);
   const [loadingQuestion, setLoadingQuestion] = useState(false);
   const [loadingCandidate, setLoadingCandidate] = useState(false);
@@ -285,6 +358,69 @@ export function GradingCenterPage() {
     review: false,
     arbiter: false,
   });
+  const viewedTaskIdsRef = useRef<Set<string>>(new Set());
+
+  // ——— 按考生阅卷模式 ———
+  const [gradingMode, setGradingMode] = useState<"question" | "candidate">(
+    () => (localStorage.getItem("grading_mode") as "question" | "candidate") || "question",
+  );
+  useEffect(() => {
+    localStorage.setItem("grading_mode", gradingMode);
+  }, [gradingMode]);
+  const [candidateExamKey, setCandidateExamKey] = useState<string | null>(null); // exam_id ?? "standalone"
+  const [selectedCandidateKey, setSelectedCandidateKey] = useState<string | null>(null);
+  // 选中考试每道题的考生列表缓存：questionId -> 该题详情（含 candidates）
+  const [examQuestionCandidates, setExamQuestionCandidates] = useState<
+    Record<string, GradingQuestionDetailResponse>
+  >({});
+  const [loadingCandidateGroups, setLoadingCandidateGroups] = useState(false);
+
+  const markCandidateViewed = async (taskId: string) => {
+    if (viewedTaskIdsRef.current.has(taskId)) return;
+    const alreadyViewed =
+      questionDetail?.candidates.some((candidate) => candidate.task_id === taskId && candidate.viewed) ||
+      (candidateDetail?.task_id === taskId && candidateDetail.viewed);
+    if (alreadyViewed) {
+      viewedTaskIdsRef.current.add(taskId);
+      return;
+    }
+
+    viewedTaskIdsRef.current.add(taskId);
+    setQuestionDetail((current) =>
+      current
+        ? {
+            ...current,
+            candidates: current.candidates.map((candidate) =>
+              candidate.task_id === taskId ? { ...candidate, viewed: true } : candidate,
+            ),
+          }
+        : current,
+    );
+    setCandidateDetail((current) =>
+      current?.task_id === taskId ? { ...current, viewed: true } : current,
+    );
+
+    try {
+      await apiRequest<{ viewed: boolean }>(`/grading/tasks/${taskId}/viewed`, {
+        method: "POST",
+      });
+    } catch {
+      viewedTaskIdsRef.current.delete(taskId);
+      setQuestionDetail((current) =>
+        current
+          ? {
+              ...current,
+              candidates: current.candidates.map((candidate) =>
+                candidate.task_id === taskId ? { ...candidate, viewed: false } : candidate,
+              ),
+            }
+          : current,
+      );
+      setCandidateDetail((current) =>
+        current?.task_id === taskId ? { ...current, viewed: false } : current,
+      );
+    }
+  };
 
   const loadInbox = async () => {
     setLoadingInbox(true);
@@ -309,9 +445,15 @@ export function GradingCenterPage() {
       const payload = await apiRequest<GradingQuestionDetailResponse>(
         `/grading/inbox/questions/${examId ?? "standalone"}/${questionId}`,
       );
-      setQuestionDetail(payload);
+      const hydratedPayload = {
+        ...payload,
+        candidates: payload.candidates.map((candidate) =>
+          viewedTaskIdsRef.current.has(candidate.task_id) ? { ...candidate, viewed: true } : candidate,
+        ),
+      };
+      setQuestionDetail(hydratedPayload);
       setReportError(null);
-      return payload;
+      return hydratedPayload;
     } catch (error) {
       setQuestionDetail(null);
       setReportError(error instanceof Error ? error.message : "加载考生列表失败");
@@ -327,22 +469,23 @@ export function GradingCenterPage() {
       const payload = await apiRequest<GradingCandidateDetailResponse>(
         `/grading/inbox/tasks/${taskId}`,
       );
-      setCandidateDetail(payload);
+      const hydratedPayload = viewedTaskIdsRef.current.has(taskId) ? { ...payload, viewed: true } : payload;
+      setCandidateDetail(hydratedPayload);
       const hasAnswer =
-        Boolean(payload.student_answer_raw?.trim()) ||
-        (payload.attachment_refs?.length ?? 0) > 0;
+        Boolean(hydratedPayload.student_answer_raw?.trim()) ||
+        (hydratedPayload.attachment_refs?.length ?? 0) > 0;
       if (!hasAnswer) {
         setManualScore("0");
         setAutoScoreReason("该考生未提交答案，评分自动设为0分");
-      } else if (payload.suggested_score == null) {
+      } else if (hydratedPayload.suggested_score == null) {
         setManualScore("0");
-        setAutoScoreReason(payload.evaluation_note ?? "AI尚未评估，评分自动设为0分");
+        setAutoScoreReason(hydratedPayload.evaluation_note ?? "AI尚未评估，评分自动设为0分");
       } else {
-        setManualScore(String(payload.suggested_score));
+        setManualScore(String(hydratedPayload.suggested_score));
         setAutoScoreReason(null);
       }
       setReportError(null);
-      return payload;
+      return hydratedPayload;
     } catch (error) {
       setCandidateDetail(null);
       setReportError(error instanceof Error ? error.message : "加载评分详情失败");
@@ -353,16 +496,80 @@ export function GradingCenterPage() {
     }
   };
 
+  const loadExportExams = async () => {
+    setLoadingExportExams(true);
+    setExportError(null);
+    try {
+      const payload = await apiRequest<GradingExportExamListResponse>("/grading/export/exams");
+      setExportExams(payload.exams);
+      return payload.exams;
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : "加载可导出考试失败");
+      return [];
+    } finally {
+      setLoadingExportExams(false);
+    }
+  };
+
+  const exportExamScores = async (exam: GradingExportExam) => {
+    setExportingExamId(exam.exam_id);
+    setExportError(null);
+    try {
+      const payload = await apiRequest<GradingExportScoreResponse>(
+        `/grading/export/exams/${exam.exam_id}/scores`,
+      );
+      const XLSX = await import("xlsx");
+      const rows: SpreadsheetCell[][] = [
+        ["学生名称", "学号", "客观题", "主观题", "总分"],
+        ...payload.students.map((student) => [
+          safeSpreadsheetText(student.candidate_name),
+          safeSpreadsheetText(student.candidate_code),
+          student.objective_score ?? 0,
+          student.subjective_score ?? 0,
+          student.total_score,
+        ]),
+      ];
+
+      const worksheet = XLSX.utils.aoa_to_sheet(rows);
+      worksheet["!cols"] = rows[0].map((_, columnIndex) => ({
+        wch: Math.max(...rows.map((row) => spreadsheetCellWidth(row[columnIndex]))),
+      }));
+
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "阅卷成绩");
+      XLSX.writeFile(workbook, `${sanitizeFileName(payload.exam_label)}-阅卷成绩-${exportDateStamp()}.xlsx`);
+      setExportPanelOpen(false);
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : "导出成绩失败");
+    } finally {
+      setExportingExamId(null);
+    }
+  };
+
   useEffect(() => {
     void loadInbox();
   }, []);
 
-  const filteredExamGroups = useMemo(() => {
-    const keyword = searchText.trim().toLowerCase();
-    if (!inbox) return [];
-    if (!keyword) return inbox.exams;
+  useEffect(() => {
+    if (!exportPanelOpen) return;
+    void loadExportExams();
+  }, [exportPanelOpen]);
 
-    return inbox.exams
+  const scopedExamGroups = useMemo(() => {
+    if (!inbox) return [];
+    return scopedExamId
+      ? inbox.exams.filter((exam) => exam.exam_id === scopedExamId)
+      : inbox.exams;
+  }, [inbox, scopedExamId]);
+
+  const filteredExamGroups = useMemo(() => {
+    // 考生模式：考试列表保持完整（关键词在渲染处过滤考生行），避免按题干过滤导致考试整组消失
+    if (gradingMode === "candidate") return scopedExamGroups;
+
+    const keyword = searchText.trim().toLowerCase();
+    if (!keyword) return scopedExamGroups;
+
+    return scopedExamGroups
       .map((exam) => ({
         ...exam,
         questions: exam.questions.filter((question) =>
@@ -373,7 +580,18 @@ export function GradingCenterPage() {
         ),
       }))
       .filter((exam) => exam.questions.length > 0);
-  }, [inbox, searchText]);
+  }, [scopedExamGroups, searchText, gradingMode]);
+
+  const filteredExportExams = useMemo(() => {
+    const keyword = exportExamSearch.trim().toLowerCase();
+    const scoped = scopedExamId
+      ? exportExams.filter((exam) => exam.exam_id === scopedExamId)
+      : exportExams;
+    if (!keyword) return scoped;
+    return scoped.filter((exam) =>
+      [exam.exam_label, exam.exam_id].join(" ").toLowerCase().includes(keyword),
+    );
+  }, [exportExams, exportExamSearch, scopedExamId]);
 
   const orderedExamGroups = useMemo(() => {
     const sorted = [...filteredExamGroups].sort(
@@ -403,11 +621,16 @@ export function GradingCenterPage() {
   }, [filteredExamGroups, questionCountOverrides]);
 
   useEffect(() => {
-    if (selectedQuestionRef || orderedExamGroups.all.length === 0) return;
-    const firstExam = orderedExamGroups.all[0];
-    const firstQuestion = firstExam.questions[0];
-    if (!firstQuestion) return;
-    setSelectedQuestionRef(buildQuestionRef(firstExam.exam_id, firstQuestion.question_id));
+    const questions = orderedExamGroups.all.flatMap((exam) =>
+      exam.questions.map((question) => ({
+        ref: buildQuestionRef(exam.exam_id, question.question_id),
+      })),
+    );
+    if (questions.length === 0) return;
+    if (selectedQuestionRef && questions.some((question) => question.ref === selectedQuestionRef)) {
+      return;
+    }
+    setSelectedQuestionRef(questions[0].ref);
   }, [orderedExamGroups, selectedQuestionRef]);
 
   useEffect(() => {
@@ -441,6 +664,8 @@ export function GradingCenterPage() {
   }, [orderedExamGroups, selectedQuestionRef]);
 
   useEffect(() => {
+    // 仅题目模式按 selectedQuestionRef 加载题目并选定 task；考生模式由考生导航策略掌控 selectedTaskId
+    if (gradingMode !== "question") return;
     if (!selectedQuestionRef || !inbox) return;
     const [examIdRaw, questionId] = selectedQuestionRef.split("::");
     const examId = examIdRaw === "standalone" ? null : examIdRaw;
@@ -457,11 +682,16 @@ export function GradingCenterPage() {
         setSelectedTaskId(null);
       }
     });
-  }, [selectedQuestionRef, inbox]);
+  }, [selectedQuestionRef, inbox, gradingMode]);
 
   useEffect(() => {
     if (!selectedTaskId) return;
     void loadCandidate(selectedTaskId);
+  }, [selectedTaskId]);
+
+  useEffect(() => {
+    if (!selectedTaskId) return;
+    void markCandidateViewed(selectedTaskId);
   }, [selectedTaskId]);
 
   useEffect(() => {
@@ -472,7 +702,7 @@ export function GradingCenterPage() {
   }, [selectedTaskId, showFollowUpWorkspace, candidateDetail]);
 
   const summaryStats = useMemo(() => {
-    const exams = (inbox?.exams ?? []).map((exam) => ({
+    const exams = scopedExamGroups.map((exam) => ({
       ...exam,
       questions: exam.questions.map((question) => {
         const override = questionCountOverrides[buildQuestionRef(exam.exam_id, question.question_id)];
@@ -495,7 +725,7 @@ export function GradingCenterPage() {
     );
 
     return { examCount, questionCount, pendingCount, completedCount };
-  }, [inbox, questionCountOverrides]);
+  }, [scopedExamGroups, questionCountOverrides]);
 
   const sortedCandidates = useMemo(() => {
     if (!questionDetail) return [];
@@ -513,11 +743,13 @@ export function GradingCenterPage() {
   );
 
   useEffect(() => {
+    // 仅题目模式做此对齐；考生模式的 selectedTaskId 由考生导航策略掌控
+    if (gradingMode !== "question") return;
     if (!activeCandidate) return;
     if (selectedTaskId !== activeCandidate.task_id) {
       setSelectedTaskId(activeCandidate.task_id);
     }
-  }, [activeCandidate, selectedTaskId]);
+  }, [activeCandidate, selectedTaskId, gradingMode]);
 
   const navigateCandidateByOffset = (offset: -1 | 1) => {
     if (!activeCandidate) return;
@@ -594,7 +826,7 @@ export function GradingCenterPage() {
           ? { ...current, status: confirmedStatus, suggested_score: scoreValue }
           : current,
       );
-      if (!wasAlreadyConfirmed && questionDetail) {
+      if (gradingMode === "question" && !wasAlreadyConfirmed && questionDetail) {
         const questionRef = buildQuestionRef(questionDetail.exam_id, questionDetail.question_id);
         const baseQuestion = inbox?.exams
           .find((exam) => (exam.exam_id ?? "standalone") === (questionDetail.exam_id ?? "standalone"))
@@ -623,15 +855,200 @@ export function GradingCenterPage() {
     }
   };
 
-  const handleConfirmScore = async () => {
-    const confirmed = await finalizeCurrentScore();
-    if (confirmed) {
-      navigateCandidateByOffset(1);
+  const handleStepCandidate = (offset: -1 | 1) => {
+    navigateCandidateByOffset(offset);
+  };
+
+  // ——— 按考生阅卷：聚合与导航（纯前端，复用现有接口）———
+  const loadExamCandidateMatrix = async (examKey: string) => {
+    const examGroup = orderedExamGroups.all.find(
+      (exam) => (exam.exam_id ?? "standalone") === examKey,
+    );
+    if (!examGroup) return;
+    setLoadingCandidateGroups(true);
+    try {
+      const examId = examGroup.exam_id; // null => standalone
+      const entries = await Promise.all(
+        examGroup.questions.map(async (question) => {
+          const payload = await apiRequest<GradingQuestionDetailResponse>(
+            `/grading/inbox/questions/${examId ?? "standalone"}/${question.question_id}`,
+          );
+          const hydrated: GradingQuestionDetailResponse = {
+            ...payload,
+            candidates: payload.candidates.map((candidate) =>
+              viewedTaskIdsRef.current.has(candidate.task_id)
+                ? { ...candidate, viewed: true }
+                : candidate,
+            ),
+          };
+          return [question.question_id, hydrated] as const;
+        }),
+      );
+      setExamQuestionCandidates(Object.fromEntries(entries));
+    } catch (error) {
+      setReportError(error instanceof Error ? error.message : "加载考生列表失败");
+    } finally {
+      setLoadingCandidateGroups(false);
     }
   };
 
-  const handleStepCandidate = (offset: -1 | 1) => {
-    navigateCandidateByOffset(offset);
+  // 进入考生模式 / 切换展开的考试 / 刷新数据时，加载该考试的考生矩阵
+  useEffect(() => {
+    if (gradingMode !== "candidate") return;
+    if (orderedExamGroups.all.length === 0) return;
+    const exists = orderedExamGroups.all.some(
+      (exam) => (exam.exam_id ?? "standalone") === candidateExamKey,
+    );
+    if (!candidateExamKey || !exists) {
+      setCandidateExamKey(orderedExamGroups.all[0].exam_id ?? "standalone");
+      return; // 下一轮再加载
+    }
+    void loadExamCandidateMatrix(candidateExamKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gradingMode, candidateExamKey, inbox]);
+
+  const candidateGroups = useMemo<CandidateGroup[]>(() => {
+    const examGroup = orderedExamGroups.all.find(
+      (exam) => (exam.exam_id ?? "standalone") === candidateExamKey,
+    );
+    if (!examGroup) return [];
+    const map = new Map<string, CandidateGroup>();
+    for (const question of examGroup.questions) {
+      const detail = examQuestionCandidates[question.question_id];
+      if (!detail) continue;
+      for (const task of detail.candidates) {
+        const key = task.candidate_code ?? task.candidate_name;
+        if (!map.has(key)) {
+          map.set(key, {
+            candidateKey: key,
+            candidateName: task.candidate_name,
+            candidateCode: task.candidate_code,
+            cells: [],
+            pendingCount: 0,
+            completedCount: 0,
+          });
+        }
+        map.get(key)!.cells.push({
+          questionId: question.question_id,
+          questionLabel: question.question_label,
+          questionContent: question.question_content,
+          questionType: question.question_type,
+          maxScore: question.max_score,
+          task,
+        });
+      }
+    }
+    const order = examGroup.questions.map((question) => question.question_id);
+    for (const group of map.values()) {
+      group.cells.sort((a, b) => order.indexOf(a.questionId) - order.indexOf(b.questionId));
+      group.completedCount = group.cells.filter((cell) =>
+        isConfirmedCandidateStatus(cell.task.status),
+      ).length;
+      group.pendingCount = group.cells.length - group.completedCount;
+    }
+    return Array.from(map.values());
+  }, [orderedExamGroups, candidateExamKey, examQuestionCandidates]);
+
+  const visibleCandidateGroups = useMemo(() => {
+    const keyword = searchText.trim().toLowerCase();
+    if (!keyword) return candidateGroups;
+    return candidateGroups.filter((group) =>
+      [group.candidateName, group.candidateCode ?? ""].join(" ").toLowerCase().includes(keyword),
+    );
+  }, [candidateGroups, searchText]);
+
+  const activeCandidateGroup = useMemo(
+    () =>
+      candidateGroups.find((group) => group.candidateKey === selectedCandidateKey) ??
+      candidateGroups[0] ??
+      null,
+    [candidateGroups, selectedCandidateKey],
+  );
+
+  const currentCellIndex = useMemo(
+    () => activeCandidateGroup?.cells.findIndex((cell) => cell.task.task_id === selectedTaskId) ?? -1,
+    [activeCandidateGroup, selectedTaskId],
+  );
+  const currentCell = currentCellIndex >= 0 ? activeCandidateGroup!.cells[currentCellIndex] : null;
+
+  const pickFirstPendingTask = (group: CandidateGroup | null) => {
+    if (!group) return;
+    const firstPending = group.cells.find((cell) => !isConfirmedCandidateStatus(cell.task.status));
+    setSelectedTaskId((firstPending ?? group.cells[0])?.task.task_id ?? null);
+  };
+
+  // 选中考生（或考生组重建）后，若当前 task 不属于该考生则定位到首道待评题
+  useEffect(() => {
+    if (gradingMode !== "candidate") return;
+    if (!activeCandidateGroup) return;
+    const belongs = activeCandidateGroup.cells.some((cell) => cell.task.task_id === selectedTaskId);
+    if (!belongs) pickFirstPendingTask(activeCandidateGroup);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gradingMode, activeCandidateGroup]);
+
+  const stepCandidateQuestion = (offset: -1 | 1) => {
+    if (!activeCandidateGroup || currentCellIndex < 0) return;
+    const next = currentCellIndex + offset;
+    if (next < 0 || next >= activeCandidateGroup.cells.length) return;
+    setCandidateTransitionDirection(offset === 1 ? "next" : "prev");
+    setSelectedTaskId(activeCandidateGroup.cells[next].task.task_id);
+  };
+
+  const stepCandidatePerson = (offset: -1 | 1) => {
+    const index = candidateGroups.findIndex(
+      (group) => group.candidateKey === activeCandidateGroup?.candidateKey,
+    );
+    const next = index + offset;
+    if (next < 0 || next >= candidateGroups.length) return;
+    const group = candidateGroups[next];
+    setCandidateTransitionDirection(offset === 1 ? "next" : "prev");
+    setSelectedCandidateKey(group.candidateKey);
+    pickFirstPendingTask(group);
+  };
+
+  // 确定分数：两种模式共用。考生模式下同步缓存状态并自动跳到本考生下一道待评题
+  const handleConfirmScoreSmart = async () => {
+    const confirmedTaskId = selectedTaskId;
+    const cellQuestionId = currentCell?.questionId ?? null;
+    const scoreChanged =
+      candidateDetail?.suggested_score == null ||
+      Number(manualScore) !== candidateDetail.suggested_score;
+    const ok = await finalizeCurrentScore();
+    if (!ok) return;
+    if (gradingMode === "question") {
+      navigateCandidateByOffset(1);
+      return;
+    }
+    if (confirmedTaskId && cellQuestionId) {
+      const confirmedStatus = scoreChanged ? "人工改分" : "已确认";
+      setExamQuestionCandidates((current) => {
+        const detail = current[cellQuestionId];
+        if (!detail) return current;
+        return {
+          ...current,
+          [cellQuestionId]: {
+            ...detail,
+            candidates: detail.candidates.map((candidate) =>
+              candidate.task_id === confirmedTaskId
+                ? {
+                    ...candidate,
+                    status: confirmedStatus,
+                    manual_override: candidate.manual_override || scoreChanged,
+                  }
+                : candidate,
+            ),
+          },
+        };
+      });
+    }
+    const rest = (activeCandidateGroup?.cells ?? []).filter(
+      (cell) =>
+        cell.task.task_id !== confirmedTaskId && !isConfirmedCandidateStatus(cell.task.status),
+    );
+    if (rest[0]) {
+      setCandidateTransitionDirection("next");
+      setSelectedTaskId(rest[0].task.task_id);
+    }
   };
 
   const refreshCurrentWorkspace = async () => {
@@ -802,17 +1219,112 @@ export function GradingCenterPage() {
         </div>
       )}
       {!showFollowUpWorkspace ? (
-        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-4 border-b border-border/70 px-4 pb-4">
-          <div className="justify-self-start">
+        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4 border-b border-border/70 px-4 pb-4">
+          <div className="min-w-0 justify-self-start">
             <h1 className="text-base font-bold tracking-tight">阅卷中心</h1>
-          </div>
-          <div className="min-w-0 justify-self-center">
-            <p className="text-center text-sm text-muted-foreground">
+            <p className="mt-1 truncate text-xs text-muted-foreground">
               当前共有 {summaryStats.examCount} 场考试、{summaryStats.questionCount} 道题，
               待处理 {summaryStats.pendingCount} 份，已完成 {summaryStats.completedCount} 份。
             </p>
           </div>
-          <div className="justify-self-end">
+          <div className="justify-self-center">
+            <div className="inline-flex items-center gap-0.5 rounded-[10px] bg-muted p-1">
+              {(
+                [
+                  { key: "question", label: "按题目阅卷", Icon: List },
+                  { key: "candidate", label: "按考生阅卷", Icon: Users },
+                ] as const
+              ).map(({ key, label, Icon }) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setGradingMode(key)}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-[7px] px-[18px] py-2 text-[13.5px] font-semibold transition-all",
+                    gradingMode === key
+                      ? "bg-primary text-primary-foreground shadow-[0_1px_2px_hsl(var(--primary)/0.35)]"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Icon className="h-4 w-4" />
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex justify-self-end items-center gap-2">
+            {backTo ? (
+              <Button variant="outline" size="sm" onClick={() => navigate(backTo)}>
+                <ArrowLeft className="h-4 w-4" />
+                {backLabel}
+              </Button>
+            ) : null}
+            <Popover
+              open={exportPanelOpen}
+              onOpenChange={(open) => {
+                setExportPanelOpen(open);
+                if (!open) {
+                  setExportExamSearch("");
+                  setExportError(null);
+                }
+              }}
+            >
+              <PopoverTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <FileDown className="h-4 w-4" />
+                  导出
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="end" side="bottom" sideOffset={10} className="w-[420px] p-0">
+                <div className="flex flex-col gap-3 p-3">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      value={exportExamSearch}
+                      onChange={(event) => setExportExamSearch(event.target.value)}
+                      placeholder="搜索考试名称或考试编号"
+                      className="pl-9"
+                    />
+                  </div>
+
+                  {exportError ? (
+                    <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                      {exportError}
+                    </div>
+                  ) : null}
+
+                  <div className="max-h-[360px] overflow-y-auto rounded-lg border border-border/70">
+                    {loadingExportExams ? (
+                      <div className="px-4 py-8 text-center text-sm text-muted-foreground">正在加载考试...</div>
+                    ) : filteredExportExams.length === 0 ? (
+                      <div className="px-4 py-8 text-center text-sm text-muted-foreground">没有找到可导出的考试。</div>
+                    ) : (
+                      <div className="divide-y divide-border/70">
+                        {filteredExportExams.map((exam) => (
+                          <button
+                            key={exam.exam_id}
+                            type="button"
+                            onClick={() => void exportExamScores(exam)}
+                            disabled={exportingExamId !== null}
+                            className="flex w-full items-center justify-between gap-4 px-3 py-2.5 text-left transition-colors hover:bg-accent/50 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium text-foreground">{exam.exam_label}</p>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                {new Date(exam.exam_date).toLocaleDateString("zh-CN")} · {exam.question_count} 道题 · {exam.candidate_count} 位考生
+                              </p>
+                            </div>
+                            <span className="shrink-0 text-xs font-medium text-primary">
+                              {exportingExamId === exam.exam_id ? "导出中..." : "导出"}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
             <Button variant="outline" size="sm" onClick={() => void refreshCurrentWorkspace()}>
               <RefreshCw className="h-4 w-4" />
               刷新
@@ -831,13 +1343,15 @@ export function GradingCenterPage() {
         <section className="min-h-0 overflow-hidden border-r border-border dark:border-white/15">
           <div className="flex h-full min-h-0 flex-col overflow-hidden px-4 pt-4 pb-2">
             <div className="shrink-0 space-y-3 border-b border-border/70 pb-3">
-              <h2 className="text-sm font-semibold text-muted-foreground">待阅试卷和题目</h2>
+              <h2 className="text-sm font-semibold text-muted-foreground">
+                {gradingMode === "candidate" ? "待阅试卷和考生" : "待阅试卷和题目"}
+              </h2>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   value={searchText}
                   onChange={(event) => setSearchText(event.target.value)}
-                  placeholder="搜索题目或考试"
+                  placeholder={gradingMode === "candidate" ? "搜索考生或考试" : "搜索题目或考试"}
                   className="h-10 rounded-lg pl-9"
                 />
               </div>
@@ -875,7 +1389,17 @@ export function GradingCenterPage() {
                               >
                                 <button
                                   type="button"
-                                  onClick={() =>
+                                  onClick={() => {
+                                    if (gradingMode === "candidate") {
+                                      // 考生模式：单开手风琴，并把展开的考试设为当前考生矩阵来源
+                                      setExpandedExamGroups((current) =>
+                                        current.has(examKey) && candidateExamKey === examKey
+                                          ? new Set()
+                                          : new Set([examKey]),
+                                      );
+                                      setCandidateExamKey(examKey);
+                                      return;
+                                    }
                                     setExpandedExamGroups((current) => {
                                       const next = new Set(current);
                                       if (next.has(examKey)) {
@@ -884,8 +1408,8 @@ export function GradingCenterPage() {
                                         next.add(examKey);
                                       }
                                       return next;
-                                    })
-                                  }
+                                    });
+                                  }}
                                   className="flex w-full items-start justify-between gap-3 rounded-md text-left transition-colors hover:bg-accent/20"
                                 >
                                   <div className="space-y-1">
@@ -906,7 +1430,61 @@ export function GradingCenterPage() {
                                   </span>
                                 </button>
 
-                                {isExpanded ? (
+                                {isExpanded && gradingMode === "candidate" ? (
+                                  <div className="space-y-2">
+                                    {examKey !== candidateExamKey ? null : loadingCandidateGroups ? (
+                                      <div className="rounded-lg border border-dashed border-border px-3 py-4 text-xs text-muted-foreground">
+                                        正在加载考生...
+                                      </div>
+                                    ) : visibleCandidateGroups.length === 0 ? (
+                                      <div className="rounded-lg border border-dashed border-border px-3 py-4 text-xs text-muted-foreground">
+                                        {candidateGroups.length === 0 ? "暂无考生。" : "没有匹配的考生。"}
+                                      </div>
+                                    ) : (
+                                      visibleCandidateGroups.map((group) => {
+                                        const selected = group.candidateKey === activeCandidateGroup?.candidateKey;
+                                        return (
+                                          <button
+                                            key={group.candidateKey}
+                                            type="button"
+                                            onClick={() => {
+                                              setCandidateTransitionDirection("neutral");
+                                              setSelectedCandidateKey(group.candidateKey);
+                                              pickFirstPendingTask(group);
+                                            }}
+                                            className={cn(
+                                              "w-full rounded-lg border px-3 py-3 text-left transition-all",
+                                              selected
+                                                ? "border-primary bg-primary/10 shadow-[inset_0_0_0_1px_hsl(var(--primary))]"
+                                                : "border-transparent bg-background hover:border-border hover:bg-accent/30",
+                                            )}
+                                          >
+                                            <div className="flex items-center justify-between gap-3">
+                                              <span className="truncate text-sm font-semibold text-foreground/85">
+                                                {group.candidateName}
+                                              </span>
+                                              <div className="flex shrink-0 items-center gap-1.5 text-xs">
+                                                {group.pendingCount > 0 ? (
+                                                  <span className="rounded-md bg-amber-50 px-2 py-0.5 font-medium text-amber-700">
+                                                    {group.pendingCount}
+                                                  </span>
+                                                ) : null}
+                                                {group.completedCount > 0 ? (
+                                                  <span className="rounded-md bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700">
+                                                    {group.completedCount}
+                                                  </span>
+                                                ) : null}
+                                              </div>
+                                            </div>
+                                            <p className="mt-1.5 text-xs text-muted-foreground">
+                                              共 {group.cells.length} 题 · 已评 {group.completedCount} · 待评 {group.pendingCount}
+                                            </p>
+                                          </button>
+                                        );
+                                      })
+                                    )}
+                                  </div>
+                                ) : isExpanded ? (
                                   <div className="space-y-2">
                                     {exam.questions.map((question: GradingInboxQuestionItem) => {
                                       const selected = selectedQuestionRef === buildQuestionRef(exam.exam_id, question.question_id);
@@ -998,6 +1576,7 @@ export function GradingCenterPage() {
             </div>
           ) : (
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 pt-2 pb-0">
+            {gradingMode === "candidate" ? null : (
             <section className="space-y-2 border-b border-border/70 py-3">
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-1">
@@ -1042,6 +1621,7 @@ export function GradingCenterPage() {
                 </div>
               ) : null}
             </section>
+            )}
 
             <div
               className={cn(
@@ -1053,8 +1633,10 @@ export function GradingCenterPage() {
             >
               {showCandidateList ? (
                 <section className="flex min-h-0 flex-col border-r border-border/70 pr-6 dark:border-white/15">
-                <div className="flex items-center justify-between pt-6 pb-4">
-                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">考生列表</h3>
+                <div className="flex items-center justify-between pb-4 pt-1.5">
+                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">
+                    {gradingMode === "candidate" ? "该考生题目" : "考生列表"}
+                  </h3>
                   <TooltipProvider delayDuration={150}>
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -1073,66 +1655,163 @@ export function GradingCenterPage() {
                     </Tooltip>
                   </TooltipProvider>
                 </div>
-                <div className="flex min-h-0 flex-1 flex-wrap align-top content-start gap-2 overflow-y-auto pr-3 pb-6">
+                {gradingMode === "candidate" ? (
+                  <>
+                  <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-3 pb-6">
+                    {loadingCandidateGroups ? (
+                      <div className="rounded-lg border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
+                        正在加载题目...
+                      </div>
+                    ) : !activeCandidateGroup ? (
+                      <div className="rounded-lg border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
+                        请选择左侧考生。
+                      </div>
+                    ) : (
+                      activeCandidateGroup.cells.map((cell, index) => {
+                        const active = cell.task.task_id === selectedTaskId;
+                        const confirmed = isConfirmedCandidateStatus(cell.task.status);
+                        return (
+                          <button
+                            key={cell.task.task_id}
+                            type="button"
+                            onClick={() => {
+                              setCandidateTransitionDirection("neutral");
+                              setSelectedTaskId(cell.task.task_id);
+                            }}
+                            className={cn(
+                              "rounded-[10px] border p-3 text-left transition-all",
+                              active
+                                ? "border-primary bg-primary/10 shadow-[inset_0_0_0_1px_hsl(var(--primary))]"
+                                : "border-border/80 bg-background hover:border-border hover:bg-accent/30",
+                            )}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="flex items-center gap-2 text-xs font-semibold text-foreground/85">
+                                <span
+                                  className={cn("h-[7px] w-[7px] rounded-full", statusDotClass(cell.task.status))}
+                                />
+                                第 {index + 1} 题 · 总分 {cell.maxScore}
+                              </span>
+                              <span
+                                className={cn(
+                                  "text-[11px] font-semibold",
+                                  confirmed
+                                    ? "text-emerald-600"
+                                    : cell.task.viewed
+                                      ? "text-amber-600"
+                                      : "text-rose-600",
+                                )}
+                              >
+                                {confirmed ? "已确定" : cell.task.viewed ? "已查看" : "待批改"}
+                              </span>
+                            </div>
+                            <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground">
+                              <LatexText>{cell.questionContent}</LatexText>
+                            </p>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2 border-t border-border/70 pt-3 pr-3">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1"
+                      disabled={
+                        !activeCandidateGroup ||
+                        candidateGroups.findIndex(
+                          (group) => group.candidateKey === activeCandidateGroup.candidateKey,
+                        ) <= 0
+                      }
+                      onClick={() => stepCandidatePerson(-1)}
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                      上一位考生
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1"
+                      disabled={
+                        !activeCandidateGroup ||
+                        candidateGroups.findIndex(
+                          (group) => group.candidateKey === activeCandidateGroup.candidateKey,
+                        ) >=
+                          candidateGroups.length - 1
+                      }
+                      onClick={() => stepCandidatePerson(1)}
+                    >
+                      下一位考生
+                      <ChevronRight className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  </>
+                ) : (
+                <div className="grid min-h-0 flex-1 grid-cols-3 content-start gap-2 overflow-y-auto pr-3 pb-6">
                   {loadingQuestion ? (
-                    <div className="w-full rounded-lg border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
+                    <div className="col-span-full rounded-lg border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
                       正在加载考生...
                     </div>
                   ) : (
-                    sortedCandidates.map((candidate: GradingQuestionCandidate) => (
-                      <TooltipProvider key={candidate.task_id} delayDuration={120}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setCandidateTransitionDirection("neutral");
-                                setSelectedTaskId(candidate.task_id);
-                              }}
-                              className={cn(
-                                "group flex h-8 items-center gap-2 rounded-full border px-3 text-left transition-all duration-200",
-                                candidate.task_id === activeCandidate?.task_id
-                                  ? "exam-primary-soft-active shadow-sm"
-                                  : "border-transparent bg-muted/40 text-muted-foreground hover:border-border/50 hover:bg-muted hover:text-foreground",
-                              )}
-                            >
-                              <span
-                                className={cn(
-                                  "h-1.5 w-1.5 shrink-0 rounded-full transition-transform group-hover:scale-125",
-                                  statusDotClass(candidate.status),
-                                  candidate.task_id === activeCandidate?.task_id && "ring-2 ring-primary-foreground/30",
-                                )}
-                              />
-                              <span
-                                className={cn(
-                                  "whitespace-nowrap text-xs font-semibold tracking-tight",
-                                  candidate.task_id === activeCandidate?.task_id ? "text-primary" : "text-foreground/70",
-                                )}
-                              >
-                                {candidate.candidate_name}
-                              </span>
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent
-                            side="top"
-                            className="rounded-lg border border-border bg-background px-3 py-2 text-foreground shadow-lg"
+                    sortedCandidates.map((candidate: GradingQuestionCandidate) => {
+                      const isActiveCandidate = candidate.task_id === activeCandidate?.task_id;
+                      const showViewedHint =
+                        !isActiveCandidate && isViewedIntermediateStatus(candidate.status, candidate.viewed);
+                      const candidateButton = (
+                        <button
+                          key={candidate.task_id}
+                          type="button"
+                          onClick={() => {
+                            setCandidateTransitionDirection("neutral");
+                            setSelectedTaskId(candidate.task_id);
+                          }}
+                          className={cn(
+                            "group flex h-8 w-full min-w-0 items-center gap-2 rounded-full border px-3 text-left transition-all duration-200",
+                            isActiveCandidate
+                              ? "exam-primary-soft-active shadow-sm"
+                              : "border-transparent bg-muted/40 text-muted-foreground hover:border-border/50 hover:bg-muted hover:text-foreground",
+                            showViewedHint &&
+                              "border-dashed border-primary/35 bg-primary/5 hover:border-primary/35 dark:border-primary/45 dark:hover:border-primary/45",
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "h-1.5 w-1.5 shrink-0 rounded-full transition-transform group-hover:scale-125",
+                              statusDotClass(candidate.status),
+                              isActiveCandidate && "ring-2 ring-primary-foreground/30",
+                            )}
+                          />
+                          <span
+                            className={cn(
+                              "min-w-0 flex-1 truncate whitespace-nowrap text-xs font-semibold tracking-tight",
+                              isActiveCandidate ? "text-primary" : "text-foreground/70",
+                            )}
                           >
-                            <div className="space-y-1 text-xs">
-                              <p className="font-semibold">{candidate.candidate_name}</p>
-                              {candidate.candidate_code ? (
-                                <p className="text-muted-foreground">学号：{candidate.candidate_code}</p>
-                              ) : null}
-                              <p className="text-muted-foreground">状态：{candidate.status}</p>
-                              <p className="text-muted-foreground">
-                                分数：{candidate.score == null ? "未完成" : candidate.score}
-                              </p>
-                            </div>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    ))
+                            {candidate.candidate_name}
+                          </span>
+                        </button>
+                      );
+
+                      return showViewedHint ? (
+                        <TooltipProvider key={candidate.task_id} delayDuration={750} skipDelayDuration={0}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>{candidateButton}</TooltipTrigger>
+                            <TooltipContent
+                              side="top"
+                              className="duration-300 ease-out data-[state=closed]:duration-75"
+                            >
+                              您已经查看过但还没确定
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      ) : (
+                        candidateButton
+                      );
+                    })
                   )}
                 </div>
+                )}
                 </section>
               ) : null}
 
@@ -1149,10 +1828,23 @@ export function GradingCenterPage() {
                       "animate-in fade-in-0 duration-150",
                   )}
                 >
-                <div className="border-b border-border/70 pt-6 pb-5">
+                <div className="border-b border-border/70 py-1.5">
                   <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-4">
                     <div className="flex min-w-0 items-center gap-3 text-sm text-foreground/80">
-                      <span className="font-medium">{candidateDetail?.candidate_name ?? "-"}</span>
+                      {gradingMode === "candidate" ? (
+                        <span className="flex items-center gap-2">
+                          <span className="font-medium text-foreground">
+                            第 {currentCellIndex >= 0 ? currentCellIndex + 1 : "-"} 题
+                          </span>
+                          {currentCell ? (
+                            <span className="text-xs text-muted-foreground">
+                              总分 {currentCell.maxScore}
+                            </span>
+                          ) : null}
+                        </span>
+                      ) : (
+                        <span className="font-medium">{candidateDetail?.candidate_name ?? "-"}</span>
+                      )}
                       {!showCandidateList ? (
                         <TooltipProvider delayDuration={150}>
                           <Tooltip>
@@ -1209,31 +1901,57 @@ export function GradingCenterPage() {
                       </div>
                       <Button
                         size="sm"
-                        onClick={() => void handleConfirmScore()}
+                        onClick={() => void handleConfirmScoreSmart()}
                         disabled={(actionLoading === "manual" || actionLoading === "confirm") || !selectedTaskId}
                       >
                         <CheckCircle2 className="h-4 w-4" />
                         {actionLoading === "manual" || actionLoading === "confirm" ? "提交中..." : "确定分数"}
                       </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleStepCandidate(-1)}
-                        disabled={activeCandidateIndex <= 0}
-                      >
-                        上一个考生
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleStepCandidate(1)}
-                        disabled={
-                          activeCandidateIndex < 0 ||
-                          activeCandidateIndex >= sortedCandidates.length - 1
-                        }
-                      >
-                        下一个考生
-                      </Button>
+                      {gradingMode === "candidate" ? (
+                        <>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => stepCandidateQuestion(-1)}
+                            disabled={currentCellIndex <= 0}
+                          >
+                            上一题
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => stepCandidateQuestion(1)}
+                            disabled={
+                              currentCellIndex < 0 ||
+                              currentCellIndex >= (activeCandidateGroup?.cells.length ?? 0) - 1
+                            }
+                          >
+                            下一题
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleStepCandidate(-1)}
+                            disabled={activeCandidateIndex <= 0}
+                          >
+                            上一个考生
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleStepCandidate(1)}
+                            disabled={
+                              activeCandidateIndex < 0 ||
+                              activeCandidateIndex >= sortedCandidates.length - 1
+                            }
+                          >
+                            下一个考生
+                          </Button>
+                        </>
+                      )}
                     </div>
                   </div>
                   {reportError ? (
@@ -1339,7 +2057,75 @@ export function GradingCenterPage() {
                           该考生本题未提交答案，暂无 LLM 评分意见。
                         </div>
                       ) : (
-                        candidateDetail?.models.map((model) => {
+                        <>
+                          {candidateDetail?.feedback && candidateDetail.feedback.dimensions.length > 0 ? (
+                            <div className="rounded-xl border border-border/50 bg-muted/10 p-4 shadow-sm">
+                              <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                                <Brain className="h-4 w-4 text-primary" />
+                                AI 评分详情
+                              </div>
+                              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                                {candidateDetail.feedback.dimensions.map((dim) => (
+                                  <div key={dim.name} className="rounded-xl bg-background p-4">
+                                    <div className="flex items-center justify-between text-sm font-medium">
+                                      <span>{dimensionLabel(dim.name)}</span>
+                                      <span className="text-primary">
+                                        {dim.score} / {dim.max_score}
+                                      </span>
+                                    </div>
+                                    <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                                      <LatexText>{dim.comment}</LatexText>
+                                    </p>
+                                  </div>
+                                ))}
+                              </div>
+                              {candidateDetail.feedback.strengths.length > 0 ? (
+                                <div className="mt-4 rounded-xl bg-background p-4">
+                                  <p className="text-xs font-medium text-foreground">优点</p>
+                                  <ul className="mt-2 list-disc space-y-1 pl-5 text-sm leading-6 text-muted-foreground">
+                                    {candidateDetail.feedback.strengths.map((line) => (
+                                      <li key={line}>
+                                        <LatexText>{line}</LatexText>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              ) : null}
+                              {candidateDetail.feedback.deductions.length > 0 ? (
+                                <div className="mt-4 flex flex-col gap-2">
+                                  {candidateDetail.feedback.deductions.map((line) => (
+                                    <div
+                                      key={line}
+                                      className="flex items-start gap-2 text-sm text-amber-700 dark:text-amber-300"
+                                    >
+                                      <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                                      <span>
+                                        <LatexText>{line}</LatexText>
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {candidateDetail.feedback.suggestions.length > 0 ? (
+                                <div className="mt-4 rounded-xl bg-background p-4 text-sm leading-6 text-muted-foreground">
+                                  建议：{candidateDetail.feedback.suggestions.join("；")}
+                                </div>
+                              ) : null}
+                              {candidateDetail.feedback.evidence_lines.length > 0 ? (
+                                <div className="mt-4 rounded-xl bg-background p-4">
+                                  <p className="text-xs font-medium text-foreground">AI 摘要</p>
+                                  <ul className="mt-2 list-disc space-y-1 pl-5 text-sm leading-6 text-muted-foreground">
+                                    {candidateDetail.feedback.evidence_lines.map((line) => (
+                                      <li key={line}>
+                                        <LatexText>{line}</LatexText>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          {candidateDetail?.models.map((model) => {
                           const modelLogoSrc = getModelLogoSrc(model.model_label);
                           const stage = model.stage as ExpandedStage;
                           return (
@@ -1432,7 +2218,8 @@ export function GradingCenterPage() {
                               ) : null}
                             </div>
                           );
-                        }) ?? null
+                        }) ?? null}
+                        </>
                       )}
                     </section>
                   </div>
@@ -1478,57 +2265,63 @@ export function GradingCenterPage() {
                     </div>
                   ) : (
                     <div className="flex flex-col">
-                      {sortedCandidates.map((candidate) => (
-                        <TooltipProvider key={`followup-${candidate.task_id}`} delayDuration={120}>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setCandidateTransitionDirection("neutral");
-                                  setSelectedTaskId(candidate.task_id);
-                                }}
+                      {sortedCandidates.map((candidate) => {
+                        const isActiveCandidate = candidate.task_id === activeCandidate?.task_id;
+                        const showViewedHint =
+                          !isActiveCandidate && isViewedIntermediateStatus(candidate.status, candidate.viewed);
+                        const candidateButton = (
+                          <button
+                            key={`followup-${candidate.task_id}`}
+                            type="button"
+                            onClick={() => {
+                              setCandidateTransitionDirection("neutral");
+                              setSelectedTaskId(candidate.task_id);
+                            }}
+                            className={cn(
+                              "group mx-2 my-1 flex min-h-11 w-auto items-center gap-3 rounded-lg border border-transparent px-3 text-left transition-all duration-200",
+                              isActiveCandidate
+                                ? "bg-accent text-accent-foreground"
+                                : "bg-transparent text-muted-foreground hover:bg-accent/70 hover:text-foreground",
+                              showViewedHint &&
+                                "border-dashed border-primary/35 bg-primary/5 hover:border-primary/35 dark:border-primary/45 dark:hover:border-primary/45",
+                            )}
+                          >
+                            <span
+                              className={cn(
+                                "h-2 w-2 shrink-0 rounded-full transition-transform group-hover:scale-125",
+                                statusDotClass(candidate.status),
+                                isActiveCandidate && "ring-2 ring-primary/20",
+                              )}
+                            />
+                            <div className="min-w-0 flex-1">
+                              <span
                                 className={cn(
-                                  "group mx-2 my-1 flex min-h-11 w-auto items-center gap-3 rounded-lg px-3 text-left transition-all duration-200",
-                                  candidate.task_id === activeCandidate?.task_id
-                                    ? "bg-accent text-accent-foreground"
-                                    : "bg-transparent text-muted-foreground hover:bg-accent/70 hover:text-foreground",
+                                  "block truncate text-sm",
+                                  isActiveCandidate ? "font-medium text-accent-foreground" : "text-foreground/80",
                                 )}
                               >
-                                <span
-                                  className={cn(
-                                    "h-2 w-2 shrink-0 rounded-full transition-transform group-hover:scale-125",
-                                    statusDotClass(candidate.status),
-                                    candidate.task_id === activeCandidate?.task_id && "ring-2 ring-primary/20",
-                                  )}
-                                />
-                                <div className="min-w-0 flex-1">
-                                  <span
-                                    className={cn(
-                                      "block truncate text-sm",
-                                      candidate.task_id === activeCandidate?.task_id ? "font-medium text-accent-foreground" : "text-foreground/80",
-                                    )}
-                                  >
-                                    {candidate.candidate_name}
-                                  </span>
-                                </div>
-                              </button>
-                            </TooltipTrigger>
-                            <TooltipContent
-                              side="right"
-                              className="rounded-lg border border-border bg-background px-3 py-2 text-foreground shadow-lg"
-                            >
-                              <div className="space-y-1 text-xs">
-                                <p className="font-semibold">{candidate.candidate_name}</p>
-                                {candidate.candidate_code ? (
-                                  <p className="text-muted-foreground">学号：{candidate.candidate_code}</p>
-                                ) : null}
-                                <p className="text-muted-foreground">状态：{candidate.status}</p>
-                              </div>
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      ))}
+                                {candidate.candidate_name}
+                              </span>
+                            </div>
+                          </button>
+                        );
+
+                        return showViewedHint ? (
+                          <TooltipProvider key={`followup-${candidate.task_id}`} delayDuration={750} skipDelayDuration={0}>
+                            <Tooltip>
+                              <TooltipTrigger asChild>{candidateButton}</TooltipTrigger>
+                              <TooltipContent
+                                side="right"
+                                className="duration-300 ease-out data-[state=closed]:duration-75"
+                              >
+                                您已经查看过但还没确定
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        ) : (
+                          candidateButton
+                        );
+                      })}
                     </div>
                   )}
                 </div>

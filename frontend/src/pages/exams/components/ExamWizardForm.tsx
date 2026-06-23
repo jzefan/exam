@@ -377,6 +377,7 @@ export function ExamWizardForm({
     mainKnowledgePointName?: string;
     initialStep?: number;
     courseOrigin?: boolean;
+    defaultClassIds?: string[];
   };
   const { toast } = useToast();
 
@@ -3684,6 +3685,9 @@ export function ExamWizardForm({
                     selectedIds={form.student_ids}
                     onChange={(ids) => updateField("student_ids", ids)}
                     defaultSupplementCollapsed
+                    defaultClassIds={
+                      mode === "create" ? navState.defaultClassIds : undefined
+                    }
                   />
                 )}
               </CardContent>

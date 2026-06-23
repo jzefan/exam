@@ -45,12 +45,18 @@ export function ClassStudentSelector({
   summaryLabel = "名考生",
   emptySummaryText = "还没有选择对象，可以优先按班级选择，导入和手动添加作为补充方式。",
   defaultSupplementCollapsed = false,
+  defaultClassIds,
 }: {
   selectedIds: string[];
   onChange: (ids: string[]) => void;
   summaryLabel?: string;
   emptySummaryText?: string;
   defaultSupplementCollapsed?: boolean;
+  /**
+   * 进入时默认勾选这些班级下的全部学生（一次性，且仅在尚未选择任何考生时生效）。
+   * 用于从课程详情进入创建考试/练习时，自动带入当前学期关联班级。
+   */
+  defaultClassIds?: string[];
 }) {
   const [supplementMode, setSupplementMode] = useState<SupplementMode>("import");
   const [isSupplementCollapsed, setIsSupplementCollapsed] = useState(defaultSupplementCollapsed);
@@ -107,11 +113,33 @@ export function ClassStudentSelector({
     return { studentData, classData };
   };
 
+  const didAutoSelectClassesRef = useRef(false);
   useEffect(() => {
     let isMounted = true;
     setIsLoading(true);
 
     void loadStudentData(isMounted)
+      .then(({ studentData }) => {
+        if (!isMounted) return;
+        // 默认带入指定班级的学生：仅一次，且只在用户尚未选择任何考生时生效，
+        // 避免覆盖用户的手动调整。
+        if (
+          didAutoSelectClassesRef.current ||
+          !defaultClassIds ||
+          defaultClassIds.length === 0 ||
+          selectedIds.length > 0
+        ) {
+          return;
+        }
+        didAutoSelectClassesRef.current = true;
+        const classIdSet = new Set(defaultClassIds);
+        const autoIds = studentData
+          .filter((user) => user.class_id && classIdSet.has(user.class_id))
+          .map((user) => user.id);
+        if (autoIds.length > 0) {
+          onChange(autoIds);
+        }
+      })
       .catch((err) => {
         console.error("ClassStudentSelector fetch error:", err);
       })
@@ -122,6 +150,7 @@ export function ClassStudentSelector({
     return () => {
       isMounted = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const normalizedSearch = search.trim().toLowerCase();

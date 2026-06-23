@@ -94,12 +94,9 @@ const JobModelGraphWorkspace = lazyNamed(
   () => import("./pages/job-models/graph-workspace"),
   "JobModelGraphWorkspace",
 );
+const JobModelList = lazyNamed(() => import("./pages/job-models/list"), "JobModelList");
 const JobModelCreate = lazyNamed(() => import("./pages/job-models/create"), "JobModelCreate");
 const JobModelFastCreate = lazyNamed(() => import("./pages/job-models/fast-create"), "JobModelFastCreate");
-const StandardLibraryPage = lazyNamed(
-  () => import("./pages/job-models/standard-library"),
-  "StandardLibraryPage",
-);
 const JobModelUploadAI = lazyNamed(() => import("./pages/job-models/upload-ai"), "JobModelUploadAI");
 const ModelConfigPage = lazyNamed(() => import("./pages/settings/model-config"), "ModelConfigPage");
 const GradingCenterPage = lazyNamed(() => import("./pages/grading"), "GradingCenterPage");
@@ -334,8 +331,8 @@ function App() {
                 >
                   <Route element={<Layout />}>
                     <Route path="/gwmx/workbench" element={<GwmxWorkbench />} />
-                    <Route path="/gwmx/job-models" element={<JobModelGraphWorkspace />} />
-                    <Route path="/gwmx/job-models/standard-library" element={<StandardLibraryPage />} />
+                    <Route path="/gwmx/job-models" element={<JobModelList />} />
+                    <Route path="/gwmx/job-models/graph" element={<JobModelGraphWorkspace />} />
                     <Route path="/gwmx/job-models/create" element={<JobModelCreate />} />
                     <Route path="/gwmx/job-models/fast-create" element={<JobModelFastCreate />} />
                     <Route path="/gwmx/job-models/upload-ai" element={<JobModelUploadAI />} />

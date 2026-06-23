@@ -741,6 +741,21 @@ export function ExamList() {
                 )
               }
               onAnalysis={() => navigate(`/exams/${exam.id}/analysis`)}
+              onGrade={
+                exam.submitted_count > 0 && exam.has_gradable_questions
+                  ? () => {
+                      const backTo = "/exams";
+                      const params = new URLSearchParams({
+                        examId: exam.id,
+                        backTo,
+                        backLabel: "返回考试管理",
+                      });
+                      navigate(`/grading?${params.toString()}`, {
+                        state: { backTo, backLabel: "返回考试管理" },
+                      });
+                    }
+                  : undefined
+              }
               onGenerateMock={
                 exam.category === "exam" ? () => openMockDialog(exam) : undefined
               }
@@ -752,6 +767,7 @@ export function ExamList() {
                       handleExportExam(exam.id, format, answers)
                   : undefined
               }
+              revealActionsOnHover
             />
           ))}
         </div>

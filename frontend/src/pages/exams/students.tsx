@@ -241,7 +241,18 @@ export function ExamStudentsPage() {
                       <button
                         key={student.student_id}
                         type="button"
-                        onClick={() => navigate(`/exams/${selectedExam!.id}/students/${student.student_id}/result`)}
+                        onClick={() =>
+                          navigate(
+                            `/exams/${selectedExam!.id}/students/${student.student_id}/result`,
+                            {
+                              state: {
+                                backTo: `/exams/students${location.search}`,
+                                backLabel: "返回考试考生",
+                                backState: backState,
+                              },
+                            },
+                          )
+                        }
                         className="grid gap-4 rounded-2xl border border-border/50 bg-background px-4 py-4 md:grid-cols-[minmax(0,1fr)_180px_180px] w-full text-left transition-colors hover:border-primary/30 hover:bg-muted/10 cursor-pointer"
                       >
                         <div className="min-w-0 space-y-1">

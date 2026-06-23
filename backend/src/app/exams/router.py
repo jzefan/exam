@@ -74,6 +74,20 @@ from app.learning.models import KnowledgePoint
 router = APIRouter()
 
 _OBJECTIVE_QUESTION_TYPES = {"choice", "true_false", "fill_in"}
+_GRADABLE_QUESTION_TYPES = {"short_answer", "essay", "code"}
+
+
+def _exam_has_gradable_questions(exam: Exam) -> bool:
+    return any(
+        exam_question.question is not None
+        and (
+            exam_question.question.type.value
+            if hasattr(exam_question.question.type, "value")
+            else str(exam_question.question.type)
+        )
+        in _GRADABLE_QUESTION_TYPES
+        for exam_question in exam.exam_questions
+    )
 
 
 async def _exam_has_student_history(db: AsyncSession, exam_id: uuid.UUID) -> bool:
@@ -196,6 +210,7 @@ def _build_exam_response(exam: Exam, student_id: uuid.UUID | None = None) -> Exa
         total_students=len(exam.exam_students),
         submitted_count=submitted,
         has_student_history=has_student_history,
+        has_gradable_questions=_exam_has_gradable_questions(exam),
         knowledge_points=list(knowledge_points_by_id.values()),
         participated=(
             exam_student.started_at is not None or exam_student.submitted_at is not None
@@ -374,7 +389,12 @@ async def list_exams(
     total = await get_total_count(db, filtered_query)
     response.headers["X-Total-Count"] = str(total)
 
-    paginated_query = apply_pagination(filtered_query, pagination, Exam)
+    paginated_query = apply_pagination(filtered_query, pagination, Exam).options(
+        selectinload(Exam.exam_questions)
+        .selectinload(ExamQuestion.question)
+        .selectinload(Question.knowledge_points),
+        selectinload(Exam.exam_students),
+    )
     result = await db.execute(paginated_query)
     exams = result.scalars().unique().all()
 

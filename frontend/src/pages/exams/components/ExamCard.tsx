@@ -1,9 +1,10 @@
-import type { ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import {
   Clock,
   ClipboardList,
   Download,
   Eye,
+  FileCheck,
   FileText,
   GraduationCap,
   Lock,
@@ -48,6 +49,7 @@ export interface ExamCardData {
   total_students: number;
   submitted_count: number;
   has_student_history: boolean;
+  has_gradable_questions?: boolean;
   knowledge_points: ExamCardKnowledgePoint[];
 }
 
@@ -63,6 +65,7 @@ export function ExamCard({
   onView,
   onEdit,
   onAnalysis,
+  onGrade,
   onGenerateMock,
   onClose,
   onDelete,
@@ -72,11 +75,13 @@ export function ExamCard({
   moreActions,
   collapseSecondaryActions = false,
   canManage = true,
+  revealActionsOnHover = false,
 }: {
   exam: ExamCardData;
   onView: () => void;
   onEdit: () => void;
   onAnalysis: () => void;
+  onGrade?: () => void;
   onGenerateMock?: () => void;
   onClose: () => void;
   onDelete: () => void;
@@ -86,6 +91,7 @@ export function ExamCard({
   moreActions?: ReactNode;
   collapseSecondaryActions?: boolean;
   canManage?: boolean;
+  revealActionsOnHover?: boolean;
 }) {
   const effectiveStatus = getEffectiveExamStatus(exam);
   const canViewAnalysis =
@@ -102,6 +108,35 @@ export function ExamCard({
     0,
     exam.knowledge_points.length - visibleKnowledgePoints.length,
   );
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [actionsPinnedByCardClick, setActionsPinnedByCardClick] = useState(false);
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const lastMenuOutsideTargetWasInCardRef = useRef(false);
+  const keepActionsVisible =
+    revealActionsOnHover &&
+    (exportMenuOpen || moreMenuOpen || actionsPinnedByCardClick);
+  const getMenuOutsideTarget = (event: Event) => {
+    const originalEvent = (event as CustomEvent<{ originalEvent?: Event }>).detail
+      ?.originalEvent;
+    return originalEvent?.target ?? event.target;
+  };
+  const handleMenuInteractOutside = (event: Event) => {
+    const target = getMenuOutsideTarget(event);
+    const targetIsInCard =
+      target instanceof Node && Boolean(cardRef.current?.contains(target));
+    lastMenuOutsideTargetWasInCardRef.current = targetIsInCard;
+    setActionsPinnedByCardClick(targetIsInCard);
+  };
+  const handleMenuCloseAutoFocus = (event: Event) => {
+    if (!revealActionsOnHover) return;
+    if (!lastMenuOutsideTargetWasInCardRef.current) {
+      // Outside-card clicks should close the menu without returning focus to the
+      // trigger; otherwise focus-within would keep the hidden actions visible.
+      event.preventDefault();
+    }
+    lastMenuOutsideTargetWasInCardRef.current = false;
+  };
   const exportMenuItems = onExport ? (
     <>
       <DropdownMenuLabel className="text-xs">导出 Word</DropdownMenuLabel>
@@ -136,7 +171,7 @@ export function ExamCard({
     canManage &&
     (moreActions ||
       (collapseSecondaryActions && (onExport || mockMenuItem))) ? (
-    <DropdownMenu>
+    <DropdownMenu open={moreMenuOpen} onOpenChange={setMoreMenuOpen}>
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
@@ -148,7 +183,13 @@ export function ExamCard({
           <span>更多</span>
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-48">
+      <DropdownMenuContent
+        align="end"
+        className="w-48"
+        onPointerDownOutside={handleMenuInteractOutside}
+        onFocusOutside={handleMenuInteractOutside}
+        onCloseAutoFocus={handleMenuCloseAutoFocus}
+      >
         {collapseSecondaryActions && onExport ? exportMenuItems : null}
         {collapseSecondaryActions && onExport && mockMenuItem ? (
           <DropdownMenuSeparator />
@@ -162,7 +203,7 @@ export function ExamCard({
     </DropdownMenu>
   ) : null;
   const exportMenu = canManage && onExport && !collapseSecondaryActions ? (
-    <DropdownMenu>
+    <DropdownMenu open={exportMenuOpen} onOpenChange={setExportMenuOpen}>
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
@@ -173,14 +214,24 @@ export function ExamCard({
           <span>导出</span>
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-48">
+      <DropdownMenuContent
+        align="end"
+        className="w-48"
+        onPointerDownOutside={handleMenuInteractOutside}
+        onFocusOutside={handleMenuInteractOutside}
+        onCloseAutoFocus={handleMenuCloseAutoFocus}
+      >
         {exportMenuItems}
       </DropdownMenuContent>
     </DropdownMenu>
   ) : null;
 
   return (
-    <div className="group relative overflow-hidden rounded-xl border border-border/50 bg-card p-0 transition-all hover:border-primary/20 hover:shadow-xl hover:shadow-primary/[0.03]">
+    <div
+      ref={cardRef}
+      className="group relative overflow-hidden rounded-xl border border-border/50 bg-card p-0 transition-all hover:border-primary/20 hover:shadow-xl hover:shadow-primary/[0.03]"
+      onPointerLeave={() => setActionsPinnedByCardClick(false)}
+    >
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 p-5">
         <div className="min-w-0 flex-1 space-y-3">
           <div className="flex items-center gap-3 flex-wrap">
@@ -261,7 +312,17 @@ export function ExamCard({
           )}
         </div>
 
-        <div className="flex items-center gap-1 self-end md:self-center">
+        <div
+          className={cn(
+            "flex items-center gap-1 self-end md:self-center",
+            revealActionsOnHover && !keepActionsVisible && "md:invisible md:pointer-events-none",
+            keepActionsVisible && "md:visible md:pointer-events-auto",
+            revealActionsOnHover && [
+              "md:group-hover:visible md:group-hover:pointer-events-auto",
+              "md:group-focus-within:visible md:group-focus-within:pointer-events-auto",
+            ],
+          )}
+        >
           <Button
             variant="ghost"
             size="sm"
@@ -281,6 +342,18 @@ export function ExamCard({
             >
               <Pencil size={14} />
               <span>修改</span>
+            </Button>
+          ) : null}
+
+          {canManage && onGrade ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold text-primary hover:bg-primary/5 hover:text-primary"
+              onClick={onGrade}
+            >
+              <FileCheck size={14} />
+              <span>批改</span>
             </Button>
           ) : null}
 
