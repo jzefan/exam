@@ -96,6 +96,13 @@ class PaperAIGenerateResponse(BaseModel):
     generated_question_count: int
 
 
+class PaperAIAppendRequest(BaseModel):
+    question_count: int = Field(default=5, ge=1, le=50)
+    difficulty_strategy: Literal["similar", "easier", "harder"] = "similar"
+    prefer_root_knowledge_point: bool = True
+    model: Literal["qwen", "deepseek", "claude"] = "deepseek"
+
+
 class PaperImportQuestionDraft(BaseModel):
     question: QuestionCreate
     order: int = Field(default=0, ge=0)

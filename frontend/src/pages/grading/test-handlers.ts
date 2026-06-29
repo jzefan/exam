@@ -80,6 +80,7 @@ function questionDetail(
       task_id: taskId,
       candidate_name: candidateName,
       candidate_code: candidateCode,
+      student_id: null,
       status: "待确认",
       score: null,
       arbitration_required: false,

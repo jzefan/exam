@@ -66,3 +66,20 @@ export async function generatePaperFromSource(
     body: JSON.stringify(payload),
   });
 }
+
+export type AppendPaperQuestionsWithAIRequest = {
+  question_count: number;
+  difficulty_strategy: PaperDifficultyStrategy;
+  prefer_root_knowledge_point: boolean;
+  model?: "qwen" | "deepseek" | "claude";
+};
+
+export async function appendPaperQuestionsWithAI<TPaperDetail>(
+  paperId: string,
+  payload: AppendPaperQuestionsWithAIRequest,
+): Promise<TPaperDetail> {
+  return paperApiRequest<TPaperDetail>(`/papers/${paperId}/ai-append`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}

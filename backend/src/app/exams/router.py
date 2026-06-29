@@ -57,6 +57,8 @@ from app.exams.student_schemas import (
     ManualQuestionScoreRequest,
     ManualQuestionScoreResponse,
     SingleQuestionAIGradeResponse,
+    StudentExamCommentRequest,
+    StudentExamCommentResponse,
     StudentExamResultQuestionResponse,
     StudentExamResultResponse,
 )
@@ -885,6 +887,7 @@ async def get_student_result_for_teacher(
             grading_status=exam_student.grading_status,
             can_view=False,
             blocked_reason="该考生尚未提交考试",
+            teacher_comment=exam_student.teacher_comment,
         )
 
     is_pending_ai = exam_student.grading_status == GradingStatus.PENDING_AI.value
@@ -954,6 +957,7 @@ async def get_student_result_for_teacher(
         blocked_reason=(
             "主观题正在进行 AI 评分，主观题分数将在评估完成后更新。客观题分数已可见。" if is_pending_ai else None
         ),
+        teacher_comment=exam_student.teacher_comment,
         questions=question_items,
     )
 
@@ -1160,6 +1164,36 @@ async def update_student_question_score_for_teacher(
         grading_status=exam_student.grading_status,
         feedback=answer.feedback or {},
     )
+
+
+@router.patch(
+    "/{exam_id}/students/{student_id}/comment",
+    response_model=StudentExamCommentResponse,
+)
+async def update_student_exam_comment_for_teacher(
+    exam_id: uuid.UUID,
+    student_id: uuid.UUID,
+    body: StudentExamCommentRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+) -> StudentExamCommentResponse:
+    await _get_writable_exam_or_404(db, exam_id, user)
+
+    exam_student = (
+        await db.execute(
+            select(ExamStudent).where(
+                ExamStudent.exam_id == exam_id,
+                ExamStudent.student_id == student_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if exam_student is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found in this exam")
+
+    comment = body.comment.strip()
+    exam_student.teacher_comment = comment or None
+    await db.commit()
+    return StudentExamCommentResponse(teacher_comment=exam_student.teacher_comment)
 
 
 @router.post("/{exam_id}/students", status_code=status.HTTP_201_CREATED)

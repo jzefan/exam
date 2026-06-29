@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, Response, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,6 +48,7 @@ from app.questions.schemas import (
     QuestionImportAnalyzeRequest,
     QuestionImportAnalyzeResponse,
     QuestionResponse,
+    QuestionTypeCountResponse,
     QuestionUpdate,
     TagCreate,
     TagResponse,
@@ -61,6 +62,7 @@ from app.questions.service import (
     build_question_edit_lock_info,
     clear_question_bank_questions,
     complete_question_answer_analysis,
+    count_questions_by_type,
     match_and_create_import_question,
     create_knowledge_point,
     create_question,
@@ -72,6 +74,7 @@ from app.questions.service import (
     get_tag_by_id,
     get_or_create_named_private_question_bank,
     get_or_create_root_knowledge_question_bank,
+    get_root_knowledge_point_for_questions,
     analyze_imported_question,
     build_import_draft_from_segment,
     complete_import_draft_with_ai,
@@ -81,6 +84,7 @@ from app.questions.service import (
     list_question_banks,
     create_question_import_job,
     get_question_import_job_by_id,
+    link_existing_questions_to_course,
     process_question_import_job,
     list_tags,
     enhance_import_drafts,
@@ -236,6 +240,7 @@ async def list_questions(
 
     base_query = _question_scope_query(user=user, is_platform_admin=is_admin)
     filters = parse_filters(request, Question)
+    print(f"[list_questions] raw filters: {filters}", flush=True)
 
     # Handle question_bank_id=__none__ as IS NULL filter
     qb_none = False
@@ -317,6 +322,44 @@ async def list_questions(
     return [await _build_question_response(db, question) for question in questions]
 
 
+@questions_router.get("/type-distribution", response_model=list[QuestionTypeCountResponse])
+async def question_type_distribution(
+    response: Response,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+    question_bank_id: str | None = Query(None),
+    difficulty: str | None = Query(None, alias="difficulty_in"),
+) -> list[QuestionTypeCountResponse]:
+    """按题型返回可用题量（自己的题目 + 平台开放题库），供自动出题题型分布展示。
+
+    用一条 GROUP BY 聚合替代"拉全部题目再前端计数"，刷新更快；可见范围与题目列表一致。
+    """
+    is_admin = await _is_question_admin(db, user)
+
+    no_bank = question_bank_id == "__none__"
+    bank_uuid = None
+    if question_bank_id and not no_bank:
+        bank_uuid = _parse_uuid_filter(question_bank_id, "question_bank_id")
+
+    difficulties: list[int] = []
+    if difficulty:
+        for raw in difficulty.split(","):
+            raw = raw.strip()
+            if raw.isdigit():
+                difficulties.append(int(raw))
+
+    counts = await count_questions_by_type(
+        db,
+        user=user,
+        is_platform_admin=is_admin,
+        question_bank_id=bank_uuid,
+        no_bank=no_bank,
+        difficulties=difficulties or None,
+    )
+    response.headers["X-Total-Count"] = str(sum(counts.values()))
+    return [QuestionTypeCountResponse(type=qtype, count=count) for qtype, count in counts.items()]
+
+
 @questions_router.get("/{question_id}", response_model=QuestionResponse)
 async def get_question(
     question_id: uuid.UUID,
@@ -356,6 +399,15 @@ async def create_question_endpoint(
     request: Request,
 ) -> QuestionResponse:
     is_admin = await _is_question_admin(db, user)
+    if data.question_bank_id is None and data.knowledge_point_ids:
+        root_knowledge_point = await get_root_knowledge_point_for_questions(db, [data])
+        if root_knowledge_point is not None:
+            default_bank = await get_or_create_root_knowledge_question_bank(
+                db,
+                user_id=user.id,
+                root_knowledge_point=root_knowledge_point,
+            )
+            data = data.model_copy(update={"question_bank_id": default_bank.id})
     await _ensure_can_write_question_bank(db, data.question_bank_id, user, is_admin)
     await _ensure_can_read_knowledge_points(db, data.knowledge_point_ids, user, is_admin)
     question = await create_question(db, data, user.id)
@@ -709,6 +761,10 @@ async def import_bulk_create_job_endpoint(
         for question in data.questions
     ]
     result = await bulk_create_questions_fast(db, data.questions, user.id)
+    # 重复导入：已存在于题库的题目（被去重跳过创建）若还没挂到本课程，补挂到课程根，
+    # 使其出现在课程题目列表中；已在课程子树内的则跳过。
+    if root_kp is not None and result.existing_question_ids:
+        await link_existing_questions_to_course(db, result.existing_question_ids, root_kp)
     job = await create_question_import_job(db, user_id=user.id, total_count=result.created)
     job.created_question_ids = [str(question_id) for question_id in result.created_question_ids]
     await db.flush()
@@ -777,7 +833,12 @@ async def enhance_import_drafts_endpoint(
     user: Annotated[User, require_roles("admin", "platform_admin", "school_admin", "teacher", "evaluator")],
 ):
     """Batch-enhance import drafts: AI answer completion/check + knowledge point matching."""
-    result = await enhance_import_drafts(db, data.drafts, data.root_knowledge_point_id)
+    result = await enhance_import_drafts(
+        db,
+        data.drafts,
+        data.root_knowledge_point_id,
+        mode=data.mode,
+    )
     return {"drafts": [d.model_dump() for d in result]}
 
 
@@ -797,7 +858,10 @@ async def enhance_import_drafts_stream_endpoint(
         kps_matched = 0
 
         async for index, result in enhance_import_drafts_stream(
-            db, data.drafts, data.root_knowledge_point_id
+            db,
+            data.drafts,
+            data.root_knowledge_point_id,
+            mode=data.mode,
         ):
             if result.answer_text:
                 answers_completed += 1

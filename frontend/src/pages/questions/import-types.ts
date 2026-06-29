@@ -26,8 +26,12 @@ export interface QuestionImportDraft {
   title: string;
   type: QuestionType;
   content_text: string;
+  // 经富文本编辑后的题干 HTML（可含图片）；存在时优先用于生成最终题目与预览。
+  content_html?: string;
   options: Record<string, string> | null;
   answer_text: string | null;
+  // 经富文本编辑后的答案 HTML（简答/论述题可含图片）。
+  answer_html?: string;
   analysis: string | null;
   difficulty: number;
   segment_source: string;
@@ -101,6 +105,8 @@ export interface EnhanceDraftInput {
   answer_text: string | null;
   analysis: string | null;
 }
+
+export type EnhanceDraftMode = "answers" | "knowledge" | "both";
 
 export interface EnhancedDraft {
   draft_id: string;

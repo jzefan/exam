@@ -2,6 +2,7 @@ import type { PointerEvent, ReactNode } from "react";
 import { useRef } from "react";
 
 import { BrandLogoMark } from "@/components/brand-logo";
+import { IcpRecordLink } from "@/components/icp-record-link";
 import { useBrand } from "@/lib/brand";
 
 interface AuthShellProps {
@@ -69,6 +70,10 @@ export function AuthShell({ children, cardClassName }: AuthShellProps) {
         </div>
         {children}
       </section>
+
+      <footer className="auth-icp-footer" aria-label="网站备案信息">
+        <IcpRecordLink />
+      </footer>
     </main>
   );
 }

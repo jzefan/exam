@@ -72,7 +72,7 @@ class AIGenerateRequest(BaseModel):
     material_text: str = Field(default="", max_length=200000)
     # 学习资料图片（PDF 整页渲染、docx/pptx 嵌入图），data URL 形式。
     # 非空时切换到多模态模型；与前端资料抽取页数上限保持一致。
-    material_images: list[str] = Field(default_factory=list, max_length=120)
+    material_images: list[str] = Field(default_factory=list, max_length=1000)
     model: AIModelProvider = AIModelProvider.DEEPSEEK
 
 

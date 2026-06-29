@@ -600,11 +600,8 @@ export function ExamWizardForm({
   });
   const knowledgePoints = knowledgePointQuery.data?.data ?? [];
 
-  const { query: autoQuestionQuery } = useList<IQuestion>({
-    resource: "questions",
-    pagination: { currentPage: 1, pageSize: 500, mode: "server" },
-    sorters: [{ field: "created_at", order: "desc" }],
-    filters: [
+  const autoCandidateFilters = useMemo(
+    () => [
       ...(autoQuestionBankId
         ? [
             {
@@ -624,9 +621,50 @@ export function ExamWizardForm({
           ]
         : []),
     ],
-    queryOptions: { enabled: questionMode === "auto" && currentStep === 1 },
+    [autoQuestionBankId, autoDifficulties],
+  );
+  const autoCandidatesEnabled = questionMode === "auto" && currentStep === 1;
+
+  // 题型分布改用后端 GROUP BY 聚合：仅统计自己的题目 + 平台开放题库，随难度切换快速刷新，
+  // 不必为了计数把全部题目序列化拉到前端。聚合同时给出候选总数（X-Total-Count），
+  // 用于下方一次性拉取生成所需的完整候选行，避免固定 pageSize 截断导致并集少算。
+  const { query: typeDistributionQuery } = useList<{
+    type: QuestionType;
+    count: number;
+  }>({
+    resource: "questions/type-distribution",
+    pagination: { currentPage: 1, pageSize: 100, mode: "server" },
+    filters: autoCandidateFilters,
+    queryOptions: { enabled: autoCandidatesEnabled, staleTime: 0 },
+  });
+  const autoCandidateTotal = typeDistributionQuery.data?.total ?? 0;
+
+  // 生成与知识点可用量需要完整候选行，按聚合得到的总数一次性拉全。
+  const { query: autoQuestionQuery } = useList<IQuestion>({
+    resource: "questions",
+    pagination: {
+      currentPage: 1,
+      pageSize: Math.max(autoCandidateTotal, 1),
+      mode: "server",
+    },
+    sorters: [{ field: "created_at", order: "desc" }],
+    filters: autoCandidateFilters,
+    queryOptions: {
+      enabled: autoCandidatesEnabled && autoCandidateTotal > 0,
+      staleTime: 0,
+    },
   });
   const autoCandidates = autoQuestionQuery.data?.data ?? [];
+
+  // 题型分布就绪（聚合查询完成）→ 用于钳制题型配额；与重型候选拉取解耦，刷新更快。
+  const typeDistributionReady =
+    autoCandidatesEnabled && !typeDistributionQuery.isFetching;
+  // 候选集就绪：聚合完成，且（无候选）或（候选请求完成且已有数据）→ 用于"生成"按钮可用性。
+  const autoCandidatesReady =
+    typeDistributionReady &&
+    (autoCandidateTotal === 0 ||
+      (!autoQuestionQuery.isFetching && autoCandidates.length > 0));
+  const autoCandidatesLoading = autoCandidatesEnabled && !autoCandidatesReady;
   const { query: selectedQuestionQuery } = useList<IQuestion>({
     resource: "questions",
     pagination: { currentPage: 1, pageSize: 500, mode: "server" },
@@ -1093,11 +1131,11 @@ export function ExamWizardForm({
     for (const option of AUTO_TYPE_DISTRIBUTION_OPTIONS) {
       counts[option.type] = 0;
     }
-    for (const question of autoCandidates) {
-      counts[question.type] = (counts[question.type] ?? 0) + 1;
+    for (const row of typeDistributionQuery.data?.data ?? []) {
+      counts[row.type] = row.count;
     }
     return counts;
-  }, [autoCandidates]);
+  }, [typeDistributionQuery.data?.data]);
   const typeAllocationEntries = useMemo(
     () =>
       (
@@ -1218,7 +1256,7 @@ export function ExamWizardForm({
     requestedKnowledgeQuestionCount !== knowledgeQuotaTargetCount;
 
   useEffect(() => {
-    if (questionMode !== "auto" || autoQuestionQuery.isLoading) return;
+    if (questionMode !== "auto" || !typeDistributionReady) return;
     setAutoTypeAllocations((prev) => {
       let changed = false;
       const next: Partial<Record<QuestionType, TypeAllocation>> = {};
@@ -1237,7 +1275,7 @@ export function ExamWizardForm({
 
       return changed ? next : prev;
     });
-  }, [autoQuestionQuery.isLoading, availableTypeCounts, questionMode]);
+  }, [typeDistributionReady, availableTypeCounts, questionMode]);
 
   // 按章节均匀分布：把目标题量轮转分配到各知识点，优先覆盖更多章节（≥80%）。
   const buildEvenKnowledgeAllocations = useCallback(
@@ -3042,7 +3080,7 @@ export function ExamWizardForm({
               type="button"
               onClick={handleAutoGenerate}
               disabled={
-                autoQuestionQuery.isLoading ||
+                autoCandidatesLoading ||
                 knowledgePointQuery.isLoading ||
                 (isTypeAllocationMode
                   ? hasTypeAllocationShortage ||

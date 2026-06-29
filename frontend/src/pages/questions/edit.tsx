@@ -15,6 +15,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Separator } from "@/components/ui/separator";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command";
@@ -82,6 +92,46 @@ function extractNonChoiceAnswer(question: IQuestion): string {
   return "";
 }
 
+// 简答/论述题的答案支持富文本（含图片），单独以 HTML 维护。
+function escapeAnswerHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function pointsToAnswerHtml(points: string[]): string {
+  return points
+    .map((point) => point.trim())
+    .filter(Boolean)
+    .map((point) => `<p>${escapeAnswerHtml(point)}</p>`)
+    .join("");
+}
+
+// 把答案 HTML 还原成逐行的纯文本要点（textContent 不保留块级换行，需先把块标签转成换行）。
+function answerHtmlToLines(html: string): string[] {
+  const withBreaks = html
+    .replace(/<\/(p|div|li|h[1-6])>/gi, "\n")
+    .replace(/<br\s*\/?>/gi, "\n");
+  const el = document.createElement("div");
+  el.innerHTML = withBreaks;
+  return (el.textContent ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function extractAnswerHtml(question: IQuestion): string {
+  if (question.type !== "short_answer" && question.type !== "essay") return "";
+  const a = question.answer ?? {};
+  if (typeof a.html === "string" && a.html.trim()) return a.html;
+  const pts = (a.points ?? a.key_points) as string[] | undefined;
+  if (pts?.length) return pointsToAnswerHtml(pts);
+  if (typeof a.text === "string" && a.text) return pointsToAnswerHtml(a.text.split("\n"));
+  if (typeof a.correct === "string" && a.correct) return pointsToAnswerHtml([a.correct]);
+  return "";
+}
+
 function extractSelectedAnswers(question: IQuestion): string[] {
   if (question.type !== "choice") return [];
   const correct = question.answer?.correct;
@@ -122,6 +172,34 @@ const questionTypeLabel: Record<QuestionType, string> = {
   code: "编程题",
 };
 
+type UIQuestionType = QuestionType | "single_choice" | "multi_choice";
+
+const questionTypeOptions: Array<{ value: UIQuestionType; label: string }> = [
+  { value: "single_choice", label: "单选题" },
+  { value: "multi_choice", label: "多选题" },
+  { value: "true_false", label: "判断题" },
+  { value: "fill_in", label: "填空题" },
+  { value: "short_answer", label: "简答题" },
+  { value: "essay", label: "论述题" },
+  { value: "code", label: "编程题" },
+];
+
+function toBackendQuestionType(uiType: UIQuestionType): QuestionType {
+  if (uiType === "single_choice" || uiType === "multi_choice") return "choice";
+  return uiType;
+}
+
+function getInitialUiQuestionType(question: IQuestion): UIQuestionType {
+  if (question.type === "choice") {
+    return Array.isArray(question.answer?.correct) ? "multi_choice" : "single_choice";
+  }
+  return question.type;
+}
+
+function getUiQuestionTypeLabel(uiType: UIQuestionType): string {
+  return questionTypeOptions.find((item) => item.value === uiType)?.label ?? "未知题型";
+}
+
 function getQuestionTypeDisplay(question: IQuestion): string {
   if (question.type === "choice") {
     return Array.isArray(question.answer?.correct) ? "多选题" : "单选题";
@@ -155,6 +233,7 @@ interface QuestionEditFormContentProps {
   cancelLabel?: string;
   showHeader?: boolean;
   showQuestionBankAndTags?: boolean;
+  allowTypeChange?: boolean;
   variant?: "page" | "dialog";
 }
 
@@ -170,12 +249,17 @@ export function QuestionEditFormContent({
   cancelLabel = "取消",
   showHeader = true,
   showQuestionBankAndTags = true,
+  allowTypeChange = true,
   variant = "page",
 }: QuestionEditFormContentProps) {
   const { data: identity } = useGetIdentity<{ primary_org?: { role_name?: string } | null }>();
   const showBankOwner = identity ? getUserRole(identity) === "platform_admin" : false;
-  const isChoice = question.type === "choice";
-  const isMultiChoice = Array.isArray(question.answer?.correct);
+  const originalUiType = getInitialUiQuestionType(question);
+  const [uiType, setUiType] = useState<UIQuestionType>(originalUiType);
+  const [pendingUiType, setPendingUiType] = useState<UIQuestionType | null>(null);
+  const type = toBackendQuestionType(uiType);
+  const isChoice = type === "choice";
+  const isMultiChoice = uiType === "multi_choice";
 
   const [questionBankId, setQuestionBankId] = useState<string>(question.question_bank_id ?? "");
   const [bankOpen, setBankOpen] = useState(false);
@@ -198,6 +282,8 @@ export function QuestionEditFormContent({
     score: String(question.score),
     answer: extractNonChoiceAnswer(question),
   });
+  // 简答/论述题答案的富文本（含图片）HTML，独立于 form.answer 维护。
+  const [answerHtml, setAnswerHtml] = useState(() => extractAnswerHtml(question));
   const editLock = question.edit_lock ?? null;
   const isInUse = Boolean(editLock?.in_use);
   const canEditDifficulty = !isInUse || editLock?.allowed_fields.includes("difficulty");
@@ -243,18 +329,20 @@ export function QuestionEditFormContent({
         ? { correct: selectedAnswers }
         : { correct: selectedAnswers[0] ?? "" };
     }
-    if (question.type === "true_false") return { correct: form.answer === "true" };
-    if (question.type === "fill_in") return { correct: fillBlanks };
-    if (question.type === "short_answer" || question.type === "essay") {
-      return { points: form.answer.split("\n").filter(Boolean) };
+    if (type === "true_false") return { correct: form.answer === "true" };
+    if (type === "fill_in") return { correct: fillBlanks };
+    if (type === "short_answer" || type === "essay") {
+      const lines = answerHtmlToLines(answerHtml);
+      // 保留 points/text 供评分与纯文本展示，html 携带富文本与图片。
+      return { points: lines, text: lines.join("\n"), html: answerHtml };
     }
-    if (question.type === "code") return { code: form.answer };
+    if (type === "code") return { code: form.answer };
     return { correct: form.answer };
   };
 
   const buildContent = () => {
     const plainText = htmlToPlainText(form.contentHtml);
-    if (question.type === "code") {
+    if (type === "code") {
       return buildCodeQuestionContent({
         contentHtml: form.contentHtml,
         plainText,
@@ -272,11 +360,60 @@ export function QuestionEditFormContent({
     return obj;
   };
 
+  const requestTypeChange = (value: string) => {
+    const nextUiType = value as UIQuestionType;
+    if (nextUiType === uiType) return;
+    setPendingUiType(nextUiType);
+  };
+
+  const applyTypeChange = () => {
+    if (!pendingUiType) return;
+
+    const previousType = type;
+    const nextType = toBackendQuestionType(pendingUiType);
+    setUiType(pendingUiType);
+
+    if (nextType === "choice") {
+      setOptions((prev) =>
+        prev.length >= 2
+          ? prev
+          : [
+              { key: "A", value: "" },
+              { key: "B", value: "" },
+              { key: "C", value: "" },
+              { key: "D", value: "" },
+            ],
+      );
+      setSelectedAnswers((prev) => {
+        const next = prev.length > 0 ? prev : ["A"];
+        return pendingUiType === "multi_choice" ? next : [next[0]];
+      });
+      updateField("answer", "");
+    } else if (nextType === "true_false") {
+      updateField("answer", "true");
+    } else if (nextType === "fill_in") {
+      setFillBlanks([""]);
+    } else if (previousType === "fill_in") {
+      updateField("answer", fillBlanks.filter(Boolean).join("\n"));
+    } else if (previousType === "choice" || previousType === "true_false") {
+      updateField("answer", "");
+    }
+
+    // 切换到简答/论述题时，用当前纯文本答案播种富文本编辑器。
+    if (nextType === "short_answer" || nextType === "essay") {
+      setAnswerHtml((prev) =>
+        prev.trim() ? prev : pointsToAnswerHtml(form.answer.split("\n")),
+      );
+    }
+
+    setPendingUiType(null);
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const plainText = htmlToPlainText(form.contentHtml);
     onSubmit({
-      type: question.type,
+      type,
       title: plainText,
       content: buildContent(),
       options: buildOptions(),
@@ -327,13 +464,32 @@ export function QuestionEditFormContent({
               </Alert>
             ) : null}
 
-            {/* Type (read-only) + Difficulty + Question Bank */}
+            {/* Type + Difficulty + Question Bank */}
             <div className={cn("grid gap-4", showQuestionBankAndTags ? "grid-cols-3" : "grid-cols-2")}>
               <div className="space-y-1.5">
                 <Label>题型</Label>
-                <div className="flex h-9 items-center rounded-md border border-input bg-muted px-3 text-sm text-muted-foreground">
-                  {getQuestionTypeDisplay(question)}
-                </div>
+                {allowTypeChange ? (
+                  <Select
+                    value={uiType}
+                    onValueChange={requestTypeChange}
+                    disabled={isStructureLocked}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="选择题型" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {questionTypeOptions.map((item) => (
+                        <SelectItem key={item.value} value={item.value}>
+                          {item.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <div className="flex h-9 items-center rounded-md border border-input bg-muted px-3 text-sm text-muted-foreground">
+                    {getQuestionTypeDisplay(question)}
+                  </div>
+                )}
               </div>
               <div className="space-y-1.5">
                 <Label>难度</Label>
@@ -413,6 +569,17 @@ export function QuestionEditFormContent({
               ) : null}
             </div>
 
+            {uiType !== originalUiType ? (
+              <Alert className="border-blue-200 bg-blue-50/80 text-blue-950">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertTitle>题型已调整</AlertTitle>
+                <AlertDescription>
+                  已从「{getQuestionTypeDisplay(question)}」改为「{getUiQuestionTypeLabel(uiType)}」。
+                  请重新核对选项、答案、解析和分值，保存后才会正式生效。
+                </AlertDescription>
+              </Alert>
+            ) : null}
+
             {/* Content */}
             <div className="space-y-1.5">
               <Label>题目内容</Label>
@@ -431,7 +598,7 @@ export function QuestionEditFormContent({
               </div>
             </div>
 
-            {question.type === "code" && (
+            {type === "code" && (
               <div className="space-y-5 rounded-2xl border border-border/70 bg-muted/20 p-4">
                 <div className="grid gap-4 md:grid-cols-3">
                   <div className="space-y-1.5 md:col-span-1">
@@ -753,15 +920,15 @@ export function QuestionEditFormContent({
             {!isChoice && (
               <div className="space-y-1.5">
                 <Label>
-                  {question.type === "true_false"
+                  {type === "true_false"
                     ? "正确答案"
-                    : question.type === "fill_in"
+                    : type === "fill_in"
                       ? "填空答案"
-                      : question.type === "code"
+                      : type === "code"
                         ? "参考答案代码（可选）"
-                        : "答案要点（每行一个）"}
+                        : "答案要点（每行一个，可插入图片）"}
                 </Label>
-                {question.type === "true_false" ? (
+                {type === "true_false" ? (
                   <Select
                     value={form.answer}
                     disabled={!canEditAnswer}
@@ -775,7 +942,7 @@ export function QuestionEditFormContent({
                       <SelectItem value="false">错误</SelectItem>
                     </SelectContent>
                   </Select>
-                ) : question.type === "fill_in" ? (
+                ) : type === "fill_in" ? (
                   <div className="space-y-2">
                     {fillBlanks.map((blank, i) => (
                       <div key={i} className="flex items-center gap-2">
@@ -817,16 +984,25 @@ export function QuestionEditFormContent({
                       添加空
                     </Button>
                   </div>
-                ) : (
+                ) : type === "code" ? (
                   <Textarea
-                    placeholder={
-                      question.type === "code" ? "输入参考答案代码（可选）..." : "每行一个答案要点..."
-                    }
+                    placeholder="输入参考答案代码（可选）..."
                     rows={4}
                     value={form.answer}
                     disabled={!canEditAnswer}
                     onChange={(e) => updateField("answer", e.target.value)}
-                    required={question.type !== "code"}
+                  />
+                ) : canEditAnswer ? (
+                  <RichTextEditor
+                    value={answerHtml}
+                    onChange={setAnswerHtml}
+                    placeholder="每行一个答案要点，可插入图片..."
+                  />
+                ) : (
+                  <Textarea
+                    rows={4}
+                    value={answerHtmlToLines(answerHtml).join("\n")}
+                    disabled
                   />
                 )}
               </div>
@@ -917,6 +1093,27 @@ export function QuestionEditFormContent({
           </form>
         </CardContent>
       </Card>
+
+      <AlertDialog
+        open={Boolean(pendingUiType)}
+        onOpenChange={(open) => {
+          if (!open) setPendingUiType(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认修改题型？</AlertDialogTitle>
+            <AlertDialogDescription>
+              将题型从「{getUiQuestionTypeLabel(uiType)}」改为「{pendingUiType ? getUiQuestionTypeLabel(pendingUiType) : ""}」后，答案、选项或代码题配置的编辑方式会随之变化。
+              原有答案可能不再适配新题型，请确认后重新核对。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={applyTypeChange}>确认修改</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

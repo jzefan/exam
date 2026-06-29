@@ -18,7 +18,6 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -42,6 +41,7 @@ import {
 import { ImportReviewWorkspace } from "@/pages/questions/components/import-review-workspace";
 import type {
   EnhanceDraftInput,
+  EnhanceDraftMode,
   QuestionImportDraft,
 } from "@/pages/questions/import-types";
 import {
@@ -61,6 +61,12 @@ import {
   recognizePaperPayload,
 } from "./recognize";
 
+function getEnhanceModeLabel(mode: EnhanceDraftMode) {
+  if (mode === "answers") return "完善答案";
+  if (mode === "knowledge") return "完善知识点";
+  return "完善答案与知识点";
+}
+
 export function PaperImportPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -68,6 +74,8 @@ export function PaperImportPage() {
   const navState = (location.state ?? {}) as {
     backTo?: string;
     backLabel?: string;
+    successTo?: string;
+    courseOrigin?: boolean;
     rootKnowledgePointId?: string;
     rootKnowledgePointName?: string;
   };
@@ -80,15 +88,16 @@ export function PaperImportPage() {
     useState<ImportDocumentPayload | null>(null);
   const [paperTitle, setPaperTitle] = useState("");
   const [paperDescription, setPaperDescription] = useState("");
-  const presetRootKnowledgePoints: SelectedKnowledgePoint[] = navState.rootKnowledgePointId
-    ? [
-        {
-          id: navState.rootKnowledgePointId,
-          name: navState.rootKnowledgePointName ?? "课程",
-          path: navState.rootKnowledgePointName ?? "课程",
-        },
-      ]
-    : [];
+  const presetRootKnowledgePoints: SelectedKnowledgePoint[] =
+    navState.rootKnowledgePointId
+      ? [
+          {
+            id: navState.rootKnowledgePointId,
+            name: navState.rootKnowledgePointName ?? "课程",
+            path: navState.rootKnowledgePointName ?? "课程",
+          },
+        ]
+      : [];
   const [selectedRootKnowledgePoints, setSelectedRootKnowledgePoints] =
     useState<SelectedKnowledgePoint[]>(presetRootKnowledgePoints);
   const [loading, setLoading] = useState(false);
@@ -98,6 +107,7 @@ export function PaperImportPage() {
   const [enhancing, setEnhancing] = useState(false);
   const [enhanceOverlay, setEnhanceOverlay] = useState<{
     status: "loading" | "done" | "error";
+    modeLabel: string;
     summary?: {
       answersCompleted: number;
       doubtsFlagged: number;
@@ -129,6 +139,14 @@ export function PaperImportPage() {
     [drafts],
   );
   const rootKnowledgePointId = selectedRootKnowledgePoints[0]?.id ?? null;
+  const courseEnhanceKnowledgePoint: SelectedKnowledgePoint | null =
+    navState.rootKnowledgePointId
+      ? selectedRootKnowledgePoints[0] ?? {
+          id: navState.rootKnowledgePointId,
+          name: navState.rootKnowledgePointName ?? "当前课程",
+          path: navState.rootKnowledgePointName ?? "当前课程",
+        }
+      : null;
   const enhancementApplied = useMemo(() => {
     if (!enhancedRootKnowledgePoint) return false;
     const approved = drafts.filter(
@@ -172,7 +190,9 @@ export function PaperImportPage() {
   };
 
   const recognizePayload = async (payload: ImportDocumentPayload) => {
-    const recognized = await recognizePaperPayload(payload);
+    const recognized = await recognizePaperPayload(payload, {
+      rootKnowledgePointId,
+    });
     const nextDrafts = recognized.drafts as unknown as QuestionImportDraft[];
     setSessionId(recognized.session_id);
     setDrafts(nextDrafts);
@@ -237,14 +257,15 @@ export function PaperImportPage() {
     }
   };
 
-  const handleEnhanceDrafts = async () => {
-    const selectedKp = enhanceSelectedKPs[0];
-    const selectedKpId = selectedKp?.id;
-    if (!selectedKpId || !selectedKp) return;
+  const handleEnhanceDrafts = async (mode: EnhanceDraftMode) => {
+    const modeLabel = getEnhanceModeLabel(mode);
+    const selectedKp = courseEnhanceKnowledgePoint ?? enhanceSelectedKPs[0] ?? null;
+    const selectedKpId = selectedKp?.id ?? null;
+    if (mode !== "answers" && !selectedKpId) return;
 
     setEnhanceDialogOpen(false);
     setEnhancing(true);
-    setEnhanceOverlay({ status: "loading" });
+    setEnhanceOverlay({ status: "loading", modeLabel });
 
     const inputs: EnhanceDraftInput[] = drafts.map((d) => ({
       draft_id: d.draft_id,
@@ -258,7 +279,6 @@ export function PaperImportPage() {
     let answersCompleted = 0;
     let doubtsFlagged = 0;
     let kpsMatched = 0;
-    let completed = 0;
 
     try {
       const token = localStorage.getItem("access_token");
@@ -270,7 +290,8 @@ export function PaperImportPage() {
         },
         body: JSON.stringify({
           drafts: inputs,
-          root_knowledge_point_id: selectedKpId,
+          root_knowledge_point_id: mode === "answers" ? null : selectedKpId,
+          mode,
         }),
       });
 
@@ -313,7 +334,6 @@ export function PaperImportPage() {
           };
 
           if (event.type === "progress" && event.index != null) {
-            completed++;
             const patch: Partial<QuestionImportDraft> = {};
             if (event.answer_text) {
               patch.answer_text = event.answer_text;
@@ -336,6 +356,7 @@ export function PaperImportPage() {
             }
             setEnhanceOverlay({
               status: "loading",
+              modeLabel,
               summary: { answersCompleted, doubtsFlagged, kpsMatched },
             });
           }
@@ -344,9 +365,13 @@ export function PaperImportPage() {
             answersCompleted = event.answers_completed ?? answersCompleted;
             doubtsFlagged = event.doubts_flagged ?? doubtsFlagged;
             kpsMatched = event.kps_matched ?? kpsMatched;
-            setEnhancedRootKnowledgePoint(selectedKp);
+            if (selectedKp) {
+              setEnhancedRootKnowledgePoint(selectedKp);
+              setSelectedRootKnowledgePoints([selectedKp]);
+            }
             setEnhanceOverlay({
               status: "done",
+              modeLabel,
               summary: { answersCompleted, doubtsFlagged, kpsMatched },
             });
             window.setTimeout(() => setEnhanceOverlay(null), 2500);
@@ -356,13 +381,14 @@ export function PaperImportPage() {
     } catch (error) {
       setEnhanceOverlay({
         status: "error",
+        modeLabel,
         errorMessage:
           error instanceof Error ? error.message : "AI 增强失败，请稍后再试",
       });
       window.setTimeout(() => setEnhanceOverlay(null), 3000);
     } finally {
       setEnhancing(false);
-      setEnhanceSelectedKPs([]);
+      if (!courseEnhanceKnowledgePoint) setEnhanceSelectedKPs([]);
     }
   };
 
@@ -438,7 +464,9 @@ export function PaperImportPage() {
       );
       setConfirmDialogOpen(false);
       toast({ title: "导入成功", description: `已创建试卷：${paper.title}` });
-      navigate(`/papers/${paper.id}`);
+      navigate(navState.successTo ?? navState.backTo ?? `/papers/${paper.id}`, {
+        state: navState.courseOrigin ? { courseOrigin: true } : undefined,
+      });
     } catch (error) {
       setParseError(error instanceof Error ? error.message : "导入失败");
     } finally {
@@ -591,10 +619,10 @@ export function PaperImportPage() {
                   </div>
                   <div className="mb-2 flex items-center gap-2 text-base font-semibold text-foreground">
                     <Sparkles size={16} />
-                    正在完善答案与知识点
+                    正在{enhanceOverlay.modeLabel}
                   </div>
                   <p className="text-sm leading-6 text-muted-foreground">
-                    AI 正在逐题检查/补全答案，并匹配课程知识点。
+                    AI 正在逐题处理，请稍候。
                   </p>
                   {enhanceOverlay.summary ? (
                     <div className="mt-3 flex flex-wrap justify-center gap-3 text-xs text-muted-foreground">
@@ -618,7 +646,7 @@ export function PaperImportPage() {
                     <CheckCircle2 size={30} />
                   </div>
                   <div className="mb-2 text-base font-semibold text-foreground">
-                    完善完成
+                    {enhanceOverlay.modeLabel}完成
                   </div>
                   <p className="text-sm leading-6 text-muted-foreground">
                     {enhanceOverlay.summary
@@ -804,31 +832,40 @@ export function PaperImportPage() {
       >
         <AlertDialogContent className="max-w-2xl">
           <AlertDialogHeader>
-            <AlertDialogTitle>完善答案与关联知识点</AlertDialogTitle>
+            <AlertDialogTitle>选择完善方式</AlertDialogTitle>
             <AlertDialogDescription>
-              AI 将为您检查/补全题目答案并匹配课程知识点。请先选择主知识点（课程）。
+              可以只完善答案、只匹配知识点，或同时完成两者。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="flex flex-col gap-3 py-2">
-            <KnowledgePointSelector
-              fetcher={(path, options) => paperApiRequest(path, options)}
-              selectedKnowledgePoints={enhanceSelectedKPs}
-              onSelectedKnowledgePointsChange={setEnhanceSelectedKPs}
-              storageKey="paper-import-enhance-knowledge-recent-keywords"
-              label="主知识点"
-              triggerLabel="搜索或展开知识图谱选择主知识点"
-              popoverSide="bottom"
-              popoverContentStyle={{
-                maxHeight: "min(340px, calc(100dvh - 360px))",
-              }}
-              selectionTarget="root"
-              selectionMode="single"
-              showUsageShortcuts={false}
-            />
-            {enhanceSelectedKPs[0] ? (
+            {courseEnhanceKnowledgePoint ? (
+              <p className="rounded-xl border border-primary/10 bg-primary/5 px-3 py-2 text-xs font-medium text-muted-foreground">
+                当前从课程进入，将直接使用「{courseEnhanceKnowledgePoint.name}」作为主知识点范围。
+                <span className="ml-1 text-muted-foreground/70">
+                  {courseEnhanceKnowledgePoint.path}
+                </span>
+              </p>
+            ) : (
+              <KnowledgePointSelector
+                fetcher={(path, options) => paperApiRequest(path, options)}
+                selectedKnowledgePoints={enhanceSelectedKPs}
+                onSelectedKnowledgePointsChange={setEnhanceSelectedKPs}
+                storageKey="paper-import-enhance-knowledge-recent-keywords"
+                label="主知识点（仅完善知识点时需要）"
+                triggerLabel="搜索或展开知识图谱选择主知识点"
+                popoverSide="bottom"
+                popoverContentStyle={{
+                  maxHeight: "min(340px, calc(100dvh - 360px))",
+                }}
+                selectionTarget="root"
+                selectionMode="single"
+                showUsageShortcuts={false}
+              />
+            )}
+            {!courseEnhanceKnowledgePoint && enhanceSelectedKPs[0] ? (
               <p className="rounded-xl border border-primary/10 bg-primary/5 px-3 py-2 text-xs font-medium text-muted-foreground">
                 将从「{enhanceSelectedKPs[0].name}
-                」下的子知识点中为题目匹配，同时检查/补全答案。
+                」下的子知识点中为题目匹配。
                 <span className="ml-1 text-muted-foreground/70">
                   {enhanceSelectedKPs[0].path}
                 </span>
@@ -837,15 +874,35 @@ export function PaperImportPage() {
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={!enhanceSelectedKPs[0]?.id || enhancing}
-              onClick={(event) => {
-                event.preventDefault();
-                void handleEnhanceDrafts();
-              }}
+            <Button
+              type="button"
+              variant="outline"
+              disabled={enhancing}
+              onClick={() => void handleEnhanceDrafts("answers")}
             >
-              开始完善
-            </AlertDialogAction>
+              完善答案
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={
+                (!courseEnhanceKnowledgePoint && !enhanceSelectedKPs[0]?.id) ||
+                enhancing
+              }
+              onClick={() => void handleEnhanceDrafts("knowledge")}
+            >
+              完善知识点
+            </Button>
+            <Button
+              type="button"
+              disabled={
+                (!courseEnhanceKnowledgePoint && !enhanceSelectedKPs[0]?.id) ||
+                enhancing
+              }
+              onClick={() => void handleEnhanceDrafts("both")}
+            >
+              完善答案与知识点
+            </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

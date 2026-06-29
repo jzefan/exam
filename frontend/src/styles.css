@@ -175,6 +175,7 @@ body {
   overflow-x: hidden;
   overflow-y: auto;
   padding: clamp(1rem, 4vw, 2.25rem);
+  padding-bottom: calc(clamp(1rem, 4vw, 2.25rem) + 2rem);
   background:
     linear-gradient(135deg, hsl(var(--background)), hsl(var(--primary) / 0.07)),
     hsl(var(--background));
@@ -272,6 +273,17 @@ body {
   height: 1px;
   content: "";
   background: linear-gradient(90deg, transparent, hsl(var(--primary) / 0.25) 30%, hsl(var(--primary) / 0.25) 70%, transparent);
+}
+
+.auth-icp-footer {
+  position: absolute;
+  right: 1rem;
+  bottom: 0.875rem;
+  left: 1rem;
+  z-index: 2;
+  display: flex;
+  justify-content: center;
+  pointer-events: auto;
 }
 
 .auth-card-register {
@@ -920,7 +932,7 @@ body {
 @media (max-width: 640px) {
   .auth-canvas {
     align-items: stretch;
-    padding: 1rem;
+    padding: 1rem 1rem 2.75rem;
   }
 
   .auth-card {
@@ -930,6 +942,10 @@ body {
 
   .auth-card-register {
     width: 100%;
+  }
+
+  .auth-icp-footer {
+    bottom: 0.875rem;
   }
 
   .auth-register-form {

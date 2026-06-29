@@ -20,7 +20,20 @@ export function PaperListPage() {
               <FilePlus2 className="mr-1.5 h-4 w-4" />
               新建试卷
             </Button>
-            <Button className="h-9 w-fit shrink-0 px-4 font-medium" onClick={() => navigate("/papers/import")}>导入试卷</Button>
+            <Button
+              className="h-9 w-fit shrink-0 px-4 font-medium"
+              onClick={() =>
+                navigate("/papers/import", {
+                  state: {
+                    backTo: "/papers",
+                    backLabel: "返回试卷列表",
+                    successTo: "/papers",
+                  },
+                })
+              }
+            >
+              导入试卷
+            </Button>
           </>
         }
       />

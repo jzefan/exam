@@ -71,6 +71,7 @@ def apply_filters(query: Select, filters: dict, model: type) -> Select:
                             raw_values = [int(v) for v in raw_values]
                         except ValueError:
                             pass
+                    print(f"[apply_filters] {field_name}_in -> {raw_values} (column type: {col_type})", flush=True)
                     query = query.where(col.in_(raw_values))
         elif "_gte" in key:
             field_name = key.replace("_gte", "")
@@ -81,7 +82,14 @@ def apply_filters(query: Select, filters: dict, model: type) -> Select:
             if hasattr(model, field_name):
                 query = query.where(getattr(model, field_name) <= value)
         elif hasattr(model, key):
+            print(f"[apply_filters] eq {key} -> {value} (column type: {str(getattr(model, key).type)})", flush=True)
             query = query.where(getattr(model, key) == value)
+    # Print compiled SQL for debugging
+    try:
+        compiled = query.compile(compile_kwargs={"literal_binds": True})
+        print(f"[apply_filters] SQL: {compiled}", flush=True)
+    except Exception:
+        pass
     return query
 
 

@@ -4,6 +4,7 @@ import { useGetIdentity } from "@refinedev/core"
 import { Briefcase, Sparkles, ArrowRight, Clock, GitBranch, Factory, ClipboardList } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { zhCN } from "date-fns/locale"
+import { IcpRecordLink } from "@/components/icp-record-link"
 import { Card, CardContent } from "@/components/ui/card"
 import { getCurrentOrgType, getCurrentRoles } from "@/lib/current-user"
 import { normalizeJobModelsResponse } from "@/pages/job-models/list-utils"
@@ -63,15 +64,16 @@ export function GwmxWorkbench() {
     .slice(0, 6)
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-base font-bold text-foreground tracking-tight">
-          {greeting()}，{identity?.name ?? "用户"} 👋
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          欢迎使用工教桥岗位能力建模平台，这里是你的工作台
-        </p>
-      </div>
+    <div className="flex min-h-[calc(100vh-6.5rem)] flex-col">
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-base font-bold text-foreground tracking-tight">
+            {greeting()}，{identity?.name ?? "用户"} 👋
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            欢迎使用工教桥岗位能力建模平台，这里是你的工作台
+          </p>
+        </div>
 
       <div className="grid grid-cols-2 gap-4">
         <StatCard
@@ -184,6 +186,12 @@ export function GwmxWorkbench() {
           </div>
         </section>
       </div>
+
+      </div>
+
+      <footer className="mt-auto flex justify-center pt-8" aria-label="网站备案信息">
+        <IcpRecordLink />
+      </footer>
     </div>
   )
 }

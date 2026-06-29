@@ -32,6 +32,13 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
@@ -42,6 +49,8 @@ import type { IQuestion } from "@/types";
 import {
   apiRequest,
   type CandidateGroup,
+  type ExamCandidateScore,
+  type ExamCandidateScoresResponse,
   type GradingCandidateDetailResponse,
   type GradingConfirmResponse,
   type GradingExportExam,
@@ -54,6 +63,7 @@ import {
   type GradingQuestionCandidate,
   type GradingQuestionDetailResponse,
 } from "./api";
+import { WholePaperView } from "./whole-paper-view";
 
 type ExpandedStage = "primary" | "review" | "arbiter";
 type GradingAttachment = {
@@ -305,8 +315,10 @@ function safeInternalBackTo(value: string | null): string | null {
 export function GradingCenterPage() {
   const location = useLocation();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const scopedExamId = searchParams.get("examId")?.trim() || null;
+  // 从课程详情「批改」进入时携带的一次性默认模式（消费后从 URL 移除，避免刷新覆盖手动状态）。
+  const initialModeParam = searchParams.get("mode");
   const routeState = (location.state ?? null) as GradingRouteState;
   const backTo = safeInternalBackTo(
     typeof routeState?.backTo === "string" ? routeState.backTo : searchParams.get("backTo"),
@@ -361,12 +373,33 @@ export function GradingCenterPage() {
   const viewedTaskIdsRef = useRef<Set<string>>(new Set());
 
   // ——— 按考生阅卷模式 ———
-  const [gradingMode, setGradingMode] = useState<"question" | "candidate">(
-    () => (localStorage.getItem("grading_mode") as "question" | "candidate") || "question",
-  );
+  const [gradingMode, setGradingMode] = useState<"question" | "candidate">(() => {
+    if (initialModeParam === "candidate" || initialModeParam === "question") return initialModeParam;
+    return (localStorage.getItem("grading_mode") as "question" | "candidate") || "question";
+  });
   useEffect(() => {
     localStorage.setItem("grading_mode", gradingMode);
   }, [gradingMode]);
+  // 左栏显示/隐藏：按考生阅卷时自动淡出隐藏，按题目阅卷时自动显示；分隔线上的按钮也可手动切换。
+  // 优先级：本次导航携带的 mode 参数 > 上次手动记忆的左栏状态 > 当前模式默认值。
+  const [sidebarHidden, setSidebarHidden] = useState(() => {
+    if (initialModeParam === "candidate") return true;
+    if (initialModeParam === "question") return false;
+    const persisted = localStorage.getItem("grading_sidebar_hidden");
+    if (persisted !== null) return persisted === "true";
+    return ((localStorage.getItem("grading_mode") as "question" | "candidate") || "question") === "candidate";
+  });
+  useEffect(() => {
+    localStorage.setItem("grading_sidebar_hidden", String(sidebarHidden));
+  }, [sidebarHidden]);
+  // 消费完一次性 mode 参数后从 URL 移除：刷新时改由记忆的左栏状态接管。
+  useEffect(() => {
+    if (!searchParams.get("mode")) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete("mode");
+    setSearchParams(next, { replace: true, state: location.state });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [candidateExamKey, setCandidateExamKey] = useState<string | null>(null); // exam_id ?? "standalone"
   const [selectedCandidateKey, setSelectedCandidateKey] = useState<string | null>(null);
   // 选中考试每道题的考生列表缓存：questionId -> 该题详情（含 candidates）
@@ -374,6 +407,14 @@ export function GradingCenterPage() {
     Record<string, GradingQuestionDetailResponse>
   >({});
   const [loadingCandidateGroups, setLoadingCandidateGroups] = useState(false);
+  const [candidateScoreMap, setCandidateScoreMap] = useState<Map<string, ExamCandidateScore>>(new Map());
+  // 按考生阅卷下的内容区视图：逐题工作流 vs 整卷视图
+  const [candidatePaneView, setCandidatePaneView] = useState<"workflow" | "paper">(
+    () => (localStorage.getItem("grading_candidate_view") as "workflow" | "paper") || "workflow",
+  );
+  useEffect(() => {
+    localStorage.setItem("grading_candidate_view", candidatePaneView);
+  }, [candidatePaneView]);
 
   const markCandidateViewed = async (taskId: string) => {
     if (viewedTaskIdsRef.current.has(taskId)) return;
@@ -425,7 +466,8 @@ export function GradingCenterPage() {
   const loadInbox = async () => {
     setLoadingInbox(true);
     try {
-      const payload = await apiRequest<GradingInboxResponse>("/grading/inbox");
+      const inboxUrl = scopedExamId ? `/grading/inbox?exam_id=${scopedExamId}` : "/grading/inbox";
+      const payload = await apiRequest<GradingInboxResponse>(inboxUrl);
       setInbox(payload);
       setQuestionCountOverrides({});
       setReportError(null);
@@ -775,13 +817,13 @@ export function GradingCenterPage() {
     }
   };
 
-  const finalizeCurrentScore = async () => {
+  const finalizeCurrentScore = async (scoreOverride?: number) => {
     if (!selectedTaskId || !candidateDetail) return true;
     const currentTaskId = selectedTaskId;
     const wasAlreadyConfirmed = isConfirmedCandidateStatus(
       activeCandidate?.status ?? candidateDetail.status,
     );
-    const scoreValue = Number(manualScore);
+    const scoreValue = scoreOverride !== undefined ? scoreOverride : Number(manualScore);
     if (Number.isNaN(scoreValue)) return false;
 
     const suggestedScore = candidateDetail.suggested_score;
@@ -885,6 +927,18 @@ export function GradingCenterPage() {
         }),
       );
       setExamQuestionCandidates(Object.fromEntries(entries));
+      if (examId) {
+        try {
+          const scorePayload = await apiRequest<ExamCandidateScoresResponse>(
+            `/grading/exams/${examId}/candidate-scores`,
+          );
+          setCandidateScoreMap(
+            new Map(scorePayload.candidates.map((candidate) => [candidate.candidate_key, candidate])),
+          );
+        } catch {
+          // 非阻塞：分数加载失败不影响主流程
+        }
+      }
     } catch (error) {
       setReportError(error instanceof Error ? error.message : "加载考生列表失败");
     } finally {
@@ -923,6 +977,7 @@ export function GradingCenterPage() {
             candidateKey: key,
             candidateName: task.candidate_name,
             candidateCode: task.candidate_code,
+            studentId: task.student_id,
             cells: [],
             pendingCount: 0,
             completedCount: 0,
@@ -971,6 +1026,16 @@ export function GradingCenterPage() {
   );
   const currentCell = currentCellIndex >= 0 ? activeCandidateGroup!.cells[currentCellIndex] : null;
 
+  // 整卷视图所需：真实考试 UUID + 考生 UUID（standalone 或缺 ID 时不可用）
+  const resolvedExamId =
+    candidateExamKey && candidateExamKey !== "standalone" ? candidateExamKey : scopedExamId;
+  const paperViewAvailable =
+    gradingMode === "candidate" && Boolean(resolvedExamId) && Boolean(activeCandidateGroup?.studentId);
+  const showPaperView = paperViewAvailable && candidatePaneView === "paper";
+  const activeCandidateGroupIndex = candidateGroups.findIndex(
+    (group) => group.candidateKey === activeCandidateGroup?.candidateKey,
+  );
+
   const pickFirstPendingTask = (group: CandidateGroup | null) => {
     if (!group) return;
     const firstPending = group.cells.find((cell) => !isConfirmedCandidateStatus(cell.task.status));
@@ -1007,13 +1072,14 @@ export function GradingCenterPage() {
   };
 
   // 确定分数：两种模式共用。考生模式下同步缓存状态并自动跳到本考生下一道待评题
-  const handleConfirmScoreSmart = async () => {
+  const handleConfirmScoreSmart = async (scoreOverride?: number) => {
     const confirmedTaskId = selectedTaskId;
     const cellQuestionId = currentCell?.questionId ?? null;
+    const effectiveScore = scoreOverride !== undefined ? scoreOverride : Number(manualScore);
     const scoreChanged =
       candidateDetail?.suggested_score == null ||
-      Number(manualScore) !== candidateDetail.suggested_score;
-    const ok = await finalizeCurrentScore();
+      effectiveScore !== candidateDetail.suggested_score;
+    const ok = await finalizeCurrentScore(scoreOverride);
     if (!ok) return;
     if (gradingMode === "question") {
       navigateCandidateByOffset(1);
@@ -1048,19 +1114,6 @@ export function GradingCenterPage() {
     if (rest[0]) {
       setCandidateTransitionDirection("next");
       setSelectedTaskId(rest[0].task.task_id);
-    }
-  };
-
-  const refreshCurrentWorkspace = async () => {
-    setActionLoading("refresh");
-    const nextInbox = await loadInbox();
-    if (selectedQuestionRef && nextInbox) {
-      const [examIdRaw, questionId] = selectedQuestionRef.split("::");
-      const examId = examIdRaw === "standalone" ? null : examIdRaw;
-      await loadQuestion(examId, questionId);
-    }
-    if (selectedTaskId) {
-      await loadCandidate(selectedTaskId);
     }
   };
 
@@ -1221,10 +1274,36 @@ export function GradingCenterPage() {
       {!showFollowUpWorkspace ? (
         <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4 border-b border-border/70 px-4 pb-4">
           <div className="min-w-0 justify-self-start">
-            <h1 className="text-base font-bold tracking-tight">阅卷中心</h1>
+            {(() => {
+              const fullTitle = scopedExamId
+                ? (scopedExamGroups[0]?.exam_label ?? "阅卷中心")
+                : "阅卷中心";
+              const isLong = fullTitle.length > 30;
+              const display = isLong ? `${fullTitle.slice(0, 30)}…` : fullTitle;
+              if (!isLong) {
+                return (
+                  <h1 className="truncate text-base font-bold tracking-tight">{display}</h1>
+                );
+              }
+              return (
+                <TooltipProvider delayDuration={300}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <h1 className="cursor-default truncate text-base font-bold tracking-tight">
+                        {display}
+                      </h1>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" align="start" className="max-w-md">
+                      {fullTitle}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              );
+            })()}
             <p className="mt-1 truncate text-xs text-muted-foreground">
-              当前共有 {summaryStats.examCount} 场考试、{summaryStats.questionCount} 道题，
-              待处理 {summaryStats.pendingCount} 份，已完成 {summaryStats.completedCount} 份。
+              {scopedExamId
+                ? `共 ${summaryStats.questionCount} 道主观题，待处理 ${summaryStats.pendingCount} 份，已完成 ${summaryStats.completedCount} 份`
+                : `当前共有 ${summaryStats.examCount} 场考试、${summaryStats.questionCount} 道题，待处理 ${summaryStats.pendingCount} 份，已完成 ${summaryStats.completedCount} 份`}
             </p>
           </div>
           <div className="justify-self-center">
@@ -1238,7 +1317,10 @@ export function GradingCenterPage() {
                 <button
                   key={key}
                   type="button"
-                  onClick={() => setGradingMode(key)}
+                  onClick={() => {
+                    setGradingMode(key);
+                    setSidebarHidden(key === "candidate");
+                  }}
                   className={cn(
                     "inline-flex items-center gap-1.5 rounded-[7px] px-[18px] py-2 text-[13.5px] font-semibold transition-all",
                     gradingMode === key
@@ -1269,12 +1351,21 @@ export function GradingCenterPage() {
                 }
               }}
             >
-              <PopoverTrigger asChild>
-                <Button variant="outline" size="sm">
-                  <FileDown className="h-4 w-4" />
-                  导出
-                </Button>
-              </PopoverTrigger>
+              <TooltipProvider delayDuration={500}>
+                <Tooltip>
+                  <PopoverTrigger asChild>
+                    <TooltipTrigger asChild>
+                      <Button variant="outline" size="sm">
+                        <FileDown className="h-4 w-4" />
+                        导出
+                      </Button>
+                    </TooltipTrigger>
+                  </PopoverTrigger>
+                  <TooltipContent side="bottom">
+                    导出本场考试下所有考生的分数
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
               <PopoverContent align="end" side="bottom" sideOffset={10} className="w-[420px] p-0">
                 <div className="flex flex-col gap-3 p-3">
                   <div className="relative">
@@ -1325,22 +1416,64 @@ export function GradingCenterPage() {
                 </div>
               </PopoverContent>
             </Popover>
-            <Button variant="outline" size="sm" onClick={() => void refreshCurrentWorkspace()}>
-              <RefreshCw className="h-4 w-4" />
-              刷新
-            </Button>
+            {gradingMode === "candidate" ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    {candidatePaneView === "paper" ? "整卷视图" : "逐题批改"}
+                    <ChevronDown className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-36">
+                  <DropdownMenuRadioGroup
+                    value={candidatePaneView}
+                    onValueChange={(value) => setCandidatePaneView(value as "workflow" | "paper")}
+                  >
+                    <DropdownMenuRadioItem value="workflow">逐题批改</DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="paper" disabled={!paperViewAvailable}>
+                      整卷视图
+                    </DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : null}
           </div>
         </div>
       ) : null}
 
       <main
         className={cn(
-          "relative grid min-h-0 flex-1 gap-0 overflow-hidden xl:grid-cols-[360px_minmax(0,1fr)]",
+          "relative grid min-h-0 flex-1 gap-0 overflow-hidden transition-[grid-template-columns] duration-500 ease-in-out",
+          sidebarHidden ? "xl:grid-cols-[0px_minmax(0,1fr)]" : "xl:grid-cols-[360px_minmax(0,1fr)]",
           showFollowUpWorkspace &&
             "pointer-events-none scale-[0.985] opacity-0 blur-[2px] transition-all duration-200 ease-out",
         )}
       >
-        <section className="min-h-0 overflow-hidden border-r border-border dark:border-white/15">
+        {/* 左右栏分隔线中部的显示/隐藏左栏按钮 */}
+        <TooltipProvider delayDuration={300}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => setSidebarHidden((prev) => !prev)}
+                aria-label={sidebarHidden ? "显示左栏" : "隐藏左栏"}
+                style={{ left: sidebarHidden ? 14 : 360 }}
+                className="absolute top-1/2 z-20 hidden h-9 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-primary/35 bg-primary/12 text-primary shadow-[0_2px_8px_hsl(var(--primary)/0.18),0_1px_3px_rgba(0,0,0,0.06)] transition-all duration-300 ease-in-out hover:scale-110 hover:border-primary/60 hover:bg-primary/20 hover:shadow-[0_4px_14px_hsl(var(--primary)/0.28),0_2px_4px_rgba(0,0,0,0.08)] active:scale-95 xl:flex"
+              >
+                {sidebarHidden ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronLeft className="h-3.5 w-3.5" />}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              {sidebarHidden ? "显示左栏" : "隐藏左栏"}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+        <section
+          className={cn(
+            "min-h-0 min-w-0 overflow-hidden border-r border-border transition-opacity duration-500 ease-in-out dark:border-white/15",
+            sidebarHidden && "pointer-events-none border-r-0 opacity-0",
+          )}
+        >
           <div className="flex h-full min-h-0 flex-col overflow-hidden px-4 pt-4 pb-2">
             <div className="shrink-0 space-y-3 border-b border-border/70 pb-3">
               <h2 className="text-sm font-semibold text-muted-foreground">
@@ -1455,30 +1588,52 @@ export function GradingCenterPage() {
                                             className={cn(
                                               "w-full rounded-lg border px-3 py-3 text-left transition-all",
                                               selected
-                                                ? "border-primary bg-primary/10 shadow-[inset_0_0_0_1px_hsl(var(--primary))]"
+                                                ? "border-primary/60 bg-primary/8"
                                                 : "border-transparent bg-background hover:border-border hover:bg-accent/30",
                                             )}
                                           >
-                                            <div className="flex items-center justify-between gap-3">
-                                              <span className="truncate text-sm font-semibold text-foreground/85">
-                                                {group.candidateName}
-                                              </span>
-                                              <div className="flex shrink-0 items-center gap-1.5 text-xs">
-                                                {group.pendingCount > 0 ? (
-                                                  <span className="rounded-md bg-amber-50 px-2 py-0.5 font-medium text-amber-700">
-                                                    {group.pendingCount}
-                                                  </span>
-                                                ) : null}
-                                                {group.completedCount > 0 ? (
-                                                  <span className="rounded-md bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700">
-                                                    {group.completedCount}
-                                                  </span>
-                                                ) : null}
-                                              </div>
-                                            </div>
-                                            <p className="mt-1.5 text-xs text-muted-foreground">
-                                              共 {group.cells.length} 题 · 已评 {group.completedCount} · 待评 {group.pendingCount}
-                                            </p>
+                                            {(() => {
+                                              const scoreEntry = candidateScoreMap.get(group.candidateKey);
+                                              const subjConfirmed = group.cells.reduce(
+                                                (sum, cell) =>
+                                                  sum + (isConfirmedCandidateStatus(cell.task.status) ? (cell.task.score ?? 0) : 0),
+                                                0,
+                                              );
+                                              return (
+                                                <>
+                                                  <div className="flex items-center justify-between gap-2">
+                                                    <div className="flex min-w-0 items-center gap-1.5">
+                                                      <span className="truncate text-sm font-semibold text-foreground/85">
+                                                        {group.candidateName}
+                                                      </span>
+                                                      {group.pendingCount > 0 ? (
+                                                        <span className="shrink-0 rounded-md bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+                                                          {group.pendingCount}
+                                                        </span>
+                                                      ) : null}
+                                                      {group.completedCount > 0 ? (
+                                                        <span className="shrink-0 rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                                                          {group.completedCount}
+                                                        </span>
+                                                      ) : null}
+                                                    </div>
+                                                    <span className="shrink-0 text-xs text-muted-foreground">
+                                                      主观题 {subjConfirmed} 分
+                                                    </span>
+                                                  </div>
+                                                  <div className="mt-1 flex items-center justify-between gap-2">
+                                                    <span className="text-xs text-muted-foreground">
+                                                      共 {group.cells.length} 题 · 待评 {group.pendingCount}
+                                                    </span>
+                                                    {scoreEntry ? (
+                                                      <span className="shrink-0 text-[11px] text-muted-foreground">
+                                                        客观题 {scoreEntry.objective_score ?? "—"} 分 · 总得 {scoreEntry.objective_score != null ? scoreEntry.objective_score + subjConfirmed : "—"} 分
+                                                      </span>
+                                                    ) : null}
+                                                  </div>
+                                                </>
+                                              );
+                                            })()}
                                           </button>
                                         );
                                       })
@@ -1498,7 +1653,7 @@ export function GradingCenterPage() {
                                           className={cn(
                                             "w-full rounded-lg border border-transparent px-3 py-3 text-left transition-all hover:border-border hover:bg-accent/30",
                                             selected
-                                              ? "border-primary bg-primary/10 shadow-[inset_0_0_0_1px_hsl(var(--primary))]"
+                                              ? "border-primary/60 bg-primary/8"
                                               : "bg-background",
                                           )}
                                         >
@@ -1562,7 +1717,14 @@ export function GradingCenterPage() {
         </section>
 
         <section className="flex min-h-[calc(100vh-180px)] flex-col">
-          {!hasVisibleQuestions ? (
+          {loadingInbox && !hasVisibleQuestions ? (
+            <div className="flex h-full min-h-0 flex-1 items-center justify-center px-8">
+              <div className="flex flex-col items-center gap-3 text-center">
+                <RefreshCw className="h-7 w-7 animate-spin text-primary" />
+                <p className="text-sm text-muted-foreground">正在加载阅卷数据...</p>
+              </div>
+            </div>
+          ) : !hasVisibleQuestions ? (
             <div className="flex h-full min-h-0 flex-1 items-center justify-center px-8">
               <div className="max-w-md space-y-3 text-center">
                 <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
@@ -1575,7 +1737,32 @@ export function GradingCenterPage() {
               </div>
             </div>
           ) : (
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 pt-2 pb-0">
+          <div
+            className={cn(
+              "flex min-h-0 flex-1 flex-col overflow-hidden",
+              showPaperView ? "" : "px-4 pt-2 pb-0",
+            )}
+          >
+            {showPaperView ? (
+              <div className="min-h-0 flex-1 overflow-hidden">
+                <WholePaperView
+                  examId={resolvedExamId!}
+                  studentId={activeCandidateGroup!.studentId!}
+                  candidateName={activeCandidateGroup?.candidateName}
+                  candidateCode={activeCandidateGroup?.candidateCode}
+                  onScoreSaved={() => {
+                    if (candidateExamKey) void loadExamCandidateMatrix(candidateExamKey);
+                  }}
+                  onPrevCandidate={() => stepCandidatePerson(-1)}
+                  onNextCandidate={() => stepCandidatePerson(1)}
+                  canPrevCandidate={activeCandidateGroupIndex > 0}
+                  canNextCandidate={
+                    activeCandidateGroupIndex >= 0 && activeCandidateGroupIndex < candidateGroups.length - 1
+                  }
+                />
+              </div>
+            ) : (
+            <>
             {gradingMode === "candidate" ? null : (
             <section className="space-y-2 border-b border-border/70 py-3">
               <div className="flex items-start justify-between gap-4">
@@ -1634,9 +1821,37 @@ export function GradingCenterPage() {
               {showCandidateList ? (
                 <section className="flex min-h-0 flex-col border-r border-border/70 pr-6 dark:border-white/15">
                 <div className="flex items-center justify-between pb-4 pt-1.5">
-                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">
-                    {gradingMode === "candidate" ? "该考生题目" : "考生列表"}
-                  </h3>
+                  {gradingMode === "candidate" && activeCandidateGroup ? (
+                    <div className="flex min-w-0 flex-col gap-0.5">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-semibold text-foreground leading-none">
+                          {activeCandidateGroup.candidateName}
+                        </span>
+                        {activeCandidateGroup.candidateCode ? (
+                          <span className="text-xs text-muted-foreground">
+                            {activeCandidateGroup.candidateCode}
+                          </span>
+                        ) : null}
+                      </div>
+                      <span className="text-[11px] text-muted-foreground">
+                        主观题{" "}
+                        {activeCandidateGroup.cells.reduce(
+                          (sum, cell) =>
+                            sum + (isConfirmedCandidateStatus(cell.task.status) ? (cell.task.score ?? 0) : 0),
+                          0,
+                        )}
+                        {" / "}
+                        {activeCandidateGroup.cells.reduce((sum, cell) => sum + cell.maxScore, 0)}{" 分"}
+                        {activeCandidateGroup.pendingCount > 0
+                          ? ` · 待批改 ${activeCandidateGroup.pendingCount} 题`
+                          : " · 已全部批改"}
+                      </span>
+                    </div>
+                  ) : (
+                    <h3 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">
+                      {gradingMode === "candidate" ? "该考生题目" : "考生列表"}
+                    </h3>
+                  )}
                   <TooltipProvider delayDuration={150}>
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -1681,7 +1896,7 @@ export function GradingCenterPage() {
                             className={cn(
                               "rounded-[10px] border p-3 text-left transition-all",
                               active
-                                ? "border-primary bg-primary/10 shadow-[inset_0_0_0_1px_hsl(var(--primary))]"
+                                ? "border-primary/60 bg-primary/8"
                                 : "border-border/80 bg-background hover:border-border hover:bg-accent/30",
                             )}
                           >
@@ -1899,14 +2114,60 @@ export function GradingCenterPage() {
                           ) : null}
                         </div>
                       </div>
-                      <Button
-                        size="sm"
-                        onClick={() => void handleConfirmScoreSmart()}
-                        disabled={(actionLoading === "manual" || actionLoading === "confirm") || !selectedTaskId}
-                      >
-                        <CheckCircle2 className="h-4 w-4" />
-                        {actionLoading === "manual" || actionLoading === "confirm" ? "提交中..." : "确定分数"}
-                      </Button>
+                      <div className="flex">
+                        <Button
+                          size="sm"
+                          onClick={() => void handleConfirmScoreSmart()}
+                          disabled={(actionLoading === "manual" || actionLoading === "confirm") || !selectedTaskId}
+                          className="rounded-r-none"
+                        >
+                          <CheckCircle2 className="h-4 w-4" />
+                          {actionLoading === "manual" || actionLoading === "confirm" ? "提交中..." : "确定分数"}
+                        </Button>
+                        <TooltipProvider delayDuration={300}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  const score = candidateDetail?.max_score ?? 0;
+                                  setManualScore(String(score));
+                                  setAutoScoreReason(null);
+                                  void handleConfirmScoreSmart(score);
+                                }}
+                                disabled={(actionLoading === "manual" || actionLoading === "confirm") || !selectedTaskId}
+                                className="rounded-none border-l-0"
+                              >
+                                满分
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              满分 {candidateDetail?.max_score ?? ""} 分，一键确认
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                        <TooltipProvider delayDuration={300}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setManualScore("0");
+                                  setAutoScoreReason(null);
+                                  void handleConfirmScoreSmart(0);
+                                }}
+                                disabled={(actionLoading === "manual" || actionLoading === "confirm") || !selectedTaskId}
+                                className="rounded-l-none border-l-0"
+                              >
+                                未得分
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>0 分，一键确认</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </div>
                       {gradingMode === "candidate" ? (
                         <>
                           <Button
@@ -2227,6 +2488,8 @@ export function GradingCenterPage() {
                 </div>
               </section>
             </div>
+            </>
+            )}
 
           </div>
           )}

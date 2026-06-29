@@ -53,6 +53,7 @@ export interface GradingQuestionCandidate {
   task_id: string;
   candidate_name: string;
   candidate_code: string | null;
+  student_id: string | null;
   status: string;
   score: number | null;
   arbitration_required: boolean;
@@ -88,6 +89,7 @@ export interface CandidateGroup {
   candidateKey: string; // candidate_code ?? candidate_name
   candidateName: string;
   candidateCode: string | null;
+  studentId: string | null; // 原始考生 UUID，用于整卷视图取数
   cells: CandidateTaskCell[];
   pendingCount: number;
   completedCount: number;
@@ -189,6 +191,17 @@ export interface GradingPromptFollowUpResponse {
 export interface GradingConfirmResponse {
   status: string;
   grading_status: "pending_ai" | "ai_scored" | "reviewed";
+}
+
+export interface ExamCandidateScore {
+  candidate_key: string;
+  objective_score: number | null;
+  subjective_score: number | null;
+  total_score: number | null;
+}
+
+export interface ExamCandidateScoresResponse {
+  candidates: ExamCandidateScore[];
 }
 
 function getAuthHeaders() {

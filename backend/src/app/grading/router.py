@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser, user_has_role
 from app.database import get_db
 from app.grading.schemas import (
+    ExamCandidateScoresRead,
     FinalGradingReportRead,
     GradingExportExamListRead,
     GradingExportScoreRead,
@@ -33,6 +34,7 @@ from app.grading.service import (
     confirm_grading_task_for_exam_submission,
     create_grading_task,
     create_manual_score_override,
+    get_exam_candidate_scores,
     get_final_report,
     get_grading_exam_score_export,
     get_grading_candidate_detail,
@@ -61,6 +63,7 @@ def _not_found(exc: ValueError) -> HTTPException:
 async def get_grading_inbox_endpoint(
     user: CurrentUser,
     db: AsyncSession = Depends(get_db),
+    exam_id: str | None = Query(default=None),
 ) -> GradingInboxRead:
     return GradingInboxRead(
         **(
@@ -68,6 +71,7 @@ async def get_grading_inbox_endpoint(
                 db,
                 current_user_id=user.id,
                 is_platform_admin=await _is_grading_admin(db, user),
+                exam_id=exam_id,
             )
         )
     )
@@ -152,6 +156,15 @@ async def get_grading_exam_score_export_endpoint(
         )
     except ValueError as exc:
         raise _not_found(exc) from exc
+
+
+@router.get("/exams/{exam_id}/candidate-scores", response_model=ExamCandidateScoresRead)
+async def get_exam_candidate_scores_endpoint(
+    exam_id: str,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> ExamCandidateScoresRead:
+    return ExamCandidateScoresRead(**(await get_exam_candidate_scores(db, exam_id)))
 
 
 @router.post("/tasks/{task_id}/follow-up", response_model=GradingPromptFollowUpRead)

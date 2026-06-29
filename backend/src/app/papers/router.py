@@ -12,6 +12,7 @@ from app.common.resource_access import can_write_owned_resource
 from app.database import get_db
 from app.papers.models import Paper, PaperImportSession
 from app.papers.schemas import (
+    PaperAIAppendRequest,
     PaperAIGenerateRequest,
     PaperAIGenerateResponse,
     PaperCreate,
@@ -29,8 +30,10 @@ from app.papers.schemas import (
     PaperImportSessionResponse,
 )
 from app.papers.service import (
+    append_ai_questions_to_paper,
     archive_paper,
     confirm_import_session,
+    create_import_session_from_pdf_file,
     create_import_session_from_recognition,
     create_paper,
     extract_paper_import_file_content,
@@ -189,18 +192,29 @@ async def recognize_paper_import_file(
 ) -> PaperImportRecognizeResponse:
     try:
         file_name = file.filename or "paper"
-        raw_text, source_format = extract_paper_import_file_content(file_name, await file.read())
-        session, recognition = await create_import_session_from_recognition(
-            db,
-            user=user,
-            request=PaperImportRecognizeRequest(
+        file_bytes = await file.read()
+        if file_name.lower().endswith(".pdf"):
+            session, recognition = await create_import_session_from_pdf_file(
+                db,
+                user=user,
                 file_name=file_name,
-                raw_text=raw_text,
-                source_format=source_format,
+                file_bytes=file_bytes,
                 root_knowledge_point_id=root_knowledge_point_id,
                 recognition_prompt=prompt,
-            ),
-        )
+            )
+        else:
+            raw_text, source_format = extract_paper_import_file_content(file_name, file_bytes)
+            session, recognition = await create_import_session_from_recognition(
+                db,
+                user=user,
+                request=PaperImportRecognizeRequest(
+                    file_name=file_name,
+                    raw_text=raw_text,
+                    source_format=source_format,
+                    root_knowledge_point_id=root_knowledge_point_id,
+                    recognition_prompt=prompt,
+                ),
+            )
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except ValueError as exc:
@@ -318,6 +332,26 @@ async def ai_generate_paper_endpoint(
         paper_id=refreshed.id,
         generated_question_count=len(refreshed.paper_questions),
     )
+
+
+@router.post("/{paper_id}/ai-append", response_model=PaperDetailResponse)
+async def ai_append_paper_questions_endpoint(
+    paper_id: uuid.UUID,
+    body: PaperAIAppendRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: WriteUser,
+) -> PaperDetailResponse:
+    is_admin = await _is_paper_admin(db, user.id)
+    paper = await _get_writable_paper_or_404(db, paper_id, user)
+    try:
+        updated = await append_ai_questions_to_paper(db, paper, body, user=user, is_admin=is_admin)
+    except ValueError as exc:
+        _raise_from_service_error(exc)
+    await db.commit()
+    refreshed = await get_paper_by_id(db, updated.id, user=user, is_admin=is_admin)
+    if refreshed is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paper not found")
+    return build_paper_detail_response(refreshed)
 
 
 @router.get("/{paper_id}/exam-seed", response_model=PaperExamSeedResponse)

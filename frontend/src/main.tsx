@@ -3,6 +3,7 @@ import "./styles.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { setupSessionExpiryHandling } from "./lib/session-expiry.ts";
+import { registerServiceWorker } from "./lib/sw-update.ts";
 
 async function bootstrap() {
   setupSessionExpiryHandling();
@@ -17,14 +18,6 @@ async function bootstrap() {
 
 void bootstrap();
 
-// Register service worker after page load (build-only; disabled in dev by vite-plugin-pwa).
-if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    const isExamPath = /^\/student\/exam\//.test(window.location.pathname);
-    if (!isExamPath) {
-      navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {
-        // SW registration failure is non-fatal; app still works.
-      });
-    }
-  });
-}
+// Register the service worker and auto-adopt new deploys (build-only; disabled
+// in dev by vite-plugin-pwa). See lib/sw-update.ts for the update strategy.
+registerServiceWorker();

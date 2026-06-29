@@ -1024,9 +1024,9 @@ async def upload_node_resource(
 ) -> LearningResourceResponse:
     """Upload a file as a learning resource for a node."""
     contents = await file.read()
-    max_size = 50 * 1024 * 1024  # 50MB
+    max_size = 180 * 1024 * 1024  # 180MB
     if len(contents) > max_size:
-        raise HTTPException(status_code=400, detail="文件大小不能超过 50MB")
+        raise HTTPException(status_code=400, detail="文件大小不能超过 180MB")
 
     normalized_title = title.strip()
     await _ensure_unique_learning_resource_title(

@@ -445,6 +445,12 @@ export function QuestionPreviewCard({
     (question.answer?.correct as string | undefined);
   const codeLanguage = (question.content?.language as string) || "python";
   const hasAnswerText = answerText !== "" && answerText !== "-";
+  // 简答/论述题答案可能含图片，存于 answer.html；有图片时按富文本渲染。
+  const answerHtml =
+    normalizedType === "short_answer" || normalizedType === "essay"
+      ? (question.answer?.html as string | undefined)
+      : undefined;
+  const hasAnswerImage = Boolean(answerHtml && /<img\b/i.test(answerHtml));
   // 选择题在选项上直接标记答案时，不再单独展示答案/参考答案区。
   const choiceAnswerInline = markChoiceAnswer && normalizedType === "choice";
   const shouldShowAnswer =
@@ -687,6 +693,10 @@ export function QuestionPreviewCard({
                     ) : (
                       <p className="text-sm text-muted-foreground">无</p>
                     )
+                  ) : hasAnswerImage ? (
+                    <div className="rounded-lg border border-primary/20 bg-primary/[0.04] px-3 py-2 text-sm text-foreground">
+                      <RichContent html={answerHtml ?? ""} />
+                    </div>
                   ) : hasAnswerText ? (
                     <div className="rounded-lg border border-primary/20 bg-primary/[0.04] px-3 py-2 text-sm text-foreground">
                       <LatexText>{answerText}</LatexText>

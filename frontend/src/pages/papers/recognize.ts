@@ -2,8 +2,8 @@
 //
 // Standard exam papers (with covers, headers, answer cards, score grids) are
 // recognized via the /papers/import endpoints, which are tuned to skip那些非题目
-// 的版式元素并保留真题的题干/选项/答案/解析。PDF 渲染成整页图走多模态识别，
-// Word(docx) 直接上传原文件走多模态，其余走纯文本识别。
+// 的版式元素并保留真题的题干/选项/答案/解析。PDF/Word(docx) 优先上传原文件，
+// 让后端按题型章节与题号边界稳定切题；视觉识别必须显式启用，避免题目数量漂移。
 
 import type {
   QuestionImportImageInput,
@@ -21,6 +21,11 @@ export type ImportDocumentPayload = {
   images: QuestionImportImageInput[];
   tables?: QuestionImportTableInput[];
   originalFile?: File;
+};
+
+export type RecognizePaperPayloadOptions = {
+  rootKnowledgePointId?: string | null;
+  allowPdfImageFallback?: boolean;
 };
 
 export const PAPER_IMPORT_MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024;
@@ -51,6 +56,17 @@ export async function extractPaperImportPayload(
     };
   }
 
+  return {
+    fileName: file.name,
+    rawText: file.name,
+    sourceFormat: "pdf",
+    images: [],
+    tables: [],
+    originalFile: file,
+  };
+}
+
+async function extractPdfImagePayload(file: File): Promise<ImportDocumentPayload> {
   const [{ getDocument, GlobalWorkerOptions }, { default: pdfWorker }] =
     await Promise.all([
       import("pdfjs-dist"),
@@ -100,19 +116,37 @@ export async function extractPaperImportPayload(
 
 export async function recognizePaperPayload(
   payload: ImportDocumentPayload,
+  options: RecognizePaperPayloadOptions = {},
 ): Promise<IPaperImportRecognizeResponse> {
-  if (payload.sourceFormat === "docx" && payload.originalFile) {
+  if ((payload.sourceFormat === "docx" || payload.sourceFormat === "pdf") && payload.originalFile) {
     const formData = new FormData();
     formData.append("file", payload.originalFile);
     formData.append(
       "prompt",
-      "请直接识别 Word 试卷中的真实题目。保留题干、选项、答案和解析，不要把封面、题型标题、题号表、答题卡或得分栏当成题目。",
+      "请直接识别试卷中的真实题目。保留题干、选项、答案和解析，不要把封面、题型标题、题号表、答题卡或得分栏当成题目。",
     );
-    return paperApiRequest<IPaperImportRecognizeResponse>(
-      "/papers/import/recognize-file",
-      { method: "POST", body: formData },
-    );
+    if (options.rootKnowledgePointId) {
+      formData.append("root_knowledge_point_id", options.rootKnowledgePointId);
+    }
+    try {
+      return await paperApiRequest<IPaperImportRecognizeResponse>(
+        "/papers/import/recognize-file",
+        { method: "POST", body: formData },
+      );
+    } catch (error) {
+      if (payload.sourceFormat !== "pdf" || !options.allowPdfImageFallback) {
+        throw error;
+      }
+      return recognizePaperPayloadAsJson(await extractPdfImagePayload(payload.originalFile), options);
+    }
   }
+  return recognizePaperPayloadAsJson(payload, options);
+}
+
+function recognizePaperPayloadAsJson(
+  payload: ImportDocumentPayload,
+  options: RecognizePaperPayloadOptions = {},
+): Promise<IPaperImportRecognizeResponse> {
   return paperApiRequest<IPaperImportRecognizeResponse>(
     "/papers/import/recognize",
     {
@@ -121,7 +155,7 @@ export async function recognizePaperPayload(
         file_name: payload.fileName,
         raw_text: payload.rawText,
         source_format: payload.sourceFormat,
-        root_knowledge_point_id: null,
+        root_knowledge_point_id: options.rootKnowledgePointId ?? null,
         images: payload.images ?? [],
         tables: payload.tables ?? [],
         recognition_prompt: RECOGNITION_PROMPT,

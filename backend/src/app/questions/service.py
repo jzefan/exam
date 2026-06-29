@@ -1,6 +1,7 @@
 """CRUD service functions for Question, Tag, and KnowledgePoint."""
 
 import asyncio
+import hashlib
 import json
 import re
 import uuid
@@ -20,6 +21,7 @@ from app.common.resource_access import teacher_owned_resource_filter, teacher_vi
 from app.database import async_session
 from app.config import settings
 from app.exams.models import Exam, ExamQuestion, ExamStudent, StudentExamAnswer, StudentExamSubmission, StudentExamSubmissionAnswer, StudentQuestionProgress
+from app.papers.models import Paper, PaperQuestion
 from app.questions.models import KnowledgePoint, Question, QuestionBank, QuestionImportJob, QuestionImportJobStatus, QuestionSource, QuestionType, Tag, question_tags
 from app.questions.schemas import (
     EnhanceDraftInput,
@@ -331,6 +333,37 @@ def _question_base_query(*, user: User | None, is_platform_admin: bool) -> Selec
             selectinload(Question.knowledge_points),
         )
     )
+
+
+async def count_questions_by_type(
+    db: AsyncSession,
+    *,
+    user: User,
+    is_platform_admin: bool,
+    question_bank_id: uuid.UUID | None = None,
+    no_bank: bool = False,
+    difficulties: list[int] | None = None,
+) -> dict[QuestionType, int]:
+    """按题型聚合可用题量，复用题目可见范围（自己的题目 + 平台开放题库）。
+
+    用一条 GROUP BY 聚合查询替代"拉全部题目再在前端计数"，避免逐条序列化的开销，
+    让自动出题界面的题型总数随难度切换快速刷新。
+    """
+    query = _question_scope_query(user=user, is_platform_admin=is_platform_admin)
+    if no_bank:
+        query = query.where(Question.question_bank_id.is_(None))
+    elif question_bank_id is not None:
+        query = query.where(Question.question_bank_id == question_bank_id)
+    if difficulties:
+        query = query.where(Question.difficulty.in_(difficulties))
+
+    stmt = (
+        query.with_only_columns(Question.type, func.count())
+        .group_by(Question.type)
+        .order_by(None)
+    )
+    rows = (await db.execute(stmt)).all()
+    return {row[0]: row[1] for row in rows}
 
 
 async def get_question_by_id(
@@ -818,6 +851,18 @@ async def can_hard_delete_question(db: AsyncSession, question_id: uuid.UUID) -> 
         .limit(1)
     )
     if progress_history is not None:
+        return False
+
+    paper_ref = await db.scalar(
+        select(PaperQuestion.question_id)
+        .join(Paper, Paper.id == PaperQuestion.paper_id)
+        .where(
+            PaperQuestion.question_id == question_id,
+            Paper.deleted_at.is_(None),
+        )
+        .limit(1)
+    )
+    if paper_ref is not None:
         return False
 
     return True
@@ -1361,6 +1406,7 @@ class TaggedListLine:
 
 _TAGGED_LIST_LINE_RE = re.compile(r"^\[(OL|UL)\]\s*(.+)$", re.IGNORECASE)
 _EXPLICIT_OPTION_LINE_RE = re.compile(r"^([A-H])[\.．、\)]\s*(.+)$", re.IGNORECASE)
+_INLINE_OPTIONS_RE = re.compile(r"(?:^|\s)([A-H])[\.．、\)]\s*(.*?)(?=\s+[A-H][\.．、\)]\s*|$)", re.IGNORECASE)
 
 
 def _parse_tagged_list_line(line: str) -> TaggedListLine | None:
@@ -1381,6 +1427,26 @@ def _looks_like_choice_prompt(text: str) -> bool:
     )
 
 
+def _extract_inline_options_from_line(line: str) -> dict[str, str]:
+    matches = list(_INLINE_OPTIONS_RE.finditer(line))
+    if len(matches) < 2:
+        return {}
+    options: dict[str, str] = {}
+    for match in matches:
+        key = match.group(1).upper()
+        value = match.group(2).strip()
+        if key not in options and value:
+            options[key] = value
+    return options
+
+
+def _strip_inline_options_from_line(line: str) -> str:
+    matches = list(_INLINE_OPTIONS_RE.finditer(line))
+    if len(matches) < 2:
+        return ""
+    return line[: matches[0].start()].strip()
+
+
 def _extract_options(
     lines: list[str],
     *,
@@ -1391,6 +1457,17 @@ def _extract_options(
     consumed_indexes: set[int] = set()
 
     for index, line in enumerate(lines):
+        inline_options = _extract_inline_options_from_line(line)
+        if len(inline_options) >= 2:
+            for key, value in inline_options.items():
+                if key not in options:
+                    options[key] = value
+            consumed_indexes.add(index)
+
+    if options:
+        return options, consumed_indexes
+
+    for index, line in enumerate(lines):
         match = _EXPLICIT_OPTION_LINE_RE.match(line)
         if match:
             options[match.group(1).upper()] = match.group(2).strip()
@@ -1398,18 +1475,6 @@ def _extract_options(
 
     if options:
         return options, consumed_indexes
-
-    # Detect inline options on a single line: "题干 A. opt1 B. opt2 C. opt3 D. opt4"
-    _INLINE_OPTIONS_RE = re.compile(r"(?:^|\s)([A-H])[\.．、\)]\s*(.+?)(?=\s+[A-H][\.．、\)]|$)")
-    if len(lines) == 1:
-        matches = list(_INLINE_OPTIONS_RE.finditer(lines[0]))
-        if len(matches) >= 2:
-            for match in matches:
-                key = match.group(1).upper()
-                value = match.group(2).strip()
-                if key not in options:
-                    options[key] = value
-            return options, {0}
 
     tagged_lines: list[tuple[int, TaggedListLine]] = []
     for index, line in enumerate(lines):
@@ -1499,18 +1564,24 @@ def _split_template_blocks(raw_text: str) -> list[list[str]]:
 
 
 def _detect_question_type(raw_text: str, options: dict[str, str], answer_text: str) -> tuple[str, str]:
+    if re.search(r"(判断题|判断|是非题|是非)", raw_text):
+        return "true_false", "high"
+    if re.search(r"(填空题|填空)", raw_text):
+        return "fill_in", "high"
+    if re.search(r"(简答题|简答|问答题)", raw_text):
+        return "short_answer", "high"
     if re.search(r"(单项选择题|单项选择|单选题|单选|多项选择题|多项选择|多选选择题|多选选择|多选题|多选|选择题|选择)", raw_text) or len(options) >= 2:
         return "choice", "high"
+    if re.search(r"(论述题|论述|阐述|分析并评价|结合实际谈谈)", raw_text):
+        return "essay", "high"
+    if re.search(r"(编程题|编程|代码题|代码|程序设计|实现函数|编写程序|示例输入|示例输出|```)", raw_text, re.IGNORECASE):
+        return "code", "high"
     if re.search(r"(判断题|判断|是非题|是非)", raw_text) or re.fullmatch(
         r"(正确|错误|对|错|√|×|T|F|True|False)", answer_text.strip(), re.IGNORECASE
     ):
         return "true_false", "high"
     if re.search(r"(_{2,}|（\s*）|\(\s*\)|【\s*】|\[\s*\])", raw_text):
         return "fill_in", "high"
-    if re.search(r"(编程题|编程|代码题|代码|程序设计|实现函数|编写程序|示例输入|示例输出|```)", raw_text, re.IGNORECASE):
-        return "code", "high"
-    if re.search(r"(论述题|论述|阐述|分析并评价|结合实际谈谈)", raw_text):
-        return "essay", "medium"
     return "short_answer", "medium"
 
 
@@ -1560,10 +1631,10 @@ def build_import_draft_from_segment(
         collecting_field = None
 
     for index, line in enumerate(lines):
-        answer_match = re.match(r"^(?:\[(答案|参考答案)\]|(答案|参考答案|answer))[:：]?\s*(.+)$", line, re.IGNORECASE)
+        answer_match = re.match(r"^(?:\[(答案|参考答案|正确答案)\]|(正确答案|答案|参考答案|answer))[:：]?\s*(.+)$", line, re.IGNORECASE)
         analysis_match = re.match(r"^(?:\[(解析|分析)\]|(解析|分析|analysis))[:：]?\s*(.+)$", line, re.IGNORECASE)
         difficulty_match = re.match(r"^(?:\[(难度|难易度)\]|(难度|难易度|difficulty))[:：]?\s*(.+)$", line, re.IGNORECASE)
-        blank_answer_field = re.match(r"^(?:\[(答案|参考答案)\]|(答案|参考答案|answer))[:：]?\s*$", line, re.IGNORECASE)
+        blank_answer_field = re.match(r"^(?:\[(答案|参考答案|正确答案)\]|(正确答案|答案|参考答案|answer))[:：]?\s*$", line, re.IGNORECASE)
         blank_analysis_field = re.match(r"^(?:\[(解析|分析)\]|(解析|分析|analysis))[:：]?\s*$", line, re.IGNORECASE)
         blank_difficulty_field = re.match(r"^(?:\[(难度|难易度)\]|(难度|难易度|difficulty))[:：]?\s*$", line, re.IGNORECASE)
         time_field = re.match(r"^(?:\[(预计时间|预期时间)\]|(预计时间|预期时间|expected.?time))[:：]?\s*(.*)$", line, re.IGNORECASE)
@@ -1612,6 +1683,9 @@ def build_import_draft_from_segment(
     content_lines: list[str] = []
     for index, line in content_candidates:
         if index in consumed_option_indexes:
+            inline_stem = _strip_inline_options_from_line(line)
+            if inline_stem:
+                content_lines.append(_strip_question_start_prefix(inline_stem))
             continue
         tagged_line = _parse_tagged_list_line(line)
         if tagged_line:
@@ -2214,6 +2288,7 @@ _DEEPSEEK_DOC_PROMPT_TEMPLATE = """以下文本已用 `[Q]` 标记分隔每道�
 - 每个 `[Q]` 块对应一道题，独立输出一行 JSON
 - 行间不要空行、不要逗号、不要数组括号
 - 不要省略、概括或改写任何字段内容
+{extra_rules}
 
 文本：
 {text}"""
@@ -2243,7 +2318,14 @@ def _normalize_question_boundaries(text: str) -> str:
     return _QUESTION_NUMBER_BOUNDARY_RE.sub("\n[Q]\n", text)
 
 
-_COMPACT_KEY_MAP = {"t": "type", "c": "content_text", "o": "options", "a": "answer_text", "an": "analysis", "imgs": "images"}
+_COMPACT_KEY_MAP = {
+    "t": "type",
+    "c": "content_text",
+    "o": "options",
+    "a": "answer_text",
+    "an": "analysis",
+    "imgs": "images",
+}
 
 
 def _parse_doc_recognition_jsonl(content: str) -> list[dict]:
@@ -2321,54 +2403,63 @@ def _extract_pdf_text_and_images(
 
     Returns (full_text, filename_to_url_map, total_images_found).
     Text contains `[IMG:filename]` markers inline where images appear.
-    Images are deduplicated by xref; same image on multiple pages is saved once.
+    Images are deduplicated by content hash; same image on multiple pages is saved once.
     """
     import io
     import pdfplumber
-    import fitz
+    from PIL import Image
 
     filename_to_url: dict[str, str] = {}
-    xref_to_filename: dict[int, str] = {}
+    image_hash_to_filename: dict[str, str] = {}
     total_images = 0
     img_count = 0
 
-    mu_doc = fitz.open(stream=file_bytes, filetype="pdf")
-
     with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
         page_texts: list[str] = []
-        for page_num, page in enumerate(pdf.pages):
+        for page in pdf.pages:
             text = page.extract_text() or ""
 
-            # Extract images for this page via PyMuPDF
-            mu_page = mu_doc[page_num]
             image_markers: list[str] = []
-            for img_info in mu_page.get_images(full=True):
+            for image in page.images:
                 total_images += 1
-                xref = img_info[0]
+                if img_count >= _MAX_EXTRACTED_IMAGES:
+                    break
 
-                if xref not in xref_to_filename:
-                    if img_count >= _MAX_EXTRACTED_IMAGES:
-                        break
-                    base = mu_doc.extract_image(xref)
-                    ext = base["ext"]
-                    data = base["image"]
-                    # Skip tiny images (watermarks/logos under 2KB or < 100px either side)
-                    w, h = base["width"], base["height"]
-                    if len(data) < 2000 or w < 100 or h < 100:
+                stream = image.get("stream")
+                if stream is None:
+                    continue
+                try:
+                    data = stream.get_rawdata()
+                except Exception:
+                    try:
+                        data = stream.get_data()
+                    except Exception:
                         continue
+
+                width, height = image.get("srcsize") or (image.get("width"), image.get("height"))
+                if len(data) < 2000 or not width or not height or width < 100 or height < 100:
+                    continue
+
+                try:
+                    image_file = Image.open(io.BytesIO(data))
+                    image_file.verify()
+                except Exception:
+                    continue
+
+                image_hash = hashlib.sha256(data).hexdigest()
+                if image_hash not in image_hash_to_filename:
                     img_count += 1
+                    ext = _guess_image_ext(data[:16])
                     filename, url = _save_image_bytes(data, ext)
-                    xref_to_filename[xref] = filename
+                    image_hash_to_filename[image_hash] = filename
                     filename_to_url[filename] = url
 
-                if xref in xref_to_filename:
-                    image_markers.append(f"[IMG:{xref_to_filename[xref]}]")
+                image_markers.append(f"[IMG:{image_hash_to_filename[image_hash]}]")
 
             if image_markers:
                 text = " ".join(image_markers) + "\n" + text
             page_texts.append(text)
 
-    mu_doc.close()
     return "\n".join(page_texts), filename_to_url, total_images
 
 
@@ -2438,6 +2529,111 @@ def _extract_docx_text_and_images(
     return "\n".join(lines), filename_to_url, img_count
 
 
+def _inline_pdf_images(raw_text: str, image_urls: dict[str, str]) -> list[QuestionImportImageInput]:
+    filenames = list(dict.fromkeys(re.findall(r"\[IMG:([^\]\s]+)\]", raw_text)))
+    return [
+        QuestionImportImageInput(image_id=filename, url=url, order=index + 1)
+        for index, filename in enumerate(filenames)
+        if (url := image_urls.get(filename))
+    ]
+
+
+def _looks_like_pdf_image_marker_line(line: str) -> bool:
+    return bool(re.fullmatch(r"(?:\[IMG:[^\]\s]+\]\s*)+", line.strip()))
+
+
+def _standard_paper_image_should_be_answer(
+    draft: QuestionImportDraft,
+    *,
+    type_hint: str | None,
+) -> bool:
+    if not draft.images or draft.answer_text:
+        return False
+    hint = type_hint or ""
+    if not re.search(r"(简答|问答|论述|分析)", hint):
+        return False
+    return draft.type.value in {"short_answer", "essay"}
+
+
+def _build_standard_paper_drafts_from_text(
+    full_text: str,
+    image_urls: dict[str, str],
+) -> list[QuestionImportDraft]:
+    """Deterministically split common Chinese exam papers by section heading + question number."""
+    prepared = preprocess_paper_import_text(full_text, [])
+    lines = [line.strip() for line in prepared.splitlines() if line.strip()]
+    drafts: list[QuestionImportDraft] = []
+    current_type_hint: str | None = None
+    current_question_type_hint: str | None = None
+    current_lines: list[str] = []
+    pending_image_lines: list[str] = []
+    current_question_number = 0
+
+    def flush() -> None:
+        nonlocal current_lines, current_question_type_hint
+        if not current_lines or not current_question_type_hint:
+            current_lines = []
+            current_question_type_hint = None
+            return
+        raw_text = "\n".join(current_lines).strip()
+        if raw_text:
+            draft = build_import_draft_from_segment(
+                raw_text,
+                segment_source="paper_rule",
+                boundary_confidence="high",
+                type_hint=current_question_type_hint,
+                images=_inline_pdf_images(raw_text, image_urls),
+            )
+            if _standard_paper_image_should_be_answer(draft, type_hint=current_question_type_hint):
+                draft = draft.model_copy(
+                    update={
+                        "images": [],
+                        "answer_images": draft.images,
+                        "issues": [issue for issue in draft.issues if issue != "未识别到答案"],
+                    }
+                )
+            drafts.append(draft)
+        current_lines = []
+        current_question_type_hint = None
+
+    for line in lines:
+        if line.startswith("[试卷题型说明]"):
+            section_hint = _extract_section_type_hint(line)
+            if section_hint:
+                flush()
+                current_type_hint = section_hint
+                current_question_number = 0
+            continue
+
+        if not current_type_hint:
+            continue
+
+        if _looks_like_pdf_image_marker_line(line):
+            pending_image_lines.append(line)
+            continue
+
+        question_number_match = re.match(r"^(\d+)\s*[.．、]\s*", line)
+        if question_number_match:
+            question_number = int(question_number_match.group(1))
+            starts_expected_question = question_number == current_question_number + 1
+            if not starts_expected_question:
+                if current_lines:
+                    current_lines.append(line)
+                continue
+            flush()
+            current_question_type_hint = current_type_hint
+            current_question_number = question_number
+            current_lines = [line, *pending_image_lines]
+            pending_image_lines = []
+            continue
+
+        if current_lines:
+            current_lines.append(line)
+
+    flush()
+    return drafts
+
+
 def _guess_image_ext(header_bytes: bytes) -> str:
     if header_bytes[:4] == b"\x89PNG":
         return "png"
@@ -2457,6 +2653,7 @@ async def _recognize_full_text_with_ai(
     source_format: str,
     empty_text_error: str,
     no_drafts_error: str,
+    recognition_prompt: str | None = None,
 ) -> "QuestionImportDocumentRecognizeResponse":
     """Split the document at question boundaries, dispatch LLM calls in parallel, merge results.
 
@@ -2479,7 +2676,10 @@ async def _recognize_full_text_with_ai(
 
     async def recognize_one(idx: int, chunk: str) -> list[QuestionImportDraft]:
         normalized = _normalize_question_boundaries(chunk)
-        prompt = _DEEPSEEK_DOC_PROMPT_TEMPLATE.format(text=normalized)
+        extra_rules = ""
+        if recognition_prompt and recognition_prompt.strip():
+            extra_rules = f"\n用户补充识别要求：\n{recognition_prompt.strip()}"
+        prompt = _DEEPSEEK_DOC_PROMPT_TEMPLATE.format(text=normalized, extra_rules=extra_rules)
         async with semaphore:
             try:
                 questions = await _request_doc_recognition_questions(prompt)
@@ -2534,13 +2734,29 @@ async def _recognize_full_text_with_ai(
     )
 
 
-async def recognize_pdf_with_ai(file_bytes: bytes, file_name: str) -> "QuestionImportDocumentRecognizeResponse":
+async def recognize_pdf_with_ai(
+    file_bytes: bytes,
+    file_name: str,
+    recognition_prompt: str | None = None,
+) -> "QuestionImportDocumentRecognizeResponse":
     """Extract text + images from PDF, split at question boundaries, call AI in parallel.
 
     Text contains inline `[IMG:filename]` markers that the LLM will reference
     in its JSONL output, producing per-question image lists with resolved URLs.
     """
     full_text, image_urls, img_count = await asyncio.to_thread(_extract_pdf_text_and_images, file_bytes)
+    deterministic_drafts = _build_standard_paper_drafts_from_text(full_text, image_urls)
+    if deterministic_drafts:
+        summary = build_import_document_summary(
+            deterministic_drafts,
+            duplicates_removed=0,
+            visual_retry_recommended=img_count > 0,
+        )
+        return QuestionImportDocumentRecognizeResponse(
+            mode=ImportRecognitionMode.SMART,
+            summary=summary,
+            drafts=deterministic_drafts,
+        )
     result = await _recognize_full_text_with_ai(
         full_text=full_text,
         image_urls=image_urls,
@@ -2548,6 +2764,7 @@ async def recognize_pdf_with_ai(file_bytes: bytes, file_name: str) -> "QuestionI
         source_format="pdf",
         empty_text_error="PDF 文件中未提取到文本内容",
         no_drafts_error="AI 未能从 PDF 中识别出任何题目，请检查文件内容",
+        recognition_prompt=recognition_prompt,
     )
     # Inject image count into summary for diagnostics
     result.summary = result.summary.model_copy(update={"visual_retry_recommended": img_count > 0})
@@ -2872,6 +3089,33 @@ async def _existing_question_signatures(db: AsyncSession, user_id: uuid.UUID) ->
     }
 
 
+async def _merge_question_knowledge_points(
+    db: AsyncSession, question_id: uuid.UUID, knowledge_point_ids: list[uuid.UUID]
+) -> None:
+    """把给定知识点合并进已有题目（去重）；用于重复导入时补充题目的知识点关联，
+    例如从课程导入时带上课程根知识点，使重复题目也出现在该课程的题目列表中。"""
+    if not knowledge_point_ids:
+        return
+    question = (
+        await db.execute(
+            select(Question)
+            .where(Question.id == question_id, Question.deleted_at.is_(None))
+            .options(selectinload(Question.knowledge_points))
+        )
+    ).scalar_one_or_none()
+    if question is None:
+        return
+    existing_ids = {kp.id for kp in question.knowledge_points}
+    missing_ids = [kp_id for kp_id in knowledge_point_ids if kp_id not in existing_ids]
+    if not missing_ids:
+        return
+    new_kps = list(
+        (await db.execute(select(KnowledgePoint).where(KnowledgePoint.id.in_(missing_ids)))).scalars().all()
+    )
+    if new_kps:
+        question.knowledge_points = [*question.knowledge_points, *new_kps]
+
+
 async def bulk_create_questions(
     db: AsyncSession, questions: list[QuestionCreate], user_id: uuid.UUID
 ) -> BulkCreateQuestionsResult:
@@ -2888,6 +3132,8 @@ async def bulk_create_questions(
         if existing_id is not None:
             existing += 1
             existing_question_ids.append(existing_id)
+            # 重复题目：把本次携带的知识点合并进已有题目，使其出现在对应课程/知识点列表中。
+            await _merge_question_knowledge_points(db, existing_id, data.knowledge_point_ids)
             continue
         question = await create_question(db, data, user_id)
         created_question_ids.append(question.id)
@@ -3124,14 +3370,21 @@ async def process_question_import_job(
                     continue
 
                 try:
-                    matched_ids = await match_knowledge_points_with_ai(question_data, candidates)
+                    try:
+                        matched_ids = await match_knowledge_points_with_ai(question_data, candidates)
+                    except Exception as exc:  # noqa: BLE001 - AI 匹配失败不应让题目丢失，记录后走兜底
+                        matched_ids = []
+                        error_message = str(exc)
                     existing_ids = {kp.id for kp in question.knowledge_points}
                     merged_ids = list(dict.fromkeys([*existing_ids, *matched_ids]))
-                    if merged_ids:
-                        matched_kps_result = await db.execute(
-                            select(KnowledgePoint).where(KnowledgePoint.id.in_(merged_ids))
-                        )
-                        question.knowledge_points = list(matched_kps_result.scalars().all())
+                    if not merged_ids:
+                        # 未匹配到任何子知识点（例如课程目录为空），兜底挂到课程根知识点，
+                        # 保证导入的题目始终在课程题目列表中可见。
+                        merged_ids = [root_knowledge_point_id]
+                    matched_kps_result = await db.execute(
+                        select(KnowledgePoint).where(KnowledgePoint.id.in_(merged_ids))
+                    )
+                    question.knowledge_points = list(matched_kps_result.scalars().all())
                     if matched_ids:
                         matched_count += 1
                     else:
@@ -3178,6 +3431,35 @@ async def process_question_import_job(
                 await db.commit()
             except Exception:  # noqa: BLE001
                 pass
+
+
+async def link_existing_questions_to_course(
+    db: AsyncSession,
+    question_ids: list[uuid.UUID],
+    root_knowledge_point: KnowledgePoint,
+) -> int:
+    """重复导入时，把已存在的题目重新关联到课程根知识点。
+
+    课程题目列表按「课程根知识点及其子树」聚合，所以已在课程子树内的题目无需再关联，
+    其余（例如之前导入到题库但没挂到本课程的）补挂到课程根，使其出现在课程题目列表中。
+    返回新关联的题目数。
+    """
+    if not question_ids:
+        return 0
+    descendants = await _load_root_descendant_knowledge_points(db, root_knowledge_point.id)
+    subtree_ids = {root_knowledge_point.id, *(kp.id for kp in descendants)}
+    rows = await db.execute(
+        select(Question)
+        .where(Question.id.in_(question_ids), Question.deleted_at.is_(None))
+        .options(selectinload(Question.knowledge_points))
+    )
+    linked = 0
+    for question in rows.scalars().unique().all():
+        if any(kp.id in subtree_ids for kp in question.knowledge_points):
+            continue  # 已在课程下，无需重复关联
+        question.knowledge_points = [*question.knowledge_points, root_knowledge_point]
+        linked += 1
+    return linked
 
 
 async def _load_root_descendant_knowledge_points(
@@ -3458,13 +3740,51 @@ async def _enhance_single_draft(
     draft: EnhanceDraftInput,
     candidates_json: list[dict],
     candidates_map: dict[uuid.UUID, str],
+    mode: str = "both",
 ) -> EnhancedDraft:
     """Run combined answer check + KP matching for one draft via AI."""
     options_str = ""
     if draft.options:
         options_str = json.dumps(draft.options, ensure_ascii=False)
 
-    prompt = f"""你是教研助手。给你一道题目和候选知识点，请同时完成三项任务：
+    if mode == "answers":
+        prompt = f"""你是教研助手。给你一道题目，请完成答案与解析处理：
+
+- 如果题目没有提供答案，请为这道题生成标准答案。
+- 如果题目已有答案，请检查答案是否正确。如果答案有疑问（如明显错误、不完整、或与题目内容矛盾），标记 doubt=true 并说明原因。
+- answer_text 只返回答案本身，不要包含解析或说明。
+- 如果题目没有提供解析，请生成一段简明、可用于教学讲解的解析。
+- 如果题目已有解析，请检查是否与题目和答案一致；若解析为空、过短或明显不完整，请补全。
+- analysis 只返回解析内容本身，不要重复题干。
+
+题目类型：{draft.type}
+题目内容：{draft.content_text[:2000]}
+选项：{options_str or "（无）"}
+当前答案：{draft.answer_text or "（无）"}
+当前解析：{draft.analysis or "（无）"}
+
+只返回合法 JSON：
+{{"answer_text":"...", "analysis":"...", "doubt":true/false, "doubt_reason":"..."|null, "matched_kp_ids":[]}}""".strip()
+    elif mode == "knowledge":
+        prompt = f"""你是教研助手。给你一道题目和候选知识点，请只完成知识点匹配：
+
+- 从候选知识点列表中选择与题目内容最相关的 0-3 个知识点。
+- 只能使用候选 id，不要编造。
+- 若没有明显相关的，返回空数组。
+- 不要补全或修改答案、解析。
+
+题目类型：{draft.type}
+题目内容：{draft.content_text[:2000]}
+选项：{options_str or "（无）"}
+当前答案：{draft.answer_text or "（无）"}
+当前解析：{draft.analysis or "（无）"}
+候选知识点（JSON 列表）：
+{json.dumps(candidates_json, ensure_ascii=False)}
+
+只返回合法 JSON：
+{{"answer_text":null, "analysis":null, "doubt":false, "doubt_reason":null, "matched_kp_ids":["uuid1","uuid2"]}}""".strip()
+    else:
+        prompt = f"""你是教研助手。给你一道题目和候选知识点，请同时完成三项任务：
 
 任务1 — 答案处理：
 - 如果题目没有提供答案，请为这道题生成标准答案。
@@ -3497,10 +3817,25 @@ async def _enhance_single_draft(
     except Exception:
         return EnhancedDraft(draft_id=draft.draft_id)
 
-    answer_text = str(data.get("answer_text", "")).strip() or None
-    analysis = str(data.get("analysis", "")).strip() or None
-    doubt = bool(data.get("doubt", False))
-    doubt_reason = str(data.get("doubt_reason", "")).strip() or None
+    if not isinstance(data, dict):
+        return EnhancedDraft(draft_id=draft.draft_id)
+
+    def optional_text(value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    if mode == "knowledge":
+        answer_text = None
+        analysis = None
+        doubt = False
+        doubt_reason = None
+    else:
+        answer_text = optional_text(data.get("answer_text"))
+        analysis = optional_text(data.get("analysis"))
+        doubt = bool(data.get("doubt", False))
+        doubt_reason = optional_text(data.get("doubt_reason"))
 
     matched_kp_ids = data.get("matched_kp_ids") if isinstance(data, dict) else None
     suggested: list[KnowledgePointSuggestion] = []
@@ -3654,10 +3989,15 @@ async def complete_seed_answer_analysis(qtype: str, content_text: str) -> dict[s
 async def enhance_import_drafts(
     db: AsyncSession,
     drafts: list[EnhanceDraftInput],
-    root_knowledge_point_id: uuid.UUID,
+    root_knowledge_point_id: uuid.UUID | None,
+    mode: str = "both",
 ) -> list[EnhancedDraft]:
     """Batch-enhance import drafts: answer completion/check + KP matching."""
-    candidates = await _load_root_descendant_knowledge_points(db, root_knowledge_point_id)
+    candidates = (
+        await _load_root_descendant_knowledge_points(db, root_knowledge_point_id)
+        if root_knowledge_point_id is not None and mode in {"knowledge", "both"}
+        else []
+    )
     candidates_map = {kp.id: kp.name for kp in candidates}
 
     semaphore = asyncio.Semaphore(5)
@@ -3668,7 +4008,7 @@ async def enhance_import_drafts(
                 f"{draft.content_text} {' '.join(draft.options.values()) if draft.options else ''}"
             )
             kp_candidates = _build_enhance_kp_candidates(candidates, keywords)
-            return await _enhance_single_draft(draft, kp_candidates, candidates_map)
+            return await _enhance_single_draft(draft, kp_candidates, candidates_map, mode=mode)
 
     return await asyncio.gather(*(process_one(d) for d in drafts))
 
@@ -3676,10 +4016,15 @@ async def enhance_import_drafts(
 async def enhance_import_drafts_stream(
     db: AsyncSession,
     drafts: list[EnhanceDraftInput],
-    root_knowledge_point_id: uuid.UUID,
+    root_knowledge_point_id: uuid.UUID | None,
+    mode: str = "both",
 ):
     """Stream-enhanced version: yields (index, EnhancedDraft) as each draft completes."""
-    candidates = await _load_root_descendant_knowledge_points(db, root_knowledge_point_id)
+    candidates = (
+        await _load_root_descendant_knowledge_points(db, root_knowledge_point_id)
+        if root_knowledge_point_id is not None and mode in {"knowledge", "both"}
+        else []
+    )
     candidates_map = {kp.id: kp.name for kp in candidates}
 
     semaphore = asyncio.Semaphore(5)
@@ -3690,7 +4035,7 @@ async def enhance_import_drafts_stream(
                 f"{draft.content_text} {' '.join(draft.options.values()) if draft.options else ''}"
             )
             kp_candidates = _build_enhance_kp_candidates(candidates, keywords)
-            result = await _enhance_single_draft(draft, kp_candidates, candidates_map)
+            result = await _enhance_single_draft(draft, kp_candidates, candidates_map, mode=mode)
             return index, result
 
     tasks = [process_one(i, d) for i, d in enumerate(drafts)]

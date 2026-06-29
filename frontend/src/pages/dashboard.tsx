@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { apiRequest } from "@/pages/grading/api";
 import { Card, CardContent } from "@/components/ui/card";
+import { IcpRecordLink } from "@/components/icp-record-link";
 import { getPersonaCopy } from "@/lib/persona-copy";
 
 interface DashboardStats {
@@ -125,16 +126,17 @@ export function Dashboard() {
   })();
 
   return (
-    <div className="space-y-8">
-      {/* Welcome */}
-      <div>
-        <h1 className="text-base font-bold text-foreground tracking-tight">
-          {greeting}，{identity?.name ?? "用户"} 👋
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          欢迎使用智评线考试管理平台，这里是你的工作台
-        </p>
-      </div>
+    <div className="flex min-h-[calc(100vh-6.5rem)] flex-col">
+      <div className="space-y-8">
+        {/* Welcome */}
+        <div>
+          <h1 className="text-base font-bold text-foreground tracking-tight">
+            {greeting}，{identity?.name ?? "用户"} 👋
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            欢迎使用智评线考试管理平台，这里是你的工作台
+          </p>
+        </div>
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -297,6 +299,11 @@ export function Dashboard() {
           )}
         </div>
       </div>
+      </div>
+
+      <footer className="mt-auto flex justify-center pt-8" aria-label="网站备案信息">
+        <IcpRecordLink />
+      </footer>
     </div>
   );
 }

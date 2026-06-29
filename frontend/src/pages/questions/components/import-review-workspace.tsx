@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   AlertTriangle,
   FileWarning,
@@ -25,30 +25,21 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
+import { htmlToPlainText } from "@/components/ui/rich-text-editor";
 import { cn } from "@/lib/utils";
 import type { IQuestion, QuestionType } from "@/types";
+import { QuestionEditFormContent, type QuestionEditSubmitValues } from "../edit";
 import type { QuestionImportDraft } from "../import-types";
 import {
   buildAnswerPayload,
+  buildImportContentHtml,
   getBlockingImportIssues,
   getQuestionTypeLabel,
   generateImportQuestionTitle,
-  importTextToHtml,
   isMissingAnswerIssue,
 } from "../import-utils";
 
@@ -63,14 +54,9 @@ const typeFilterOptions: Array<{ value: QuestionType; label: string; dotClass: s
   { value: "code", label: "编程题", dotClass: "bg-amber-500" },
 ];
 
-const editableTypeOptions: Array<{ value: QuestionType; label: string }> = [
-  { value: "choice", label: "选择题" },
-  { value: "true_false", label: "判断题" },
-  { value: "fill_in", label: "填空题" },
-  { value: "short_answer", label: "简答题" },
-  { value: "essay", label: "论述题" },
-  { value: "code", label: "编程题" },
-];
+const typeOrder = new Map<QuestionType, number>(
+  typeFilterOptions.map((item, index) => [item.value, index]),
+);
 
 function hasMissingAnswer(draft: QuestionImportDraft) {
   return !draft.answer_text?.trim() || draft.issues.some(isMissingAnswerIssue);
@@ -128,10 +114,12 @@ function draftToPreviewQuestion(draft: QuestionImportDraft): IQuestion {
     title,
     content: {
       text: draft.content_text,
-      html: importTextToHtml(draft.content_text),
+      html: draft.content_html ?? buildImportContentHtml(draft.content_text, draft.images ?? []),
     },
     options: draft.type === "choice" ? draft.options : null,
-    answer: buildAnswerPayload(draft.type, draft.answer_text),
+    answer: draft.answer_html
+      ? { ...buildAnswerPayload(draft.type, draft.answer_text), html: draft.answer_html }
+      : buildAnswerPayload(draft.type, draft.answer_text),
     analysis: draft.analysis,
     difficulty: Math.min(5, Math.max(1, Math.round(draft.difficulty || 3))),
     score: 10,
@@ -240,6 +228,55 @@ function QuestionCard({
   );
 }
 
+// 答案值（来自题库编辑表单）还原成草稿的纯文本答案，供生成最终题目与兜底展示。
+function answerTextFromEditValues(values: QuestionEditSubmitValues): string | null {
+  const answer = values.answer ?? {};
+  switch (values.type) {
+    case "choice":
+      return Array.isArray(answer.correct)
+        ? (answer.correct as string[]).join("")
+        : String(answer.correct ?? "");
+    case "true_false":
+      return answer.correct === true ? "正确" : "错误";
+    case "fill_in":
+      return Array.isArray(answer.correct)
+        ? (answer.correct as string[]).join("\n")
+        : String(answer.correct ?? "");
+    case "code":
+      return String(answer.code ?? "");
+    default:
+      return Array.isArray(answer.points)
+        ? (answer.points as string[]).join("\n")
+        : typeof answer.text === "string"
+          ? answer.text
+          : null;
+  }
+}
+
+// 把题库编辑表单的提交值转换成草稿补丁；编辑后草稿需重新进入待核对状态。
+function editValuesToDraftPatch(values: QuestionEditSubmitValues): Partial<QuestionImportDraft> {
+  const isSubjective = values.type === "short_answer" || values.type === "essay";
+  const contentHtml = typeof values.content.html === "string" ? values.content.html : "";
+  const contentText =
+    typeof values.content.text === "string" && values.content.text
+      ? values.content.text
+      : htmlToPlainText(contentHtml);
+  const answerHtml = typeof values.answer.html === "string" ? values.answer.html : undefined;
+  return {
+    type: values.type,
+    title: generateImportQuestionTitle(contentText),
+    content_text: contentText,
+    content_html: contentHtml || undefined,
+    options: values.type === "choice" ? values.options : null,
+    answer_text: answerTextFromEditValues(values),
+    answer_html: isSubjective ? answerHtml : undefined,
+    analysis: values.analysis ?? null,
+    difficulty: Math.min(5, Math.max(1, Math.round(values.difficulty || 3))),
+    review_status: "pending",
+    review_required: true,
+  };
+}
+
 function ImportEditDialog({
   draft,
   onOpenChange,
@@ -249,265 +286,32 @@ function ImportEditDialog({
   onOpenChange: (open: boolean) => void;
   onSave: (draftId: string, patch: Partial<QuestionImportDraft>) => void;
 }) {
-  const [editingDraft, setEditingDraft] = useState<QuestionImportDraft | null>(draft);
-
-  useEffect(() => {
-    setEditingDraft(draft);
-  }, [draft]);
-
-  const updateOption = (key: string, value: string) => {
-    setEditingDraft((current) =>
-      current
-        ? {
-            ...current,
-            options: {
-              ...(current.options ?? {}),
-              [key]: value,
-            },
-          }
-        : current,
-    );
-  };
-
-  const addOption = () => {
-    setEditingDraft((current) => {
-      if (!current) return current;
-      const keys = Object.keys(current.options ?? {});
-      const nextKey = String.fromCharCode(65 + keys.length);
-      return {
-        ...current,
-        options: {
-          ...(current.options ?? {}),
-          [nextKey]: "",
-        },
-      };
-    });
-  };
-
-  const removeOption = (key: string) => {
-    setEditingDraft((current) => {
-      if (!current?.options) return current;
-      const nextOptions = { ...current.options };
-      delete nextOptions[key];
-      return { ...current, options: nextOptions };
-    });
-  };
-
   return (
     <Dialog open={Boolean(draft)} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>编辑题目</DialogTitle>
-          <DialogDescription>修改后可切换到预览，确认展示效果再保存。</DialogDescription>
+          <DialogDescription>与题库的「修改题目」一致，保存后将重新进入待核对状态。</DialogDescription>
         </DialogHeader>
 
-        {editingDraft ? (
-          <Tabs defaultValue="edit" className="min-w-0">
-            <TabsList>
-              <TabsTrigger value="edit">编辑</TabsTrigger>
-              <TabsTrigger value="preview">预览</TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="edit" className="mt-4">
-              <div className="flex flex-col gap-4">
-                <div className="flex flex-col gap-2">
-                  <Label>题型</Label>
-                  <Select
-                    value={editingDraft.type}
-                    onValueChange={(value) =>
-                      setEditingDraft((current) =>
-                        current ? { ...current, type: value as QuestionType } : current,
-                      )
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="选择题型" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {editableTypeOptions.map((item) => (
-                        <SelectItem key={item.value} value={item.value}>
-                          {item.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="flex flex-col gap-2">
-                  <Label>题目内容</Label>
-                  <Textarea
-                    value={editingDraft.content_text}
-                    onChange={(event) =>
-                      setEditingDraft((current) =>
-                        current ? { ...current, content_text: event.target.value } : current,
-                      )
-                    }
-                    className="min-h-36 leading-7"
-                    placeholder="请输入题目内容，支持 $LaTeX$ 公式"
-                  />
-                </div>
-
-                {editingDraft.type === "choice" ? (
-                  <div className="flex flex-col gap-2">
-                    <div className="flex items-center justify-between gap-3">
-                      <Label>选项</Label>
-                      <Button type="button" variant="outline" size="sm" onClick={addOption}>
-                        添加选项
-                      </Button>
-                    </div>
-                    <div className="grid gap-2">
-                      {Object.entries(editingDraft.options ?? { A: "", B: "", C: "", D: "" }).map(([key, value]) => (
-                        <div key={key} className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            className={cn(
-                              "flex h-7 min-w-7 items-center justify-center rounded-full text-xs font-black transition-colors",
-                              editingDraft.answer_text?.trim() === key
-                                ? "bg-primary text-white"
-                                : "bg-slate-100 text-slate-400 hover:bg-primary/10 hover:text-primary",
-                            )}
-                            onClick={() =>
-                              setEditingDraft((current) =>
-                                current ? { ...current, answer_text: key } : current,
-                              )
-                            }
-                          >
-                            {key}
-                          </button>
-                          <Input
-                            value={value}
-                            onChange={(event) => updateOption(key, event.target.value)}
-                            placeholder={`选项 ${key}`}
-                          />
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="text-red-500"
-                            onClick={() => removeOption(key)}
-                          >
-                            删除
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="flex flex-col gap-2">
-                    <Label>答案</Label>
-                    <Textarea
-                      value={editingDraft.answer_text ?? ""}
-                      onChange={(event) =>
-                        setEditingDraft((current) =>
-                          current ? { ...current, answer_text: event.target.value } : current,
-                        )
-                      }
-                      className="min-h-24 leading-7"
-                      placeholder="请输入答案"
-                    />
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    <Label>解析</Label>
-                    <Textarea
-                      value={editingDraft.analysis ?? ""}
-                      onChange={(event) =>
-                        setEditingDraft((current) =>
-                          current ? { ...current, analysis: event.target.value } : current,
-                        )
-                      }
-                      className="min-h-24 leading-7"
-                      placeholder="请输入解析"
-                    />
-                  </div>
-                </div>
-
-                {editingDraft.doubt || editingDraft.doubt_reason ? (
-                  <div className="rounded-xl border border-orange-100 bg-orange-50 px-3 py-2 text-xs font-medium leading-5 text-orange-800">
-                    <div className="flex items-center gap-2">
-                      <label className="flex items-center gap-1.5 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={!editingDraft.doubt}
-                          onChange={(e) =>
-                            setEditingDraft((current) =>
-                              current
-                                ? { ...current, doubt: !e.target.checked, doubt_reason: e.target.checked ? null : current.doubt_reason }
-                                : current,
-                            )
-                          }
-                          className="size-3.5 rounded border-orange-300 text-primary accent-primary"
-                        />
-                        <span className="font-bold">存疑</span>
-                      </label>
-                    </div>
-                    {editingDraft.doubt_reason ? (
-                      <p className="mt-1">{editingDraft.doubt_reason}</p>
-                    ) : null}
-                  </div>
-                ) : null}
-
-                {editingDraft.suggested_knowledge_points &&
-                editingDraft.suggested_knowledge_points.length > 0 ? (
-                  <div className="flex flex-wrap items-center gap-1">
-                    <span className="text-[11px] text-slate-400">
-                      关联知识点：
-                    </span>
-                    {editingDraft.suggested_knowledge_points.map((kp) => (
-                      <Badge
-                        key={kp.id}
-                        variant="secondary"
-                        className="h-5 text-[11px]"
-                      >
-                        {kp.name}
-                      </Badge>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            </TabsContent>
-
-            <TabsContent value="preview" className="mt-4 rounded-2xl border border-slate-100 bg-slate-50 p-4">
-              <QuestionPreviewCard
-                question={draftToPreviewQuestion(editingDraft)}
-                mode="detailed"
-                defaultExpanded
-                hideAnswer={hasMissingAnswer(editingDraft)}
-                className="border-slate-100 bg-white shadow-none"
-                trailing={<DraftStatusBadges draft={editingDraft} />}
-              />
-            </TabsContent>
-          </Tabs>
-        ) : null}
-
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-            取消
-          </Button>
-          <Button
-            type="button"
-            disabled={!editingDraft}
-            onClick={() => {
-              if (!editingDraft) return;
-              onSave(editingDraft.draft_id, {
-                title: generateImportQuestionTitle(editingDraft.content_text),
-                type: editingDraft.type,
-                content_text: editingDraft.content_text,
-                options: editingDraft.type === "choice" ? editingDraft.options : null,
-                answer_text: editingDraft.answer_text,
-                analysis: editingDraft.analysis,
-                doubt: editingDraft.doubt,
-                doubt_reason: editingDraft.doubt_reason,
-                review_status: "pending",
-                review_required: true,
-              });
+        {draft ? (
+          <QuestionEditFormContent
+            question={draftToPreviewQuestion(draft)}
+            banks={[]}
+            allTags={[]}
+            knowledgePoints={[]}
+            showHeader={false}
+            showQuestionBankAndTags={false}
+            allowTypeChange
+            variant="dialog"
+            submitLabel="保存修改"
+            onCancel={() => onOpenChange(false)}
+            onSubmit={(values) => {
+              onSave(draft.draft_id, editValuesToDraftPatch(values));
               onOpenChange(false);
             }}
-          >
-            保存修改
-          </Button>
-        </DialogFooter>
+          />
+        ) : null}
       </DialogContent>
     </Dialog>
   );
@@ -540,9 +344,25 @@ export function ImportReviewWorkspace({
     [drafts],
   );
 
+  const orderedDrafts = useMemo(() => {
+    return drafts
+      .map((draft, originalIndex) => ({ draft, originalIndex }))
+      .sort((a, b) => {
+        const typeDiff =
+          (typeOrder.get(a.draft.type) ?? Number.MAX_SAFE_INTEGER) -
+          (typeOrder.get(b.draft.type) ?? Number.MAX_SAFE_INTEGER);
+        return typeDiff || a.originalIndex - b.originalIndex;
+      })
+      .map(({ draft }) => draft);
+  }, [drafts]);
+
+  const displayIndexByDraftId = useMemo(() => {
+    return new Map(orderedDrafts.map((draft, index) => [draft.draft_id, index + 1]));
+  }, [orderedDrafts]);
+
   const visibleDrafts = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    return drafts.filter((draft) => {
+    return orderedDrafts.filter((draft) => {
       if (filter === "issues" && getBlockingImportIssues(draft).length === 0) return false;
       if (filter === "missing_answer" && (getBlockingImportIssues(draft).length > 0 || !hasMissingAnswer(draft))) return false;
       if (filter === "doubt" && !draft.doubt) return false;
@@ -550,7 +370,7 @@ export function ImportReviewWorkspace({
       if (!normalizedQuery) return true;
       return searchableText(draft).includes(normalizedQuery);
     });
-  }, [drafts, filter, query]);
+  }, [filter, orderedDrafts, query]);
 
   const countByType = (type: QuestionType) => drafts.filter((draft) => draft.type === type).length;
 
@@ -682,11 +502,11 @@ export function ImportReviewWorkspace({
             </div>
           ) : (
             <div className="mx-auto flex max-w-[1040px] flex-col gap-3">
-              {visibleDrafts.map((draft) => (
+              {visibleDrafts.map((draft, visibleIndex) => (
                 <QuestionCard
                   key={draft.draft_id}
                   draft={draft}
-                  index={drafts.findIndex((item) => item.draft_id === draft.draft_id) + 1}
+                  index={displayIndexByDraftId.get(draft.draft_id) ?? visibleIndex + 1}
                   onEdit={setEditingDraft}
                   onDelete={setDeletingDraft}
                 />

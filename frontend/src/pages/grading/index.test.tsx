@@ -60,9 +60,10 @@ describe("GradingCenterPage", () => {
 
     await user.click(screen.getByRole("button", { name: /按考生阅卷/ }));
 
-    // Sidebar header and middle-column header reflect candidate mode.
+    // Sidebar header reflects candidate mode; the middle-column header now shows
+    // the active candidate's info (name + 学号), with 学号 unique to that header.
     expect(await screen.findByText("待阅试卷和考生")).toBeInTheDocument();
-    expect(await screen.findByText("该考生题目")).toBeInTheDocument();
+    expect(await screen.findByText("A-101")).toBeInTheDocument();
 
     // Context bar exposes per-candidate navigation; action row steps questions.
     expect(screen.getByRole("button", { name: /下一位考生/ })).toBeInTheDocument();

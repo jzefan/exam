@@ -26,11 +26,12 @@ from app.exams.models import (
 )
 from app.job_models.models import LearningResource
 from app.learning.models import Direction, KnowledgePoint, Major
-from app.questions.models import Question, question_knowledge_points
+from app.questions.models import Question, QuestionBank, question_knowledge_points
 from app.questions.router import _build_question_response
 from app.questions.service import (
     can_hard_delete_question,
     get_or_create_root_knowledge_question_bank,
+    root_knowledge_question_bank_name,
     soft_delete_question,
 )
 from app.rbac.models import Class, Role, TeacherStudent, UserOrganization
@@ -160,6 +161,58 @@ def _course_subtree_cte(course_id: uuid.UUID, *, include_deleted_root: bool = Fa
     )
 
 
+async def _get_course_default_question_bank(
+    db: AsyncSession,
+    course: KnowledgePoint,
+) -> QuestionBank | None:
+    """Return the course's default question bank under the current naming convention."""
+
+    if course.owner_id is None:
+        return None
+    stmt = (
+        select(QuestionBank)
+        .where(
+            QuestionBank.owner_id == course.owner_id,
+            QuestionBank.name == root_knowledge_question_bank_name(course.name),
+            QuestionBank.deleted_at.is_(None),
+        )
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def _get_course_default_question_banks(
+    db: AsyncSession,
+    courses: list[KnowledgePoint],
+) -> dict[uuid.UUID, QuestionBank]:
+    course_keys = {
+        (course.owner_id, root_knowledge_question_bank_name(course.name))
+        for course in courses
+        if course.owner_id is not None
+    }
+    if not course_keys:
+        return {}
+
+    owner_ids = {owner_id for owner_id, _name in course_keys}
+    names = {name for _owner_id, name in course_keys}
+    rows = (
+        await db.execute(
+            select(QuestionBank).where(
+                QuestionBank.owner_id.in_(owner_ids),
+                QuestionBank.name.in_(names),
+                QuestionBank.deleted_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    bank_by_key = {(bank.owner_id, bank.name): bank for bank in rows}
+    return {
+        course.id: bank
+        for course in courses
+        if course.owner_id is not None
+        if (bank := bank_by_key.get((course.owner_id, root_knowledge_question_bank_name(course.name)))) is not None
+    }
+
+
 async def _get_visible_course(
     db: AsyncSession,
     course_id: uuid.UUID,
@@ -205,27 +258,27 @@ def _display_path(major: Major | None, direction: Direction | None, course: Know
 
 async def _course_counts(
     db: AsyncSession,
-    course_id: uuid.UUID,
+    course: KnowledgePoint,
     *,
     user: User,
     is_admin: bool,
     semester_id: uuid.UUID | None = None,
     include_deleted_root: bool = False,
 ) -> dict[str, int]:
+    course_id = course.id
     subtree = _course_subtree_cte(course_id, include_deleted_root=include_deleted_root)
     subtree_ids = select(subtree.c.id)
 
-    question_stmt = (
-        select(func.count(func.distinct(Question.id)))
-        .select_from(Question)
-        .join(question_knowledge_points, Question.id == question_knowledge_points.c.question_id)
-        .where(
+    default_bank = await _get_course_default_question_bank(db, course)
+    question_count = 0
+    if default_bank is not None:
+        question_stmt = select(func.count(Question.id)).where(
             Question.deleted_at.is_(None),
-            question_knowledge_points.c.knowledge_point_id.in_(subtree_ids),
+            Question.question_bank_id == default_bank.id,
         )
-    )
-    if not is_admin:
-        question_stmt = question_stmt.where(teacher_owned_resource_filter(Question, user.id))
+        if not is_admin:
+            question_stmt = question_stmt.where(teacher_owned_resource_filter(Question, user.id))
+        question_count = await db.scalar(question_stmt) or 0
 
     material_stmt = select(func.count(LearningResource.id)).where(
         LearningResource.node_type == "kp",
@@ -282,7 +335,6 @@ async def _course_counts(
     if not is_admin:
         pending_stmt = pending_stmt.where(teacher_owned_resource_filter(Exam, user.id))
 
-    question_count = await db.scalar(question_stmt) or 0
     material_count = await db.scalar(material_stmt) or 0
     exam_count = await db.scalar(_exam_count_stmt("exam")) or 0
     assignment_count = await db.scalar(_exam_count_stmt("practice")) or 0
@@ -308,7 +360,7 @@ def _empty_counts() -> dict[str, int]:
 
 async def _batch_course_counts(
     db: AsyncSession,
-    course_ids: list[uuid.UUID],
+    courses: list[KnowledgePoint],
     *,
     user: User,
     is_admin: bool,
@@ -321,9 +373,11 @@ async def _batch_course_counts(
     on that CTE — total round-trips drop to 5 regardless of course count.
     """
 
-    result: dict[uuid.UUID, dict[str, int]] = {cid: _empty_counts() for cid in course_ids}
-    if not course_ids:
+    result: dict[uuid.UUID, dict[str, int]] = {course.id: _empty_counts() for course in courses}
+    if not courses:
         return result
+
+    course_ids = [course.id for course in courses]
 
     # Anchor: (course_id, descendant_kp_id) starting with each course as its own descendant.
     anchor = select(
@@ -341,19 +395,24 @@ async def _batch_course_counts(
     )
     subtree = subtree.union_all(child)
 
-    # 1) questions per course (distinct so multi-KP tagging doesn't double-count)
-    q_stmt = (
-        select(subtree.c.course_id, func.count(func.distinct(Question.id)))
-        .select_from(subtree)
-        .join(question_knowledge_points, question_knowledge_points.c.knowledge_point_id == subtree.c.kp_id)
-        .join(Question, Question.id == question_knowledge_points.c.question_id)
-        .where(Question.deleted_at.is_(None))
-        .group_by(subtree.c.course_id)
-    )
-    if not is_admin:
-        q_stmt = q_stmt.where(teacher_owned_resource_filter(Question, user.id))
-    for course_id, count in (await db.execute(q_stmt)).all():
-        result[course_id]["question_count"] = count
+    # 1) questions per course: a course owns the questions in its default question bank.
+    default_banks_by_course = await _get_course_default_question_banks(db, courses)
+    course_id_by_bank_id = {
+        bank.id: course_id for course_id, bank in default_banks_by_course.items()
+    }
+    if course_id_by_bank_id:
+        q_stmt = (
+            select(Question.question_bank_id, func.count(Question.id))
+            .where(
+                Question.deleted_at.is_(None),
+                Question.question_bank_id.in_(course_id_by_bank_id.keys()),
+            )
+            .group_by(Question.question_bank_id)
+        )
+        if not is_admin:
+            q_stmt = q_stmt.where(teacher_owned_resource_filter(Question, user.id))
+        for bank_id, count in (await db.execute(q_stmt)).all():
+            result[course_id_by_bank_id[bank_id]]["question_count"] = count
 
     # 2) materials per course
     m_stmt = (
@@ -507,7 +566,7 @@ async def _course_summary(
     is_deleted = course.deleted_at is not None
     counts = await _course_counts(
         db,
-        course.id,
+        course,
         user=user,
         is_admin=is_admin,
         semester_id=semester_id,
@@ -618,8 +677,8 @@ async def list_teacher_courses(db: DB, user: CurrentUser) -> list[TeacherCourseS
     if not rows:
         return []
 
-    course_ids = [course.id for course, _direction, _major in rows]
-    counts_by_id = await _batch_course_counts(db, course_ids, user=user, is_admin=is_admin)
+    courses = [course for course, _direction, _major in rows]
+    counts_by_id = await _batch_course_counts(db, courses, user=user, is_admin=is_admin)
 
     return [
         _build_course_summary(
@@ -1041,13 +1100,15 @@ async def list_teacher_course_questions(
         is_admin=is_admin,
         include_deleted=True,
     )
-    subtree = _course_subtree_cte(course_id, include_deleted_root=course.deleted_at is not None)
+    default_bank = await _get_course_default_question_bank(db, course)
+    if default_bank is None:
+        return []
+
     stmt = (
         select(Question)
-        .join(question_knowledge_points, Question.id == question_knowledge_points.c.question_id)
         .where(
             Question.deleted_at.is_(None),
-            question_knowledge_points.c.knowledge_point_id.in_(select(subtree.c.id)),
+            Question.question_bank_id == default_bank.id,
         )
         .options(
             selectinload(Question.creator),
@@ -1055,7 +1116,6 @@ async def list_teacher_course_questions(
             selectinload(Question.tags),
             selectinload(Question.knowledge_points),
         )
-        .distinct()
         .order_by(Question.updated_at.desc())
         .limit(limit)
     )
@@ -1084,15 +1144,16 @@ async def clear_teacher_course_questions(
     ):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权修改该课程")
 
-    subtree = _course_subtree_cte(course_id)
+    default_bank = await _get_course_default_question_bank(db, course)
+    if default_bank is None:
+        return {"deleted": 0, "hard_deleted": 0, "soft_deleted": 0}
+
     stmt = (
         select(Question)
-        .join(question_knowledge_points, Question.id == question_knowledge_points.c.question_id)
         .where(
             Question.deleted_at.is_(None),
-            question_knowledge_points.c.knowledge_point_id.in_(select(subtree.c.id)),
+            Question.question_bank_id == default_bank.id,
         )
-        .distinct()
     )
     if not is_admin:
         stmt = stmt.where(teacher_owned_resource_filter(Question, user.id))
@@ -1128,6 +1189,7 @@ async def get_teacher_course_knowledge_tree(course_id: uuid.UUID, db: DB, user: 
     )
     subtree = _course_subtree_cte(course_id, include_deleted_root=course.deleted_at is not None)
     subtree_ids = select(subtree.c.id)
+    default_bank = await _get_course_default_question_bank(db, course)
 
     nodes = (
         await db.execute(
@@ -1137,15 +1199,21 @@ async def get_teacher_course_knowledge_tree(course_id: uuid.UUID, db: DB, user: 
         )
     ).scalars().all()
 
-    q_rows = (
-        await db.execute(
-            select(question_knowledge_points.c.knowledge_point_id, func.count(func.distinct(Question.id)))
-            .select_from(question_knowledge_points)
-            .join(Question, Question.id == question_knowledge_points.c.question_id)
-            .where(Question.deleted_at.is_(None), question_knowledge_points.c.knowledge_point_id.in_(subtree_ids))
-            .group_by(question_knowledge_points.c.knowledge_point_id)
-        )
-    ).all()
+    q_rows = []
+    if default_bank is not None:
+        q_rows = (
+            await db.execute(
+                select(question_knowledge_points.c.knowledge_point_id, func.count(func.distinct(Question.id)))
+                .select_from(question_knowledge_points)
+                .join(Question, Question.id == question_knowledge_points.c.question_id)
+                .where(
+                    Question.deleted_at.is_(None),
+                    Question.question_bank_id == default_bank.id,
+                    question_knowledge_points.c.knowledge_point_id.in_(subtree_ids),
+                )
+                .group_by(question_knowledge_points.c.knowledge_point_id)
+            )
+        ).all()
     q_direct = {kp_id: count for kp_id, count in q_rows}
 
     m_rows = (

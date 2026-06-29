@@ -3,6 +3,7 @@ import { useGetIdentity } from "@refinedev/core"
 import { getUserRole } from "@/types/rbac"
 import { getHomeRoute } from "@/utils/role-routing"
 import { BrandLogoMark } from "@/components/brand-logo"
+import { IcpRecordLink } from "@/components/icp-record-link"
 import { Button } from "@/components/ui/button"
 import {
   ArrowRight,
@@ -291,6 +292,7 @@ export function GwmxLanding() {
         <div className="mx-auto flex max-w-6xl flex-col items-center gap-2 px-6 text-xs text-muted-foreground">
           <span>工教桥 · 智评线旗下产教融合产品</span>
           <span>&copy; {new Date().getFullYear()} 工教桥 · 岗位能力建模与专业对标平台</span>
+          <IcpRecordLink />
         </div>
       </footer>
     </div>

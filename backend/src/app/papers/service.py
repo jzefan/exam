@@ -22,6 +22,7 @@ from app.common.resource_access import can_write_owned_resource, teacher_owned_r
 from app.learning.models import KnowledgePoint
 from app.papers.models import Paper, PaperImportSession, PaperQuestion
 from app.papers.schemas import (
+    PaperAIAppendRequest,
     PaperAIGenerateRequest,
     PaperCreate,
     PaperImportConfirmRequest,
@@ -45,8 +46,10 @@ from app.questions.similarity import (
     question_summary_for_prompt,
 )
 from app.questions.service import (
+    _load_root_descendant_knowledge_points,
     bulk_create_questions_fast,
     get_or_create_named_private_question_bank,
+    recognize_pdf_with_ai,
     recognize_question_document,
 )
 
@@ -487,6 +490,7 @@ async def _pick_existing_question_for_slot(
     selected_questions: list[Any],
     user: User,
     is_admin: bool,
+    course_scope_kp_ids: set[uuid.UUID] | None = None,
 ) -> Question | None:
     source_question = slot.source_item.question
     type_value = slot.question_type
@@ -494,6 +498,12 @@ async def _pick_existing_question_for_slot(
     base_query = _question_scope_query_for_generation(user=user, is_admin=is_admin).where(
         Question.type == type_value,
     )
+    # 严格限定在本课程（主知识点及其子树）范围内取题，避免兜底时选到其它课程的无关题目，
+    # 进而污染后续 AI 生成的上下文。
+    if course_scope_kp_ids:
+        base_query = base_query.where(
+            Question.knowledge_points.any(KnowledgePoint.id.in_(course_scope_kp_ids))
+        )
     if excluded_question_ids:
         base_query = base_query.where(Question.id.not_in(excluded_question_ids))
 
@@ -543,6 +553,18 @@ async def generate_question_items_from_source_items(
         raise ValueError("源内容没有可用于生成的题目")
     if total_count < len(source_items):
         raise ValueError("目标题目数不能少于源题目数")
+
+    # 本课程（主知识点及其子树）的取题范围：复用题库题时严格限定在此范围内，
+    # 避免选到其它课程的题目并污染 AI 生成上下文。
+    course_scope_kp_ids: set[uuid.UUID] | None = None
+    if root_knowledge_point_id is not None:
+        root_uuid = (
+            root_knowledge_point_id
+            if isinstance(root_knowledge_point_id, uuid.UUID)
+            else uuid.UUID(str(root_knowledge_point_id))
+        )
+        descendants = await _load_root_descendant_knowledge_points(db, root_uuid)
+        course_scope_kp_ids = {root_uuid, *(kp.id for kp in descendants)}
 
     source_questions: list[dict] = [
         {
@@ -604,6 +626,7 @@ async def generate_question_items_from_source_items(
             selected_questions=selected_questions,
             user=user,
             is_admin=is_admin,
+            course_scope_kp_ids=course_scope_kp_ids,
         )
         if picked is None:
             continue
@@ -659,6 +682,9 @@ async def generate_question_items_from_source_items(
                 break
         if generated is None:
             raise ValueError("AI 生成题目与已有题过于相似，无法生成足够的不重复题目")
+        source_bank_id = getattr(slot.source_item.question, "question_bank_id", None)
+        if source_bank_id is not None:
+            generated = generated.model_copy(update={"question_bank_id": source_bank_id})
         generated.score = _source_item_score(slot.source_item) or generated.score
         generated_questions.append(generated)
         selected_questions.append(generated)
@@ -981,6 +1007,11 @@ def question_create_from_import_draft(
         answer = {"code": answer_text}
     else:
         answer = {"points": [part.strip() for part in answer_text.splitlines() if part.strip()]}
+    if draft.answer_images:
+        answer["images"] = [
+            image.model_dump(mode="json") if hasattr(image, "model_dump") else image
+            for image in draft.answer_images
+        ]
 
     knowledge_point_ids = [
         kp.id for kp in (draft.suggested_knowledge_points or [])
@@ -1052,17 +1083,58 @@ async def create_import_session_from_recognition(
             recognition_prompt=request.recognition_prompt,
         )
     )
-    session = PaperImportSession(
+    session = await create_import_session_from_document_recognition(
+        db,
+        user=user,
         file_name=request.file_name,
         source_format=request.source_format,
         root_knowledge_point_id=request.root_knowledge_point_id,
+        recognition=recognition,
+    )
+    return session, recognition
+
+
+async def create_import_session_from_pdf_file(
+    db: AsyncSession,
+    *,
+    user: User,
+    file_name: str,
+    file_bytes: bytes,
+    root_knowledge_point_id: uuid.UUID | None = None,
+    recognition_prompt: str | None = None,
+) -> tuple[PaperImportSession, QuestionImportDocumentRecognizeResponse]:
+    recognition = await recognize_pdf_with_ai(file_bytes, file_name, recognition_prompt=recognition_prompt)
+    session = await create_import_session_from_document_recognition(
+        db,
+        user=user,
+        file_name=file_name,
+        source_format="pdf",
+        root_knowledge_point_id=root_knowledge_point_id,
+        recognition=recognition,
+    )
+    return session, recognition
+
+
+async def create_import_session_from_document_recognition(
+    db: AsyncSession,
+    *,
+    user: User,
+    file_name: str,
+    source_format: str,
+    root_knowledge_point_id: uuid.UUID | None,
+    recognition: QuestionImportDocumentRecognizeResponse,
+) -> PaperImportSession:
+    session = PaperImportSession(
+        file_name=file_name,
+        source_format=source_format,
+        root_knowledge_point_id=root_knowledge_point_id,
         preview_payload=recognition.model_dump(mode="json"),
         error_detail=None,
         created_by=user.id,
     )
     db.add(session)
     await db.flush()
-    return session, recognition
+    return session
 
 
 async def get_import_session(
@@ -1218,3 +1290,67 @@ async def generate_paper_from_source(
         user=user,
         is_admin=is_admin,
     )
+
+
+async def append_ai_questions_to_paper(
+    db: AsyncSession,
+    paper: Paper,
+    body: PaperAIAppendRequest,
+    *,
+    user: User,
+    is_admin: bool,
+) -> Paper:
+    if not can_write_owned_resource(is_platform_admin=is_admin, current_user_id=user.id, owner_id=paper.owner_id):
+        raise ValueError("paper not found or not writable")
+
+    source_items: list[PaperQuestion] = [
+        item
+        for item in sorted(paper.paper_questions, key=lambda question_item: question_item.order)
+        if item.question is not None
+    ]
+    if not source_items:
+        raise ValueError("当前试卷没有可用于 AI 生成的源题目")
+
+    existing_question_ids = {item.question_id for item in source_items}
+    generated = await generate_question_items_from_source_items(
+        db,
+        source_items,
+        total_count=len(source_items) + body.question_count,
+        source_reuse_rate=100,
+        root_knowledge_point_id=paper.root_knowledge_point_id,
+        prefer_root_knowledge_point=body.prefer_root_knowledge_point,
+        difficulty_strategy=body.difficulty_strategy,
+        model=body.model,
+        user=user,
+        is_admin=is_admin,
+        exam_title=paper.title,
+    )
+
+    append_items = [
+        item
+        for item in generated.question_items
+        if item.question_id not in existing_question_ids
+    ][: body.question_count]
+    if not append_items:
+        raise ValueError("AI 未生成可追加的新题目，请调整数量或难度后重试")
+
+    next_items = [
+        PaperQuestionItem(
+            question_id=item.question_id,
+            order=index,
+            score_override=item.score_override,
+        )
+        for index, item in enumerate(source_items)
+    ]
+    offset = len(next_items)
+    next_items.extend(
+        PaperQuestionItem(
+            question_id=item.question_id,
+            order=offset + index,
+            score_override=item.score_override,
+        )
+        for index, item in enumerate(append_items)
+    )
+    await sync_paper_questions(db, paper, next_items)
+    await db.flush()
+    return (await get_paper_by_id(db, paper.id, user=user, is_admin=True)) or paper

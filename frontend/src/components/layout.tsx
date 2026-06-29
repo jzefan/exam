@@ -341,8 +341,8 @@ export function Layout() {
                   </NavigationMenuItem>
                 )}
 
-                {/* ---- 题库管理 (教师、管理员) ---- */}
-                {(isTeacher || isAdmin) && (
+                {/* ---- 题库管理 (评估员、管理员；教师改用「我的课程」内的题库能力) ---- */}
+                {(role === "evaluator" || isAdmin) && (
                   <NavigationMenuItem className="relative">
                     <DropdownMenu open={questionMenuOpen} onOpenChange={setQuestionMenuOpen}>
                       <DropdownMenuTrigger asChild>

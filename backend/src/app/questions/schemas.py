@@ -3,12 +3,14 @@
 import uuid
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
 from app.common.data_visibility import VisibilityScope
 from app.questions.models import QuestionImportJobStatus, QuestionSource, QuestionType, TagType
+
+MAX_IMPORT_IMAGE_URL_LENGTH = 10_000_000
 
 
 # --- Tag ---
@@ -237,7 +239,7 @@ class ImportReviewStatus(str, Enum):
 
 class QuestionImportImageInput(BaseModel):
     image_id: str = Field(min_length=1, max_length=100)
-    url: str = Field(min_length=1, max_length=2048)
+    url: str = Field(min_length=1, max_length=MAX_IMPORT_IMAGE_URL_LENGTH)
     order: int = Field(ge=0)
     page: int | None = Field(default=None, ge=1)
     alt: str | None = Field(default=None, max_length=255)
@@ -268,6 +270,7 @@ class QuestionImportDraft(BaseModel):
     boundary_confidence: ImportConfidence
     issues: list[str] = Field(default_factory=list)
     images: list[QuestionImportImageInput] = Field(default_factory=list)
+    answer_images: list[QuestionImportImageInput] = Field(default_factory=list)
     comparison_flags: list[str] = Field(default_factory=list)
     review_status: ImportReviewStatus = ImportReviewStatus.PENDING
     review_required: bool = True
@@ -389,6 +392,13 @@ class QuestionBankClearResponse(BaseModel):
     soft_deleted: int
 
 
+class QuestionTypeCountResponse(BaseModel):
+    """单个题型的可用题量，用于自动出题的题型分布展示。"""
+
+    type: QuestionType
+    count: int
+
+
 class QuestionImportMatchCreateRequest(BaseModel):
     question: QuestionCreate
     root_knowledge_point_id: uuid.UUID | None = None
@@ -423,7 +433,14 @@ class EnhanceDraftInput(BaseModel):
 
 class QuestionImportEnhanceDraftsRequest(BaseModel):
     drafts: list[EnhanceDraftInput] = Field(min_length=1, max_length=500)
-    root_knowledge_point_id: uuid.UUID
+    root_knowledge_point_id: uuid.UUID | None = None
+    mode: Literal["answers", "knowledge", "both"] = "both"
+
+    @model_validator(mode="after")
+    def require_root_for_knowledge_matching(self) -> "QuestionImportEnhanceDraftsRequest":
+        if self.mode in {"knowledge", "both"} and self.root_knowledge_point_id is None:
+            raise ValueError("root_knowledge_point_id is required when matching knowledge points")
+        return self
 
 
 class EnhancedDraft(BaseModel):

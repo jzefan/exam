@@ -456,3 +456,95 @@ async def test_get_paper_exam_seed_returns_question_items(client, db_session):
     assert payload["question_items"] == [
         {"question_id": str(question.id), "order": 0, "score_override": 6.0}
     ]
+
+
+@pytest.mark.asyncio
+async def test_pick_existing_question_stays_within_course_scope(db_session):
+    """AI 生成新试卷复用题库题时，只能取本课程范围内的题，绝不串到其它课程。"""
+    from types import SimpleNamespace
+
+    from app.papers.service import _pick_existing_question_for_slot
+
+    teacher = await _teacher(db_session, "paper-scope-teacher")
+    course_kp = KnowledgePoint(
+        name="计算机网络", owner_id=teacher.id, visibility=VisibilityScope.PRIVATE
+    )
+    other_kp = KnowledgePoint(
+        name="市场营销", owner_id=teacher.id, visibility=VisibilityScope.PRIVATE
+    )
+    db_session.add_all([course_kp, other_kp])
+    await db_session.flush()
+
+    source_q = Question(
+        type=QuestionType.CHOICE,
+        title="源题",
+        content={"text": "TCP 三次握手的作用是什么"},
+        options={"A": "建立连接", "B": "释放连接"},
+        answer={"correct": "A"},
+        difficulty=2,
+        score=5,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    off_topic = Question(
+        type=QuestionType.CHOICE,
+        title="无关题",
+        content={"text": "市场营销 4P 不包括以下哪一项"},
+        options={"A": "价格", "B": "天气"},
+        answer={"correct": "B"},
+        difficulty=2,
+        score=5,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    source_q.knowledge_points = [course_kp]
+    off_topic.knowledge_points = [other_kp]
+    db_session.add_all([source_q, off_topic])
+    await db_session.flush()
+
+    # 选题器只读 slot.source_item / question_type / knowledge_point_ids，用轻量对象即可。
+    slot = SimpleNamespace(
+        source_item=SimpleNamespace(question=source_q, question_id=source_q.id, order=0),
+        question_type="choice",
+        knowledge_point_ids=[course_kp.id],
+    )
+
+    # 仅有的候选是挂在其它课程(market)上的无关题 → 被课程范围过滤，不应选中。
+    picked = await _pick_existing_question_for_slot(
+        db_session,
+        slot,
+        excluded_question_ids={source_q.id},
+        selected_questions=[],
+        user=teacher,
+        is_admin=False,
+        course_scope_kp_ids={course_kp.id},
+    )
+    assert picked is None
+
+    # 课程内新增一道同类型题 → 现在能选到它（且绝不是其它课程的题）。
+    in_course = Question(
+        type=QuestionType.CHOICE,
+        title="课程内另一题",
+        content={"text": "子网掩码 255.255.255.0 对应的前缀长度是"},
+        options={"A": "/24", "B": "/16"},
+        answer={"correct": "A"},
+        difficulty=2,
+        score=5,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    in_course.knowledge_points = [course_kp]
+    db_session.add(in_course)
+    await db_session.flush()
+
+    picked2 = await _pick_existing_question_for_slot(
+        db_session,
+        slot,
+        excluded_question_ids={source_q.id},
+        selected_questions=[],
+        user=teacher,
+        is_admin=False,
+        course_scope_kp_ids={course_kp.id},
+    )
+    assert picked2 is not None
+    assert picked2.id == in_course.id

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useGetIdentity, useList } from "@refinedev/core";
 import { Search, Check, FileText, Maximize2, Minimize2, ChevronDown, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -39,21 +40,39 @@ export function QuestionSelector({
   onChange,
   knowledgePointOptions,
   showSummary = true,
+  renderSummary,
   isFullscreen: controlledIsFullscreen,
   onFullscreenChange,
   initialBankName,
+  initialBankId,
+  initialBankQuestionCount,
+  lockInitialBank = false,
   initialKnowledgePointId,
   autoSelectAll = false,
   initialType,
   restrictKnowledgePointsToOptions = false,
+  fillAvailableHeight = false,
+  refreshKey,
 }: {
   selectedIds: string[];
   onChange: (ids: string[]) => void;
   knowledgePointOptions?: SelectedKnowledgePoint[];
   showSummary?: boolean;
+  /** 自定义摘要行：由父组件渲染（题数统计 + 清空/全屏等操作），用于将摘要并入外层标题行。 */
+  renderSummary?: (info: {
+    selectedCount: number;
+    currentBankTotal: number | null | undefined;
+    total: number;
+    onClear: () => void;
+    onOpenFullscreen: () => void;
+  }) => ReactNode;
   isFullscreen?: boolean;
   onFullscreenChange?: (next: boolean) => void;
   initialBankName?: string;
+  initialBankId?: string;
+  initialBankQuestionCount?: number;
+  /** 与 initialBankName 配合使用：锁定题库筛选，不允许切到其它题库。 */
+  lockInitialBank?: boolean;
   initialKnowledgePointId?: string;
   /** 进入时默认全选当前题库 + 知识点过滤下的全部题目（一次性）。 */
   autoSelectAll?: boolean;
@@ -61,6 +80,10 @@ export function QuestionSelector({
   initialType?: QuestionType;
   /** 知识点下拉只展示传入的 knowledgePointOptions（用于限定课程相关知识点）。 */
   restrictKnowledgePointsToOptions?: boolean;
+  /** 嵌入大弹窗/分栏布局时，让题目列表吃满父容器剩余高度。 */
+  fillAvailableHeight?: boolean;
+  /** 外部新增题目后递增该值，触发题库与题目列表刷新。 */
+  refreshKey?: number;
 }) {
   const { data: identity } = useGetIdentity<{ primary_org?: { role_name?: string } | null }>();
   const showBankOwner = identity ? getUserRole(identity) === "platform_admin" : false;
@@ -83,6 +106,7 @@ export function QuestionSelector({
   };
 
   const selectedSet = new Set(selectedIds);
+  const bankFilterLocked = lockInitialBank && Boolean(initialBankName);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -124,13 +148,23 @@ export function QuestionSelector({
       );
 
   useEffect(() => {
-    if (!initialBankName || bankNameInitialised || banks.length === 0) return;
+    if (bankNameInitialised) return;
+    if (initialBankId) {
+      setBankFilter(initialBankId);
+      setBankNameInitialised(true);
+      return;
+    }
+    if (!initialBankName || banks.length === 0) return;
     const match = banks.find((b) => b.name === initialBankName);
     if (match) {
       setBankFilter(match.id);
       setBankNameInitialised(true);
+      return;
     }
-  }, [initialBankName, bankNameInitialised, banks]);
+    if (!lockInitialBank) {
+      setBankNameInitialised(true);
+    }
+  }, [initialBankId, initialBankName, bankNameInitialised, banks, lockInitialBank]);
 
   const kpFilterSetRef = useRef(false);
   useEffect(() => {
@@ -161,6 +195,18 @@ export function QuestionSelector({
   const total = questionQuery.data?.total ?? 0;
   const isLoading = questionQuery.isLoading;
   const totalPages = Math.ceil(total / pageSize);
+  const currentBank = bankFilter ? banks.find((bank) => bank.id === bankFilter) : null;
+  const currentBankTotal = currentBank?.question_count ?? initialBankQuestionCount;
+  const hasInitialBankFallback =
+    Boolean(initialBankId && initialBankName) &&
+    !banks.some((bank) => bank.id === initialBankId);
+
+  useEffect(() => {
+    if (!refreshKey) return;
+    void bankQuery.refetch();
+    void questionQuery.refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
 
   // 从课程详情跳转过来时，默认全选「课程题库 + 知识点」过滤下的全部题目。
   // 等过滤条件（题库名解析、知识点）就绪后再拉全量，避免误选到未过滤的题目。
@@ -222,6 +268,7 @@ export function QuestionSelector({
       </div>
       <Select
         value={bankFilter ?? ALL_BANKS}
+        disabled={bankFilterLocked}
         onValueChange={(value) => {
           setBankFilter(value === ALL_BANKS ? null : value);
           setPage(1);
@@ -232,6 +279,9 @@ export function QuestionSelector({
         </SelectTrigger>
         <SelectContent>
           <SelectItem value={ALL_BANKS}>全部题库</SelectItem>
+          {hasInitialBankFallback && initialBankId && initialBankName ? (
+            <SelectItem value={initialBankId}>{initialBankName}</SelectItem>
+          ) : null}
           {banks.map((b) => (
             <SelectItem key={b.id} value={b.id}>
               {formatQuestionBankLabel(b, { showOwner: showBankOwner })}
@@ -283,7 +333,12 @@ export function QuestionSelector({
   );
 
   const renderQuestionList = () => (
-    <div className="max-h-[min(56vh,520px)] divide-y divide-border/40 overflow-y-auto rounded-lg border border-border/60">
+    <div
+      className={cn(
+        "divide-y divide-border/40 overflow-y-auto rounded-lg border border-border/60",
+        fillAvailableHeight ? "min-h-0 flex-1" : "max-h-[min(56vh,520px)]",
+      )}
+    >
       {isLoading ? (
         <div className="p-8 text-center text-sm text-muted-foreground">加载中...</div>
       ) : questions.length === 0 ? (
@@ -405,7 +460,8 @@ export function QuestionSelector({
         <div className="min-w-0">
           <p className="text-base font-semibold text-foreground">全屏选题</p>
           <p className="text-sm text-muted-foreground">
-            已选 {selectedIds.length} 题，共 {total} 题
+            已选 {selectedIds.length} 题
+            {currentBankTotal != null ? `，当前题库共 ${currentBankTotal} 题` : `，共 ${total} 题`}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -493,12 +549,27 @@ export function QuestionSelector({
   );
 
   return (
-    <div className="space-y-4">
+    <div className={cn(fillAvailableHeight ? "flex min-h-0 flex-1 flex-col gap-4" : "space-y-4")}>
       {/* Summary */}
-      {showSummary && (
+      {showSummary && renderSummary
+        ? renderSummary({
+            selectedCount: selectedIds.length,
+            currentBankTotal,
+            total,
+            onClear: () => onChange([]),
+            onOpenFullscreen: () => setIsFullscreen(true),
+          })
+        : null}
+      {showSummary && !renderSummary && (
         <div className="flex items-center justify-between">
           <p className="text-sm text-muted-foreground">
             已选 <span className="font-semibold text-foreground">{selectedIds.length}</span> 题
+            {currentBankTotal != null ? (
+              <>
+                <span className="mx-1">·</span>
+                当前题库共 <span className="font-semibold text-foreground">{currentBankTotal}</span> 题
+              </>
+            ) : null}
           </p>
           <div className="flex items-center gap-2">
             {selectedIds.length > 0 && (
@@ -545,11 +616,14 @@ export function QuestionSelector({
         </div>
       )}
 
-      {isFullscreen && (
-        <div className="fixed inset-0 z-[80] flex flex-col bg-background">
-          {renderFullscreenList()}
-        </div>
-      )}
+      {isFullscreen && typeof document !== "undefined"
+        ? createPortal(
+            <div className="fixed inset-0 z-[1000] flex flex-col bg-background">
+              {renderFullscreenList()}
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

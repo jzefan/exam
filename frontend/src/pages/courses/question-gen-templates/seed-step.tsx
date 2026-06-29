@@ -49,6 +49,7 @@ import {
   recognizeQuestionListSeeds,
   recognizeStandardPaperSeeds,
   type RecognizedSeed,
+  type SeedImage,
 } from "./api";
 import type { ManualSeed } from "./types";
 
@@ -72,6 +73,59 @@ type SeedMethod = "import" | "bank" | "manual";
 
 function typeLabel(type?: string | null): string {
   return (type && TYPE_META[type]?.label) || "未分类";
+}
+
+function inlineSeedImages(...texts: Array<string | null | undefined>): SeedImage[] {
+  const seen = new Set<string>();
+  const images: SeedImage[] = [];
+  for (const text of texts) {
+    for (const match of text?.matchAll(/\[(?:IMG|IMAGE):([^\]\s]+)\]/g) ?? []) {
+      const filename = match[1];
+      if (seen.has(filename)) continue;
+      seen.add(filename);
+      images.push({ image_id: filename, url: `/api/uploads/files/${filename}`, alt: "答案图片" });
+    }
+  }
+  return images;
+}
+
+function stripInlineSeedImages(text?: string | null): string {
+  return (text ?? "").replace(/\s*\[(?:IMG|IMAGE):[^\]\s]+\]\s*/g, "\n").trim();
+}
+
+function seedAnswerImages(seed: {
+  answerImages?: SeedImage[];
+  answer_images?: SeedImage[];
+  images?: SeedImage[];
+  text?: string | null;
+  answer?: string | null;
+  analysis?: string | null;
+}): SeedImage[] {
+  if (seed.answerImages && seed.answerImages.length > 0) return seed.answerImages;
+  if (seed.answer_images && seed.answer_images.length > 0) return seed.answer_images;
+  const inlineImages = inlineSeedImages(seed.text, seed.answer, seed.analysis);
+  if (inlineImages.length > 0) return inlineImages;
+  if (!seed.answer?.trim() && !seed.analysis?.trim() && seed.images && seed.images.length > 0) return seed.images;
+  return [];
+}
+
+function SeedAnswerImages({ images }: { images: SeedImage[] }) {
+  if (images.length === 0) return null;
+  return (
+    <div className="space-y-1">
+      <p className="font-medium text-foreground">答案图片：</p>
+      <div className="space-y-2">
+        {images.map((image, index) => (
+          <img
+            key={image.image_id ?? image.url ?? index}
+            src={image.url}
+            alt={image.alt || "答案图片"}
+            className="max-h-72 max-w-full rounded border border-border bg-background object-contain sm:max-w-[520px]"
+          />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 async function extractText(file: File): Promise<{ text: string; source_format: "pdf" | "docx" | "md" }> {
@@ -206,7 +260,19 @@ export function SeedStep({
   const confirmImport = useCallback(() => {
     const picked: ManualSeed[] = recognized
       .filter((_, i) => recognizeSel.has(i))
-      .map((s) => ({ type: s.type, text: s.text, options: s.options ?? null, answer: s.answer ?? null, analysis: s.analysis ?? null }));
+      .map((s) => {
+        const answerImages = seedAnswerImages(s);
+        return {
+          type: s.type,
+          text: stripInlineSeedImages(s.text),
+          options: s.options ?? null,
+          answer: stripInlineSeedImages(s.answer),
+          analysis: stripInlineSeedImages(s.analysis),
+          images: s.images ?? [],
+          answerImages,
+          answer_images: answerImages,
+        };
+      });
     setManualSeeds([...manualSeeds, ...picked]);
     setRecognizeOpen(false);
     setRecognized([]);
@@ -280,13 +346,19 @@ export function SeedStep({
         toast({ title: "未能识别题目", description: "请检查粘贴的内容后重试。", variant: "destructive" });
         return;
       }
-      const added: ManualSeed[] = seeds.map((s) => ({
-        type: s.type,
-        text: s.text,
-        options: s.options ?? null,
-        answer: s.answer ?? null,
-        analysis: s.analysis ?? null,
-      }));
+      const added: ManualSeed[] = seeds.map((s) => {
+        const answerImages = seedAnswerImages(s);
+        return {
+          type: s.type,
+          text: stripInlineSeedImages(s.text),
+          options: s.options ?? null,
+          answer: stripInlineSeedImages(s.answer),
+          analysis: stripInlineSeedImages(s.analysis),
+          images: s.images ?? [],
+          answerImages,
+          answer_images: answerImages,
+        };
+      });
       setManualSeeds([...manualSeeds, ...added]);
       setManualText("");
       toast({ title: `已识别并添加 ${added.length} 道种子题` });
@@ -512,7 +584,10 @@ export function SeedStep({
               const key = `manual-${index}`;
               const open = expandedKey === key;
               const seedOptions = seed.options && Object.keys(seed.options).length > 0 ? seed.options : null;
-              const hasDetail = Boolean(seedOptions || (seed.answer ?? "").trim() || (seed.analysis ?? "").trim());
+              const answerImages = seedAnswerImages(seed);
+              const hasDetail = Boolean(
+                seedOptions || (seed.answer ?? "").trim() || (seed.analysis ?? "").trim() || answerImages.length > 0,
+              );
               return (
                 <div key={key} className="rounded-md border border-border/70 bg-muted/20 text-xs">
                   <div className="flex items-center gap-2 px-2.5 py-1.5">
@@ -525,7 +600,7 @@ export function SeedStep({
                       className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
                     >
                       <span className="min-w-0 flex-1 truncate" title={seed.text}>
-                        {seed.text}
+                        {stripInlineSeedImages(seed.text)}
                       </span>
                       <ChevronDown
                         size={14}
@@ -544,7 +619,7 @@ export function SeedStep({
                     <div className="space-y-1.5 border-t border-dashed border-border/60 px-2.5 py-2 text-[11px] leading-5 text-muted-foreground">
                       <p className="whitespace-pre-wrap break-words">
                         <span className="font-medium text-foreground">题干：</span>
-                        {seed.text}
+                        {stripInlineSeedImages(seed.text)}
                       </p>
                       {seedOptions && (
                         <div className="space-y-0.5">
@@ -558,13 +633,14 @@ export function SeedStep({
                       {(seed.answer ?? "").trim() && (
                         <p className="whitespace-pre-wrap break-words">
                           <span className="font-medium text-foreground">答案：</span>
-                          {seed.answer}
+                          {stripInlineSeedImages(seed.answer)}
                         </p>
                       )}
+                      <SeedAnswerImages images={answerImages} />
                       {(seed.analysis ?? "").trim() && (
                         <p className="whitespace-pre-wrap break-words">
                           <span className="font-medium text-foreground">解析：</span>
-                          {seed.analysis}
+                          {stripInlineSeedImages(seed.analysis)}
                         </p>
                       )}
                       {!hasDetail && <p className="text-muted-foreground/70">（无答案与解析）</p>}
@@ -599,7 +675,12 @@ export function SeedStep({
                     if (seed.type !== type) return null;
                     const open = recognizeExpanded.has(index);
                     const hasOptions = Boolean(seed.options && Object.keys(seed.options).length > 0);
-                    const hasDetail = hasOptions || Boolean((seed.answer ?? "").trim()) || Boolean((seed.analysis ?? "").trim());
+                    const answerImages = seedAnswerImages(seed);
+                    const hasDetail =
+                      hasOptions ||
+                      Boolean((seed.answer ?? "").trim()) ||
+                      Boolean((seed.analysis ?? "").trim()) ||
+                      answerImages.length > 0;
                     return (
                       <div key={index} className="rounded-md border border-border/70 text-xs hover:bg-muted/30">
                         <div className="flex items-start gap-2 px-2.5 py-2">
@@ -653,13 +734,14 @@ export function SeedStep({
                             {(seed.answer ?? "").trim() && (
                               <p>
                                 <span className="font-medium text-foreground">答案：</span>
-                                {seed.answer}
+                                {stripInlineSeedImages(seed.answer)}
                               </p>
                             )}
+                            <SeedAnswerImages images={answerImages} />
                             {(seed.analysis ?? "").trim() && (
                               <p>
                                 <span className="font-medium text-foreground">解析：</span>
-                                {seed.analysis}
+                                {stripInlineSeedImages(seed.analysis)}
                               </p>
                             )}
                           </div>

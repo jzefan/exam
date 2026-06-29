@@ -2,7 +2,9 @@ server {
   listen 3036;
   server_name _;
 
-  client_max_body_size 50m;
+  # Keep this above the backend's 180MB course-material limit so multipart
+  # upload overhead is not rejected before the request reaches FastAPI.
+  client_max_body_size 200m;
 
   # Current deployment slots are injected by scripts/deploy.sh.
   # __BACKEND_SLOT__ / __FRONTEND_SLOT__ are replaced with blue or green
@@ -24,11 +26,11 @@ server {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
 
-    # Paper/document import may call external AI services (DeepSeek/Qwen)
-    # which can take 60-120 seconds for large files with many questions.
-    proxy_read_timeout 180s;
-    proxy_send_timeout 60s;
-    client_max_body_size 30m;
+    # Paper/document import may call external AI services (DeepSeek/Qwen),
+    # and large course-material uploads may need a longer transfer window.
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+    client_max_body_size 200m;
   }
 
   location / {

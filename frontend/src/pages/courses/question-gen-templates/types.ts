@@ -21,6 +21,9 @@ export interface ManualSeed {
   options?: Record<string, string> | null;
   answer?: string | null;
   analysis?: string | null;
+  images?: Array<{ image_id?: string; url: string; alt?: string | null }>;
+  answerImages?: Array<{ image_id?: string; url: string; alt?: string | null }>;
+  answer_images?: Array<{ image_id?: string; url: string; alt?: string | null }>;
 }
 
 export interface SeedUsageEntry {

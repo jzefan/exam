@@ -57,6 +57,7 @@ import {
 } from "./question-knowledge-recognition";
 import type {
   EnhanceDraftInput,
+  EnhanceDraftMode,
   QuestionBulkCreateResponse,
   QuestionImportBulkCreateJobResponse,
   QuestionImportDocumentRecognizeResponse,
@@ -150,6 +151,12 @@ type AiRecognizeOverlayState =
   | { status: "success"; count: number }
   | null;
 
+function getEnhanceModeLabel(mode: EnhanceDraftMode) {
+  if (mode === "answers") return "完善答案";
+  if (mode === "knowledge") return "完善知识点";
+  return "完善答案与知识点";
+}
+
 export function QuestionImportPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -218,6 +225,7 @@ export function QuestionImportPage() {
   const [enhancing, setEnhancing] = useState(false);
   const [enhanceOverlay, setEnhanceOverlay] = useState<{
     status: "loading" | "done" | "error";
+    modeLabel: string;
     summary?: {
       answersCompleted: number;
       doubtsFlagged: number;
@@ -301,6 +309,14 @@ export function QuestionImportPage() {
     (draft) => getBlockingImportIssues(draft).length > 0,
   ).length;
   const selectedRootKnowledgePointId = selectedRootKnowledgePoints[0]?.id ?? "";
+  const courseEnhanceKnowledgePoint: SelectedKnowledgePoint | null =
+    navState.courseKpId
+      ? selectedRootKnowledgePoints[0] ?? {
+          id: navState.courseKpId,
+          name: navState.courseName ?? "当前课程",
+          path: navState.courseName ?? "当前课程",
+        }
+      : null;
   const showDocxQualityWarning =
     documentPayload?.sourceFormat === "docx" &&
     summary.visual_retry_recommended;
@@ -757,7 +773,18 @@ export function QuestionImportPage() {
       )
       .map((draft) => draft.draft_id);
     const bankId = questionBankId === "__none__" ? null : questionBankId;
-    const questions = buildImportableQuestions(importDrafts, bankId);
+    const baseQuestions = buildImportableQuestions(importDrafts, bankId);
+    // 从课程进入导入时，给每道题带上课程根知识点，确保即使选「暂不关联」，
+    // 题目也会归到本课程，出现在课程详情的题目列表中。
+    const courseKpId = navState.courseKpId;
+    const questions = courseKpId
+      ? baseQuestions.map((question) => ({
+          ...question,
+          knowledge_point_ids: Array.from(
+            new Set([...(question.knowledge_point_ids ?? []), courseKpId]),
+          ),
+        }))
+      : baseQuestions;
     if (
       questions.length === 0 ||
       questions.length !== importableDraftIds.length
@@ -873,13 +900,15 @@ export function QuestionImportPage() {
     await runImportWithRootKnowledgePoint(null);
   };
 
-  const handleEnhanceDrafts = async () => {
-    const selectedKpId = enhanceSelectedKPs[0]?.id;
-    if (!selectedKpId) return;
+  const handleEnhanceDrafts = async (mode: EnhanceDraftMode) => {
+    const modeLabel = getEnhanceModeLabel(mode);
+    const selectedKp = courseEnhanceKnowledgePoint ?? enhanceSelectedKPs[0] ?? null;
+    const selectedKpId = selectedKp?.id ?? null;
+    if (mode !== "answers" && !selectedKpId) return;
 
     setEnhanceDialogOpen(false);
     setEnhancing(true);
-    setEnhanceOverlay({ status: "loading" });
+    setEnhanceOverlay({ status: "loading", modeLabel });
 
     const inputs: EnhanceDraftInput[] = drafts.map((d) => ({
       draft_id: d.draft_id,
@@ -906,7 +935,8 @@ export function QuestionImportPage() {
           },
           body: JSON.stringify({
             drafts: inputs,
-            root_knowledge_point_id: selectedKpId,
+            root_knowledge_point_id: mode === "answers" ? null : selectedKpId,
+            mode,
           }),
         },
       );
@@ -981,6 +1011,7 @@ export function QuestionImportPage() {
             }
             setEnhanceOverlay({
               status: "loading",
+              modeLabel,
               summary: { answersCompleted, doubtsFlagged, kpsMatched },
             });
           }
@@ -990,8 +1021,12 @@ export function QuestionImportPage() {
               event.answers_completed ?? answersCompleted;
             doubtsFlagged = event.doubts_flagged ?? doubtsFlagged;
             kpsMatched = event.kps_matched ?? kpsMatched;
+            if (selectedKp) {
+              setSelectedRootKnowledgePoints([selectedKp]);
+            }
             setEnhanceOverlay({
               status: "done",
+              modeLabel,
               summary: { answersCompleted, doubtsFlagged, kpsMatched },
             });
             window.setTimeout(() => setEnhanceOverlay(null), 2500);
@@ -1001,6 +1036,7 @@ export function QuestionImportPage() {
     } catch (error) {
       setEnhanceOverlay({
         status: "error",
+        modeLabel,
         errorMessage:
           error instanceof Error
             ? error.message
@@ -1009,7 +1045,7 @@ export function QuestionImportPage() {
       window.setTimeout(() => setEnhanceOverlay(null), 3000);
     } finally {
       setEnhancing(false);
-      setEnhanceSelectedKPs([]);
+      if (!courseEnhanceKnowledgePoint) setEnhanceSelectedKPs([]);
     }
   };
 
@@ -1461,10 +1497,10 @@ export function QuestionImportPage() {
                   </div>
                   <div className="mb-2 flex items-center gap-2 text-base font-semibold text-foreground">
                     <Sparkles size={16} />
-                    正在完善答案与知识点
+                    正在{enhanceOverlay.modeLabel}
                   </div>
                   <p className="text-sm leading-6 text-muted-foreground">
-                    AI 正在逐题检查/补全答案，并匹配课程知识点。
+                    AI 正在逐题处理，请稍候。
                   </p>
                   {enhanceOverlay.summary ? (
                     <div className="mt-3 flex flex-wrap justify-center gap-3 text-xs text-muted-foreground">
@@ -1488,7 +1524,7 @@ export function QuestionImportPage() {
                     <CheckCircle2 size={30} />
                   </div>
                   <div className="mb-2 text-base font-semibold text-foreground">
-                    完善完成
+                    {enhanceOverlay.modeLabel}完成
                   </div>
                   <p className="text-sm leading-6 text-muted-foreground">
                     {enhanceOverlay.summary
@@ -1598,33 +1634,42 @@ export function QuestionImportPage() {
       >
         <AlertDialogContent className="max-w-2xl">
           <AlertDialogHeader>
-            <AlertDialogTitle>完善答案与关联知识点</AlertDialogTitle>
+            <AlertDialogTitle>选择完善方式</AlertDialogTitle>
             <AlertDialogDescription>
-              AI 将为您检查/补全题目答案并匹配课程知识点。请先选择主知识点（课程）。
+              可以只完善答案、只匹配知识点，或同时完成两者。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="flex flex-col gap-3 py-2">
-            <KnowledgePointSelector
-              fetcher={(path, options) =>
-                questionApiFetch(`/api${path}`, options)
-              }
-              selectedKnowledgePoints={enhanceSelectedKPs}
-              onSelectedKnowledgePointsChange={setEnhanceSelectedKPs}
-              storageKey="question-import-enhance-knowledge-recent-keywords"
-              label="主知识点"
-              triggerLabel="搜索或展开知识图谱选择主知识点"
-              popoverSide="bottom"
-              popoverContentStyle={{
-                maxHeight: "min(340px, calc(100dvh - 360px))",
-              }}
-              selectionTarget="root"
-              selectionMode="single"
-              showUsageShortcuts={false}
-            />
-            {enhanceSelectedKPs[0] ? (
+            {courseEnhanceKnowledgePoint ? (
+              <p className="rounded-xl border border-primary/10 bg-primary/5 px-3 py-2 text-xs font-medium text-muted-foreground">
+                当前从课程进入，将直接使用「{courseEnhanceKnowledgePoint.name}」作为主知识点范围。
+                <span className="ml-1 text-muted-foreground/70">
+                  {courseEnhanceKnowledgePoint.path}
+                </span>
+              </p>
+            ) : (
+              <KnowledgePointSelector
+                fetcher={(path, options) =>
+                  questionApiFetch(`/api${path}`, options)
+                }
+                selectedKnowledgePoints={enhanceSelectedKPs}
+                onSelectedKnowledgePointsChange={setEnhanceSelectedKPs}
+                storageKey="question-import-enhance-knowledge-recent-keywords"
+                label="主知识点（仅完善知识点时需要）"
+                triggerLabel="搜索或展开知识图谱选择主知识点"
+                popoverSide="bottom"
+                popoverContentStyle={{
+                  maxHeight: "min(340px, calc(100dvh - 360px))",
+                }}
+                selectionTarget="root"
+                selectionMode="single"
+                showUsageShortcuts={false}
+              />
+            )}
+            {!courseEnhanceKnowledgePoint && enhanceSelectedKPs[0] ? (
               <p className="rounded-xl border border-primary/10 bg-primary/5 px-3 py-2 text-xs font-medium text-muted-foreground">
                 将从「{enhanceSelectedKPs[0].name}
-                」下的子知识点中为题目匹配，同时检查/补全答案。
+                」下的子知识点中为题目匹配。
                 <span className="ml-1 text-muted-foreground/70">
                   {enhanceSelectedKPs[0].path}
                 </span>
@@ -1633,15 +1678,35 @@ export function QuestionImportPage() {
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={!enhanceSelectedKPs[0]?.id || enhancing}
-              onClick={(event) => {
-                event.preventDefault();
-                void handleEnhanceDrafts();
-              }}
+            <Button
+              type="button"
+              variant="outline"
+              disabled={enhancing}
+              onClick={() => void handleEnhanceDrafts("answers")}
             >
-              开始完善
-            </AlertDialogAction>
+              完善答案
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={
+                (!courseEnhanceKnowledgePoint && !enhanceSelectedKPs[0]?.id) ||
+                enhancing
+              }
+              onClick={() => void handleEnhanceDrafts("knowledge")}
+            >
+              完善知识点
+            </Button>
+            <Button
+              type="button"
+              disabled={
+                (!courseEnhanceKnowledgePoint && !enhanceSelectedKPs[0]?.id) ||
+                enhancing
+              }
+              onClick={() => void handleEnhanceDrafts("both")}
+            >
+              完善答案与知识点
+            </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

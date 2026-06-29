@@ -16,7 +16,9 @@ import {
   ArrowRight,
   BookCopy,
   CheckCircle2,
+  ChevronDown,
   Compass,
+  CircleAlert,
   Loader2,
   Maximize2,
   Sparkles,
@@ -51,9 +53,18 @@ import { Label } from "@/components/ui/label";
 import { PageIntroHeader } from "@/components/ui/page-intro-header";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
 import { consumeExamSeed } from "@/lib/exam-seed";
+import { formatQuestionBankLabel } from "@/lib/question-banks";
 import {
   getGeneratedQuestionPersistKey,
   useUnsavedGeneratedQuestionsGuard,
@@ -66,7 +77,9 @@ import { validateTypeAllocation } from "@/pages/questions/ai-generate-utils";
 import type {
   IExamQuestion,
   IExamStudent,
+  IKnowledgePoint,
   IQuestion,
+  IQuestionBank,
   QuestionType,
 } from "@/types";
 
@@ -84,7 +97,12 @@ import {
 } from "./components/paper-view-utils";
 
 type PracticeStepId = "knowledge" | "questions" | "students" | "publish";
-type QuestionMode = "manual" | "ai";
+type QuestionMode = "manual" | "auto" | "ai";
+type KnowledgePointAllocation = {
+  knowledgePointId: string;
+  count: number;
+};
+type TypeAllocation = { count: number; score: number };
 
 type GeneratedQuestion = {
   index: number;
@@ -146,8 +164,8 @@ const stepItems: Array<{
   },
   {
     id: "questions",
-    title: "步骤 2：选择题目 / AI出题",
-    description: "可以手动选题，也可以按知识点直接生成练习题。",
+    title: "步骤 2：选择题目 / 自动出题 / AI出题",
+    description: "可以手动选题，也可以从题库自动抽题或直接生成练习题。",
   },
   {
     id: "students",
@@ -163,6 +181,32 @@ const stepItems: Array<{
 
 const practiceBadgeClass =
   "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300";
+const ALL_BANKS = "__all_banks__";
+const KNOWLEDGE_COVERAGE_TARGET = 0.8;
+const difficultyOptions = [
+  { value: 1, label: "容易" },
+  { value: 2, label: "较易" },
+  { value: 3, label: "中等" },
+  { value: 4, label: "较难" },
+  { value: 5, label: "很难" },
+];
+const AUTO_TYPE_DISTRIBUTION_OPTIONS: { type: QuestionType; label: string }[] =
+  [
+    { type: "choice", label: "选择题" },
+    { type: "true_false", label: "判断题" },
+    { type: "fill_in", label: "填空题" },
+    { type: "short_answer", label: "简答题" },
+    { type: "essay", label: "论述题" },
+    { type: "code", label: "编程题" },
+  ];
+const AUTO_TYPE_DEFAULT_SCORES: Record<QuestionType, number> = {
+  choice: 1,
+  true_false: 1,
+  fill_in: 2,
+  short_answer: 5,
+  essay: 5,
+  code: 10,
+};
 
 function toLocalDateTimeValue(value: Date | undefined): string {
   if (!value) return "";
@@ -206,6 +250,26 @@ function getNextPracticeTitle(existingTitles: string[], date = new Date()) {
   return maxSuffix < 0 ? baseTitle : `${baseTitle}-${maxSuffix + 1}`;
 }
 
+function getNextCoursePracticeTitle(
+  courseName: string | undefined,
+  existingTitles: string[] = [],
+) {
+  const course = courseName?.trim() || "课程";
+  const baseTitle = `${course}练习`;
+  let maxSuffix = existingTitles.includes(baseTitle) ? 0 : -1;
+  const escapedBase = baseTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`^${escapedBase}-(\\d+)$`);
+
+  for (const title of existingTitles) {
+    const match = title.match(pattern);
+    if (match) {
+      maxSuffix = Math.max(maxSuffix, Number(match[1]));
+    }
+  }
+
+  return maxSuffix < 0 ? baseTitle : `${baseTitle}-${maxSuffix + 1}`;
+}
+
 function getDefaultAITypeAlloc(): Record<QuestionType, number> {
   return {
     choice: 0,
@@ -215,6 +279,91 @@ function getDefaultAITypeAlloc(): Record<QuestionType, number> {
     essay: 0,
     code: 0,
   };
+}
+
+function shuffleQuestions(questions: IQuestion[], count: number): IQuestion[] {
+  const next = [...questions];
+  for (let index = next.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [next[index], next[swapIndex]] = [next[swapIndex], next[index]];
+  }
+  return next.slice(0, count);
+}
+
+function getQuestionSimilarityText(question: IQuestion): string {
+  const contentText =
+    typeof question.content?.text === "string"
+      ? question.content.text
+      : JSON.stringify(question.content ?? {});
+  const optionText = question.options
+    ? Object.values(question.options).join(" ")
+    : "";
+  return `${question.title} ${contentText} ${optionText}`;
+}
+
+function normalizeQuestionSimilarityText(value: string): string {
+  return (value.toLowerCase().match(/[\u4e00-\u9fffA-Za-z0-9]+/g) ?? []).join(
+    "",
+  );
+}
+
+function questionSimilarityScore(left: IQuestion, right: IQuestion): number {
+  const leftText = normalizeQuestionSimilarityText(
+    getQuestionSimilarityText(left),
+  );
+  const rightText = normalizeQuestionSimilarityText(
+    getQuestionSimilarityText(right),
+  );
+  if (!leftText || !rightText) return 0;
+  if (leftText === rightText) return 1;
+  const [shorter, longer] =
+    leftText.length <= rightText.length
+      ? [leftText, rightText]
+      : [rightText, leftText];
+  if (
+    shorter.length >= 18 &&
+    longer.includes(shorter) &&
+    shorter.length / Math.max(1, longer.length) >= 0.58
+  ) {
+    return 1;
+  }
+  const bigrams = (text: string) =>
+    new Set(
+      Array.from({ length: Math.max(0, text.length - 1) }, (_, index) =>
+        text.slice(index, index + 2),
+      ),
+    );
+  const leftBigrams = bigrams(leftText);
+  const rightBigrams = bigrams(rightText);
+  if (leftBigrams.size === 0 || rightBigrams.size === 0) return 0;
+  const overlap = [...leftBigrams].filter((item) =>
+    rightBigrams.has(item),
+  ).length;
+  return (2 * overlap) / (leftBigrams.size + rightBigrams.size);
+}
+
+function areQuestionsTooSimilar(left: IQuestion, right: IQuestion): boolean {
+  return questionSimilarityScore(left, right) >= 0.52;
+}
+
+function selectDistinctQuestions(
+  questions: IQuestion[],
+  count: number,
+  existing: IQuestion[] = [],
+): IQuestion[] {
+  const selected: IQuestion[] = [];
+  for (const candidate of shuffleQuestions(questions, questions.length)) {
+    if (
+      [...existing, ...selected].some((question) =>
+        areQuestionsTooSimilar(candidate, question),
+      )
+    ) {
+      continue;
+    }
+    selected.push(candidate);
+    if (selected.length >= count) break;
+  }
+  return selected;
 }
 
 export function PracticeCreate() {
@@ -228,6 +377,7 @@ export function PracticeCreate() {
     successTo?: string;
     courseKpId?: string;
     courseSemesterId?: string;
+    courseName?: string;
     knowledgePointId?: string;
     knowledgePointName?: string;
     knowledgePointPath?: string;
@@ -266,10 +416,18 @@ export function PracticeCreate() {
   const [maxVisitedStep, setMaxVisitedStep] = useState(() =>
     isEditMode ? stepItems.length - 1 : 0,
   );
-  const [title, setTitle] = useState(() =>
-    isEditMode ? "" : getDefaultPracticeTitle(),
-  );
+  const [title, setTitle] = useState(() => {
+    if (isEditMode) return "";
+    if (navState.courseName)
+      return getNextCoursePracticeTitle(navState.courseName);
+    return getDefaultPracticeTitle();
+  });
   const [isTitleManuallyEdited, setIsTitleManuallyEdited] = useState(false);
+  const defaultTitle = useMemo(() => {
+    if (navState.courseName)
+      return getNextCoursePracticeTitle(navState.courseName);
+    return getDefaultPracticeTitle();
+  }, [navState.courseName]);
   const [description, setDescription] = useState("");
   const [mainKnowledgePoint, setMainKnowledgePoint] =
     useState<SelectedKnowledgePoint | null>(null);
@@ -281,6 +439,28 @@ export function PracticeCreate() {
   const [questionItems, setQuestionItems] = useState<PracticeQuestionItem[]>(
     [],
   );
+  const [autoQuestionBankId, setAutoQuestionBankId] = useState<string | null>(
+    null,
+  );
+  const [autoQuestionCount, setAutoQuestionCount] = useState(10);
+  const [autoDifficulties, setAutoDifficulties] = useState<number[]>([2, 3, 4]);
+  const [autoKnowledgeAllocations, setAutoKnowledgeAllocations] = useState<
+    KnowledgePointAllocation[]
+  >([]);
+  const [autoTypeAllocations, setAutoTypeAllocations] = useState<
+    Partial<Record<QuestionType, TypeAllocation>>
+  >({});
+  const [autoTypeCountDrafts, setAutoTypeCountDrafts] = useState<
+    Partial<Record<QuestionType, string>>
+  >({});
+  const [autoTypeScoreDrafts, setAutoTypeScoreDrafts] = useState<
+    Partial<Record<QuestionType, string>>
+  >({});
+  const [autoKnowledgeQuotaOpen, setAutoKnowledgeQuotaOpen] = useState(false);
+  const [autoGeneratedMeta, setAutoGeneratedMeta] = useState<{
+    count: number;
+    totalScore: number;
+  } | null>(null);
   const [scoreDialogOpen, setScoreDialogOpen] = useState(false);
   const [scorePreviewMode, setScorePreviewMode] = useState<"order" | "type">(
     "order",
@@ -342,6 +522,108 @@ export function PracticeCreate() {
     : startImmediately
       ? toLocalNowValue()
       : scheduledStartTime;
+
+  const { query: questionBankQuery } = useList<IQuestionBank>({
+    resource: "question-banks",
+    pagination: { currentPage: 1, pageSize: 200 },
+  });
+  const questionBanks = questionBankQuery.data?.data ?? [];
+
+  // 从课程详情进入时，默认选中课程题库（手动 + 自动出题共用）。
+  const [wizardDefaultBankName] = useState<string | undefined>(
+    navState.defaultBankName,
+  );
+
+  // 同步解析默认题库 ID，用于自动出题模式首次渲染即显示课程题库。
+  const defaultAutoBankId = useMemo(() => {
+    if (!wizardDefaultBankName || questionBanks.length === 0) return null;
+    const match = questionBanks.find(
+      (b) => b.name === wizardDefaultBankName,
+    );
+    return match?.id ?? null;
+  }, [wizardDefaultBankName, questionBanks]);
+
+  // 用户是否已手动更改过题库（切换自动/手动模式、点重置等场景会清除）。
+  const [autoBankExplicit, setAutoBankExplicit] = useState(false);
+
+  // 自动出题实际生效的题库 ID：用户手动选择优先，否则用默认值。
+  const effectiveAutoBankId = useMemo(
+    () => (autoBankExplicit ? autoQuestionBankId : defaultAutoBankId),
+    [autoBankExplicit, autoQuestionBankId, defaultAutoBankId],
+  );
+
+  const { query: knowledgePointQuery } = useList<IKnowledgePoint>({
+    resource: "knowledge-points",
+    pagination: { currentPage: 1, pageSize: 500 },
+  });
+  const knowledgePoints = knowledgePointQuery.data?.data ?? [];
+
+  const autoCandidateFilters = useMemo(
+    () => [
+      ...(effectiveAutoBankId
+        ? [
+            {
+              field: "question_bank_id",
+              operator: "eq" as const,
+              value: effectiveAutoBankId,
+            },
+          ]
+        : []),
+      ...(autoDifficulties.length > 0
+        ? [
+            {
+              field: "difficulty",
+              operator: "in" as const,
+              value: autoDifficulties,
+            },
+          ]
+        : []),
+    ],
+    [effectiveAutoBankId, autoDifficulties],
+  );
+  const autoCandidatesEnabled =
+    questionMode === "auto" && currentStepId === "questions";
+
+  // 题型分布改用后端 GROUP BY 聚合：仅统计自己的题目 + 平台开放题库，随难度切换快速刷新，
+  // 不必为了计数把全部题目序列化拉到前端。聚合同时给出候选总数（X-Total-Count），
+  // 用于下方一次性拉取生成所需的完整候选行，避免固定 pageSize 截断导致并集少算。
+  const { query: typeDistributionQuery } = useList<{
+    type: QuestionType;
+    count: number;
+  }>({
+    resource: "questions/type-distribution",
+    pagination: { currentPage: 1, pageSize: 100, mode: "server" },
+    filters: autoCandidateFilters,
+    queryOptions: { enabled: autoCandidatesEnabled, staleTime: 0 },
+  });
+  const autoCandidateTotal = typeDistributionQuery.data?.total ?? 0;
+
+  // 生成与知识点可用量需要完整候选行，按聚合得到的总数一次性拉全。
+  const { query: autoQuestionQuery } = useList<IQuestion>({
+    resource: "questions",
+    pagination: {
+      currentPage: 1,
+      pageSize: Math.max(autoCandidateTotal, 1),
+      mode: "server",
+    },
+    sorters: [{ field: "created_at", order: "desc" }],
+    filters: autoCandidateFilters,
+    queryOptions: {
+      enabled: autoCandidatesEnabled && autoCandidateTotal > 0,
+      staleTime: 0,
+    },
+  });
+  const autoCandidates = autoQuestionQuery.data?.data ?? [];
+
+  // 题型分布就绪（聚合查询完成）→ 用于钳制题型配额；与重型候选拉取解耦，刷新更快。
+  const typeDistributionReady =
+    autoCandidatesEnabled && !typeDistributionQuery.isFetching;
+  // 候选集就绪：聚合完成，且（无候选）或（候选请求完成且已有数据）→ 用于"生成"按钮可用性。
+  const autoCandidatesReady =
+    typeDistributionReady &&
+    (autoCandidateTotal === 0 ||
+      (!autoQuestionQuery.isFetching && autoCandidates.length > 0));
+  const autoCandidatesLoading = autoCandidatesEnabled && !autoCandidatesReady;
 
   const selectedQuestionQuery = useList<IQuestion>({
     resource: "questions",
@@ -410,6 +692,170 @@ export function PracticeCreate() {
       })),
     [questionTypeSummaries, sortedQuestionItems],
   );
+  const availableTypeCounts = useMemo(() => {
+    const counts: Partial<Record<QuestionType, number>> = {};
+    for (const option of AUTO_TYPE_DISTRIBUTION_OPTIONS) {
+      counts[option.type] = 0;
+    }
+    for (const row of typeDistributionQuery.data?.data ?? []) {
+      counts[row.type] = row.count;
+    }
+    return counts;
+  }, [typeDistributionQuery.data?.data]);
+  const typeAllocationEntries = useMemo(
+    () =>
+      (
+        Object.entries(autoTypeAllocations) as [QuestionType, TypeAllocation][]
+      ).filter(([, allocation]) => allocation.count > 0),
+    [autoTypeAllocations],
+  );
+  const isTypeAllocationMode = typeAllocationEntries.length > 0;
+  const requestedTypeQuestionCount = useMemo(
+    () =>
+      typeAllocationEntries.reduce(
+        (sum, [, allocation]) => sum + allocation.count,
+        0,
+      ),
+    [typeAllocationEntries],
+  );
+  const hasTypeAllocationShortage = useMemo(
+    () =>
+      typeAllocationEntries.some(
+        ([type, allocation]) =>
+          allocation.count > (availableTypeCounts[type] ?? 0),
+      ),
+    [availableTypeCounts, typeAllocationEntries],
+  );
+  const knowledgeQuotaTargetCount = isTypeAllocationMode
+    ? requestedTypeQuestionCount
+    : autoQuestionCount;
+  const knowledgeQuotaCandidates = useMemo(
+    () =>
+      isTypeAllocationMode
+        ? autoCandidates.filter(
+            (question) => (autoTypeAllocations[question.type]?.count ?? 0) > 0,
+          )
+        : autoCandidates,
+    [autoCandidates, autoTypeAllocations, isTypeAllocationMode],
+  );
+  const availableKnowledgePoints = useMemo(() => {
+    const countByKnowledgeId = new Map<string, number>();
+    for (const question of knowledgeQuotaCandidates) {
+      for (const point of question.knowledge_points) {
+        countByKnowledgeId.set(
+          point.id,
+          (countByKnowledgeId.get(point.id) ?? 0) + 1,
+        );
+      }
+    }
+    return knowledgePoints
+      .map((knowledgePoint) => ({
+        ...knowledgePoint,
+        availableCount: countByKnowledgeId.get(knowledgePoint.id) ?? 0,
+      }))
+      .filter((knowledgePoint) => knowledgePoint.availableCount > 0);
+  }, [knowledgePoints, knowledgeQuotaCandidates]);
+  const availableKnowledgePointMap = useMemo(
+    () =>
+      new Map(
+        availableKnowledgePoints.map((knowledgePoint) => [
+          knowledgePoint.id,
+          knowledgePoint,
+        ]),
+      ),
+    [availableKnowledgePoints],
+  );
+  const autoAllocationMap = useMemo(
+    () =>
+      new Map(
+        autoKnowledgeAllocations.map((allocation) => [
+          allocation.knowledgePointId,
+          allocation,
+        ]),
+      ),
+    [autoKnowledgeAllocations],
+  );
+  const requestedKnowledgeQuestionCount = useMemo(
+    () =>
+      autoKnowledgeAllocations.reduce(
+        (sum, allocation) => sum + allocation.count,
+        0,
+      ),
+    [autoKnowledgeAllocations],
+  );
+  const hasKnowledgeAllocationShortage = useMemo(
+    () =>
+      autoKnowledgeAllocations.some((allocation) => {
+        const knowledgePoint = availableKnowledgePointMap.get(
+          allocation.knowledgePointId,
+        );
+        return (
+          !knowledgePoint || allocation.count > knowledgePoint.availableCount
+        );
+      }),
+    [autoKnowledgeAllocations, availableKnowledgePointMap],
+  );
+  const isKnowledgeAllocationMode = autoKnowledgeAllocations.length > 0;
+  const hasKnowledgeAllocationMismatch =
+    isKnowledgeAllocationMode &&
+    Number.isFinite(knowledgeQuotaTargetCount) &&
+    knowledgeQuotaTargetCount > 0 &&
+    requestedKnowledgeQuestionCount !== knowledgeQuotaTargetCount;
+  const buildEvenKnowledgeAllocations = useCallback(
+    (target: number): KnowledgePointAllocation[] => {
+      if (availableKnowledgePoints.length === 0) return [];
+      const total =
+        Number.isFinite(target) && target > 0
+          ? target
+          : availableKnowledgePoints.length;
+      const buckets = availableKnowledgePoints.map((point) => ({
+        knowledgePointId: point.id,
+        count: 0,
+        cap: point.availableCount,
+      }));
+      let remaining = total;
+      let progressed = true;
+      while (remaining > 0 && progressed) {
+        progressed = false;
+        for (const bucket of buckets) {
+          if (remaining <= 0) break;
+          if (bucket.count < bucket.cap) {
+            bucket.count += 1;
+            remaining -= 1;
+            progressed = true;
+          }
+        }
+      }
+      return buckets
+        .filter((bucket) => bucket.count > 0)
+        .map(({ knowledgePointId, count }) => ({ knowledgePointId, count }));
+    },
+    [availableKnowledgePoints],
+  );
+  const effectiveKnowledgeAllocations = useMemo(
+    () =>
+      isKnowledgeAllocationMode
+        ? autoKnowledgeAllocations
+        : buildEvenKnowledgeAllocations(knowledgeQuotaTargetCount),
+    [
+      autoKnowledgeAllocations,
+      buildEvenKnowledgeAllocations,
+      isKnowledgeAllocationMode,
+      knowledgeQuotaTargetCount,
+    ],
+  );
+  const knowledgeCoverageTotal = availableKnowledgePoints.length;
+  const knowledgeCoverageCovered = effectiveKnowledgeAllocations.filter(
+    (allocation) => allocation.count > 0,
+  ).length;
+  const knowledgeCoveragePercent =
+    knowledgeCoverageTotal > 0
+      ? Math.round((knowledgeCoverageCovered / knowledgeCoverageTotal) * 100)
+      : 0;
+  const knowledgeCoverageMet =
+    knowledgeCoverageTotal === 0 ||
+    knowledgeCoverageCovered >=
+      Math.ceil(knowledgeCoverageTotal * KNOWLEDGE_COVERAGE_TARGET);
   const questionTypeDraftDefaults = useMemo(
     () =>
       questionTypeSummaries.reduce<Partial<Record<QuestionType, string>>>(
@@ -433,7 +879,7 @@ export function PracticeCreate() {
         value: todayPracticeTitlePrefix,
       },
     ],
-    queryOptions: { enabled: !isEditMode },
+    queryOptions: { enabled: !isEditMode && !navState.courseName },
   });
   const suggestedPracticeTitle = useMemo(() => {
     const existingTitles = (
@@ -448,7 +894,11 @@ export function PracticeCreate() {
     hydratedExamRef.current = true;
     setTitle(practice.title ?? "");
     setDescription(practice.description ?? "");
-    setQuestionMode(practice.question_mode === "ai" ? "ai" : "manual");
+    setQuestionMode(
+      practice.question_mode === "ai" || practice.question_mode === "auto"
+        ? practice.question_mode
+        : "manual",
+    );
     const orderedItems = practice.questions
       .slice()
       .sort((left, right) => left.order - right.order)
@@ -553,6 +1003,28 @@ export function PracticeCreate() {
     });
   }, [questionIds, selectedQuestionMap]);
 
+  useEffect(() => {
+    if (questionMode !== "auto" || !typeDistributionReady) return;
+    setAutoTypeAllocations((prev) => {
+      let changed = false;
+      const next: Partial<Record<QuestionType, TypeAllocation>> = {};
+
+      for (const [type, allocation] of Object.entries(prev) as [
+        QuestionType,
+        TypeAllocation,
+      ][]) {
+        const available = availableTypeCounts[type] ?? 0;
+        if (allocation.count > available) {
+          changed = true;
+          continue;
+        }
+        next[type] = allocation;
+      }
+
+      return changed ? next : prev;
+    });
+  }, [typeDistributionReady, availableTypeCounts, questionMode]);
+
   const totalScore = useMemo(
     () =>
       questionItems.reduce(
@@ -602,7 +1074,7 @@ export function PracticeCreate() {
       return;
     }
 
-    setTitle(getDefaultPracticeTitle());
+    setTitle(defaultTitle);
     setIsTitleManuallyEdited(false);
     setDescription("");
     setMainKnowledgePoint(null);
@@ -610,6 +1082,16 @@ export function PracticeCreate() {
     setQuestionMode("manual");
     setQuestionIds([]);
     setQuestionItems([]);
+    setAutoQuestionBankId(null);
+    setAutoBankExplicit(false);
+    setAutoQuestionCount(10);
+    setAutoDifficulties([2, 3, 4]);
+    setAutoKnowledgeAllocations([]);
+    setAutoTypeAllocations({});
+    setAutoTypeCountDrafts({});
+    setAutoTypeScoreDrafts({});
+    setAutoGeneratedMeta(null);
+    setAutoKnowledgeQuotaOpen(false);
     setStudentIds([]);
     setPublicLinkEnabled(false);
     setDurationMinutes(60);
@@ -643,7 +1125,7 @@ export function PracticeCreate() {
       setSeedLoading(false);
       if (hydratedPaperSeedRef.current) {
         hydratedPaperSeedRef.current = null;
-        setTitle(getDefaultPracticeTitle());
+        setTitle(defaultTitle);
         setIsTitleManuallyEdited(false);
         setDescription("");
         setSelectedKnowledgePoints([]);
@@ -745,13 +1227,9 @@ export function PracticeCreate() {
   }, [isEditMode, seedKey, toast]);
 
   useEffect(() => {
-    if (isEditMode || isTitleManuallyEdited) return;
+    if (isEditMode || isTitleManuallyEdited || navState.courseName) return;
     setTitle(suggestedPracticeTitle);
-  }, [isEditMode, isTitleManuallyEdited, suggestedPracticeTitle]);
-
-  const [wizardDefaultBankName] = useState<string | undefined>(
-    navState.defaultBankName,
-  );
+  }, [isEditMode, isTitleManuallyEdited, suggestedPracticeTitle, navState.courseName]);
 
   const courseNavAppliedRef = useRef(false);
   useEffect(() => {
@@ -786,6 +1264,19 @@ export function PracticeCreate() {
         setCurrentStep(navState.initialStep);
         setMaxVisitedStep((prev) => Math.max(prev, navState.initialStep!));
       }
+    } else if (navState.courseName && navState.courseKpId) {
+      // 从课程详情 tab 头部直接进入，只带课程信息不指定具体知识点时，
+      // 自动选中"课程（可选）"字段。
+      courseNavAppliedRef.current = true;
+      setMainKnowledgePoint({
+        id: navState.courseKpId,
+        name: navState.courseName,
+        path: navState.courseName,
+      });
+      if (navState.initialStep !== undefined) {
+        setCurrentStep(navState.initialStep);
+        setMaxVisitedStep((prev) => Math.max(prev, navState.initialStep!));
+      }
     }
   }, [isEditMode, navState]);
 
@@ -802,9 +1293,9 @@ export function PracticeCreate() {
 
     if (stepId === "questions") {
       if (questionIds.length === 0) {
-        return questionMode === "manual"
-          ? "请先选择题目。"
-          : "请先生成练习题目。";
+        if (questionMode === "manual") return "请先选择题目。";
+        if (questionMode === "auto") return "请先自动生成题单。";
+        return "请先生成练习题目。";
       }
     }
 
@@ -1134,6 +1625,39 @@ export function PracticeCreate() {
     abortRef.current?.abort();
   };
 
+  const resetAutoSelection = ({
+    clearQuestions = true,
+  }: {
+    clearQuestions?: boolean;
+  } = {}) => {
+    setAutoQuestionBankId(null);
+    setAutoBankExplicit(false);
+    setAutoQuestionCount(10);
+    setAutoDifficulties([2, 3, 4]);
+    setAutoKnowledgeAllocations([]);
+    setAutoTypeAllocations({});
+    setAutoTypeCountDrafts({});
+    setAutoTypeScoreDrafts({});
+    setAutoGeneratedMeta(null);
+    setAutoKnowledgeQuotaOpen(false);
+    if (clearQuestions) {
+      setQuestionIds([]);
+      setQuestionItems([]);
+    }
+  };
+
+  const handleAutoDifficultyChange = (level: number, checked: boolean) => {
+    setAutoGeneratedMeta(null);
+    setAutoDifficulties((prev) => {
+      if (checked) {
+        return prev.includes(level)
+          ? prev
+          : [...prev, level].sort((left, right) => left - right);
+      }
+      return prev.filter((item) => item !== level);
+    });
+  };
+
   const changeQuestionMode = (nextMode: QuestionMode) => {
     if (nextMode === questionMode) return;
 
@@ -1144,13 +1668,395 @@ export function PracticeCreate() {
       setAIApplying(false);
       setPersistedAIQuestionKeys([]);
     }
+    if (questionMode === "auto" && nextMode !== "auto") {
+      resetAutoSelection({ clearQuestions: true });
+    }
     if (questionMode === "ai" && nextMode !== "ai") {
       abortRef.current?.abort();
       setAIGenerating(false);
       setAIApplying(false);
+      setQuestionIds([]);
+      setQuestionItems([]);
     }
 
     setQuestionMode(nextMode);
+  };
+
+  const handleKnowledgeAllocationToggle = (
+    knowledgePointId: string,
+    checked: boolean,
+  ) => {
+    setAutoGeneratedMeta(null);
+    setAutoKnowledgeAllocations((prev) => {
+      if (checked) {
+        if (
+          prev.some(
+            (allocation) => allocation.knowledgePointId === knowledgePointId,
+          )
+        ) {
+          return prev;
+        }
+        return [...prev, { knowledgePointId, count: 1 }];
+      }
+
+      return prev.filter(
+        (allocation) => allocation.knowledgePointId !== knowledgePointId,
+      );
+    });
+  };
+
+  const handleKnowledgeAllocationCountChange = (
+    knowledgePointId: string,
+    value: string,
+  ) => {
+    const nextCount = Math.max(0, parseInt(value, 10) || 0);
+    setAutoGeneratedMeta(null);
+    setAutoKnowledgeAllocations((prev) =>
+      prev
+        .map((allocation) =>
+          allocation.knowledgePointId === knowledgePointId
+            ? { ...allocation, count: nextCount }
+            : allocation,
+        )
+        .filter((allocation) => allocation.count > 0),
+    );
+  };
+
+  const handleTypeAllocationCountChange = (
+    type: QuestionType,
+    value: string,
+  ) => {
+    const nextCount = Math.max(0, parseInt(value, 10) || 0);
+    setAutoGeneratedMeta(null);
+    setAutoKnowledgeAllocations([]);
+    setAutoTypeAllocations((prev) => ({
+      ...prev,
+      [type]: {
+        count: nextCount,
+        score: prev[type]?.score ?? AUTO_TYPE_DEFAULT_SCORES[type],
+      },
+    }));
+  };
+
+  const handleTypeAllocationScoreChange = (
+    type: QuestionType,
+    value: string,
+  ) => {
+    const nextScore = Math.max(0, Number(value) || 0);
+    setAutoGeneratedMeta(null);
+    setAutoTypeAllocations((prev) =>
+      prev[type]
+        ? { ...prev, [type]: { ...prev[type], score: nextScore } }
+        : prev,
+    );
+  };
+
+  const commitTypeAllocationCount = (type: QuestionType, value: string) => {
+    handleTypeAllocationCountChange(type, value);
+    setAutoTypeCountDrafts((prev) => {
+      const next = { ...prev };
+      delete next[type];
+      return next;
+    });
+  };
+
+  const commitTypeAllocationScore = (type: QuestionType, value: string) => {
+    handleTypeAllocationScoreChange(type, value);
+    setAutoTypeScoreDrafts((prev) => {
+      const next = { ...prev };
+      delete next[type];
+      return next;
+    });
+  };
+
+  const applyEvenKnowledgeCoverage = () => {
+    setAutoGeneratedMeta(null);
+    setSubmitError(null);
+    const targetCount = isTypeAllocationMode
+      ? requestedTypeQuestionCount
+      : autoQuestionCount;
+    if (!Number.isFinite(targetCount) || targetCount <= 0) {
+      setSubmitError("请先设置题型数量或出题数量，再进行知识点配额。");
+      return;
+    }
+    const allocations = buildEvenKnowledgeAllocations(targetCount);
+    if (allocations.length === 0) {
+      setSubmitError("当前题库与难度条件下暂无可用知识点，无法均匀覆盖。");
+      return;
+    }
+    setAutoKnowledgeAllocations(allocations);
+  };
+
+  const handleAutoGenerate = () => {
+    setSubmitError(null);
+    setAutoGeneratedMeta(null);
+
+    if (autoDifficulties.length === 0) {
+      setSubmitError("自动出题至少需要选择一个难度范围。");
+      return;
+    }
+
+    if (isTypeAllocationMode) {
+      if (hasTypeAllocationShortage) {
+        setSubmitError("所选题型的可用题量不足，请调整每种题型的题目数量。");
+        return;
+      }
+      if (hasKnowledgeAllocationShortage) {
+        setSubmitError("所选知识点的可用题量不足，请调整每个知识点的题目数量。");
+        return;
+      }
+      if (hasKnowledgeAllocationMismatch) {
+        setSubmitError(
+          `知识点配额合计为 ${requestedKnowledgeQuestionCount} 题，必须等于当前题型计划的 ${requestedTypeQuestionCount} 题。`,
+        );
+        return;
+      }
+      if (
+        typeAllocationEntries.some(([, allocation]) => allocation.score <= 0)
+      ) {
+        setSubmitError("请为每种已启用的题型设置大于 0 的分值。");
+        return;
+      }
+
+      const typePicked: IQuestion[] = [];
+      const scoreByQuestionId = new Map<string, number>();
+      const pickedIds = new Set<string>();
+
+      if (isKnowledgeAllocationMode) {
+        const remainingByType = new Map<QuestionType, number>(
+          typeAllocationEntries.map(([type, allocation]) => [
+            type,
+            allocation.count,
+          ]),
+        );
+        const remainingByKnowledge = new Map<string, number>(
+          autoKnowledgeAllocations.map((allocation) => [
+            allocation.knowledgePointId,
+            allocation.count,
+          ]),
+        );
+        const candidatesByKnowledgeAndType = new Map<
+          string,
+          Partial<Record<QuestionType, IQuestion[]>>
+        >();
+        for (const question of autoCandidates) {
+          if (!autoTypeAllocations[question.type]?.count) continue;
+          for (const knowledgePoint of question.knowledge_points) {
+            const typeMap =
+              candidatesByKnowledgeAndType.get(knowledgePoint.id) ?? {};
+            const candidates = typeMap[question.type] ?? [];
+            candidates.push(question);
+            typeMap[question.type] = candidates;
+            candidatesByKnowledgeAndType.set(knowledgePoint.id, typeMap);
+          }
+        }
+        for (const [type, allocation] of typeAllocationEntries) {
+          let remainingForType = allocation.count;
+
+          while (remainingForType > 0) {
+            const knowledgeCandidates = autoKnowledgeAllocations
+              .map((knowledgeAllocation) => {
+                const knowledgeRemaining =
+                  remainingByKnowledge.get(
+                    knowledgeAllocation.knowledgePointId,
+                  ) ?? 0;
+                const candidates = (
+                  candidatesByKnowledgeAndType.get(
+                    knowledgeAllocation.knowledgePointId,
+                  )?.[type] ?? []
+                ).filter((question) => !pickedIds.has(question.id));
+                return {
+                  knowledgePointId: knowledgeAllocation.knowledgePointId,
+                  knowledgeRemaining,
+                  candidates,
+                };
+              })
+              .filter(
+                (item) =>
+                  item.knowledgeRemaining > 0 && item.candidates.length > 0,
+              )
+              .sort((left, right) => {
+                const leftPressure =
+                  left.candidates.length - left.knowledgeRemaining;
+                const rightPressure =
+                  right.candidates.length - right.knowledgeRemaining;
+                return (
+                  leftPressure - rightPressure ||
+                  right.knowledgeRemaining - left.knowledgeRemaining
+                );
+              });
+
+            const selectedKnowledge = knowledgeCandidates[0];
+            if (!selectedKnowledge) break;
+
+            const selected = selectDistinctQuestions(
+              selectedKnowledge.candidates,
+              1,
+              typePicked,
+            )[0];
+            if (!selected) break;
+
+            typePicked.push(selected);
+            pickedIds.add(selected.id);
+            scoreByQuestionId.set(selected.id, allocation.score);
+            remainingForType -= 1;
+            remainingByType.set(type, remainingForType);
+            remainingByKnowledge.set(
+              selectedKnowledge.knowledgePointId,
+              selectedKnowledge.knowledgeRemaining - 1,
+            );
+          }
+        }
+
+        const remainingTypeCount = Array.from(remainingByType.values()).reduce(
+          (sum, count) => sum + Math.max(0, count),
+          0,
+        );
+        const remainingKnowledgeCount = Array.from(
+          remainingByKnowledge.values(),
+        ).reduce((sum, count) => sum + Math.max(0, count), 0);
+
+        if (remainingTypeCount > 0 || remainingKnowledgeCount > 0) {
+          setSubmitError(
+            "当前知识点配额无法同时满足题型分布，请减少某些知识点数量或重新按章节均匀覆盖。",
+          );
+          return;
+        }
+      } else {
+        const candidatesByType = new Map<QuestionType, IQuestion[]>();
+        for (const question of autoCandidates) {
+          const candidates = candidatesByType.get(question.type) ?? [];
+          candidates.push(question);
+          candidatesByType.set(question.type, candidates);
+        }
+        for (const [type, allocation] of typeAllocationEntries) {
+          const candidatesForType = (candidatesByType.get(type) ?? []).filter(
+            (question) => !pickedIds.has(question.id),
+          );
+          const selectedForType = selectDistinctQuestions(
+            candidatesForType,
+            allocation.count,
+            typePicked,
+          );
+          typePicked.push(...selectedForType);
+          selectedForType.forEach((question) => {
+            pickedIds.add(question.id);
+            scoreByQuestionId.set(question.id, allocation.score);
+          });
+        }
+      }
+
+      if (typePicked.length !== requestedTypeQuestionCount) {
+        setSubmitError(
+          `去除重复或相似题后，只能生成 ${typePicked.length} 道题，请减少题量或扩大题库/知识点范围。`,
+        );
+        return;
+      }
+
+      setQuestionIds(typePicked.map((question) => question.id));
+      setQuestionItems(
+        typePicked.map((question, index) => ({
+          question_id: question.id,
+          order: index,
+          score_override:
+            scoreByQuestionId.get(question.id) ?? question.score ?? null,
+        })),
+      );
+      setAutoGeneratedMeta({
+        count: typePicked.length,
+        totalScore: Number(
+          typePicked
+            .reduce(
+              (sum, question) =>
+                sum + (scoreByQuestionId.get(question.id) ?? question.score),
+              0,
+            )
+            .toFixed(2),
+          ),
+      });
+      return;
+    }
+
+    if (
+      !isKnowledgeAllocationMode &&
+      (!Number.isFinite(autoQuestionCount) || autoQuestionCount <= 0)
+    ) {
+      setSubmitError("请填写有效的出题数量。");
+      return;
+    }
+
+    if (isKnowledgeAllocationMode && requestedKnowledgeQuestionCount <= 0) {
+      setSubmitError("请至少为一个知识点设置大于 0 的题目数量。");
+      return;
+    }
+
+    if (isKnowledgeAllocationMode && hasKnowledgeAllocationShortage) {
+      setSubmitError("所选知识点的可用题量不足，请调整每个知识点的题目数量。");
+      return;
+    }
+
+    if (
+      !isKnowledgeAllocationMode &&
+      autoCandidates.length < autoQuestionCount
+    ) {
+      setSubmitError(
+        `当前条件下只有 ${autoCandidates.length} 道题，无法生成 ${autoQuestionCount} 道试题。`,
+      );
+      return;
+    }
+
+    let picked: IQuestion[] = [];
+    let remainingPool = [...autoCandidates];
+    const allocations = isKnowledgeAllocationMode
+      ? autoKnowledgeAllocations
+      : buildEvenKnowledgeAllocations(knowledgeQuotaTargetCount);
+
+    for (const allocation of allocations) {
+      const candidatesForKnowledge = remainingPool.filter((question) =>
+        question.knowledge_points.some(
+          (knowledgePoint) => knowledgePoint.id === allocation.knowledgePointId,
+        ),
+      );
+      const selectedForKnowledge = selectDistinctQuestions(
+        candidatesForKnowledge,
+        allocation.count,
+        picked,
+      );
+      picked = [...picked, ...selectedForKnowledge];
+      const selectedIds = new Set(
+        selectedForKnowledge.map((question) => question.id),
+      );
+      remainingPool = remainingPool.filter(
+        (question) => !selectedIds.has(question.id),
+      );
+    }
+
+    if (!isKnowledgeAllocationMode && picked.length < autoQuestionCount) {
+      picked = [
+        ...picked,
+        ...selectDistinctQuestions(
+          remainingPool,
+          autoQuestionCount - picked.length,
+          picked,
+        ),
+      ];
+    }
+
+    const expectedAutoCount = isKnowledgeAllocationMode
+      ? requestedKnowledgeQuestionCount
+      : autoQuestionCount;
+    if (picked.length < expectedAutoCount) {
+      setSubmitError(
+        `去除重复或相似题后，只能生成 ${picked.length} 道题，请减少题量或扩大题库/知识点范围。`,
+      );
+      return;
+    }
+
+    setQuestionIds(picked.map((question) => question.id));
+    setAutoGeneratedMeta({
+      count: picked.length,
+      totalScore: picked.reduce((sum, question) => sum + question.score, 0),
+    });
   };
 
   const removeAIQuestion = (index: number) => {
@@ -1832,7 +2738,7 @@ export function PracticeCreate() {
           {currentStepId === "questions" && (
             <Card>
               <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
-                <CardTitle>步骤 2：选择题目 / AI出题</CardTitle>
+                <CardTitle>步骤 2：选择题目 / 自动出题 / AI出题</CardTitle>
                 {questionMode === "manual" && (
                   <div className="flex items-center gap-3">
                     <p className="text-sm text-muted-foreground">
@@ -1855,7 +2761,7 @@ export function PracticeCreate() {
                 )}
               </CardHeader>
               <CardContent className="space-y-5">
-                <div className="grid gap-3 md:grid-cols-2">
+                <div className="grid gap-3 md:grid-cols-3">
                   <button
                     type="button"
                     onClick={() => changeQuestionMode("manual")}
@@ -1877,6 +2783,30 @@ export function PracticeCreate() {
                       />
                       <p className="text-sm font-semibold text-foreground">
                         手动选题
+                      </p>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => changeQuestionMode("auto")}
+                    className={cn(
+                      "rounded-xl border px-4 py-3 text-left transition-colors",
+                      questionMode === "auto"
+                        ? "border-primary ring-1 ring-primary/40 shadow-sm"
+                        : "border-border hover:border-primary/40",
+                    )}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Sparkles
+                        size={16}
+                        className={
+                          questionMode === "auto"
+                            ? "text-primary"
+                            : "text-muted-foreground"
+                        }
+                      />
+                      <p className="text-sm font-semibold text-foreground">
+                        自动出题
                       </p>
                     </div>
                   </button>
@@ -1922,6 +2852,479 @@ export function PracticeCreate() {
                       !isEditMode && Boolean(navState.knowledgePointId)
                     }
                   />
+                ) : questionMode === "auto" ? (
+                  <div className="space-y-4">
+                    <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_180px]">
+                      <Select
+                        value={effectiveAutoBankId ?? ALL_BANKS}
+                        onValueChange={(value) => {
+                          setAutoBankExplicit(true);
+                          setAutoQuestionBankId(
+                            value === ALL_BANKS ? null : value,
+                          );
+                          setAutoGeneratedMeta(null);
+                        }}
+                      >
+                        <SelectTrigger id="practice-auto-question-bank">
+                          <SelectValue placeholder="题库范围：全部题库" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={ALL_BANKS}>全部题库</SelectItem>
+                          {questionBanks.map((bank) => (
+                            <SelectItem key={bank.id} value={bank.id}>
+                              {formatQuestionBankLabel(bank, {
+                                showOwner: role === "platform_admin",
+                              })}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+
+                      <div className="relative">
+                        <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
+                          抽取
+                        </span>
+                        <Input
+                          id="practice-auto-question-count"
+                          type="number"
+                          min={1}
+                          placeholder="出题数量"
+                          aria-label="出题数量"
+                          value={
+                            isTypeAllocationMode
+                              ? requestedTypeQuestionCount
+                              : isKnowledgeAllocationMode
+                                ? requestedKnowledgeQuestionCount
+                                : autoQuestionCount
+                          }
+                          onChange={(event) => {
+                            setAutoQuestionCount(
+                              parseInt(event.target.value, 10) || 0,
+                            );
+                            setAutoGeneratedMeta(null);
+                          }}
+                          disabled={
+                            isTypeAllocationMode || isKnowledgeAllocationMode
+                          }
+                          className="px-11 text-center"
+                        />
+                        <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground">
+                          题
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                      {difficultyOptions.map((item) => {
+                        const checked = autoDifficulties.includes(item.value);
+                        return (
+                          <label
+                            key={item.value}
+                            className={cn(
+                              "flex items-center gap-3 rounded-lg border px-3 py-2 text-sm transition-colors",
+                              checked
+                                ? "border-primary font-medium text-primary"
+                                : "border-border bg-background text-foreground",
+                            )}
+                          >
+                            <Checkbox
+                              checked={checked}
+                              onCheckedChange={(value) =>
+                                handleAutoDifficultyChange(
+                                  item.value,
+                                  value === true,
+                                )
+                              }
+                            />
+                            <span>{item.label}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+
+                    <div className="space-y-3 rounded-xl border border-border/80 bg-muted/20 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-foreground">
+                            题型分布
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            设置题型数量与每题分值后，系统会按题型从题库自动抽题。
+                          </p>
+                        </div>
+                        {isTypeAllocationMode ? (
+                          <Badge variant="secondary">
+                            合计 {requestedTypeQuestionCount} 题
+                          </Badge>
+                        ) : null}
+                      </div>
+
+                      <div className="space-y-2">
+                        {AUTO_TYPE_DISTRIBUTION_OPTIONS.map(
+                          ({ type, label }) => {
+                            const allocation = autoTypeAllocations[type];
+                            const available = availableTypeCounts[type] ?? 0;
+                            const disabled = available <= 0;
+                            const shortage = allocation
+                              ? allocation.count > available
+                              : false;
+                            const countValue =
+                              autoTypeCountDrafts[type] ??
+                              allocation?.count ??
+                              "";
+                            const scoreValue =
+                              autoTypeScoreDrafts[type] ??
+                              allocation?.score ??
+                              "";
+
+                            return (
+                              <div
+                                key={type}
+                                className={cn(
+                                  "grid gap-3 rounded-lg border p-3 sm:grid-cols-[minmax(0,1fr)_110px_120px]",
+                                  allocation && allocation.count > 0
+                                    ? "border-primary/40 bg-background"
+                                    : "border-border bg-background/70",
+                                  disabled && "opacity-60",
+                                )}
+                              >
+                                <div className="min-w-0">
+                                  <span className="block text-sm font-medium text-foreground">
+                                    {label}
+                                  </span>
+                                  <span className="mt-1 block text-xs text-muted-foreground">
+                                    {disabled
+                                      ? "当前无可用题目"
+                                      : `当前可用 ${available} 题`}
+                                  </span>
+                                  {shortage ? (
+                                    <span className="mt-1 flex items-center gap-1 text-xs text-destructive">
+                                      <CircleAlert size={12} />
+                                      数量不足，最多可选 {available} 题
+                                    </span>
+                                  ) : null}
+                                </div>
+
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  max={available}
+                                  aria-label={`${label}数量`}
+                                  placeholder="数量"
+                                  value={countValue}
+                                  disabled={disabled}
+                                  onFocus={() =>
+                                    setAutoTypeCountDrafts((prev) => ({
+                                      ...prev,
+                                      [type]:
+                                        allocation?.count != null
+                                          ? String(allocation.count)
+                                          : "",
+                                    }))
+                                  }
+                                  onChange={(event) => {
+                                    const nextValue = event.target.value;
+                                    setAutoTypeCountDrafts((prev) => ({
+                                      ...prev,
+                                      [type]: nextValue,
+                                    }));
+                                    if (nextValue !== "") {
+                                      handleTypeAllocationCountChange(
+                                        type,
+                                        nextValue,
+                                      );
+                                    }
+                                  }}
+                                  onBlur={(event) =>
+                                    commitTypeAllocationCount(
+                                      type,
+                                      event.currentTarget.value,
+                                    )
+                                  }
+                                  onKeyDown={(event) => {
+                                    if (event.key === "Enter") {
+                                      event.currentTarget.blur();
+                                    }
+                                  }}
+                                />
+
+                                <div className="relative">
+                                  <Input
+                                    type="number"
+                                    min={0.5}
+                                    step={0.5}
+                                    aria-label={`${label}每题分值`}
+                                    placeholder="每题分值"
+                                    value={scoreValue}
+                                    disabled={
+                                      disabled ||
+                                      !allocation ||
+                                      allocation.count <= 0
+                                    }
+                                    onFocus={() =>
+                                      setAutoTypeScoreDrafts((prev) => ({
+                                        ...prev,
+                                        [type]:
+                                          allocation?.score != null
+                                            ? String(allocation.score)
+                                            : "",
+                                      }))
+                                    }
+                                    onChange={(event) => {
+                                      const nextValue = event.target.value;
+                                      setAutoTypeScoreDrafts((prev) => ({
+                                        ...prev,
+                                        [type]: nextValue,
+                                      }));
+                                      if (nextValue !== "") {
+                                        handleTypeAllocationScoreChange(
+                                          type,
+                                          nextValue,
+                                        );
+                                      }
+                                    }}
+                                    onBlur={(event) =>
+                                      commitTypeAllocationScore(
+                                        type,
+                                        event.currentTarget.value,
+                                      )
+                                    }
+                                    onKeyDown={(event) => {
+                                      if (event.key === "Enter") {
+                                        event.currentTarget.blur();
+                                      }
+                                    }}
+                                    className="pr-8"
+                                  />
+                                  <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
+                                    分
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          },
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="space-y-3 rounded-xl border border-border/80 bg-muted/20 p-4">
+                      <button
+                        type="button"
+                        className="flex w-full items-start justify-between gap-3 text-left"
+                        onClick={() =>
+                          setAutoKnowledgeQuotaOpen((prev) => !prev)
+                        }
+                        aria-expanded={autoKnowledgeQuotaOpen}
+                      >
+                        <div>
+                          <div className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+                            技能知识点配额
+                            <Badge variant="outline" className="font-normal">
+                              高级
+                            </Badge>
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            先确定题型数量，再把这批题分配到知识点；配额合计必须等于当前计划的{" "}
+                            {knowledgeQuotaTargetCount || 0} 题。
+                          </p>
+                        </div>
+                        <span className="flex shrink-0 items-center gap-2">
+                          {isKnowledgeAllocationMode ? (
+                            <Badge
+                              variant={
+                                hasKnowledgeAllocationMismatch
+                                  ? "destructive"
+                                  : "secondary"
+                              }
+                            >
+                              合计 {requestedKnowledgeQuestionCount} 题
+                            </Badge>
+                          ) : null}
+                          <ChevronDown
+                            size={16}
+                            className={cn(
+                              "text-muted-foreground transition-transform",
+                              autoKnowledgeQuotaOpen && "rotate-180",
+                            )}
+                          />
+                        </span>
+                      </button>
+
+                      {!autoKnowledgeQuotaOpen &&
+                      availableKnowledgePoints.length > 0 ? (
+                        <span
+                          className={cn(
+                            "flex items-center gap-1 text-xs font-medium",
+                            knowledgeCoverageMet
+                              ? "text-emerald-600"
+                              : "text-amber-600",
+                          )}
+                        >
+                          {knowledgeCoverageMet ? (
+                            <CheckCircle2 size={12} />
+                          ) : (
+                            <CircleAlert size={12} />
+                          )}
+                          {isKnowledgeAllocationMode ? "已" : "将自动"}覆盖{" "}
+                          {knowledgeCoverageCovered}/{knowledgeCoverageTotal}{" "}
+                          个知识点（{knowledgeCoveragePercent}%）
+                        </span>
+                      ) : null}
+
+                      {autoKnowledgeQuotaOpen ? (
+                        <>
+                          {availableKnowledgePoints.length > 0 ? (
+                            <div className="flex flex-wrap items-center gap-3">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-8 text-xs"
+                                onClick={applyEvenKnowledgeCoverage}
+                                disabled={knowledgePointQuery.isLoading}
+                              >
+                                <Wand2 size={14} className="mr-1" />
+                                按章节均匀覆盖
+                              </Button>
+                              <span className="text-xs text-muted-foreground">
+                                依据当前计划的{" "}
+                                {knowledgeQuotaTargetCount || 0}{" "}
+                                题在各知识点均匀分布。
+                              </span>
+                              {hasKnowledgeAllocationMismatch ? (
+                                <span className="flex items-center gap-1 text-xs font-medium text-destructive">
+                                  <CircleAlert size={12} />
+                                  配额合计需等于 {knowledgeQuotaTargetCount} 题
+                                </span>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          {knowledgePointQuery.isLoading ? (
+                            <div className="text-sm text-muted-foreground">
+                              知识点加载中...
+                            </div>
+                          ) : availableKnowledgePoints.length === 0 ? (
+                            <div className="text-sm text-muted-foreground">
+                              当前题库与难度条件下暂无可用于自动出题的知识点。
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              {availableKnowledgePoints.map(
+                                (knowledgePoint) => {
+                                  const allocation = autoAllocationMap.get(
+                                    knowledgePoint.id,
+                                  );
+                                  const shortage = allocation
+                                    ? allocation.count >
+                                      knowledgePoint.availableCount
+                                    : false;
+
+                                  return (
+                                    <div
+                                      key={knowledgePoint.id}
+                                      className={cn(
+                                        "grid gap-3 rounded-lg border p-3 md:grid-cols-[minmax(0,1fr)_120px]",
+                                        allocation
+                                          ? "border-primary/40 bg-background"
+                                          : "border-border bg-background/70",
+                                      )}
+                                    >
+                                      <label className="flex items-start gap-3">
+                                        <Checkbox
+                                          checked={Boolean(allocation)}
+                                          onCheckedChange={(value) =>
+                                            handleKnowledgeAllocationToggle(
+                                              knowledgePoint.id,
+                                              value === true,
+                                            )
+                                          }
+                                        />
+                                        <span className="min-w-0">
+                                          <span className="block text-sm font-medium text-foreground">
+                                            {knowledgePoint.name}
+                                          </span>
+                                          <span className="mt-1 block text-xs text-muted-foreground">
+                                            当前可用{" "}
+                                            {knowledgePoint.availableCount} 题
+                                          </span>
+                                          {shortage ? (
+                                            <span className="mt-1 flex items-center gap-1 text-xs text-destructive">
+                                              <CircleAlert size={12} />
+                                              数量不足，最多可选{" "}
+                                              {knowledgePoint.availableCount} 题
+                                            </span>
+                                          ) : null}
+                                        </span>
+                                      </label>
+
+                                      <Input
+                                        type="number"
+                                        min={1}
+                                        max={knowledgePoint.availableCount}
+                                        aria-label={`${knowledgePoint.name}题目数量`}
+                                        value={allocation?.count ?? ""}
+                                        placeholder="题目数"
+                                        disabled={!allocation}
+                                        onChange={(event) =>
+                                          handleKnowledgeAllocationCountChange(
+                                            knowledgePoint.id,
+                                            event.target.value,
+                                          )
+                                        }
+                                      />
+                                    </div>
+                                  );
+                                },
+                              )}
+                            </div>
+                          )}
+                        </>
+                      ) : null}
+                    </div>
+
+                    <div className="flex flex-col gap-3 rounded-xl border border-border/80 bg-background p-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-foreground">
+                          生成题单
+                          <span className="ml-2 text-xs font-normal text-muted-foreground">
+                            已选 {questionIds.length} 题
+                            {autoGeneratedMeta ? (
+                              <span className="ml-2">
+                                · 最近生成 {autoGeneratedMeta.count} 题 /{" "}
+                                {autoGeneratedMeta.totalScore} 分
+                              </span>
+                            ) : null}
+                          </span>
+                        </p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          按题型计划生成题目；若设置了知识点配额，会在这批题内按配额抽题，并覆盖当前已选题目。
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        onClick={handleAutoGenerate}
+                        disabled={
+                          autoCandidatesLoading ||
+                          knowledgePointQuery.isLoading ||
+                          (isTypeAllocationMode
+                            ? hasTypeAllocationShortage ||
+                              hasKnowledgeAllocationShortage ||
+                              hasKnowledgeAllocationMismatch
+                            : isKnowledgeAllocationMode
+                              ? requestedKnowledgeQuestionCount <= 0 ||
+                                hasKnowledgeAllocationShortage
+                              : autoQuestionCount <= 0)
+                        }
+                      >
+                        {autoCandidatesLoading ? (
+                          <Loader2 size={16} className="mr-1 animate-spin" />
+                        ) : (
+                          <Sparkles size={16} className="mr-1" />
+                        )}
+                        {autoGeneratedMeta ? "重新生成" : "生成题单"}
+                      </Button>
+                    </div>
+                  </div>
                 ) : (
                   <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
                     <AIQuestionConfigPanel
@@ -2289,7 +3692,11 @@ export function PracticeCreate() {
                 <Badge
                   variant={questionMode === "manual" ? "secondary" : "outline"}
                 >
-                  {questionMode === "manual" ? "手动选题" : "AI出题"}
+                  {questionMode === "manual"
+                    ? "手动选题"
+                    : questionMode === "auto"
+                      ? "自动出题"
+                      : "AI出题"}
                 </Badge>
                 <Badge variant="outline">练习</Badge>
               </div>

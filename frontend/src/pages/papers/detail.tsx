@@ -11,7 +11,7 @@ import {
   Send,
   Sparkles,
 } from "lucide-react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,6 +43,14 @@ const SOURCE_TYPE_LABELS: Record<string, string> = {
   ai_generated: "AI 生成",
 };
 
+type PaperDetailNavState = {
+  backTo?: string;
+  backLabel?: string;
+  courseOrigin?: boolean;
+  publishExamSuccessTo?: string;
+  publishPracticeSuccessTo?: string;
+};
+
 function formatDateTime(iso: string) {
   const date = new Date(iso);
   const pad = (value: number) => String(value).padStart(2, "0");
@@ -57,6 +65,10 @@ function getQuestionTypeLabel(type: string | null | undefined): string {
 export function PaperDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const navState = (location.state ?? {}) as PaperDetailNavState;
+  const backTo = navState.backTo ?? "/papers";
+  const backLabel = navState.backLabel ?? "返回试卷列表";
   const { toast } = useToast();
   const [busy, setBusy] = useState(false);
   const [aiDialogOpen, setAiDialogOpen] = useState(false);
@@ -133,7 +145,7 @@ export function PaperDetailPage() {
         }),
       });
       toast({ title: "复制成功", description: `已创建试卷：${created.title}` });
-      navigate(`/papers/${created.id}`);
+      navigate(`/papers/${created.id}`, { state: navState });
     } catch (error) {
       toast({
         title: "复制失败",
@@ -155,14 +167,19 @@ export function PaperDetailPage() {
   }
 
   const archived = Boolean(paper.archived_at);
+  const handleBack = () => {
+    navigate(backTo, {
+      state: navState.courseOrigin ? { courseOrigin: true } : undefined,
+    });
+  };
 
   return (
     <div className="mx-auto w-full max-w-[1280px]">
       <PageIntroHeader
         title={paper.title}
         description={paper.description || "试卷详情：查看题目构成、题型分布，并可复制、AI 再生成或直接发起考试。"}
-        onBack={() => navigate("/papers")}
-        backLabel="返回试卷列表"
+        onBack={handleBack}
+        backLabel={backLabel}
         fullBleed
         className="mb-6"
         actions={
@@ -210,8 +227,8 @@ export function PaperDetailPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => navigate("/papers")}
-              title="返回试卷列表"
+              onClick={handleBack}
+              title={backLabel}
             >
               <List className="h-4 w-4" />
               返回列表
@@ -429,6 +446,7 @@ export function PaperDetailPage() {
         paperId={paper.id}
         paperTitle={paper.title}
         rootKnowledgePointName={paper.root_knowledge_point?.name}
+        generatedPaperState={navState}
       />
 
       {quickPublishMode ? (
@@ -439,7 +457,13 @@ export function PaperDetailPage() {
           onOpenChange={(next) => {
             if (!next) setQuickPublishMode(null);
           }}
-          onPublished={() => navigate("/exams")}
+          onPublished={() => {
+            const successTo =
+              quickPublishMode === "practice"
+                ? navState.publishPracticeSuccessTo
+                : navState.publishExamSuccessTo;
+            navigate(successTo ?? "/exams");
+          }}
         />
       ) : null}
     </div>

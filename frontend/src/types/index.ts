@@ -389,6 +389,7 @@ export interface IExamResult {
   grading_status: ExamGradingStatus | null;
   can_view: boolean;
   blocked_reason: string | null;
+  teacher_comment?: string | null;
   questions: IExamResultQuestion[];
 }
 

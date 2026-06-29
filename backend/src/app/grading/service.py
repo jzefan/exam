@@ -139,6 +139,7 @@ def _parse_task_locator(task: GradingTask) -> dict[str, str | None]:
     exam_id: str | None = None
     question_id: str | None = None
     candidate_code: str | None = None
+    student_id: str | None = None
 
     if source_business_id:
         parts = source_business_id.split(":")
@@ -146,6 +147,7 @@ def _parse_task_locator(task: GradingTask) -> dict[str, str | None]:
             exam_id = parts[0]
             question_id = parts[1]
             candidate_code = parts[2]
+            student_id = parts[2]
         elif len(parts) >= 2:
             question_id = parts[0]
             candidate_code = ":".join(parts[1:])
@@ -166,6 +168,7 @@ def _parse_task_locator(task: GradingTask) -> dict[str, str | None]:
         "question_label": _humanize_question_id(question_id, task.question_type),
         "candidate_name": candidate_name,
         "candidate_code": normalized_candidate_code,
+        "student_id": student_id,
     }
 
 
@@ -358,19 +361,36 @@ async def _load_workspace_tasks(
     *,
     current_user_id: uuid.UUID | None = None,
     is_platform_admin: bool = True,
+    exam_id: str | None = None,
+    lightweight: bool = False,
 ) -> list[GradingTask]:
-    result = await db.execute(
-        select(GradingTask)
-        .options(
+    # 列表态（收件箱 / 按题目考生列表）只需终评快照与审计事件即可算出状态与分数；
+    # 完整的多模型快照 + model_config 只有单条详情页才需要，列表态不加载以减少数据量。
+    if lightweight:
+        options = [
+            selectinload(GradingTask.latest_final_snapshot),
+            selectinload(GradingTask.audit_events),
+        ]
+    else:
+        options = [
             selectinload(GradingTask.latest_final_snapshot),
             selectinload(GradingTask.latest_manual_snapshot),
             selectinload(GradingTask.latest_arbitration_snapshot),
             selectinload(GradingTask.snapshots).selectinload(GradingResultSnapshot.model_config),
             selectinload(GradingTask.audit_events),
-        )
+        ]
+    query = (
+        select(GradingTask)
+        .options(*options)
         .execution_options(populate_existing=True)
         .order_by(GradingTask.updated_at.desc())
     )
+    if exam_id:
+        query = query.where(
+            GradingTask.source_type == "exam_submission",
+            GradingTask.source_business_id.like(f"{exam_id}:%"),
+        )
+    result = await db.execute(query)
     tasks = list(result.scalars().all())
     return await _filter_tasks_by_exam_access(
         db,
@@ -718,11 +738,14 @@ async def get_grading_inbox(
     *,
     current_user_id: uuid.UUID | None = None,
     is_platform_admin: bool = True,
+    exam_id: str | None = None,
 ) -> dict[str, Any]:
     tasks = await _load_workspace_tasks(
         db,
         current_user_id=current_user_id,
         is_platform_admin=is_platform_admin,
+        exam_id=exam_id,
+        lightweight=True,
     )
     locators = await _hydrate_task_locators(db, tasks)
 
@@ -982,6 +1005,8 @@ async def get_grading_question_candidates(
         db,
         current_user_id=current_user_id,
         is_platform_admin=is_platform_admin,
+        exam_id=exam_id if exam_id and exam_id != "standalone" else None,
+        lightweight=True,
     )
     locators = await _hydrate_task_locators(db, tasks)
     matched: list[tuple[GradingTask, dict[str, str | None]]] = []
@@ -1010,6 +1035,7 @@ async def get_grading_question_candidates(
             "task_id": str(task.id),
             "candidate_name": task_locator["candidate_name"],
             "candidate_code": task_locator["candidate_code"],
+            "student_id": task_locator["student_id"],
             "status": _task_display_status(task),
             "score": task.latest_final_snapshot.score_total if task.latest_final_snapshot else None,
             "arbitration_required": task.latest_arbitration_snapshot_id is not None,
@@ -3000,3 +3026,41 @@ async def run_grading_task(
     )
     await db.flush()
     return {"status": task.status, "arbitration_required": False, "reason": None}
+
+
+async def get_exam_candidate_scores(
+    db: AsyncSession,
+    exam_id: str,
+) -> dict:
+    exam_uuid = _try_parse_uuid(exam_id)
+    if exam_uuid is None:
+        return {"candidates": []}
+
+    rows = (
+        await db.execute(
+            select(
+                ExamStudent.objective_score,
+                ExamStudent.subjective_score,
+                ExamStudent.score,
+                User.full_name,
+                User.student_id.label("student_code"),
+                User.phone,
+            )
+            .join(User, User.id == ExamStudent.student_id)
+            .where(ExamStudent.exam_id == exam_uuid)
+        )
+    ).all()
+
+    candidates = []
+    for obj_score, subj_score, total, full_name, student_code, phone in rows:
+        candidate_code = student_code or phone or None
+        candidate_key = candidate_code or full_name
+        candidates.append(
+            {
+                "candidate_key": candidate_key,
+                "objective_score": obj_score,
+                "subjective_score": subj_score,
+                "total_score": total,
+            }
+        )
+    return {"candidates": candidates}

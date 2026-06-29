@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { useList } from "@refinedev/core";
+import { useDelete, useList } from "@refinedev/core";
 import {
   ArrowLeft,
   BarChart3,
@@ -35,6 +35,7 @@ import {
   Lock,
   MoreHorizontal,
   Move,
+  Pencil,
   Plus,
   Search,
   Settings,
@@ -75,6 +76,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
@@ -634,20 +644,6 @@ function filterQuestionsForKnowledgeNode(
   );
 }
 
-function buildCourseQuestionCountByNodeId(
-  node: CourseKnowledgeNode | null,
-): Record<string, number> {
-  const result: Record<string, number> = {};
-  const visit = (current: CourseKnowledgeNode | null) => {
-    if (!current) return;
-    result[current.id] = current.question_count;
-    for (const child of current.children) {
-      visit(child);
-    }
-  };
-  visit(node);
-  return result;
-}
 
 function courseQuestionBankName(courseName: string | undefined) {
   const normalized = courseName?.trim();
@@ -2066,6 +2062,7 @@ function ExamRows({
                       examId: item.id,
                       backTo,
                       backLabel: "返回课程详情",
+                      mode: "candidate",
                     });
                     navigate(`/grading?${params.toString()}`, { state: backState });
                   }
@@ -2094,6 +2091,23 @@ function ExamRows({
     </div>
   );
 }
+const QUESTION_PAGE_SIZE_OPTIONS = [10, 20, 30, 50, 100, 200];
+
+function buildQuestionPaginationPages(
+  current: number,
+  total: number,
+): (number | "ellipsis")[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages: (number | "ellipsis")[] = [1];
+  if (current > 3) pages.push("ellipsis");
+  const start = Math.max(2, current - 1);
+  const end = Math.min(total - 1, current + 1);
+  for (let i = start; i <= end; i++) pages.push(i);
+  if (current < total - 2) pages.push("ellipsis");
+  pages.push(total);
+  return pages;
+}
+
 function QuestionsTab({
   questions,
   courseId,
@@ -2111,6 +2125,7 @@ function QuestionsTab({
   seedUsage,
   onPublishedExamOrAssignment,
   onClearAllQuestions,
+  onQuestionDeleted,
 }: {
   questions: IQuestion[];
   courseId: string;
@@ -2136,8 +2151,12 @@ function QuestionsTab({
     category: CreateFromSelectionCategory,
   ) => void | Promise<void>;
   onClearAllQuestions: () => void;
+  onQuestionDeleted?: (questionId: string) => void;
 }) {
   const navigate = useNavigate();
+  const { mutate: deleteQuestion } = useDelete();
+  const [deleteQuestionTarget, setDeleteQuestionTarget] =
+    useState<IQuestion | null>(null);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [createFromSelectionOpen, setCreateFromSelectionOpen] = useState(false);
@@ -2145,6 +2164,8 @@ function QuestionsTab({
   const [selectedQuestionTypes, setSelectedQuestionTypes] = useState<
     Set<QuestionType>
   >(new Set());
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
 
   useEffect(() => {
     const questionIds = new Set(questions.map((question) => question.id));
@@ -2153,6 +2174,11 @@ function QuestionsTab({
       return next.size === current.size ? current : next;
     });
   }, [questions]);
+
+  // 筛选条件或每页数量变化时回到第一页
+  useEffect(() => {
+    setPage(1);
+  }, [query, selectedQuestionTypes, knowledgeFilterNodeId, pageSize]);
 
   const questionTypeCounts = useMemo(() => {
     const counts = new Map<QuestionType, number>();
@@ -2197,6 +2223,10 @@ function QuestionsTab({
       `${question.title} ${question.knowledge_points.map((kp) => kp.name).join(" ")}`.toLowerCase();
     return !query.trim() || text.includes(query.trim().toLowerCase());
   });
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(page, pageCount);
+  const pagedQuestions = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const paginationPages = buildQuestionPaginationPages(safePage, pageCount);
   const visibleQuestionIds = new Set(filtered.map((question) => question.id));
   const selectedQuestionIds = [...selected].filter((id) =>
     visibleQuestionIds.has(id),
@@ -2463,11 +2493,11 @@ function QuestionsTab({
       ) : (
         <div className="flex flex-col gap-3">
           <div className="space-y-3">
-            {filtered.map((question, index) => (
+            {pagedQuestions.map((question, idx) => (
               <QuestionPreviewCard
                 key={question.id}
                 question={question}
-                index={index + 1}
+                index={(safePage - 1) * pageSize + idx + 1}
                 expanded={allQuestionsExpanded}
                 expandOnClick
                 hideAnswer
@@ -2496,27 +2526,102 @@ function QuestionsTab({
                   </div>
                 }
                 actions={
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 px-1.5 text-xs text-muted-foreground hover:text-primary sm:px-2"
-                    onClick={() =>
-                      navigate(`/questions/edit/${question.id}`, {
-                        state: {
-                          backTo: `/courses/${courseId}?tab=questions`,
-                          backLabel: "返回课程题目",
-                          successTo: `/courses/${courseId}?tab=questions`,
-                        },
-                      })
-                    }
-                  >
-                    <Eye size={13} className="sm:mr-1" />
-                    <span className="hidden sm:inline">打开题目</span>
-                  </Button>
+                  <>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-1.5 text-xs text-muted-foreground hover:text-blue-600 sm:px-2 dark:hover:text-blue-400"
+                      onClick={() =>
+                        navigate(`/questions/edit/${question.id}`, {
+                          state: {
+                            backTo: `/courses/${courseId}?tab=questions`,
+                            backLabel: "返回课程题目",
+                            successTo: `/courses/${courseId}?tab=questions`,
+                          },
+                        })
+                      }
+                    >
+                      <Pencil size={13} className="sm:mr-1" />
+                      <span className="hidden sm:inline">编辑</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-1.5 text-xs text-muted-foreground hover:text-red-600 sm:px-2 dark:hover:text-red-400"
+                      onClick={() => setDeleteQuestionTarget(question)}
+                    >
+                      <Trash2 size={13} className="sm:mr-1" />
+                      <span className="hidden sm:inline">删除</span>
+                    </Button>
+                  </>
                 }
               />
             ))}
+          </div>
+
+          <div className="flex flex-col gap-3 pt-1 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground sm:text-sm">
+              <span>共 {filtered.length} 题</span>
+              <span>每页</span>
+              <Select value={String(pageSize)} onValueChange={(value) => setPageSize(Number(value))}>
+                <SelectTrigger className="h-8 w-[76px] text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {QUESTION_PAGE_SIZE_OPTIONS.map((size) => (
+                    <SelectItem key={size} value={String(size)} className="text-xs">
+                      {size}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <span>题</span>
+            </div>
+            {pageCount > 1 ? (
+              <Pagination className="mx-0 w-auto">
+                <PaginationContent>
+                  <PaginationItem>
+                    <PaginationPrevious
+                      onClick={() => {
+                        if (safePage > 1) setPage(safePage - 1);
+                      }}
+                      className={
+                        safePage <= 1 ? "pointer-events-none opacity-50" : "cursor-pointer"
+                      }
+                    />
+                  </PaginationItem>
+                  {paginationPages.map((pageItem, idx) =>
+                    pageItem === "ellipsis" ? (
+                      <PaginationItem key={`ellipsis-${idx}`}>
+                        <PaginationEllipsis />
+                      </PaginationItem>
+                    ) : (
+                      <PaginationItem key={pageItem}>
+                        <PaginationLink
+                          isActive={pageItem === safePage}
+                          onClick={() => setPage(pageItem)}
+                          className="cursor-pointer"
+                        >
+                          {pageItem}
+                        </PaginationLink>
+                      </PaginationItem>
+                    ),
+                  )}
+                  <PaginationItem>
+                    <PaginationNext
+                      onClick={() => {
+                        if (safePage < pageCount) setPage(safePage + 1);
+                      }}
+                      className={
+                        safePage >= pageCount ? "pointer-events-none opacity-50" : "cursor-pointer"
+                      }
+                    />
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
+            ) : null}
           </div>
         </div>
       )}
@@ -2536,6 +2641,47 @@ function QuestionsTab({
           void onPublishedExamOrAssignment(category);
         }}
       />
+
+      <AlertDialog
+        open={!!deleteQuestionTarget}
+        onOpenChange={(open) => {
+          if (!open) setDeleteQuestionTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除题目</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定要删除这道题目吗？此操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (!deleteQuestionTarget) return;
+                deleteQuestion(
+                  { resource: "questions", id: deleteQuestionTarget.id },
+                  {
+                    onSuccess: () => {
+                      setSelected((prev) => {
+                        const next = new Set(prev);
+                        next.delete(deleteQuestionTarget.id);
+                        return next;
+                      });
+                      onQuestionDeleted?.(deleteQuestionTarget.id);
+                      setDeleteQuestionTarget(null);
+                    },
+                  },
+                );
+              }}
+            >
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -4089,12 +4235,34 @@ export function CourseDetailPage() {
       filterQuestionsForKnowledgeNode(questions, tree, questionFilterNodeId),
     [questions, questionFilterNodeId, tree],
   );
-  const questionCountByNodeId = useMemo(
-    () => buildCourseQuestionCountByNodeId(tree),
-    [tree],
-  );
+  const questionCountByNodeId = useMemo(() => {
+    const counts: Record<string, number> = {};
+    // Initialize all tree node IDs to 0 so even nodes with no questions show up
+    const initFromTree = (node: CourseKnowledgeNode | null) => {
+      if (!node) return;
+      counts[node.id] = 0;
+      for (const child of node.children) initFromTree(child);
+    };
+    initFromTree(tree);
+    // Count questions per associated knowledge point
+    for (const q of questions) {
+      for (const kp of q.knowledge_points) {
+        counts[kp.id] = (counts[kp.id] ?? 0) + 1;
+      }
+    }
+    return counts;
+  }, [questions, tree]);
   const questionKnowledgeFilterOptions = useMemo(
     () => flattenCourseKnowledgeNodes(tree).filter((item) => item.depth > 0),
+    [tree],
+  );
+  const paperKnowledgePointOptions = useMemo(
+    () =>
+      flattenCourseKnowledgeNodes(tree).map((item) => ({
+        id: item.id,
+        name: item.name,
+        path: item.path,
+      })),
     [tree],
   );
   const materialUploadTargets = useMemo(
@@ -5200,6 +5368,8 @@ export function CourseDetailPage() {
 
   const handleGenerateFromKnowledgeNode = useCallback(
     (node: CourseKnowledgeNode) => {
+      if (!id) return;
+      const returnTo = `/courses/${id}?tab=knowledge&node_id=${node.id}`;
       try {
         sessionStorage.setItem(
           AI_PREFILL_KEY,
@@ -5215,7 +5385,13 @@ export function CourseDetailPage() {
       } catch {
         // sessionStorage can be unavailable in private modes — non-fatal.
       }
-      navigate("/questions/ai-generate");
+      navigate("/questions/ai-generate", {
+        state: {
+          backTo: returnTo,
+          backLabel: "返回课程详情",
+          successTo: returnTo,
+        },
+      });
     },
     [course, id, navigate],
   );
@@ -5381,11 +5557,12 @@ export function CourseDetailPage() {
         initialStep?: number;
       },
     ) => {
+      const targetTab = kind === "exam" ? "exams" : "assignments";
       navigate(kind === "exam" ? "/exams/create" : "/exams/practice/create", {
         state: {
-          backTo: `/courses/${id}`,
+          backTo: `/courses/${id}?tab=${targetTab}`,
           backLabel: "返回课程详情",
-          successTo: `/courses/${id}?tab=${kind === "exam" ? "exams" : "assignments"}`,
+          successTo: `/courses/${id}?tab=${targetTab}`,
           courseKpId: options?.courseKpId ?? id,
           ...(course?.name ? { courseName: course.name } : {}),
           ...(kind === "exam"
@@ -6430,7 +6607,13 @@ export function CourseDetailPage() {
                     onClose={(exam) => setExamToClose(exam)}
                     onDelete={(exam) => setExamToDelete(exam)}
                     onGenerateMock={openMockExamDialog}
-                    onCreate={() => goCreateExamOrAssignment("exam")}
+                    onCreate={() =>
+                        goCreateExamOrAssignment("exam", {
+                          mainKnowledgePointId: tree?.id,
+                          mainKnowledgePointName: course?.name,
+                          defaultBankName: courseQuestionBankName(course?.name),
+                        })
+                      }
                     onExport={handleExportExam}
                   />
                 )}
@@ -6471,7 +6654,13 @@ export function CourseDetailPage() {
                       onNewSemester={() => setNewSemesterOpen(true)}
                       onClose={(exam) => setExamToClose(exam)}
                       onDelete={(exam) => setExamToDelete(exam)}
-                      onCreate={() => goCreateExamOrAssignment("assignment")}
+                      onCreate={() =>
+                        goCreateExamOrAssignment("assignment", {
+                          mainKnowledgePointId: tree?.id,
+                          mainKnowledgePointName: course?.name,
+                          defaultBankName: courseQuestionBankName(course?.name),
+                        })
+                      }
                     />
                   </div>
                 )}
@@ -6518,6 +6707,11 @@ export function CourseDetailPage() {
                       seedUsage={seedUsage}
                       onPublishedExamOrAssignment={handlePublishedFromSelection}
                       onClearAllQuestions={() => setClearQuestionsOpen(true)}
+                      onQuestionDeleted={(questionId) => {
+                        setQuestions((prev) =>
+                          prev.filter((q) => q.id !== questionId),
+                        );
+                      }}
                     />
                   </div>
                 )}
@@ -6554,6 +6748,15 @@ export function CourseDetailPage() {
               <TabsContent value="papers" className="mt-0">
                 <PaperListBody
                   rootKnowledgePointId={tree?.id ?? id}
+                  courseQuestionBankName={courseQuestionBankName(course.name)}
+                  knowledgePointOptions={paperKnowledgePointOptions}
+                  detailNavState={{
+                    backTo: `/courses/${id}?tab=papers`,
+                    backLabel: "返回课程详情",
+                    courseOrigin: true,
+                    publishExamSuccessTo: `/courses/${id}?tab=exams`,
+                    publishPracticeSuccessTo: `/courses/${id}?tab=assignments`,
+                  }}
                   rightSlot={
                     course.can_write ? (
                       <Button

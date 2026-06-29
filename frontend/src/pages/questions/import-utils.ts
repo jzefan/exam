@@ -459,7 +459,11 @@ export function buildImportableQuestions(drafts: QuestionImportDraft[], question
       const rawTitle = (draft.title || generateImportQuestionTitle(draft.content_text)).trim();
       const title = (rawTitle || "未命名题目").slice(0, 500);
       const clampedDifficulty = Math.min(5, Math.max(1, Math.round(draft.difficulty || 3)));
-      const contentHtml = buildImportContentHtml(draft.content_text, draft.images ?? []);
+      const contentHtml =
+        draft.content_html ?? buildImportContentHtml(draft.content_text, draft.images ?? []);
+      const answer = draft.answer_html
+        ? { ...buildAnswerPayload(draft.type, draft.answer_text), html: draft.answer_html }
+        : buildAnswerPayload(draft.type, draft.answer_text);
       return {
         type: draft.type,
         title,
@@ -468,7 +472,7 @@ export function buildImportableQuestions(drafts: QuestionImportDraft[], question
           html: contentHtml,
         },
         options: draft.type === "choice" ? draft.options : null,
-        answer: buildAnswerPayload(draft.type, draft.answer_text),
+        answer,
         analysis: draft.analysis || null,
         difficulty: clampedDifficulty,
         score: 10,

@@ -107,7 +107,12 @@ tar \
   --exclude="./frontend/.env.*" \
   --exclude="./deploy/env/backend.env" \
   --exclude="./deploy/env/database.env" \
+  --exclude="./.claude" \
+  --exclude="./.remember" \
+  --exclude="./.pnpm-store" \
+  --exclude="./.superpowers" \
   --exclude="./backend/.venv" \
+  --exclude="./backend/uploads" \
   --exclude="./frontend/node_modules" \
   --exclude="./frontend/dist" \
   --exclude="./backend/__pycache__" \

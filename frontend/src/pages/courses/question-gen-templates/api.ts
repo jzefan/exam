@@ -77,6 +77,14 @@ export interface RecognizedSeed {
   options?: Record<string, string> | null;
   answer?: string | null;
   analysis?: string | null;
+  images?: SeedImage[];
+  answerImages?: SeedImage[];
+}
+
+export interface SeedImage {
+  image_id?: string;
+  url: string;
+  alt?: string | null;
 }
 
 /** 手动添加种子题：根据题型 + 题干，AI 补全参考答案与解析。 */
@@ -96,17 +104,52 @@ interface DocRecognizeDraft {
   options?: Record<string, string> | null;
   answer_text?: string | null;
   analysis?: string | null;
+  images?: SeedImage[] | null;
+  answer_images?: SeedImage[] | null;
+}
+
+function answerRefersToImage(answer?: string | null): boolean {
+  const normalized = (answer ?? "").replace(/\s/g, "");
+  return ["见图", "见图片", "见答案图片", "见下图", "如图", "见解析图片"].includes(normalized);
+}
+
+function inlineImageSeeds(text?: string | null): SeedImage[] {
+  const matches = Array.from((text ?? "").matchAll(/\[(?:IMG|IMAGE):([^\]\s]+)\]/g));
+  return matches.map((match) => ({
+    image_id: match[1],
+    url: `/api/uploads/files/${match[1]}`,
+    alt: "答案图片",
+  }));
+}
+
+function stripInlineImageMarkers(text?: string | null): string {
+  return (text ?? "").replace(/\s*\[(?:IMG|IMAGE):[^\]\s]+\]\s*/g, "\n").trim();
 }
 
 function draftsToSeeds(drafts: DocRecognizeDraft[]): RecognizedSeed[] {
   return drafts
-    .map((d) => ({
-      type: d.type,
-      text: (d.content_text ?? "").trim(),
-      options: d.options ?? null,
-      answer: d.answer_text ?? null,
-      analysis: d.analysis ?? null,
-    }))
+    .map((d) => {
+      const inlineImages = [...inlineImageSeeds(d.content_text), ...inlineImageSeeds(d.answer_text), ...inlineImageSeeds(d.analysis)];
+      const draftImages = d.images ?? [];
+      const explicitAnswerImages = d.answer_images ?? [];
+      const likelyImageAnswer =
+        answerRefersToImage(d.answer_text) ||
+        (!d.answer_text?.trim() && !d.analysis?.trim() && ["short_answer", "essay"].includes(d.type));
+      return {
+        type: d.type,
+        text: stripInlineImageMarkers(d.content_text),
+        options: d.options ?? null,
+        answer: d.answer_text ?? null,
+        analysis: stripInlineImageMarkers(d.analysis),
+        images: draftImages,
+        answerImages:
+          explicitAnswerImages.length > 0
+            ? explicitAnswerImages
+            : likelyImageAnswer && draftImages.length > 0
+              ? draftImages
+              : inlineImages,
+      };
+    })
     .filter((s) => s.text.length > 0);
 }
 

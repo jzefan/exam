@@ -224,6 +224,54 @@ describe("question import helpers", () => {
     expect(html).toContain("<td>列1</td><td>列2</td>");
   });
 
+  it("prefers edited content_html/answer_html (with images) when building importable questions", () => {
+    const drafts: QuestionImportDraft[] = [
+      {
+        ...baseDraft,
+        draft_id: "draft-rich",
+        type: "short_answer",
+        content_text: "简述 TCP 三次握手",
+        content_html: "<p>简述 TCP 三次握手</p><img src=\"/api/uploads/files/q.png\" alt=\"图\" />",
+        options: null,
+        answer_text: "第一次握手\n第二次握手",
+        answer_html: "<p>第一次握手</p><img src=\"/api/uploads/files/a.png\" alt=\"答案图\" />",
+        review_status: "approved",
+        review_required: false,
+      },
+    ];
+
+    const [question] = buildImportableQuestions(drafts, null);
+
+    // 题干优先使用编辑后的 HTML（含图片），而非由纯文本再生成。
+    expect(question.content.html).toContain("/api/uploads/files/q.png");
+    // 答案保留 points/text 供评分，并携带 html（含图片）。
+    expect(question.answer).toMatchObject({
+      points: ["第一次握手", "第二次握手"],
+      html: expect.stringContaining("/api/uploads/files/a.png"),
+    });
+  });
+
+  it("falls back to text-derived content and plain answer when no edited html is present", () => {
+    const drafts: QuestionImportDraft[] = [
+      {
+        ...baseDraft,
+        draft_id: "draft-plain",
+        type: "short_answer",
+        content_text: "纯文本题干",
+        options: null,
+        answer_text: "要点一\n要点二",
+        review_status: "approved",
+        review_required: false,
+      },
+    ];
+
+    const [question] = buildImportableQuestions(drafts, null);
+
+    expect(question.content.html).toContain("纯文本题干");
+    expect(question.answer).toEqual({ points: ["要点一", "要点二"] });
+    expect(question.answer).not.toHaveProperty("html");
+  });
+
   it("selects the next draft after removing the current selected draft", () => {
     const drafts = [
       { ...baseDraft, draft_id: "draft-1" },
@@ -791,7 +839,7 @@ describe("QuestionImportPage", () => {
     expect(screen.queryByRole("button", { name: "AI 补全当前题" })).not.toBeInTheDocument();
   });
 
-  it("opens a dialog editor with preview for each question card", async () => {
+  it("opens the question edit form dialog for each question card", async () => {
     fetchMock.mockResolvedValueOnce(
       mockJsonResponse({
         mode: "smart",
@@ -819,9 +867,10 @@ describe("QuestionImportPage", () => {
     await screen.findByText("核对导入内容");
     fireEvent.click(screen.getByRole("button", { name: "编辑" }));
 
-    expect(await screen.findByRole("dialog")).toHaveTextContent("编辑题目");
-    expect(screen.getByRole("tab", { name: "编辑" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "预览" })).toBeInTheDocument();
+    // 现在复用题库的「修改题目」表单（QuestionEditFormContent），不再是编辑/预览选项卡。
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("编辑题目");
+    expect(dialog).toHaveTextContent("题目内容");
     expect(screen.getByRole("button", { name: "保存修改" })).toBeInTheDocument();
   });
 

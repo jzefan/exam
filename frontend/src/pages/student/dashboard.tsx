@@ -3,6 +3,7 @@ import { useList, useGetIdentity } from "@refinedev/core";
 import { useNavigate } from "react-router-dom";
 import { ArrowRight, BookOpen, CalendarClock, Target, Medal } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-viewport";
+import { IcpRecordLink } from "@/components/icp-record-link";
 import {
   Table,
   TableBody,
@@ -161,10 +162,11 @@ export function StudentDashboard() {
     const nextExam = pending.find((e) => e.effectiveStatus === "upcoming");
     const recentCompleted = filteredCompleted[0];
     return (
-      <div className="space-y-4 px-1 py-2">
-        <h2 className="text-base font-bold text-foreground">
-          {tStudent("dashboard_greeting", { name: userName }, locale)}
-        </h2>
+      <div className="flex min-h-[calc(100vh-7rem)] flex-col px-1 py-2">
+        <div className="space-y-4">
+          <h2 className="text-base font-bold text-foreground">
+            {tStudent("dashboard_greeting", { name: userName }, locale)}
+          </h2>
         {activeExam && (
           <button
             className="w-full rounded-2xl border border-primary/20 bg-primary/8 p-4 text-left"
@@ -226,52 +228,58 @@ export function StudentDashboard() {
         >
           查看全部考试 →
         </button>
+        </div>
+
+        <footer className="mt-auto flex justify-center pt-6" aria-label="网站备案信息">
+          <IcpRecordLink />
+        </footer>
       </div>
     );
   }
 
   return (
-    <div className="space-y-8">
-      <section className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
-        <div className="space-y-2">
-          <h2 className="text-lg font-black text-foreground tracking-tight">
-            {tStudent("dashboard_greeting", { name: userName }, locale)}
-          </h2>
-          <div className="text-sm text-muted-foreground/65 font-medium">
-            <span>
-              {pendingCount > 0
-                ? tStudent("dashboard_pending_summary", { count: pendingCount }, locale)
-                : tStudent("dashboard_empty_summary", undefined, locale)}
-            </span>
+    <div className="flex min-h-[calc(100vh-7rem)] flex-col md:min-h-[calc(100vh-8rem)]">
+      <div className="space-y-8">
+        <section className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
+          <div className="space-y-2">
+            <h2 className="text-lg font-black text-foreground tracking-tight">
+              {tStudent("dashboard_greeting", { name: userName }, locale)}
+            </h2>
+            <div className="text-sm text-muted-foreground/65 font-medium">
+              <span>
+                {pendingCount > 0
+                  ? tStudent("dashboard_pending_summary", { count: pendingCount }, locale)
+                  : tStudent("dashboard_empty_summary", undefined, locale)}
+              </span>
+            </div>
           </div>
-        </div>
 
-        <div className="flex gap-3">
-          <Card className="min-w-[148px] rounded-2xl border border-border/60 bg-background/95 shadow-sm">
-            <CardContent className="flex items-center gap-3 px-5 py-4">
-              <div className="h-10 w-10 rounded-xl bg-primary/12 flex items-center justify-center text-primary">
-                <Target size={18} />
-              </div>
-              <div className="flex flex-col">
-                <span className="text-lg font-bold tabular-nums text-foreground leading-none">{avgScore}</span>
-                <span className="mt-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/80">{tStudent("dashboard_avg_score", undefined, locale)}</span>
-              </div>
-            </CardContent>
-          </Card>
+          <div className="flex gap-3">
+            <Card className="min-w-[148px] rounded-2xl border border-border/60 bg-background/95 shadow-sm">
+              <CardContent className="flex items-center gap-3 px-5 py-4">
+                <div className="h-10 w-10 rounded-xl bg-primary/12 flex items-center justify-center text-primary">
+                  <Target size={18} />
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-lg font-bold tabular-nums text-foreground leading-none">{avgScore}</span>
+                  <span className="mt-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/80">{tStudent("dashboard_avg_score", undefined, locale)}</span>
+                </div>
+              </CardContent>
+            </Card>
 
-          <Card className="min-w-[148px] rounded-2xl border border-border/60 bg-background/95 shadow-sm">
-            <CardContent className="flex items-center gap-3 px-5 py-4">
-              <div className="h-10 w-10 rounded-xl bg-muted flex items-center justify-center text-foreground/80">
-                <Medal size={18} />
-              </div>
-              <div className="flex flex-col">
-                <span className="text-lg font-bold tabular-nums text-foreground leading-none">{passedCount}</span>
-                <span className="mt-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/80">{tStudent("dashboard_passed_exams", undefined, locale)}</span>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </section>
+            <Card className="min-w-[148px] rounded-2xl border border-border/60 bg-background/95 shadow-sm">
+              <CardContent className="flex items-center gap-3 px-5 py-4">
+                <div className="h-10 w-10 rounded-xl bg-muted flex items-center justify-center text-foreground/80">
+                  <Medal size={18} />
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-lg font-bold tabular-nums text-foreground leading-none">{passedCount}</span>
+                  <span className="mt-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/80">{tStudent("dashboard_passed_exams", undefined, locale)}</span>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </section>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
         <div className="lg:col-span-2 space-y-8">
@@ -448,6 +456,11 @@ export function StudentDashboard() {
           </section>
         </div>
       </div>
+      </div>
+
+      <footer className="mt-auto flex justify-center pt-8" aria-label="网站备案信息">
+        <IcpRecordLink />
+      </footer>
     </div>
   );
 }

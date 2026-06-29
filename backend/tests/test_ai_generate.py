@@ -117,6 +117,12 @@ def test_exam_mock_generate_request_defaults_to_deepseek() -> None:
     assert request.model == "deepseek"
 
 
+def test_ai_generate_request_accepts_material_images_up_to_page_limit() -> None:
+    request = AIGenerateRequest(material_images=["data:image/jpeg;base64,abc"] * 1000)
+
+    assert len(request.material_images) == 1000
+
+
 @pytest.mark.asyncio
 async def test_unique_exam_title_for_owner_increments_duplicate_mock_title(
     db_session,

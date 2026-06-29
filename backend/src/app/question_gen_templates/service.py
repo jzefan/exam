@@ -218,6 +218,15 @@ def _manual_seed_to_text(item: Any) -> str:
     answer = str(item.get("answer") or "").strip()
     if answer:
         parts.append(f"答案：{answer}")
+    answer_images = item.get("answer_images")
+    if isinstance(answer_images, list) and answer_images:
+        image_lines = []
+        for image in answer_images:
+            if isinstance(image, dict):
+                image_lines.append(str(image.get("url") or image.get("image_id") or "").strip())
+        image_lines = [line for line in image_lines if line]
+        if image_lines:
+            parts.append("答案图片：\n" + "\n".join(image_lines))
     analysis = str(item.get("analysis") or "").strip()
     if analysis:
         parts.append(f"解析：{analysis}")

@@ -31,6 +31,7 @@ interface PaperAIGenerateDialogProps {
   paperId: string;
   paperTitle: string;
   rootKnowledgePointName?: string | null;
+  generatedPaperState?: unknown;
 }
 
 export function PaperAIGenerateDialog({
@@ -39,6 +40,7 @@ export function PaperAIGenerateDialog({
   paperId,
   paperTitle,
   rootKnowledgePointName,
+  generatedPaperState,
 }: PaperAIGenerateDialogProps) {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -70,7 +72,7 @@ export function PaperAIGenerateDialog({
         description: `已生成 ${result.generated_question_count} 道题目`,
       });
       onOpenChange(false);
-      navigate(`/papers/${result.paper_id}`);
+      navigate(`/papers/${result.paper_id}`, { state: generatedPaperState });
     } catch (error) {
       toast({
         title: "生成失败",

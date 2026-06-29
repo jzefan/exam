@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   Sparkles,
   Trash2,
@@ -78,6 +78,12 @@ type AIGeneratePrefill = {
   node_id?: string;
   node_name?: string;
   course_name?: string;
+};
+
+type AIGenerateNavState = {
+  backTo?: string;
+  backLabel?: string;
+  successTo?: string;
 };
 
 function inferCourseNameForAIGeneration(
@@ -334,6 +340,10 @@ function GenerationPreview({
 
 export function AIGeneratePage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navState = (location.state ?? {}) as AIGenerateNavState;
+  const backTo = navState.backTo ?? "/questions";
+  const successTo = navState.successTo ?? backTo;
   const { toast } = useToast();
   const abortRef = useRef<AbortController | null>(null);
 
@@ -665,7 +675,7 @@ export function AIGeneratePage() {
           ),
         );
         allowNextNavigation();
-        navigate("/questions");
+        navigate(successTo);
         return;
       }
 
@@ -721,7 +731,7 @@ export function AIGeneratePage() {
         ),
       );
       allowNextNavigation();
-      navigate("/questions");
+      navigate(successTo);
     } catch (err) {
       toast({
         title: "保存失败",
@@ -737,6 +747,7 @@ export function AIGeneratePage() {
     navigate,
     questions,
     selectedKPs,
+    successTo,
     toast,
   ]);
 
@@ -750,8 +761,8 @@ export function AIGeneratePage() {
       <PageIntroHeader
         title="AI 智能出题"
         description="配置题型、难度与知识点，AI 一键生成题目，预览无误后保存到题库"
-        onBack={() => navigate("/questions")}
-        backLabel="返回题库"
+        onBack={() => navigate(backTo)}
+        backLabel={navState.backLabel ?? "返回题库"}
         actions={
           <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
             <Bot size={14} />

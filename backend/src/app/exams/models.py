@@ -115,6 +115,7 @@ class ExamStudent(Base, TimestampMixin):
     ai_scored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     graded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    teacher_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     student: Mapped["app.auth.models.User"] = relationship(  # type: ignore[name-defined]
         "User", foreign_keys=[student_id], lazy="joined"

@@ -25,6 +25,7 @@ class ManualSeed(BaseModel):
     options: dict[str, str] | None = None  # 选择题选项 {"A": "...", "B": "..."}
     answer: str | None = Field(default=None, max_length=4000)
     analysis: str | None = Field(default=None, max_length=4000)
+    answer_images: list[dict] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod

@@ -109,6 +109,14 @@ class ManualQuestionScoreResponse(BaseModel):
     feedback: dict[str, Any] = Field(default_factory=dict)
 
 
+class StudentExamCommentRequest(BaseModel):
+    comment: str = Field(default="", max_length=2000)
+
+
+class StudentExamCommentResponse(BaseModel):
+    teacher_comment: str | None = None
+
+
 class StudentExamResultResponse(BaseModel):
     exam_id: uuid.UUID
     title: str
@@ -120,6 +128,7 @@ class StudentExamResultResponse(BaseModel):
     grading_status: str | None = None
     can_view: bool
     blocked_reason: str | None = None
+    teacher_comment: str | None = None
     questions: list[StudentExamResultQuestionResponse] = Field(default_factory=list)
 
 

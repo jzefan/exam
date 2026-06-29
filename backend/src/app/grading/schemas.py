@@ -194,6 +194,7 @@ class GradingInboxCandidateRead(BaseModel):
     task_id: str
     candidate_name: str
     candidate_code: str | None = None
+    student_id: str | None = None
     status: str
     score: float | None = None
     arbitration_required: bool = False
@@ -314,3 +315,14 @@ class GradingPromptFollowUpHistoryRead(BaseModel):
     prompt: str
     created_at: str | None = None
     models: list[GradingPromptFollowUpModelRead] = Field(default_factory=list)
+
+
+class ExamCandidateScoreRead(BaseModel):
+    candidate_key: str
+    objective_score: float | None = None
+    subjective_score: float | None = None
+    total_score: float | None = None
+
+
+class ExamCandidateScoresRead(BaseModel):
+    candidates: list[ExamCandidateScoreRead]
