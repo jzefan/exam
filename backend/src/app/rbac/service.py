@@ -245,9 +245,16 @@ async def create_or_link_student(
         return student, True, True
 
     linked = await ensure_teacher_student_link(db, teacher_id, existing_student.id)
+    existing_student.full_name = data.full_name
+    if data.phone:
+        existing_student.phone = data.phone
+    if data.student_id:
+        existing_student.student_id = data.student_id
+    if data.class_id is not None:
+        existing_student.class_id = data.class_id
     if existing_student.owner_teacher_id is None:
         existing_student.owner_teacher_id = teacher_id
-        await db.flush()
+    await db.flush()
     return existing_student, linked, False
 
 

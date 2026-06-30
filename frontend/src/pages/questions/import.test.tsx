@@ -1,3 +1,4 @@
+import { MemoryRouter } from "react-router-dom";
 import { render, screen, fireEvent, waitFor } from "@/test/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -42,6 +43,34 @@ vi.mock("@refinedev/core", async () => {
     useList: () => useListMock(),
   };
 });
+
+// 编辑弹窗内嵌的题库编辑表单使用 RichTextEditor（tiptap），在 jsdom 下以简单 textarea 替身。
+vi.mock("@/components/ui/rich-text-editor", () => ({
+  RichTextEditor: ({
+    value,
+    onChange,
+    placeholder,
+  }: {
+    value: string;
+    onChange: (value: string) => void;
+    placeholder?: string;
+  }) => (
+    <textarea
+      aria-label={placeholder ?? "富文本编辑器"}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  ),
+  htmlToPlainText: (value: string) => value.replace(/<[^>]+>/g, "").trim(),
+}));
+
+function renderImportPage() {
+  return render(
+    <MemoryRouter>
+      <QuestionImportPage />
+    </MemoryRouter>,
+  );
+}
 
 const baseDraft: QuestionImportDraft = {
   draft_id: "draft-1",
@@ -435,7 +464,7 @@ describe("question import helpers", () => {
 
 describe("QuestionImportPage", () => {
   it("keeps the upload screen focused on file selection", () => {
-    render(<QuestionImportPage />);
+    renderImportPage();
 
     expect(screen.getByRole("button", { name: "选择本地文件" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "快速识别" })).not.toBeInTheDocument();
@@ -460,7 +489,7 @@ describe("QuestionImportPage", () => {
       }),
     );
 
-    render(<QuestionImportPage />);
+    renderImportPage();
 
     const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
     fireEvent.change(screen.getByTestId("question-import-file-input"), {
@@ -518,7 +547,7 @@ describe("QuestionImportPage", () => {
         }),
       );
 
-    render(<QuestionImportPage />);
+    renderImportPage();
 
     const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
     fireEvent.change(screen.getByTestId("question-import-file-input"), {
@@ -571,7 +600,7 @@ describe("QuestionImportPage", () => {
       }),
     );
 
-    render(<QuestionImportPage />);
+    renderImportPage();
 
     const file = new File(["docx-body"], "questions.docx", {
       type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -619,7 +648,7 @@ describe("QuestionImportPage", () => {
       }),
     );
 
-    render(<QuestionImportPage />);
+    renderImportPage();
 
     const file = new File(["docx-body"], "questions.docx", {
       type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -659,7 +688,7 @@ describe("QuestionImportPage", () => {
       .mockResolvedValueOnce(mockJsonResponse([]))
       .mockResolvedValueOnce(mockJsonResponse({ created: 1, existing: 0, failed: 1 }));
 
-    render(<QuestionImportPage />);
+    renderImportPage();
 
     const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
     fireEvent.change(screen.getByTestId("question-import-file-input"), {
@@ -703,7 +732,7 @@ describe("QuestionImportPage", () => {
       .mockResolvedValueOnce(mockJsonResponse([]))
       .mockResolvedValueOnce(mockJsonResponse({ created: 1, existing: 1, failed: 0 }));
 
-    render(<QuestionImportPage />);
+    renderImportPage();
 
     const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
     fireEvent.change(screen.getByTestId("question-import-file-input"), {
@@ -740,7 +769,7 @@ describe("QuestionImportPage", () => {
       .mockResolvedValueOnce(mockJsonResponse([]))
       .mockResolvedValueOnce(mockJsonResponse({ created: 1, existing: 0, failed: 0 }));
 
-    render(<QuestionImportPage />);
+    renderImportPage();
 
     const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
     fireEvent.change(screen.getByTestId("question-import-file-input"), {
@@ -791,7 +820,7 @@ describe("QuestionImportPage", () => {
       }),
     );
 
-    render(<QuestionImportPage />);
+    renderImportPage();
 
     const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
     fireEvent.change(screen.getByTestId("question-import-file-input"), {
@@ -824,7 +853,7 @@ describe("QuestionImportPage", () => {
       }),
     );
 
-    render(<QuestionImportPage />);
+    renderImportPage();
 
     const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
     fireEvent.change(screen.getByTestId("question-import-file-input"), {
@@ -857,7 +886,7 @@ describe("QuestionImportPage", () => {
       }),
     );
 
-    render(<QuestionImportPage />);
+    renderImportPage();
 
     const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
     fireEvent.change(screen.getByTestId("question-import-file-input"), {
@@ -894,7 +923,7 @@ describe("QuestionImportPage", () => {
       )
       .mockResolvedValueOnce(mockJsonResponse([]));
 
-    render(<QuestionImportPage />);
+    renderImportPage();
 
     const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
     fireEvent.change(screen.getByTestId("question-import-file-input"), {
@@ -929,7 +958,7 @@ describe("QuestionImportPage", () => {
       }),
     );
 
-    render(<QuestionImportPage />);
+    renderImportPage();
 
     const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
     fireEvent.change(screen.getByTestId("question-import-file-input"), {

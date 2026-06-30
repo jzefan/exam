@@ -66,6 +66,24 @@ class PaperQuestion(Base, TimestampMixin):
     )
 
 
+class PaperQuestionKnowledgeSuggestion(BaseModel):
+    __tablename__ = "paper_question_knowledge_suggestions"
+
+    paper_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("papers.id", ondelete="CASCADE"), nullable=False)
+    question_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("questions.id", ondelete="CASCADE"), nullable=False
+    )
+    suggested_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("paper_id", "question_id", name="uq_paper_question_knowledge_suggestion"),
+        Index("ix_paper_question_knowledge_suggestions_paper_id", "paper_id"),
+        Index("ix_paper_question_knowledge_suggestions_question_id", "question_id"),
+    )
+
+
 class PaperImportSession(BaseModel):
     __tablename__ = "paper_import_sessions"
 

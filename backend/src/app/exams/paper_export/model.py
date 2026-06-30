@@ -7,6 +7,7 @@ import re
 import uuid
 from collections import Counter
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +16,9 @@ from app.exams.models import Exam
 from app.learning.models import KnowledgePoint
 from app.questions.models import QuestionType
 from app.teacher_courses.models import CourseSemester, ExamSemesterAssignment
+
+if TYPE_CHECKING:
+    from app.papers.models import Paper
 
 # Fixed section order + Chinese titles. Sections only appear when the exam
 # actually contains that question type.
@@ -114,7 +118,10 @@ def _format_answer(qtype: str, answer: object, analysis: str | None) -> str:
     if isinstance(answer, dict):
         if qtype == QuestionType.CHOICE.value:
             correct = answer.get("correct")
-            parts.append(_strip_html(correct) if correct is not None else "")
+            if isinstance(correct, list):
+                parts.append("、".join(_strip_html(item) for item in correct if _strip_html(item)))
+            else:
+                parts.append(_strip_html(correct) if correct is not None else "")
         elif qtype == QuestionType.TRUE_FALSE.value:
             correct = answer.get("correct")
             if isinstance(correct, bool):
@@ -214,15 +221,16 @@ def paper_header_lines(paper: "ExamPaper") -> tuple[str, str, str]:
     return line1, line2, line3
 
 
-def assemble_sections(exam: Exam, *, with_answers: bool) -> tuple[PaperSection, ...]:
-    """Group an exam's questions into ordered sections by question type."""
-    ordered = sorted(exam.exam_questions, key=lambda eq: (eq.order, str(eq.question_id)))
+def assemble_question_item_sections(question_items: object, *, with_answers: bool) -> tuple[PaperSection, ...]:
+    """Group exam/paper question association rows into ordered sections."""
+    ordered = sorted(question_items or [], key=lambda item: (item.order, str(item.question_id)))
     by_type: dict[str, list] = {}
-    for exam_question in ordered:
-        question = exam_question.question
+    for question_item in ordered:
+        question = question_item.question
         if question is None:
             continue
-        by_type.setdefault(question.type.value, []).append(exam_question)
+        qtype = question.type.value if hasattr(question.type, "value") else str(question.type)
+        by_type.setdefault(qtype, []).append(question_item)
 
     sections: list[PaperSection] = []
     section_idx = 0
@@ -232,9 +240,9 @@ def assemble_sections(exam: Exam, *, with_answers: bool) -> tuple[PaperSection, 
             continue
         scores: list[float] = []
         questions: list[PaperQuestion] = []
-        for number, exam_question in enumerate(bucket, start=1):
-            question = exam_question.question
-            score = float(exam_question.score_override if exam_question.score_override is not None else question.score)
+        for number, question_item in enumerate(bucket, start=1):
+            question = question_item.question
+            score = float(question_item.score_override if question_item.score_override is not None else question.score)
             scores.append(score)
             questions.append(
                 PaperQuestion(
@@ -261,6 +269,11 @@ def assemble_sections(exam: Exam, *, with_answers: bool) -> tuple[PaperSection, 
         )
         section_idx += 1
     return tuple(sections)
+
+
+def assemble_sections(exam: Exam, *, with_answers: bool) -> tuple[PaperSection, ...]:
+    """Group an exam's questions into ordered sections by question type."""
+    return assemble_question_item_sections(exam.exam_questions, with_answers=with_answers)
 
 
 async def _resolve_course_name(db: AsyncSession, course_kp_id: uuid.UUID | None) -> str | None:
@@ -310,6 +323,32 @@ async def build_exam_paper(
         exam_title=exam.title,
         class_label=(semester.semester_major_label if semester else None),
         duration_minutes=int(exam.duration_minutes or 0),
+        exam_form=exam_form,
+        total_score=total_score,
+        with_answers=with_answers,
+        sections=sections,
+    )
+
+
+async def build_paper_export(
+    db: AsyncSession,
+    paper: "Paper",
+    *,
+    with_answers: bool,
+    school_name: str,
+    exam_form: str,
+) -> ExamPaper:
+    """Assemble the standard paper export view model for a reusable paper."""
+    sections = assemble_question_item_sections(paper.paper_questions, with_answers=with_answers)
+    course_name = await _resolve_course_name(db, paper.root_knowledge_point_id)
+    total_score = sum(s.total_score for s in sections)
+    return ExamPaper(
+        school_name=school_name,
+        semester_name=None,
+        course_name=course_name,
+        exam_title=paper.title,
+        class_label=None,
+        duration_minutes=0,
         exam_form=exam_form,
         total_score=total_score,
         with_answers=with_answers,

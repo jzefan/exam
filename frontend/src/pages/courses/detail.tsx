@@ -6754,6 +6754,10 @@ export function CourseDetailPage() {
                     backTo: `/courses/${id}?tab=papers`,
                     backLabel: "返回课程详情",
                     courseOrigin: true,
+                    courseKpId: tree?.id ?? id,
+                    ...(semesterFilter
+                      ? { courseSemesterId: semesterFilter }
+                      : {}),
                     publishExamSuccessTo: `/courses/${id}?tab=exams`,
                     publishPracticeSuccessTo: `/courses/${id}?tab=assignments`,
                   }}

@@ -6,7 +6,7 @@ from app.auth.security import create_access_token
 from app.auth.service import create_user
 from app.common.data_visibility import VisibilityScope
 from app.learning.models import KnowledgePoint
-from app.papers.models import Paper, PaperImportSession, PaperQuestion, PaperSourceType
+from app.papers.models import Paper, PaperImportSession, PaperQuestion, PaperQuestionKnowledgeSuggestion, PaperSourceType
 from app.papers.schemas import PaperCreate, PaperImportRecognizeRequest, PaperQuestionItem, PaperUpdate
 from app.papers.service import (
     create_import_session_from_recognition,
@@ -15,7 +15,7 @@ from app.papers.service import (
     list_papers_for_user,
     update_paper,
 )
-from app.questions.models import Question, QuestionType
+from app.questions.models import Question, QuestionSource, QuestionType, question_knowledge_points
 from app.rbac.models import Organization, Role
 
 
@@ -456,6 +456,298 @@ async def test_get_paper_exam_seed_returns_question_items(client, db_session):
     assert payload["question_items"] == [
         {"question_id": str(question.id), "order": 0, "score_override": 6.0}
     ]
+
+
+@pytest.mark.asyncio
+async def test_export_paper_endpoint_reuses_standard_paper_renderer(client, db_session):
+    teacher = await _teacher(db_session, "paper-export-teacher")
+    course = KnowledgePoint(name="数据库课程", description=None, owner_id=teacher.id)
+    db_session.add(course)
+    await db_session.flush()
+    question = Question(
+        type=QuestionType.CHOICE,
+        title="多选题",
+        content={"text": "哪些属于关系型数据库？"},
+        options={"A": "MySQL", "B": "Redis", "C": "PostgreSQL", "D": "MongoDB"},
+        answer={"correct": ["A", "C"]},
+        analysis="MySQL 和 PostgreSQL 是关系型数据库。",
+        difficulty=2,
+        score=6,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    paper = Paper(
+        title="导出试卷",
+        source_type=PaperSourceType.MANUAL,
+        root_knowledge_point_id=course.id,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    db_session.add_all([course, question, paper])
+    await db_session.flush()
+    db_session.add(PaperQuestion(paper_id=paper.id, question_id=question.id, order=0, score_override=6))
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    response = await client.get(
+        f"/api/papers/{paper.id}/export",
+        params={"format": "docx", "answers": "true"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert "attachment" in response.headers["content-disposition"]
+    assert "filename*=UTF-8''" in response.headers["content-disposition"]
+    assert response.content[:4] == b"PK\x03\x04"
+
+    import io
+    import zipfile
+
+    xml = zipfile.ZipFile(io.BytesIO(response.content)).read("word/document.xml").decode("utf-8")
+    assert "A、C" in xml
+    assert "0 分钟" not in xml
+
+
+@pytest.mark.asyncio
+async def test_start_paper_knowledge_recognition_targets_imported_root_only_questions(client, db_session, monkeypatch):
+    teacher = await _teacher(db_session, "paper-kp-recognition-teacher")
+    root = KnowledgePoint(
+        name="数据分析课程",
+        parent_id=None,
+        owner_id=teacher.id,
+        visibility=VisibilityScope.PRIVATE.value,
+    )
+    db_session.add(root)
+    await db_session.flush()
+    child = KnowledgePoint(
+        name="数据清洗",
+        parent_id=root.id,
+        owner_id=teacher.id,
+        visibility=VisibilityScope.PRIVATE.value,
+    )
+    imported_root_question = Question(
+        type=QuestionType.CHOICE,
+        title="导入根知识点题",
+        content={"text": "缺失值处理通常属于哪一步？"},
+        options={"A": "清洗", "B": "展示"},
+        answer={"correct": "A"},
+        difficulty=2,
+        score=6,
+        source=QuestionSource.IMPORTED.value,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    manual_root_question = Question(
+        type=QuestionType.CHOICE,
+        title="手动根知识点题",
+        content={"text": "手动题不应自动识别"},
+        options={"A": "是", "B": "否"},
+        answer={"correct": "A"},
+        difficulty=2,
+        score=6,
+        source=QuestionSource.MANUAL.value,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    imported_child_question = Question(
+        type=QuestionType.CHOICE,
+        title="已有子知识点题",
+        content={"text": "已有具体知识点不应自动识别"},
+        options={"A": "是", "B": "否"},
+        answer={"correct": "A"},
+        difficulty=2,
+        score=6,
+        source=QuestionSource.IMPORTED.value,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    paper = Paper(
+        title="知识点识别试卷",
+        source_type=PaperSourceType.IMPORT,
+        root_knowledge_point_id=root.id,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    imported_root_question.knowledge_points = [root]
+    manual_root_question.knowledge_points = [root]
+    imported_child_question.knowledge_points = [child]
+    db_session.add_all([child, imported_root_question, manual_root_question, imported_child_question, paper])
+    await db_session.flush()
+    db_session.add_all([
+        PaperQuestion(paper_id=paper.id, question_id=imported_root_question.id, order=0, score_override=6),
+        PaperQuestion(paper_id=paper.id, question_id=manual_root_question.id, order=1, score_override=6),
+        PaperQuestion(paper_id=paper.id, question_id=imported_child_question.id, order=2, score_override=6),
+    ])
+    await db_session.commit()
+
+    async def noop_background_task(**_kwargs):
+        return None
+
+    monkeypatch.setattr("app.papers.router.process_existing_question_knowledge_match_job", noop_background_task)
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    response = await client.post(f"/api/papers/{paper.id}/knowledge-recognition")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_count"] == 1
+    assert payload["question_ids"] == [str(imported_root_question.id)]
+
+
+@pytest.mark.asyncio
+async def test_generate_paper_knowledge_suggestions_persists_virtual_only(client, db_session, monkeypatch):
+    teacher = await _teacher(db_session, "paper-kp-suggestion-teacher")
+    root = KnowledgePoint(
+        name="数据分析课程",
+        parent_id=None,
+        owner_id=teacher.id,
+        visibility=VisibilityScope.PRIVATE.value,
+    )
+    db_session.add(root)
+    await db_session.flush()
+    child = KnowledgePoint(
+        name="数据可视化",
+        parent_id=root.id,
+        owner_id=teacher.id,
+        visibility=VisibilityScope.PRIVATE.value,
+    )
+    outside = KnowledgePoint(
+        name="市场营销",
+        parent_id=None,
+        owner_id=teacher.id,
+        visibility=VisibilityScope.PRIVATE.value,
+    )
+    db_session.add_all([child, outside])
+    await db_session.flush()
+
+    root_only_question = Question(
+        type=QuestionType.CHOICE,
+        title="缺失值处理",
+        content={"text": "缺失值处理通常属于哪一步？"},
+        options={"A": "数据清洗", "B": "图表展示"},
+        answer={"correct": "A"},
+        difficulty=2,
+        score=6,
+        source=QuestionSource.IMPORTED.value,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    no_kp_question = Question(
+        type=QuestionType.CHOICE,
+        title="无知识点题",
+        content={"text": "这道题导入后没有任何知识点。"},
+        options={"A": "是", "B": "否"},
+        answer={"correct": "A"},
+        difficulty=2,
+        score=6,
+        source=QuestionSource.IMPORTED.value,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    outside_kp_question = Question(
+        type=QuestionType.CHOICE,
+        title="课程外知识点题",
+        content={"text": "这道题错误关联到了课程外知识点。"},
+        options={"A": "是", "B": "否"},
+        answer={"correct": "A"},
+        difficulty=2,
+        score=6,
+        source=QuestionSource.IMPORTED.value,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    child_question = Question(
+        type=QuestionType.CHOICE,
+        title="柱状图读取",
+        content={"text": "柱状图适合展示什么？"},
+        options={"A": "分类对比", "B": "文本朗读"},
+        answer={"correct": "A"},
+        difficulty=2,
+        score=6,
+        source=QuestionSource.IMPORTED.value,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    paper = Paper(
+        title="虚拟知识点建议试卷",
+        source_type=PaperSourceType.IMPORT,
+        root_knowledge_point_id=root.id,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    root_only_question.knowledge_points = [root]
+    outside_kp_question.knowledge_points = [outside]
+    child_question.knowledge_points = [child]
+    db_session.add_all([root_only_question, no_kp_question, outside_kp_question, child_question, paper])
+    await db_session.flush()
+    stale_suggestion = PaperQuestionKnowledgeSuggestion(
+        paper_id=paper.id,
+        question_id=child_question.id,
+        suggested_name="旧建议",
+        reason="已有子知识点后不应继续展示。",
+        created_by=teacher.id,
+    )
+    db_session.add(stale_suggestion)
+    db_session.add_all([
+        PaperQuestion(paper_id=paper.id, question_id=root_only_question.id, order=0, score_override=6),
+        PaperQuestion(paper_id=paper.id, question_id=no_kp_question.id, order=1, score_override=6),
+        PaperQuestion(paper_id=paper.id, question_id=outside_kp_question.id, order=2, score_override=6),
+        PaperQuestion(paper_id=paper.id, question_id=child_question.id, order=3, score_override=6),
+    ])
+    await db_session.commit()
+
+    async def fake_deepseek_json(prompt):
+        if "无知识点题" in prompt:
+            return {
+                "suggested_name": "导入补全",
+                "reason": "题目未关联知识点。",
+            }
+        if "课程外知识点题" in prompt:
+            return {
+                "suggested_name": "课程范围校正",
+                "reason": "题目未覆盖当前课程子知识点。",
+            }
+        return {
+            "suggested_name": "数据清洗",
+            "reason": "题干考查缺失值处理。",
+        }
+
+    monkeypatch.setattr("app.papers.service._request_deepseek_json", fake_deepseek_json)
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    response = await client.post(f"/api/papers/{paper.id}/knowledge-suggestions")
+
+    assert response.status_code == 200
+    payload = response.json()
+    suggestions_by_question_id = {
+        item["question_id"]: item
+        for item in payload["suggestions"]
+    }
+    assert len(suggestions_by_question_id) == 3
+    assert suggestions_by_question_id[str(root_only_question.id)]["suggested_name"] == "数据清洗"
+    assert suggestions_by_question_id[str(no_kp_question.id)]["suggested_name"] == "导入补全"
+    assert suggestions_by_question_id[str(outside_kp_question.id)]["suggested_name"] == "课程范围校正"
+    assert all(item["suggested_name"] != "旧建议" for item in payload["suggestions"])
+
+    detail_response = await client.get(f"/api/papers/{paper.id}")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert len(detail["knowledge_suggestions"]) == 3
+    assert all(item["suggested_name"] != "旧建议" for item in detail["knowledge_suggestions"])
+
+    kp_rows = (
+        await db_session.execute(
+            select(question_knowledge_points.c.knowledge_point_id).where(
+                question_knowledge_points.c.question_id == root_only_question.id
+            )
+        )
+    ).scalars().all()
+    assert kp_rows == [root.id]
+    suggestion_count = await db_session.scalar(select(PaperQuestionKnowledgeSuggestion))
+    assert suggestion_count is not None
+    assert stale_suggestion.deleted_at is not None
 
 
 @pytest.mark.asyncio

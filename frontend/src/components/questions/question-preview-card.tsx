@@ -112,13 +112,11 @@ const QUESTION_SOURCE_META: Record<
 > = {
   manual: {
     label: "手动添加",
-    className:
-      "border border-border bg-muted text-muted-foreground",
+    className: "border border-border bg-muted text-muted-foreground",
   },
   ai_generated: {
     label: "AI 生成",
-    className:
-      "border border-primary/30 bg-primary/10 text-primary",
+    className: "border border-primary/30 bg-primary/10 text-primary",
   },
   imported: {
     label: "导入",
@@ -339,7 +337,9 @@ function ChoiceOptions({
             key={key}
             className={cn(
               "text-sm",
-              isCorrect ? "font-semibold text-primary" : "text-muted-foreground",
+              isCorrect
+                ? "font-semibold text-primary"
+                : "text-muted-foreground",
               layout === "single-row"
                 ? "min-w-0 whitespace-nowrap"
                 : "min-w-0 break-words",
@@ -417,9 +417,9 @@ export function QuestionPreviewCard({
     ? isClickExpanded || isExpanded
     : expandOnHover
       ? isHoverExpanded
-    : mode === "detailed"
-      ? isExpanded
-      : defaultExpanded;
+      : mode === "detailed"
+        ? isExpanded
+        : defaultExpanded;
   const html = getQuestionContentHtml(question);
   const normalizedType = normalizeQuestionType(question.type);
   const isCode = normalizedType === "code";
@@ -559,59 +559,59 @@ export function QuestionPreviewCard({
     >
       {/* header */}
       {!hideHeader ? (
-      <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-1 sm:px-5">
-        {typeof index === "number" ? (
-          <span className="min-w-[1.25rem] font-serif text-lg font-bold tabular-nums text-foreground">
-            {index}
-          </span>
-        ) : null}
-        {!hideTypeBadge ? (
-          <span className="inline-flex shrink-0 items-center whitespace-nowrap rounded-md bg-secondary px-2 py-0.5 text-xs font-semibold text-secondary-foreground">
-            {typeLabel}
-          </span>
-        ) : null}
-        {(() => {
-          const meta = QUESTION_SOURCE_META[question.source ?? "manual"];
-          return (
-            <span
-              className={cn(
-                "inline-flex shrink-0 items-center whitespace-nowrap rounded-md px-2 py-0.5 text-xs font-medium",
-                meta.className,
-              )}
-            >
-              {meta.label}
+        <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-1 sm:px-5">
+          {typeof index === "number" ? (
+            <span className="min-w-[1.05rem] font-serif text-base font-bold tabular-nums text-foreground">
+              {index}
             </span>
-          );
-        })()}
-        {headerKnowledge ? (
-          <span className="hidden min-w-0 truncate text-xs text-muted-foreground sm:inline">
-            {headerKnowledge}
-          </span>
-        ) : null}
-
-        <div className="flex-1" />
-
-        {!hideScoreAndDifficulty ? (
-          <>
-            <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap">
-              <span className="hidden whitespace-nowrap text-xs text-muted-foreground sm:inline">
-                {difficultyLabel}
+          ) : null}
+          {!hideTypeBadge ? (
+            <span className="inline-flex shrink-0 items-center whitespace-nowrap rounded-md bg-secondary px-2 py-0.5 text-xs font-semibold text-secondary-foreground">
+              {typeLabel}
+            </span>
+          ) : null}
+          {(() => {
+            const meta = QUESTION_SOURCE_META[question.source ?? "manual"];
+            return (
+              <span
+                className={cn(
+                  "inline-flex shrink-0 items-center whitespace-nowrap rounded-md px-2 py-0.5 text-xs font-medium",
+                  meta.className,
+                )}
+              >
+                {meta.label}
               </span>
-              <DifficultyBars level={question.difficulty} />
+            );
+          })()}
+          {headerKnowledge ? (
+            <span className="hidden min-w-0 truncate text-xs text-muted-foreground sm:inline">
+              {headerKnowledge}
             </span>
-            <span className="h-4 w-px bg-border" />
-            <span className="whitespace-nowrap font-serif text-sm font-semibold tabular-nums text-foreground">
-              {question.score}
-              <span className="ml-0.5 text-xs font-medium text-muted-foreground">
-                分
+          ) : null}
+
+          <div className="flex-1" />
+
+          {!hideScoreAndDifficulty ? (
+            <>
+              <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap">
+                <span className="hidden whitespace-nowrap text-xs text-muted-foreground sm:inline">
+                  {difficultyLabel}
+                </span>
+                <DifficultyBars level={question.difficulty} />
               </span>
-            </span>
-          </>
-        ) : null}
-        {trailing ? (
-          <span className="ml-1 inline-flex items-center">{trailing}</span>
-        ) : null}
-      </div>
+              <span className="h-4 w-px bg-border" />
+              <span className="whitespace-nowrap font-serif text-sm font-semibold tabular-nums text-foreground">
+                {question.score}
+                <span className="ml-0.5 text-xs font-medium text-muted-foreground">
+                  分
+                </span>
+              </span>
+            </>
+          ) : null}
+          {trailing ? (
+            <span className="ml-1 inline-flex items-center">{trailing}</span>
+          ) : null}
+        </div>
       ) : null}
 
       {/* body */}

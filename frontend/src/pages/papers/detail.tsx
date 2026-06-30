@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useOne } from "@refinedev/core";
 import {
   Copy,
@@ -9,20 +9,47 @@ import {
   List,
   Loader2,
   Send,
+  SlidersHorizontal,
   Sparkles,
 } from "lucide-react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { TooltipButton } from "@/components/ui/tooltip-button";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/components/ui/drawer";
 import { PageIntroHeader } from "@/components/ui/page-intro-header";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
 import type { IPaperDetail, QuestionType } from "@/types";
+import type { ExamQuestionFormItem } from "@/pages/exams/components/exam-form-utils";
+import {
+  buildPaperPreviewItems,
+  buildQuestionTypeSummaries,
+  getPaperQuestionAnchorId,
+  type QuestionTypeSummary,
+} from "@/pages/exams/components/paper-view-utils";
+import {
+  PaperScorePanel,
+  type ScoreViewMode,
+} from "@/pages/exams/components/PaperScorePanel";
 
 import { paperApiRequest } from "./api";
 import { PaperAIGenerateDialog } from "./ai-generate-dialog";
+import {
+  applyPaperTypeScoreAllocation,
+  arePaperScoreItemsEqual,
+  buildPaperScoreItems,
+  buildPaperScoreUpdatePayload,
+  totalPaperScore,
+} from "./paper-detail-score";
 import {
   PaperQuickPublishDialog,
   type PaperQuickPublishMode,
@@ -47,6 +74,8 @@ type PaperDetailNavState = {
   backTo?: string;
   backLabel?: string;
   courseOrigin?: boolean;
+  courseKpId?: string;
+  courseSemesterId?: string;
   publishExamSuccessTo?: string;
   publishPracticeSuccessTo?: string;
 };
@@ -75,31 +104,200 @@ export function PaperDetailPage() {
   const [quickPublishMode, setQuickPublishMode] = useState<PaperQuickPublishMode | null>(null);
   const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [scoreDrawerOpen, setScoreDrawerOpen] = useState(false);
+  const [currentPaper, setCurrentPaper] = useState<IPaperDetail | null>(null);
+  const [scoreItems, setScoreItems] = useState<ExamQuestionFormItem[]>([]);
+  const [initialScoreItems, setInitialScoreItems] = useState<ExamQuestionFormItem[]>([]);
+  const [scoreMode, setScoreMode] = useState<ScoreViewMode>("order");
+  const [pendingJumpQuestionId, setPendingJumpQuestionId] = useState<string | null>(null);
+  const [typeScoreDrafts, setTypeScoreDrafts] = useState<
+    Partial<Record<QuestionType, string>>
+  >({});
+  const [scoreSaving, setScoreSaving] = useState(false);
+  const typeScoreDraftDefaultsRef = useRef<
+    Partial<Record<QuestionType, string>>
+  >({});
 
-  const { result: paper, query } = useOne<IPaperDetail>({
+  const { result: fetchedPaper, query } = useOne<IPaperDetail>({
     resource: "papers",
     id: id!,
     queryOptions: { enabled: Boolean(id) },
   });
 
+  useEffect(() => {
+    if (!fetchedPaper) return;
+    const nextScoreItems = buildPaperScoreItems(fetchedPaper);
+    setCurrentPaper(fetchedPaper);
+    setScoreItems(nextScoreItems);
+    setInitialScoreItems(nextScoreItems);
+    setTypeScoreDrafts({});
+    typeScoreDraftDefaultsRef.current = {};
+  }, [fetchedPaper]);
+
+  const paperQuestions = useMemo(
+    () =>
+      (currentPaper?.questions ?? [])
+        .map((item) => item.question)
+        .filter((question): question is NonNullable<typeof question> => Boolean(question)),
+    [currentPaper?.questions],
+  );
+
+  const previewItems = useMemo(
+    () => buildPaperPreviewItems(scoreItems, paperQuestions),
+    [paperQuestions, scoreItems],
+  );
+
+  const questionTypeSummaries = useMemo(
+    () => buildQuestionTypeSummaries(previewItems),
+    [previewItems],
+  );
+
+  const questionTypeDraftDefaults = useMemo(
+    () =>
+      questionTypeSummaries.reduce<Partial<Record<QuestionType, string>>>(
+        (acc, summary) => {
+          acc[summary.type] =
+            summary.totalScore > 0 ? String(summary.totalScore) : "";
+          return acc;
+        },
+        {},
+      ),
+    [questionTypeSummaries],
+  );
+
+  useEffect(() => {
+    const previousDefaults = typeScoreDraftDefaultsRef.current;
+
+    setTypeScoreDrafts((prev) => {
+      const next = questionTypeSummaries.reduce<
+        Partial<Record<QuestionType, string>>
+      >((acc, summary) => {
+        const defaultValue = questionTypeDraftDefaults[summary.type] ?? "";
+        const previousDefaultValue = previousDefaults[summary.type];
+        const currentValue = prev[summary.type];
+        acc[summary.type] =
+          currentValue === undefined || currentValue === previousDefaultValue
+            ? defaultValue
+            : currentValue;
+        return acc;
+      }, {});
+
+      return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+    });
+
+    typeScoreDraftDefaultsRef.current = questionTypeDraftDefaults;
+  }, [questionTypeDraftDefaults, questionTypeSummaries]);
+
+  const scoreItemByQuestionId = useMemo(
+    () => new Map(scoreItems.map((item) => [item.question_id, item])),
+    [scoreItems],
+  );
+
+  const scoreDirty = !arePaperScoreItemsEqual(scoreItems, initialScoreItems);
+  const scoreTotal = totalPaperScore(scoreItems);
+
   const typeBuckets = useMemo(() => {
-    if (!paper) return [] as Array<{ type: string; count: number; totalScore: number }>;
+    if (!currentPaper) return [] as Array<{ type: string; count: number; totalScore: number }>;
     const map = new Map<string, { type: string; count: number; totalScore: number }>();
-    for (const item of paper.questions) {
+    for (const item of currentPaper.questions) {
       const key = item.question?.type ?? "unknown";
       const bucket = map.get(key) ?? { type: key, count: 0, totalScore: 0 };
       bucket.count += 1;
-      bucket.totalScore += item.score_override ?? item.question?.score ?? 0;
+      bucket.totalScore += scoreItemByQuestionId.get(item.question_id)?.score_override ?? 0;
       map.set(key, bucket);
     }
     return Array.from(map.values()).sort((a, b) => b.count - a.count);
-  }, [paper]);
+  }, [currentPaper, scoreItemByQuestionId]);
 
   const filteredQuestions = useMemo(() => {
-    if (!paper) return [];
-    if (selectedTypes.size === 0) return paper.questions;
-    return paper.questions.filter((item) => selectedTypes.has(item.question?.type ?? "unknown"));
-  }, [paper, selectedTypes]);
+    if (!currentPaper) return [];
+    if (selectedTypes.size === 0) return currentPaper.questions;
+    return currentPaper.questions.filter((item) => selectedTypes.has(item.question?.type ?? "unknown"));
+  }, [currentPaper, selectedTypes]);
+
+  useEffect(() => {
+    if (!pendingJumpQuestionId) return;
+    if (!filteredQuestions.some((item) => item.question_id === pendingJumpQuestionId)) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      document
+        .getElementById(getPaperQuestionAnchorId(pendingJumpQuestionId))
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+      setPendingJumpQuestionId(null);
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [filteredQuestions, pendingJumpQuestionId]);
+
+  const updateQuestionScore = (questionId: string, value: string) => {
+    const parsed = Number(value);
+    setScoreItems((prev) =>
+      prev.map((item) =>
+        item.question_id === questionId
+          ? {
+              ...item,
+              score_override: Number.isFinite(parsed) ? Math.max(0, parsed) : 0,
+            }
+          : item,
+      ),
+    );
+  };
+
+  const handleApplyTypeScore = (summary: QuestionTypeSummary) => {
+    const parsed = Number(typeScoreDrafts[summary.type]);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      toast({
+        title: "题型总分无效",
+        description: `${getQuestionTypeLabel(summary.type)}的总分必须大于 0。`,
+        variant: "destructive",
+      });
+      return;
+    }
+    setScoreItems((prev) => applyPaperTypeScoreAllocation(prev, summary, parsed));
+  };
+
+  const handleSaveScores = async () => {
+    if (!currentPaper || scoreSaving) return;
+    const invalidItem = scoreItems.find(
+      (item) =>
+        !Number.isFinite(Number(item.score_override)) ||
+        Number(item.score_override) < 0,
+    );
+    if (invalidItem) {
+      toast({
+        title: "分数无效",
+        description: "每道题分数必须大于或等于 0。",
+        variant: "destructive",
+      });
+      return;
+    }
+    setScoreSaving(true);
+    try {
+      const updated = await paperApiRequest<IPaperDetail>(`/papers/${currentPaper.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(buildPaperScoreUpdatePayload(scoreItems)),
+      });
+      const nextScoreItems = buildPaperScoreItems(updated);
+      setCurrentPaper(updated);
+      setScoreItems(nextScoreItems);
+      setInitialScoreItems(nextScoreItems);
+      toast({
+        title: "分数已保存",
+        description: `当前试卷总分 ${updated.total_score} 分。`,
+      });
+      await query.refetch();
+    } catch (error) {
+      toast({
+        title: "保存分数失败",
+        description: error instanceof Error ? error.message : "请稍后重试",
+        variant: "destructive",
+      });
+    } finally {
+      setScoreSaving(false);
+    }
+  };
 
   const toggleType = (type: string) => {
     setSelectedTypes((prev) => {
@@ -125,22 +323,29 @@ export function PaperDetailPage() {
     });
   };
 
+  const jumpToQuestion = (questionId: string) => {
+    setExpandedIds((prev) => new Set(prev).add(questionId));
+    setSelectedTypes(new Set());
+    setPendingJumpQuestionId(questionId);
+  };
+
   const handleCopy = async () => {
-    if (!paper) return;
+    if (!currentPaper) return;
     setBusy(true);
     try {
       const created = await paperApiRequest<IPaperDetail>("/papers", {
         method: "POST",
         body: JSON.stringify({
-          title: `${paper.title}（复制）`,
-          description: paper.description,
+          title: `${currentPaper.title}（复制）`,
+          description: currentPaper.description,
           source_type: "manual",
-          source_paper_id: paper.id,
-          root_knowledge_point_id: paper.root_knowledge_point_id,
-          question_items: paper.questions.map((item) => ({
+          source_paper_id: currentPaper.id,
+          root_knowledge_point_id: currentPaper.root_knowledge_point_id,
+          question_items: currentPaper.questions.map((item) => ({
             question_id: item.question_id,
             order: item.order,
-            score_override: item.score_override,
+            score_override:
+              scoreItemByQuestionId.get(item.question_id)?.score_override ?? item.score_override,
           })),
         }),
       });
@@ -157,7 +362,7 @@ export function PaperDetailPage() {
     }
   };
 
-  if (query.isLoading || !paper) {
+  if (query.isLoading || !currentPaper) {
     return (
       <div className="mx-auto flex w-full max-w-[1280px] items-center justify-center px-6 py-20 text-muted-foreground">
         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -166,7 +371,7 @@ export function PaperDetailPage() {
     );
   }
 
-  const archived = Boolean(paper.archived_at);
+  const archived = Boolean(currentPaper.archived_at);
   const handleBack = () => {
     navigate(backTo, {
       state: navState.courseOrigin ? { courseOrigin: true } : undefined,
@@ -176,63 +381,63 @@ export function PaperDetailPage() {
   return (
     <div className="mx-auto w-full max-w-[1280px]">
       <PageIntroHeader
-        title={paper.title}
-        description={paper.description || "试卷详情：查看题目构成、题型分布，并可复制、AI 再生成或直接发起考试。"}
+        title={currentPaper.title}
+        description={currentPaper.description || "试卷详情：查看题目构成、题型分布，并可复制、AI 再生成或直接发起考试。"}
         onBack={handleBack}
         backLabel={backLabel}
         fullBleed
         className="mb-6"
         actions={
           <div className="flex items-center gap-2">
-            <Button
+            <TooltipButton
               variant="outline"
               size="sm"
               onClick={handleCopy}
               disabled={busy}
-              title="复制出一份新试卷"
+              tooltip="复制出一份新试卷"
             >
               <Copy className="h-4 w-4" />
               复制
-            </Button>
-            <Button
+            </TooltipButton>
+            <TooltipButton
               variant="outline"
               size="sm"
               onClick={() => setAiDialogOpen(true)}
               disabled={busy || archived}
-              title="基于当前试卷 AI 生成新试卷"
+              tooltip="基于当前试卷 AI 生成新试卷"
             >
               <Sparkles className="h-4 w-4" />
               AI 生成新试卷
-            </Button>
+            </TooltipButton>
             <Separator orientation="vertical" className="mx-1 h-6" />
-            <Button
+            <TooltipButton
               variant="outline"
               size="sm"
               onClick={() => setQuickPublishMode("practice")}
-              disabled={archived || paper.questions.length === 0}
-              title="基于当前试卷快速发布一次练习"
+              disabled={archived || currentPaper.questions.length === 0}
+              tooltip="基于当前试卷快速发布一次练习"
             >
               <Send className="h-4 w-4" />
               发布练习
-            </Button>
-            <Button
+            </TooltipButton>
+            <TooltipButton
               size="sm"
               onClick={() => setQuickPublishMode("exam")}
-              disabled={archived || paper.questions.length === 0}
-              title="基于当前试卷快速创建一场考试"
+              disabled={archived || currentPaper.questions.length === 0}
+              tooltip="基于当前试卷快速创建一场考试"
             >
               <FilePlus2 className="h-4 w-4" />
               创建考试
-            </Button>
-            <Button
+            </TooltipButton>
+            <TooltipButton
               variant="outline"
               size="sm"
               onClick={handleBack}
-              title={backLabel}
+              tooltip={backLabel}
             >
               <List className="h-4 w-4" />
               返回列表
-            </Button>
+            </TooltipButton>
           </div>
         }
       />
@@ -260,28 +465,28 @@ export function PaperDetailPage() {
               <div>
                 <dt className="text-xs text-muted-foreground">来源</dt>
                 <dd className="mt-0.5 font-medium">
-                  {SOURCE_TYPE_LABELS[paper.source_type] ?? paper.source_type}
+                  {SOURCE_TYPE_LABELS[currentPaper.source_type] ?? currentPaper.source_type}
                 </dd>
               </div>
               <div>
                 <dt className="text-xs text-muted-foreground">主知识点</dt>
-                <dd className="mt-0.5 font-medium">{paper.root_knowledge_point?.name ?? "—"}</dd>
+                <dd className="mt-0.5 font-medium">{currentPaper.root_knowledge_point?.name ?? "—"}</dd>
               </div>
               <div>
                 <dt className="text-xs text-muted-foreground">题目数 / 总分</dt>
                 <dd className="mt-0.5 font-medium">
-                  <span className="tabular-nums">{paper.question_count}</span>
+                  <span className="tabular-nums">{currentPaper.question_count}</span>
                   <span className="mx-1 text-muted-foreground">/</span>
-                  <span className="tabular-nums">{paper.total_score}</span>
+                  <span className="tabular-nums">{scoreTotal}</span>
                 </dd>
               </div>
               <div>
                 <dt className="text-xs text-muted-foreground">创建人</dt>
-                <dd className="mt-0.5 font-medium">{paper.created_by_name || "—"}</dd>
+                <dd className="mt-0.5 font-medium">{currentPaper.created_by_name || "—"}</dd>
               </div>
               <div>
                 <dt className="text-xs text-muted-foreground">创建时间</dt>
-                <dd className="mt-0.5 font-medium tabular-nums">{formatDateTime(paper.created_at)}</dd>
+                <dd className="mt-0.5 font-medium tabular-nums">{formatDateTime(currentPaper.created_at)}</dd>
               </div>
             </dl>
           </section>
@@ -322,7 +527,7 @@ export function PaperDetailPage() {
                   >
                     <span>全部</span>
                     <span className="tabular-nums text-xs text-muted-foreground">
-                      {paper.questions.length}
+                      {currentPaper.questions.length}
                     </span>
                   </button>
                 </li>
@@ -362,7 +567,7 @@ export function PaperDetailPage() {
                 <h2 className="text-sm font-semibold">题目列表</h2>
                 <span className="text-xs text-muted-foreground">
                   共 {filteredQuestions.length}
-                  {selectedTypes.size > 0 ? ` / ${paper.questions.length}` : ""} 题
+                  {selectedTypes.size > 0 ? ` / ${currentPaper.questions.length}` : ""} 题
                 </span>
               </div>
               <div className="flex items-center gap-2">
@@ -393,12 +598,27 @@ export function PaperDetailPage() {
                     {expandedIds.size > 0 ? "全部收起" : "全部展开"}
                   </Button>
                 ) : null}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => setScoreDrawerOpen(true)}
+                >
+                  <SlidersHorizontal data-icon="inline-start" />
+                  设置分数
+                  {scoreDirty ? (
+                    <span className="ml-1 rounded-full bg-primary px-1.5 py-0.5 text-[10px] text-primary-foreground">
+                      未保存
+                    </span>
+                  ) : null}
+                </Button>
               </div>
             </div>
 
             {filteredQuestions.length === 0 ? (
               <div className="px-5 py-16 text-center text-sm text-muted-foreground">
-                {paper.questions.length === 0 ? "暂无题目" : "当前筛选下没有题目"}
+                {currentPaper.questions.length === 0 ? "暂无题目" : "当前筛选下没有题目"}
               </div>
             ) : (
               <div className="space-y-2 p-3 sm:p-4">
@@ -414,10 +634,14 @@ export function PaperDetailPage() {
                     );
                   }
                   const isExpanded = expandedIds.has(item.question_id);
-                  const score = item.score_override ?? item.question.score;
+                  const score =
+                    scoreItemByQuestionId.get(item.question_id)?.score_override ??
+                    item.score_override ??
+                    item.question.score;
                   return (
                     <button
                       key={item.question_id}
+                      id={getPaperQuestionAnchorId(item.question_id)}
                       type="button"
                       onClick={() => toggleExpand(item.question_id)}
                       className="block w-full text-left"
@@ -443,9 +667,9 @@ export function PaperDetailPage() {
       <PaperAIGenerateDialog
         open={aiDialogOpen}
         onOpenChange={setAiDialogOpen}
-        paperId={paper.id}
-        paperTitle={paper.title}
-        rootKnowledgePointName={paper.root_knowledge_point?.name}
+        paperId={currentPaper.id}
+        paperTitle={currentPaper.title}
+        rootKnowledgePointName={currentPaper.root_knowledge_point?.name}
         generatedPaperState={navState}
       />
 
@@ -453,7 +677,9 @@ export function PaperDetailPage() {
         <PaperQuickPublishDialog
           open={Boolean(quickPublishMode)}
           mode={quickPublishMode}
-          paper={paper}
+          paper={currentPaper}
+          courseKpId={navState.courseKpId}
+          courseSemesterId={navState.courseSemesterId}
           onOpenChange={(next) => {
             if (!next) setQuickPublishMode(null);
           }}
@@ -466,6 +692,54 @@ export function PaperDetailPage() {
           }}
         />
       ) : null}
+
+      <Drawer open={scoreDrawerOpen} onOpenChange={setScoreDrawerOpen} direction="right">
+        <DrawerContent className="bottom-0 right-0 top-0 w-[min(460px,calc(100vw-1rem))] border-l border-border shadow-2xl">
+          <DrawerHeader>
+            <div className="min-w-0">
+              <DrawerTitle>设置分数</DrawerTitle>
+              <DrawerDescription>
+                按顺序或题型调整分值，点击题号可回到题目位置。
+              </DrawerDescription>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setScoreDrawerOpen(false)}
+            >
+              关闭
+            </Button>
+          </DrawerHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+            <PaperScorePanel
+              items={previewItems}
+              questionItems={scoreItems}
+              mode={scoreMode}
+              onModeChange={setScoreMode}
+              onQuestionScoreChange={updateQuestionScore}
+              questionTypeSummaries={questionTypeSummaries}
+              typeScoreDrafts={typeScoreDrafts}
+              onTypeDraftChange={(type, value) =>
+                setTypeScoreDrafts((prev) => ({
+                  ...prev,
+                  [type]: value,
+                }))
+              }
+              onApplyTypeScore={handleApplyTypeScore}
+              totalScore={scoreTotal}
+              dirty={scoreDirty}
+              saving={scoreSaving}
+              onSave={handleSaveScores}
+              title={`总题量 ${currentPaper.question_count} 题`}
+              description="两个视角都只显示题号；改分后记得保存。"
+              saveLabel="保存试卷分数"
+              compact
+              onJumpToQuestion={jumpToQuestion}
+            />
+          </div>
+        </DrawerContent>
+      </Drawer>
     </div>
   );
 }

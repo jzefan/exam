@@ -88,6 +88,10 @@ const ExamPaperViewPage = lazyNamed(() => import("./pages/exams/view"), "ExamPap
 const PaperListPage = lazyNamed(() => import("./pages/papers/list"), "PaperListPage");
 const PaperDetailPage = lazyNamed(() => import("./pages/papers/detail"), "PaperDetailPage");
 const PaperImportPage = lazyNamed(() => import("./pages/papers/import"), "PaperImportPage");
+const PaperKnowledgeCoveragePage = lazyNamed(
+  () => import("./pages/papers/knowledge-coverage"),
+  "PaperKnowledgeCoveragePage",
+);
 const ExamTaking = lazyNamed(() => import("./pages/student/exam-taking"), "ExamTaking");
 const EditorPage = lazyNamed(() => import("./pages/job-models/editor"), "EditorPage");
 const JobModelGraphWorkspace = lazyNamed(
@@ -298,6 +302,7 @@ function App() {
                     <Route path="/papers">
                       <Route index element={<PaperListPage />} />
                       <Route path="import" element={<PaperImportPage />} />
+                      <Route path=":id/knowledge-coverage" element={<PaperKnowledgeCoveragePage />} />
                       <Route path=":id" element={<PaperDetailPage />} />
                     </Route>
                     <Route path="/courses">

@@ -26,6 +26,8 @@ interface PaperQuickPublishDialogProps {
   onOpenChange: (open: boolean) => void;
   paper: IPaperDetail;
   mode: PaperQuickPublishMode;
+  courseKpId?: string;
+  courseSemesterId?: string;
   onPublished?: (examId: string) => void;
 }
 
@@ -42,6 +44,8 @@ export function PaperQuickPublishDialog({
   onOpenChange,
   paper,
   mode,
+  courseKpId,
+  courseSemesterId,
   onPublished,
 }: PaperQuickPublishDialogProps) {
   const { toast } = useToast();
@@ -92,6 +96,8 @@ export function PaperQuickPublishDialog({
         })),
         question_ids: paper.questions.map((item) => item.question_id),
         student_ids: studentIds,
+        ...(courseKpId ? { course_kp_id: courseKpId } : {}),
+        ...(courseSemesterId ? { course_semester_id: courseSemesterId } : {}),
       };
 
       const created = await paperApiRequest<{ id: string }>("/exams", {

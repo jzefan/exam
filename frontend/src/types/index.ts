@@ -141,6 +141,16 @@ export interface IPaperQuestion {
   question: IQuestion | null;
 }
 
+export interface IPaperQuestionKnowledgeSuggestion {
+  id: string;
+  paper_id: string;
+  question_id: string;
+  suggested_name: string;
+  reason: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface IPaper {
   id: string;
   title: string;
@@ -162,6 +172,7 @@ export interface IPaper {
 
 export interface IPaperDetail extends IPaper {
   questions: IPaperQuestion[];
+  knowledge_suggestions?: IPaperQuestionKnowledgeSuggestion[];
 }
 
 export interface IPaperImportImageInput {

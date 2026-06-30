@@ -72,6 +72,53 @@ describe("QuestionSelector", () => {
     });
   });
 
+  it("calls the edit handler from the expanded question preview", async () => {
+    const question = {
+      id: "question-edit",
+      type: "choice",
+      title: "默认标题",
+      content: { text: "可以被编辑的题目" },
+      options: { A: "选项 A", B: "选项 B" },
+      answer: { correct: "A" },
+      analysis: "解析",
+      difficulty: 3,
+      score: 5,
+      usage_count: 0,
+      question_bank_id: "bank-1",
+      question_bank_name: "网络基础",
+      tags: [],
+      knowledge_points: [],
+      created_by: "user-1",
+      created_by_name: "Teacher",
+      created_at: "2026-04-01T00:00:00Z",
+      updated_at: "2026-04-01T00:00:00Z",
+    };
+    useListMock.mockImplementation(({ resource }: { resource: string }) => {
+      if (resource === "question-banks") {
+        return { query: { data: { data: [] }, isLoading: false } };
+      }
+
+      return {
+        query: {
+          data: {
+            data: [question],
+            total: 1,
+          },
+          isLoading: false,
+        },
+      };
+    });
+
+    const user = userEvent.setup();
+    const onEditQuestion = vi.fn();
+    render(<QuestionSelector onChange={vi.fn()} selectedIds={[]} onEditQuestion={onEditQuestion} />);
+
+    await user.click(screen.getByRole("button", { name: /可以被编辑的题目/i }));
+    await user.click(await screen.findByRole("button", { name: "编辑题目" }));
+
+    expect(onEditQuestion).toHaveBeenCalledWith(question);
+  });
+
   it("renders latex content in the manual selection list row", async () => {
     useListMock.mockImplementation(({ resource }: { resource: string }) => {
       if (resource === "question-banks") {

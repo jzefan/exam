@@ -226,8 +226,13 @@ def render_docx(paper: ExamPaper) -> bytes:
     _line(doc, line2, size=16, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2)
     _line(doc, line3, size=14, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2)
 
-    # Line 4: time limit + exam form.
-    info = f"答题时限：{paper.duration_minutes} 分钟    考试形式：{paper.exam_form}"
+    # Line 4: time limit + exam form. Reusable paper exports may not carry a
+    # duration, so omit the time-limit fragment instead of rendering 0 minutes.
+    info = (
+        f"答题时限：{paper.duration_minutes} 分钟    考试形式：{paper.exam_form}"
+        if paper.duration_minutes > 0
+        else f"考试形式：{paper.exam_form}"
+    )
     _line(doc, info, size=12, align=WD_ALIGN_PARAGRAPH.CENTER, space_after=4)
 
     # Line 5: class / id / name / score, centered.

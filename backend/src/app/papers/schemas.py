@@ -11,6 +11,7 @@ from app.questions.schemas import (
     QuestionCreate,
     QuestionImportDocumentSummary,
     QuestionImportDraft,
+    QuestionImportJobResponse,
     QuestionImportImageInput,
     QuestionImportTableInput,
     QuestionResponse,
@@ -50,6 +51,18 @@ class PaperQuestionResponse(BaseModel):
     question: QuestionResponse | None = None
 
 
+class PaperQuestionKnowledgeSuggestionResponse(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: uuid.UUID
+    paper_id: uuid.UUID
+    question_id: uuid.UUID
+    suggested_name: str
+    reason: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
 class PaperResponse(BaseModel):
     id: uuid.UUID
     title: str
@@ -71,6 +84,7 @@ class PaperResponse(BaseModel):
 
 class PaperDetailResponse(PaperResponse):
     questions: list[PaperQuestionResponse] = Field(default_factory=list)
+    knowledge_suggestions: list[PaperQuestionKnowledgeSuggestionResponse] = Field(default_factory=list)
 
 
 class PaperExamSeedResponse(BaseModel):
@@ -94,6 +108,21 @@ class PaperAIGenerateRequest(BaseModel):
 class PaperAIGenerateResponse(BaseModel):
     paper_id: uuid.UUID
     generated_question_count: int
+
+
+class PaperKnowledgeRecognitionStartResponse(BaseModel):
+    job_id: uuid.UUID
+    status: str
+    total_count: int
+    question_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class PaperKnowledgeRecognitionJobResponse(QuestionImportJobResponse):
+    pass
+
+
+class PaperKnowledgeSuggestionGenerateResponse(BaseModel):
+    suggestions: list[PaperQuestionKnowledgeSuggestionResponse] = Field(default_factory=list)
 
 
 class PaperAIAppendRequest(BaseModel):

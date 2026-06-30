@@ -20,7 +20,7 @@ from app.auth.models import User
 from app.common.data_visibility import VisibilityScope
 from app.common.resource_access import can_write_owned_resource, teacher_owned_resource_filter, teacher_visible_resource_filter
 from app.learning.models import KnowledgePoint
-from app.papers.models import Paper, PaperImportSession, PaperQuestion
+from app.papers.models import Paper, PaperImportSession, PaperQuestion, PaperQuestionKnowledgeSuggestion
 from app.papers.schemas import (
     PaperAIAppendRequest,
     PaperAIGenerateRequest,
@@ -46,6 +46,7 @@ from app.questions.similarity import (
     question_summary_for_prompt,
 )
 from app.questions.service import (
+    _request_deepseek_json,
     _load_root_descendant_knowledge_points,
     bulk_create_questions_fast,
     get_or_create_named_private_question_bank,
@@ -817,6 +818,148 @@ async def get_paper_by_id(db: AsyncSession, paper_id: uuid.UUID, *, user: User, 
     if paper:
         paper.paper_questions.sort(key=lambda item: item.order)
     return paper
+
+
+async def list_paper_question_knowledge_suggestions(
+    db: AsyncSession,
+    paper_id: uuid.UUID,
+) -> list[PaperQuestionKnowledgeSuggestion]:
+    rows = await db.execute(
+        select(PaperQuestionKnowledgeSuggestion)
+        .where(
+            PaperQuestionKnowledgeSuggestion.paper_id == paper_id,
+            PaperQuestionKnowledgeSuggestion.deleted_at.is_(None),
+        )
+        .order_by(PaperQuestionKnowledgeSuggestion.created_at.asc())
+    )
+    return list(rows.scalars().all())
+
+
+async def _list_all_paper_question_knowledge_suggestions(
+    db: AsyncSession,
+    paper_id: uuid.UUID,
+) -> list[PaperQuestionKnowledgeSuggestion]:
+    rows = await db.execute(
+        select(PaperQuestionKnowledgeSuggestion)
+        .where(PaperQuestionKnowledgeSuggestion.paper_id == paper_id)
+        .order_by(PaperQuestionKnowledgeSuggestion.created_at.asc())
+    )
+    return list(rows.scalars().all())
+
+
+async def _load_course_knowledge_point_scope(
+    db: AsyncSession,
+    root_knowledge_point_id: uuid.UUID | None,
+) -> tuple[set[uuid.UUID], set[uuid.UUID]]:
+    if root_knowledge_point_id is None:
+        return set(), set()
+    descendants = await _load_root_descendant_knowledge_points(db, root_knowledge_point_id)
+    descendant_ids = {knowledge_point.id for knowledge_point in descendants}
+    return {root_knowledge_point_id, *descendant_ids}, descendant_ids
+
+
+def _question_needs_virtual_knowledge_suggestion(
+    question: Question,
+    *,
+    course_knowledge_point_ids: set[uuid.UUID],
+    concrete_knowledge_point_ids: set[uuid.UUID],
+) -> bool:
+    if not course_knowledge_point_ids:
+        return False
+    question_knowledge_point_ids = {knowledge_point.id for knowledge_point in question.knowledge_points or []}
+    return not bool(question_knowledge_point_ids & concrete_knowledge_point_ids)
+
+
+def _question_virtual_suggestion_prompt(question: Question, root_name: str | None) -> str:
+    content = _normalise_prompt_text(question.content, max_length=1200)
+    options = _normalise_prompt_text(question.options, max_length=600)
+    answer = _normalise_prompt_text(question.answer, max_length=500)
+    analysis = _normalise_prompt_text(question.analysis, max_length=500)
+    return f"""
+你是课程教研助手。当前课程没有维护足够的子知识点，系统不能真正关联不存在的知识点。
+请根据题目内容，为它建议 1 个“虚拟知识点名称”，用于试卷知识点视角的临时覆盖展示。
+
+课程/根知识点：{root_name or "当前课程"}
+题型：{_question_type_value(question)}
+题目标题：{question.title}
+题目内容：{content}
+选项：{options}
+答案：{answer}
+解析：{analysis}
+
+要求：
+1. suggested_name 用中文，2 到 12 个字，像课程目录里的知识点，不要包含“建议”“虚拟”“课程”等泛词。
+2. reason 用一句话说明为什么这个题可能属于该知识点，最多 40 字。
+3. 只返回合法 JSON，字段为 suggested_name: string, reason: string。
+""".strip()
+
+
+async def generate_paper_virtual_knowledge_suggestions(
+    db: AsyncSession,
+    paper: Paper,
+    *,
+    user_id: uuid.UUID,
+) -> list[PaperQuestionKnowledgeSuggestion]:
+    root_id = paper.root_knowledge_point_id
+    course_knowledge_point_ids, concrete_knowledge_point_ids = await _load_course_knowledge_point_scope(db, root_id)
+    existing = {
+        suggestion.question_id: suggestion
+        for suggestion in await _list_all_paper_question_knowledge_suggestions(db, paper.id)
+    }
+    candidates = [
+        item
+        for item in sorted(paper.paper_questions, key=lambda value: value.order)
+        if item.question is not None
+        and _question_needs_virtual_knowledge_suggestion(
+            item.question,
+            course_knowledge_point_ids=course_knowledge_point_ids,
+            concrete_knowledge_point_ids=concrete_knowledge_point_ids,
+        )
+    ]
+    candidate_question_ids = {item.question.id for item in candidates if item.question is not None}
+    for question_id, suggestion in list(existing.items()):
+        if question_id not in candidate_question_ids:
+            suggestion.deleted_at = datetime.now(timezone.utc)
+            existing.pop(question_id, None)
+
+    for item in candidates:
+        question = item.question
+        if question.id in existing:
+            existing[question.id].deleted_at = None
+            continue
+
+        fallback_name = _normalise_prompt_text(question.title or question.content, max_length=12) or "综合应用"
+        fallback_name = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", fallback_name)[:12] or "综合应用"
+        suggested_name = fallback_name
+        reason = "根据题干内容自动建议。"
+        try:
+            payload = await _request_deepseek_json(
+                _question_virtual_suggestion_prompt(
+                    question,
+                    paper.root_knowledge_point.name if paper.root_knowledge_point else None,
+                )
+            )
+            raw_name = str(payload.get("suggested_name") or "").strip()
+            raw_reason = str(payload.get("reason") or "").strip()
+            if raw_name:
+                suggested_name = raw_name[:200]
+            if raw_reason:
+                reason = raw_reason[:200]
+        except Exception:  # noqa: BLE001
+            pass
+
+        suggestion = PaperQuestionKnowledgeSuggestion(
+            paper_id=paper.id,
+            question_id=question.id,
+            suggested_name=suggested_name,
+            reason=reason,
+            created_by=user_id,
+        )
+        db.add(suggestion)
+        existing[question.id] = suggestion
+
+    await db.flush()
+    return await list_paper_question_knowledge_suggestions(db, paper.id)
 
 
 def _normalized_paper_question_rows(paper_id: uuid.UUID, question_items: list[PaperQuestionItem]) -> list[PaperQuestion]:

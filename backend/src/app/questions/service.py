@@ -3433,6 +3433,106 @@ async def process_question_import_job(
                 pass
 
 
+def _question_create_from_existing(question: Question) -> QuestionCreate:
+    return QuestionCreate(
+        type=question.type,
+        title=question.title,
+        content=question.content or {},
+        options=question.options,
+        answer=question.answer or {},
+        analysis=question.analysis,
+        difficulty=question.difficulty,
+        score=float(question.score),
+        source=question.source or QuestionSource.IMPORTED,
+        tag_ids=[tag.id for tag in question.tags],
+        knowledge_point_ids=[knowledge_point.id for knowledge_point in question.knowledge_points],
+        question_bank_id=question.question_bank_id,
+    )
+
+
+async def process_existing_question_knowledge_match_job(
+    *,
+    job_id: uuid.UUID,
+    user_id: uuid.UUID,
+    root_knowledge_point_id: uuid.UUID,
+    question_ids: list[uuid.UUID],
+) -> None:
+    async with async_session() as db:
+        job = await get_question_import_job_by_id(db, job_id, user_id=user_id)
+        if job is None:
+            return
+
+        job.status = QuestionImportJobStatus.RUNNING
+        await db.commit()
+
+        processed_count = 0
+        matched_count = 0
+        unmatched_count = 0
+        failed_count = 0
+        final_status = QuestionImportJobStatus.COMPLETED
+        error_message: str | None = None
+
+        try:
+            candidates = await _load_root_descendant_knowledge_points(db, root_knowledge_point_id)
+            questions_by_id = await _load_questions_for_import_job(db, question_ids)
+
+            for question_id in question_ids:
+                question = questions_by_id.get(question_id)
+                if question is None:
+                    failed_count += 1
+                    processed_count += 1
+                    error_message = error_message or f"question {question_id} not found"
+                    continue
+
+                try:
+                    question_data = _question_create_from_existing(question)
+                    matched_ids = await match_knowledge_points_with_ai(question_data, candidates)
+                    if matched_ids:
+                        target_ids = matched_ids
+                        matched_count += 1
+                    else:
+                        target_ids = [root_knowledge_point_id]
+                        unmatched_count += 1
+                    matched_kps_result = await db.execute(
+                        select(KnowledgePoint).where(KnowledgePoint.id.in_(target_ids))
+                    )
+                    question.knowledge_points = list(matched_kps_result.scalars().all())
+                except Exception as exc:  # noqa: BLE001
+                    failed_count += 1
+                    error_message = str(exc)
+                finally:
+                    processed_count += 1
+                    job.processed_count = processed_count
+                    job.matched_count = matched_count
+                    job.unmatched_count = unmatched_count
+                    job.failed_count = failed_count
+                    job.created_question_ids = [str(question_id) for question_id in question_ids]
+                    await db.commit()
+
+            if failed_count > 0:
+                final_status = (
+                    QuestionImportJobStatus.PARTIAL_FAILED
+                    if processed_count > failed_count
+                    else QuestionImportJobStatus.FAILED
+                )
+        except Exception as exc:  # noqa: BLE001
+            final_status = (
+                QuestionImportJobStatus.FAILED
+                if processed_count == 0
+                else QuestionImportJobStatus.PARTIAL_FAILED
+            )
+            error_message = str(exc)
+        finally:
+            job.status = final_status
+            job.processed_count = processed_count
+            job.matched_count = matched_count
+            job.unmatched_count = unmatched_count
+            job.failed_count = failed_count
+            job.error_message = error_message
+            job.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+
+
 async def link_existing_questions_to_course(
     db: AsyncSession,
     question_ids: list[uuid.UUID],

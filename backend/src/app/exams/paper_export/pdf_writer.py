@@ -221,10 +221,14 @@ def render_pdf(paper: ExamPaper) -> bytes:
     flows.append(Paragraph(_esc(line1), styles["subtitle"]))
     flows.append(Paragraph(_esc(line2), styles["title"]))
     flows.append(Paragraph(_esc(line3), styles["class"]))
-    # Line 4: time limit + exam form.
-    flows.append(
-        Paragraph(_esc(f"答题时限：{paper.duration_minutes} 分钟    考试形式：{paper.exam_form}"), styles["info"])
+    # Line 4: time limit + exam form. Reusable paper exports may not carry a
+    # duration, so omit the time-limit fragment instead of rendering 0 minutes.
+    info = (
+        f"答题时限：{paper.duration_minutes} 分钟    考试形式：{paper.exam_form}"
+        if paper.duration_minutes > 0
+        else f"考试形式：{paper.exam_form}"
     )
+    flows.append(Paragraph(_esc(info), styles["info"]))
     flows.append(Spacer(1, 0.2 * cm))
     # Line 5: class / id / name / score, centered.
     flows.append(Paragraph("班级__________ 学号__________ 姓名__________ 得分__________", styles["student"]))

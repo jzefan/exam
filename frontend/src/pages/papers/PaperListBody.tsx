@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useList } from "@refinedev/core";
 import { useNavigate } from "react-router-dom";
-import { ChevronDown, ChevronRight, Copy, Eye, Loader2, Maximize2, Pencil, Plus, RefreshCcw, Search, Sparkles, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, Download, Eye, Loader2, Maximize2, Network, Pencil, Plus, RefreshCcw, Search, Sparkles, Trash2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { TooltipButton } from "@/components/ui/tooltip-button";
 import {
   Dialog,
   DialogContent,
@@ -12,9 +13,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
+import { exportPaper, type ExportPaperFormat } from "@/lib/exam-export";
 import type {
   IKnowledgePoint,
   IPaper,
@@ -51,6 +61,8 @@ type PaperDetailNavState = {
   backTo?: string;
   backLabel?: string;
   courseOrigin?: boolean;
+  courseKpId?: string;
+  courseSemesterId?: string;
   publishExamSuccessTo?: string;
   publishPracticeSuccessTo?: string;
 };
@@ -61,8 +73,11 @@ type PaperKnowledgePointOption = {
   path: string;
 };
 
-const MANUAL_QUESTION_TYPES: Array<{ value: QuestionType; label: string }> = [
-  { value: "choice", label: "选择题" },
+type ManualQuestionType = QuestionType | "single_choice" | "multi_choice";
+
+const MANUAL_QUESTION_TYPES: Array<{ value: ManualQuestionType; label: string }> = [
+  { value: "single_choice", label: "单选题" },
+  { value: "multi_choice", label: "多选题" },
   { value: "true_false", label: "判断题" },
   { value: "fill_in", label: "填空题" },
   { value: "short_answer", label: "简答题" },
@@ -70,9 +85,23 @@ const MANUAL_QUESTION_TYPES: Array<{ value: QuestionType; label: string }> = [
   { value: "code", label: "编程题" },
 ];
 
-const QUESTION_TYPE_LABELS: Record<string, string> = Object.fromEntries(
-  MANUAL_QUESTION_TYPES.map((item) => [item.value, item.label]),
-);
+const QUESTION_TYPE_LABELS: Record<string, string> = {
+  choice: "选择题",
+  ...Object.fromEntries(MANUAL_QUESTION_TYPES.map((item) => [item.value, item.label])),
+};
+
+const QUESTION_TYPE_ORDER: Record<QuestionType, number> = {
+  choice: 0,
+  true_false: 1,
+  fill_in: 2,
+  short_answer: 3,
+  essay: 4,
+  code: 5,
+};
+
+function toBackendQuestionType(type: ManualQuestionType): QuestionType {
+  return type === "single_choice" || type === "multi_choice" ? "choice" : type;
+}
 
 function formatDateTime(iso: string) {
   const date = new Date(iso);
@@ -181,6 +210,25 @@ export function PaperListBody({
       toast({ title: "已删除", description: paper.title });
     });
 
+  const handleExport = async (
+    paper: IPaper,
+    format: ExportPaperFormat,
+    answers: boolean,
+  ) => {
+    try {
+      setBusyPaperId(paper.id);
+      await exportPaper(paper.id, { format, answers });
+    } catch (error) {
+      toast({
+        title: "导出失败",
+        description: error instanceof Error ? error.message : "请稍后重试",
+        variant: "destructive",
+      });
+    } finally {
+      setBusyPaperId(null);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border/40 bg-muted/5 p-4">
@@ -263,7 +311,7 @@ export function PaperListBody({
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex justify-end gap-1">
-                      <Button
+                      <TooltipButton
                         variant="ghost"
                         size="icon"
                         onClick={() =>
@@ -271,46 +319,103 @@ export function PaperListBody({
                             state: detailNavState,
                           })
                         }
-                        title="查看"
+                        tooltip="查看"
                       >
                         <Eye className="h-4 w-4" />
-                      </Button>
-                      <Button
+                      </TooltipButton>
+                      {rootKnowledgePointId ? (
+                        <TooltipButton
+                          variant="ghost"
+                          size="icon"
+                          onClick={() =>
+                            navigate(`/papers/${paper.id}/knowledge-coverage`, {
+                              state: {
+                                ...detailNavState,
+                                backTo: detailNavState?.backTo ?? "/papers",
+                                backLabel: detailNavState?.backLabel ?? "返回试卷列表",
+                                courseQuestionBankName,
+                                knowledgePointOptions,
+                                rootKnowledgePointId,
+                                rootKnowledgePointName: paper.root_knowledge_point?.name,
+                              },
+                            })
+                          }
+                          tooltip="知识点视角"
+                        >
+                          <Network className="h-4 w-4" />
+                        </TooltipButton>
+                      ) : null}
+                      <TooltipButton
                         variant="ghost"
                         size="icon"
                         onClick={() => setEditingPaper(paper)}
                         disabled={isBusy}
-                        title="修改试卷"
+                        tooltip="修改试卷"
                       >
                         <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button
+                      </TooltipButton>
+                      <TooltipButton
                         variant="ghost"
                         size="icon"
                         onClick={() => handleCopy(paper)}
                         disabled={isBusy}
-                        title="复制"
+                        tooltip="复制"
                       >
                         <Copy className="h-4 w-4" />
-                      </Button>
-                      <Button
+                      </TooltipButton>
+                      <TooltipButton
                         variant="ghost"
                         size="icon"
                         onClick={() => setAiDialogPaper(paper)}
                         disabled={isBusy || Boolean(paper.archived_at)}
-                        title="AI生成新试卷"
+                        tooltip="AI 生成新试卷"
                       >
                         <Sparkles className="h-4 w-4" />
-                      </Button>
-                      <Button
+                      </TooltipButton>
+                      {rootKnowledgePointId ? (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              disabled={isBusy}
+                              aria-label="导出试卷"
+                            >
+                              <Download className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-48">
+                            <DropdownMenuLabel className="text-xs">导出 Word</DropdownMenuLabel>
+                            <DropdownMenuItem onClick={() => handleExport(paper, "docx", true)}>
+                              <Download className="mr-2" />
+                              含答案
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleExport(paper, "docx", false)}>
+                              <Download className="mr-2" />
+                              空白试卷
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuLabel className="text-xs">导出 PDF</DropdownMenuLabel>
+                            <DropdownMenuItem onClick={() => handleExport(paper, "pdf", true)}>
+                              <Download className="mr-2" />
+                              含答案
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleExport(paper, "pdf", false)}>
+                              <Download className="mr-2" />
+                              空白试卷
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      ) : null}
+                      <TooltipButton
                         variant="ghost"
                         size="icon"
                         onClick={() => handleDelete(paper)}
                         disabled={isBusy}
-                        title="删除"
+                        tooltip="删除"
                       >
                         <Trash2 className="h-4 w-4 text-destructive" />
-                      </Button>
+                      </TooltipButton>
                     </div>
                   </td>
                 </tr>
@@ -368,29 +473,30 @@ function createManualQuestionDraft({
   bank,
   knowledgePoint,
 }: {
-  type: QuestionType;
+  type: ManualQuestionType;
   bank: IQuestionBank | null;
   knowledgePoint: IKnowledgePoint | null | undefined;
 }): IQuestion {
   const now = new Date().toISOString();
+  const backendType = toBackendQuestionType(type);
   const baseAnswer: Record<string, unknown> =
-    type === "true_false"
+    backendType === "true_false"
       ? { correct: true }
-      : type === "fill_in"
+      : backendType === "fill_in"
         ? { correct: [""] }
-        : type === "short_answer" || type === "essay"
+        : backendType === "short_answer" || backendType === "essay"
           ? { points: [] }
-          : type === "code"
+          : backendType === "code"
             ? { code: "" }
-            : { correct: "A" };
+            : { correct: type === "multi_choice" ? ["A"] : "A" };
 
   return {
     id: "manual-draft",
-    type,
+    type: backendType,
     title: "",
     content: { html: "", text: "" },
     options:
-      type === "choice"
+      backendType === "choice"
         ? { A: "", B: "", C: "", D: "" }
         : null,
     answer: baseAnswer,
@@ -448,9 +554,11 @@ function PaperEditDialog({
   const [aiCount, setAiCount] = useState(5);
   const [aiDifficulty, setAiDifficulty] = useState<PaperDifficultyStrategy>("similar");
   const [manualAddOpen, setManualAddOpen] = useState(false);
-  const [manualQuestionType, setManualQuestionType] = useState<QuestionType>("choice");
+  const [manualQuestionType, setManualQuestionType] = useState<ManualQuestionType>("single_choice");
+  const [editingQuestion, setEditingQuestion] = useState<IQuestion | null>(null);
   const [manualKnowledgePointId, setManualKnowledgePointId] = useState("");
   const [manualSaving, setManualSaving] = useState(false);
+  const [questionSaving, setQuestionSaving] = useState(false);
   const [selectorRefreshKey, setSelectorRefreshKey] = useState(0);
   const [ensuredCourseBank, setEnsuredCourseBank] = useState<IQuestionBank | null>(null);
   const [ensuringCourseBank, setEnsuringCourseBank] = useState(false);
@@ -534,13 +642,10 @@ function PaperEditDialog({
       list.push(item);
       grouped.set(key, list);
     }
-    const typeOrder = new Map(
-      MANUAL_QUESTION_TYPES.map((item, index) => [item.value, index]),
-    );
     return Array.from(grouped.entries()).sort(
       ([a], [b]) =>
-        (typeOrder.get(a as QuestionType) ?? Number.MAX_SAFE_INTEGER) -
-        (typeOrder.get(b as QuestionType) ?? Number.MAX_SAFE_INTEGER),
+        (QUESTION_TYPE_ORDER[a as QuestionType] ?? Number.MAX_SAFE_INTEGER) -
+        (QUESTION_TYPE_ORDER[b as QuestionType] ?? Number.MAX_SAFE_INTEGER),
     );
   }, [selectedQuestionItems]);
   const existingSelectedCount = selectedIds.filter((id) => itemById.has(id)).length;
@@ -740,7 +845,7 @@ function PaperEditDialog({
       });
       setSelectedIds((prev) => Array.from(new Set([...prev, created.id])));
       setManualAddOpen(false);
-      setManualQuestionType("choice");
+      setManualQuestionType("single_choice");
       setManualKnowledgePointId("");
       setSelectorRefreshKey((value) => value + 1);
       toast({
@@ -755,6 +860,55 @@ function PaperEditDialog({
       });
     } finally {
       setManualSaving(false);
+    }
+  };
+
+  const handleQuestionEditSubmit = async (values: QuestionEditSubmitValues) => {
+    if (!editingQuestion) return;
+    setQuestionSaving(true);
+    try {
+      const updatedQuestion = await paperApiRequest<IQuestion>(`/questions/${editingQuestion.id}`, {
+        method: "PUT",
+        body: JSON.stringify(values),
+      });
+      setPendingQuestionById((prev) => {
+        if (!prev.has(updatedQuestion.id)) return prev;
+        const next = new Map(prev);
+        const previous = next.get(updatedQuestion.id);
+        if (previous) {
+          next.set(updatedQuestion.id, {
+            ...previous,
+            question: updatedQuestion,
+          });
+        }
+        return next;
+      });
+      setDetail((current) =>
+        current
+          ? {
+              ...current,
+              questions: current.questions.map((item) =>
+                item.question_id === updatedQuestion.id
+                  ? { ...item, question: updatedQuestion }
+                  : item,
+              ),
+            }
+          : current,
+      );
+      setSelectorRefreshKey((value) => value + 1);
+      setEditingQuestion(null);
+      toast({
+        title: "题目已更新",
+        description: "当前试卷和课程题库中的题目内容已同步更新。",
+      });
+    } catch (error) {
+      toast({
+        title: "修改题目失败",
+        description: error instanceof Error ? error.message : "请稍后重试",
+        variant: "destructive",
+      });
+    } finally {
+      setQuestionSaving(false);
     }
   };
 
@@ -872,16 +1026,16 @@ function PaperEditDialog({
                                   <p className="min-w-0 flex-1 line-clamp-2 text-sm font-medium text-foreground">
                                     {getPaperQuestionTitle(item)}
                                   </p>
-                                  <Button
+                                  <TooltipButton
                                     type="button"
                                     variant="ghost"
                                     size="icon"
                                     className="h-8 w-8 shrink-0"
                                     onClick={() => removeQuestion(item.question_id)}
-                                    title="从试卷中移除"
+                                    tooltip="从试卷中移除"
                                   >
                                     <X className="h-4 w-4 text-destructive" />
-                                  </Button>
+                                  </TooltipButton>
                                 </div>
                               ),
                             )}
@@ -1046,6 +1200,7 @@ function PaperEditDialog({
                   restrictKnowledgePointsToOptions={knowledgePointOptions !== undefined}
                   fillAvailableHeight
                   refreshKey={selectorRefreshKey}
+                  onEditQuestion={setEditingQuestion}
                 />
               )}
             </section>
@@ -1081,7 +1236,7 @@ function PaperEditDialog({
               <select
                 id="manual-question-type"
                 value={manualQuestionType}
-                onChange={(event) => setManualQuestionType(event.target.value as QuestionType)}
+                onChange={(event) => setManualQuestionType(event.target.value as ManualQuestionType)}
                 disabled={manualSaving}
                 className="h-9 min-w-36 rounded-md border border-input bg-background px-3 text-sm"
               >
@@ -1116,7 +1271,7 @@ function PaperEditDialog({
             </div>
             {manualQuestionDraft ? (
               <QuestionEditFormContent
-                key={`${manualQuestionDraft.type}-${manualQuestionDraft.question_bank_id ?? "no-bank"}-${manualQuestionDraft.knowledge_points[0]?.id ?? "no-kp"}-${manualKnowledgePointId || "default-kp"}`}
+                key={`${manualQuestionType}-${manualQuestionDraft.question_bank_id ?? "no-bank"}-${manualQuestionDraft.knowledge_points[0]?.id ?? "no-kp"}-${manualKnowledgePointId || "default-kp"}`}
                 question={manualQuestionDraft}
                 banks={courseBank ? [courseBank] : banks}
                 allTags={allTags}
@@ -1133,6 +1288,40 @@ function PaperEditDialog({
               />
             ) : null}
           </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={Boolean(editingQuestion)}
+        onOpenChange={(open) => {
+          if (!open && !questionSaving) setEditingQuestion(null);
+        }}
+      >
+        <DialogContent className="max-h-[92dvh] max-w-4xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>编辑题目</DialogTitle>
+            <DialogDescription>
+              修改后会同步更新课程题库，并保留在当前试卷中。
+            </DialogDescription>
+          </DialogHeader>
+          {editingQuestion ? (
+            <QuestionEditFormContent
+              key={editingQuestion.id}
+              question={editingQuestion}
+              banks={courseBank ? [courseBank] : banks}
+              allTags={allTags}
+              knowledgePoints={knowledgePoints}
+              isSubmitting={questionSaving}
+              submitLabel="保存题目"
+              cancelLabel="取消"
+              showHeader={false}
+              showQuestionBankAndTags={false}
+              variant="dialog"
+              onCancel={() => {
+                if (!questionSaving) setEditingQuestion(null);
+              }}
+              onSubmit={handleQuestionEditSubmit}
+            />
+          ) : null}
         </DialogContent>
       </Dialog>
     </Dialog>

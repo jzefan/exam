@@ -369,3 +369,52 @@ async def test_teacher_can_batch_remove_students_from_current_list(client: Async
     list_response = await client.get("/api/rbac/students")
     assert list_response.status_code == 200
     assert list_response.json() == []
+
+
+@pytest.mark.asyncio
+async def test_teacher_batch_import_updates_existing_student_class(
+    client: AsyncClient, db_session
+) -> None:
+    org = await _create_org_with_roles(db_session)
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-batch-import-class",
+        email="teacher-batch-import-class@example.com",
+        full_name="Teacher Batch Import Class",
+    )
+    target_class = Class(name="2025级健康大数据班", org_id=org.id, created_by=teacher.id)
+    db_session.add(target_class)
+    await db_session.flush()
+    existing_student = await create_student(
+        db_session,
+        org.id,
+        StudentCreate(full_name="许宇航", phone=None, student_id="3256260101"),
+        owner_teacher_id=None,
+    )
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    response = await client.post(
+        "/api/rbac/students/batch",
+        json=[
+            {
+                "full_name": "许宇航",
+                "phone": None,
+                "student_id": "3256260101",
+                "class_id": str(target_class.id),
+            }
+        ],
+    )
+
+    assert response.status_code == 201
+    assert response.json() == {"success_count": 1, "failed_count": 0, "errors": []}
+
+    await db_session.refresh(existing_student)
+    assert existing_student.class_id == target_class.id
+
+    list_response = await client.get(f"/api/rbac/students?class_id={target_class.id}")
+    assert list_response.status_code == 200
+    payload = list_response.json()
+    assert [item["student_id"] for item in payload] == ["3256260101"]
+    assert payload[0]["class_name"] == "2025级健康大数据班"

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useGetIdentity, useList } from "@refinedev/core";
-import { Search, Check, FileText, Maximize2, Minimize2, ChevronDown, X } from "lucide-react";
+import { Search, Check, FileText, Maximize2, Minimize2, ChevronDown, Pencil, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -53,6 +53,7 @@ export function QuestionSelector({
   restrictKnowledgePointsToOptions = false,
   fillAvailableHeight = false,
   refreshKey,
+  onEditQuestion,
 }: {
   selectedIds: string[];
   onChange: (ids: string[]) => void;
@@ -84,6 +85,8 @@ export function QuestionSelector({
   fillAvailableHeight?: boolean;
   /** 外部新增题目后递增该值，触发题库与题目列表刷新。 */
   refreshKey?: number;
+  /** 展开题目详情后允许父组件接管编辑流程。 */
+  onEditQuestion?: (question: IQuestion) => void;
 }) {
   const { data: identity } = useGetIdentity<{ primary_org?: { role_name?: string } | null }>();
   const showBankOwner = identity ? getUserRole(identity) === "platform_admin" : false;
@@ -248,6 +251,11 @@ export function QuestionSelector({
 
   const toggleExpanded = (questionId: string) => {
     setExpandedId((prev) => (prev === questionId ? null : questionId));
+  };
+
+  const handleEditQuestion = (question: IQuestion) => {
+    setIsFullscreen(false);
+    onEditQuestion?.(question);
   };
 
   const shouldIgnoreCardToggle = (target: EventTarget | null) =>
@@ -443,6 +451,19 @@ export function QuestionSelector({
                       defaultExpanded
                       markChoiceAnswer
                       className="border-0 bg-transparent pr-8 shadow-none"
+                      actions={
+                        onEditQuestion ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleEditQuestion(q)}
+                          >
+                            <Pencil size={14} />
+                            编辑题目
+                          </Button>
+                        ) : undefined
+                      }
                     />
                   </div>
                 </div>
@@ -535,6 +556,19 @@ export function QuestionSelector({
                           >
                             {isSelected ? "已选择" : "未选择"}
                           </Badge>
+                        }
+                        actions={
+                          onEditQuestion ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleEditQuestion(q)}
+                            >
+                              <Pencil size={14} />
+                              编辑题目
+                            </Button>
+                          ) : undefined
                         }
                       />
                     </div>
