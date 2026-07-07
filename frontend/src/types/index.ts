@@ -52,6 +52,8 @@ export interface ITokenResponse {
 }
 
 export type QuestionType = "choice" | "true_false" | "fill_in" | "short_answer" | "essay" | "code";
+export type ChoiceDisplayType = "single_choice" | "multi_choice";
+export type QuestionDisplayType = ChoiceDisplayType | Exclude<QuestionType, "choice">;
 
 export type QuestionSource = "manual" | "ai_generated" | "imported";
 export type CodeLanguage = "python" | "javascript" | "java" | "cpp" | "c" | "go";
@@ -294,6 +296,7 @@ export interface ICodeFunctionParameter {
 
 export interface ICodeQuestionContent extends Record<string, unknown> {
   mode?: "program" | "function";
+  html?: string;
   description?: string;
   text?: string;
   input_description?: string;
@@ -399,6 +402,7 @@ export interface IExamResult {
   subjective_score: number | null;
   grading_status: ExamGradingStatus | null;
   can_view: boolean;
+  can_retake: boolean;
   blocked_reason: string | null;
   teacher_comment?: string | null;
   questions: IExamResultQuestion[];

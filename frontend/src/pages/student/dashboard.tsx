@@ -382,7 +382,7 @@ export function StudentDashboard() {
                             {gradingStatus === "pending_ai" ? (
                               <span className="text-xs font-bold text-muted-foreground/60">待AI评分</span>
                             ) : gradingStatus === "ai_scored" ? (
-                              <div className="inline-flex items-center gap-1 rounded-full bg-secondary px-3 py-1 text-sm font-black text-secondary-foreground">
+                              <div className="inline-flex items-center whitespace-nowrap rounded-full bg-secondary px-2.5 py-1 text-xs font-bold text-secondary-foreground">
                                 AI已评分
                               </div>
                             ) : hasScore ? (

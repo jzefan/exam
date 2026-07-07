@@ -9,17 +9,18 @@ interface Props {
 
 const BLANK_PLACEHOLDER_RE = /_{3,}|（\s*）|\(\s*\)|【\s*】/g;
 
-function inferBlankCount(content: { text?: string; blank_count?: number }, fallbackText: string) {
+function inferBlankCount(content: { html?: string; text?: string; blank_count?: number }, fallbackText: string) {
   if (typeof content.blank_count === "number" && content.blank_count > 0) {
     return content.blank_count;
   }
-  const text = content.text ?? fallbackText;
+  const text = content.text ?? content.html ?? fallbackText;
   const matches = text.match(BLANK_PLACEHOLDER_RE);
   return Math.max(matches?.length ?? 0, 1);
 }
 
 export function FillInQuestion({ question, answer, onChange }: Props) {
   const content = question.content as {
+    html?: string;
     text?: string;
     blank_count?: number;
   };
@@ -38,7 +39,7 @@ export function FillInQuestion({ question, answer, onChange }: Props) {
       <div
         className="prose prose-sm dark:prose-invert max-w-none leading-relaxed"
         dangerouslySetInnerHTML={{
-          __html: renderLatexInHtml(content.text ?? question.title),
+          __html: renderLatexInHtml(content.html ?? content.text ?? question.title),
         }}
       />
 

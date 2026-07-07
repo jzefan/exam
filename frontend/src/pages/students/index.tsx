@@ -1,6 +1,6 @@
 import { useGetIdentity, usePermissions } from "@refinedev/core";
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Plus, Upload, Search, FileSpreadsheet, X, Info, Users, CheckCircle2, AlertCircle, Trash2 } from "lucide-react";
+import { Plus, Upload, Search, FileSpreadsheet, X, Info, Users, CheckCircle2, AlertCircle, Trash2, KeyRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -45,7 +45,7 @@ interface Student {
   id: string;
   full_name: string;
   phone: string | null;
-  student_id: string;
+  student_id: string | null;
   username: string;
   is_active: boolean;
   class_id: string | null;
@@ -59,6 +59,10 @@ interface ImportResult {
   errors: string[];
 }
 
+interface PasswordResetResult {
+  password_source: "student_id" | "username";
+}
+
 export default function StudentManagementPage() {
   const { data: role } = usePermissions<string>({});
   const { data: identity } = useGetIdentity<{ persona?: string | null }>();
@@ -70,6 +74,7 @@ export default function StudentManagementPage() {
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [resettingStudentId, setResettingStudentId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasLoadedStudentsRef = useRef(false);
@@ -301,6 +306,39 @@ export default function StudentManagementPage() {
     }
   };
 
+  const resetStudentPassword = async (student: Student) => {
+    const studentIdentifierLabel = copy.persona === "teacher" ? "学号" : "编号";
+    const passwordSeed = (student.student_id || student.username).trim();
+    const passwordSourceLabel = student.student_id ? studentIdentifierLabel : "账号";
+    const confirmed = window.confirm(
+      `确定要重置 ${student.full_name} 的密码吗？\n重置后初始密码为${passwordSourceLabel}：${passwordSeed}，${copy.person}下次登录需修改密码。`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setResettingStudentId(student.id);
+    try {
+      const result = await apiRequest<PasswordResetResult>(`/rbac/students/${student.id}/reset-password`, {
+        method: "POST",
+      });
+      const sourceLabel = result.password_source === "student_id" ? studentIdentifierLabel : "账号";
+      const sourceValue = result.password_source === "student_id" ? student.student_id : student.username;
+      toast({
+        title: "密码已重置",
+        description: `${student.full_name} 的初始密码已重置为${sourceLabel}${sourceValue ? `：${sourceValue}` : ""}。`,
+      });
+    } catch (error: unknown) {
+      toast({
+        title: "重置失败",
+        description: error instanceof Error ? error.message : "请稍后重试",
+        variant: "destructive",
+      });
+    } finally {
+      setResettingStudentId(null);
+    }
+  };
+
   return (
     <div className="flex h-full min-h-0 gap-0 overflow-hidden">
       {/* Left Sidebar: Classes */}
@@ -368,7 +406,7 @@ export default function StudentManagementPage() {
                     : selectedClassName}
               </h1>
               <p className="text-sm text-muted-foreground">
-                管理{copy.person}账号，初始密码默认为手机号；无手机号时默认为{copy.persona === "teacher" ? "学号" : "编号"}。
+                管理{copy.person}账号，新建账号初始密码默认为手机号；重置密码时优先使用{copy.persona === "teacher" ? "学号" : "编号"}，无{copy.persona === "teacher" ? "学号" : "编号"}则使用账号。
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -424,7 +462,7 @@ export default function StudentManagementPage() {
                   <TableHead>{copy.group}</TableHead>
                   {showOwnershipColumn && <TableHead>归属</TableHead>}
                   <TableHead className="w-[80px]">状态</TableHead>
-                  <TableHead className="w-[96px] text-right">操作</TableHead>
+                  <TableHead className="w-[184px] text-right">操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -467,16 +505,28 @@ export default function StudentManagementPage() {
                       <TableCell>
                         <span className={cn("h-2 w-2 rounded-full inline-block", student.is_active ? "bg-emerald-500" : "bg-rose-500")} />
                       </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          aria-label={`删除 ${student.full_name}`}
-                          className="text-destructive hover:text-destructive"
-                          onClick={() => void deleteStudents([student.id])}
-                        >
-                          删除
-                        </Button>
+                      <TableCell>
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            aria-label={`重置密码 ${student.full_name}`}
+                            disabled={resettingStudentId === student.id}
+                            onClick={() => void resetStudentPassword(student)}
+                          >
+                            <KeyRound />
+                            {resettingStudentId === student.id ? "重置中" : "重置密码"}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            aria-label={`删除 ${student.full_name}`}
+                            className="text-destructive hover:text-destructive"
+                            onClick={() => void deleteStudents([student.id])}
+                          >
+                            删除
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))

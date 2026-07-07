@@ -276,6 +276,55 @@ def _expected_question_types(type_distribution: dict[str, int]) -> list[str]:
     return expected
 
 
+def _backend_question_type(qtype: str | None) -> str | None:
+    if qtype in {"single_choice", "multi_choice"}:
+        return "choice"
+    return qtype
+
+
+def _split_choice_answer_keys(value: str) -> list[str]:
+    return [part.strip() for part in re.split(r"[,，;；、\s]+", value) if part.strip()]
+
+
+def _normalize_generated_choice_variant(
+    question: dict[str, Any],
+    *,
+    expected_type: str | None,
+) -> dict[str, Any]:
+    if question.get("type") != "choice":
+        return question
+    answer = question.get("answer")
+    if not isinstance(answer, dict):
+        answer = {}
+    correct = answer.get("correct")
+    if expected_type == "multi_choice":
+        if isinstance(correct, list):
+            normalized_correct = correct
+        elif isinstance(correct, str):
+            parts = _split_choice_answer_keys(correct)
+            normalized_correct = parts if parts else [correct]
+        elif correct is None:
+            normalized_correct = []
+        else:
+            normalized_correct = [correct]
+        answer = {**answer, "correct": normalized_correct}
+        content = question.get("content") if isinstance(question.get("content"), dict) else {}
+        question["content"] = {**content, "multi": True}
+        question["answer"] = answer
+        return question
+    if expected_type == "single_choice":
+        if isinstance(correct, list):
+            answer = {**answer, "correct": next((item for item in correct if item), "")}
+        content = question.get("content") if isinstance(question.get("content"), dict) else {}
+        question["content"] = {**content, "multi": False}
+        question["answer"] = answer
+        return question
+    content = question.get("content") if isinstance(question.get("content"), dict) else {}
+    question["content"] = {**content, "multi": isinstance(correct, list)}
+    question["answer"] = answer
+    return question
+
+
 def _answer_text(answer: Any) -> str:
     if not isinstance(answer, dict):
         return ""
@@ -289,8 +338,9 @@ def _validate_generated_question_shape(
     expected_type: str | None,
 ) -> str | None:
     actual_type = question.get("type")
-    if expected_type is not None and actual_type != expected_type:
-        return f"AI 返回题型不符合要求：期望 {expected_type}，实际 {actual_type or '空'}"
+    expected_backend_type = _backend_question_type(expected_type)
+    if expected_backend_type is not None and actual_type != expected_backend_type:
+        return f"AI 返回题型不符合要求：期望 {expected_backend_type}，实际 {actual_type or '空'}"
     if actual_type == "code":
         if question.get("options") not in (None, {}):
             return "AI 返回的代码题不能包含选择题选项"
@@ -540,6 +590,10 @@ async def generate_questions_stream(
                                                 expected_types[question_count]
                                                 if question_count < len(expected_types)
                                                 else None
+                                            )
+                                            parsed_question = _normalize_generated_choice_variant(
+                                                parsed_question,
+                                                expected_type=expected_type,
                                             )
                                             shape_error = _validate_generated_question_shape(
                                                 parsed_question,

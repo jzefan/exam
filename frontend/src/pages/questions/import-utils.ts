@@ -431,7 +431,10 @@ export function extractHtmlTables(html: string): QuestionImportTableInput[] {
 
 export function buildAnswerPayload(type: QuestionType, answerText: string | null) {
   const text = answerText ?? "";
-  if (type === "choice") return { correct: text };
+  if (type === "choice") {
+    const parts = text.split(/[,，;；、\n]/).map((item) => item.trim()).filter(Boolean);
+    return { correct: parts.length > 1 ? parts : (parts[0] ?? text) };
+  }
   if (type === "true_false") return { correct: /^(正确|对|true|t|√)$/i.test(text.trim()) };
   if (type === "fill_in") {
     return { correct: text.split(/[;,；\n]/).map((item) => item.trim()).filter(Boolean) };
@@ -470,6 +473,7 @@ export function buildImportableQuestions(drafts: QuestionImportDraft[], question
         content: {
           text: stripHtmlForTitle(draft.content_text),
           html: contentHtml,
+          ...(draft.type === "choice" ? { multi: Array.isArray(answer.correct) } : {}),
         },
         options: draft.type === "choice" ? draft.options : null,
         answer,

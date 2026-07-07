@@ -733,13 +733,6 @@ export function ExamList() {
               key={exam.id}
               exam={exam}
               onView={() => navigate(`/exams/${exam.id}/view`)}
-              onEdit={() =>
-                navigate(
-                  exam.category === "practice"
-                    ? `/exams/practice/edit/${exam.id}`
-                    : `/exams/edit/${exam.id}`,
-                )
-              }
               onAnalysis={() => navigate(`/exams/${exam.id}/analysis`)}
               onGrade={
                 exam.submitted_count > 0 && exam.has_gradable_questions

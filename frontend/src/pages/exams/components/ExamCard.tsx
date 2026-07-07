@@ -63,7 +63,6 @@ function formatDateTime(iso: string | null) {
 export function ExamCard({
   exam,
   onView,
-  onEdit,
   onAnalysis,
   onGrade,
   onGenerateMock,
@@ -79,7 +78,6 @@ export function ExamCard({
 }: {
   exam: ExamCardData;
   onView: () => void;
-  onEdit: () => void;
   onAnalysis: () => void;
   onGrade?: () => void;
   onGenerateMock?: () => void;
@@ -329,21 +327,9 @@ export function ExamCard({
             className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold"
             onClick={onView}
           >
-            <Eye size={14} />
-            <span>查看</span>
+            {canManage ? <Pencil size={14} /> : <Eye size={14} />}
+            <span>{canManage ? "修改" : "查看"}</span>
           </Button>
-
-          {canManage ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold"
-              onClick={onEdit}
-            >
-              <Pencil size={14} />
-              <span>修改</span>
-            </Button>
-          ) : null}
 
           {canManage && onGrade ? (
             <Button

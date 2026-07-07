@@ -343,7 +343,7 @@ async def count_questions_by_type(
     question_bank_id: uuid.UUID | None = None,
     no_bank: bool = False,
     difficulties: list[int] | None = None,
-) -> dict[QuestionType, int]:
+) -> dict[str, int]:
     """按题型聚合可用题量，复用题目可见范围（自己的题目 + 平台开放题库）。
 
     用一条 GROUP BY 聚合查询替代"拉全部题目再在前端计数"，避免逐条序列化的开销，
@@ -357,13 +357,20 @@ async def count_questions_by_type(
     if difficulties:
         query = query.where(Question.difficulty.in_(difficulties))
 
-    stmt = (
-        query.with_only_columns(Question.type, func.count())
-        .group_by(Question.type)
-        .order_by(None)
-    )
+    stmt = query.with_only_columns(Question.type, Question.content, Question.answer).order_by(None)
     rows = (await db.execute(stmt)).all()
-    return {row[0]: row[1] for row in rows}
+    counts: dict[str, int] = {}
+    for question_type, content, answer in rows:
+        qtype = question_type.value if isinstance(question_type, QuestionType) else str(question_type)
+        if qtype == QuestionType.CHOICE.value:
+            key = "multi_choice" if (
+                (isinstance(content, dict) and content.get("multi") is True)
+                or _choice_answer_is_multi(answer)
+            ) else "single_choice"
+        else:
+            key = qtype
+        counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
 async def get_question_by_id(
@@ -388,11 +395,26 @@ def _question_source_value(source: object) -> str:
     return QuestionSource.MANUAL.value
 
 
+def _choice_answer_is_multi(answer: Any) -> bool:
+    return isinstance(answer, dict) and isinstance(answer.get("correct"), list)
+
+
+def _normalize_choice_content(
+    question_type: QuestionType | str | None,
+    content: Any,
+    answer: Any,
+) -> Any:
+    qtype = question_type.value if isinstance(question_type, QuestionType) else str(question_type or "")
+    if qtype != QuestionType.CHOICE.value or not isinstance(content, dict):
+        return content
+    return {**content, "multi": _choice_answer_is_multi(answer)}
+
+
 async def create_question(db: AsyncSession, data: QuestionCreate, user_id: uuid.UUID) -> Question:
     question = Question(
         type=data.type,
         title=data.title,
-        content=data.content,
+        content=_normalize_choice_content(data.type, data.content, data.answer),
         options=data.options,
         answer=data.answer,
         analysis=data.analysis,
@@ -636,6 +658,8 @@ async def update_question(db: AsyncSession, question: Question, data: QuestionUp
     update_data = data.model_dump(exclude_unset=True, exclude={"tag_ids", "knowledge_point_ids"})
     for field, value in update_data.items():
         setattr(question, field, value)
+
+    question.content = _normalize_choice_content(question.type, question.content, question.answer)
 
     if data.tag_ids is not None:
         tags_result = await db.execute(select(Tag).where(Tag.id.in_(data.tag_ids)))
@@ -3289,7 +3313,7 @@ async def _load_questions_for_import_job(
         return {}
     result = await db.execute(
         select(Question)
-        .options(selectinload(Question.knowledge_points))
+        .options(selectinload(Question.knowledge_points), selectinload(Question.tags))
         .where(Question.id.in_(question_ids))
     )
     return {question.id: question for question in result.scalars().all()}
@@ -3356,10 +3380,17 @@ async def process_question_import_job(
         error_message: str | None = None
 
         try:
-            candidates = await _load_root_descendant_knowledge_points(db, root_knowledge_point_id)
             question_payloads = [QuestionCreate.model_validate(question) for question in questions]
             question_ids = [uuid.UUID(question_id) for question_id in job.created_question_ids]
             questions_by_id = await _load_questions_for_import_job(db, question_ids)
+            candidates = await _load_root_descendant_knowledge_points(db, root_knowledge_point_id)
+            if not candidates:
+                candidates = await _suggest_course_child_knowledge_points_from_questions(
+                    db,
+                    root_knowledge_point_id=root_knowledge_point_id,
+                    user_id=user_id,
+                    questions=list(questions_by_id.values()),
+                )
 
             for question_id, question_data in zip(question_ids, question_payloads):
                 question = questions_by_id.get(question_id)
@@ -3371,21 +3402,17 @@ async def process_question_import_job(
 
                 try:
                     try:
-                        matched_ids = await match_knowledge_points_with_ai(question_data, candidates)
+                        matched = await _set_question_matched_course_knowledge_points(
+                            db,
+                            question=question,
+                            question_data=question_data,
+                            candidates=candidates,
+                            root_knowledge_point_id=root_knowledge_point_id,
+                        )
                     except Exception as exc:  # noqa: BLE001 - AI 匹配失败不应让题目丢失，记录后走兜底
-                        matched_ids = []
+                        matched = False
                         error_message = str(exc)
-                    existing_ids = {kp.id for kp in question.knowledge_points}
-                    merged_ids = list(dict.fromkeys([*existing_ids, *matched_ids]))
-                    if not merged_ids:
-                        # 未匹配到任何子知识点（例如课程目录为空），兜底挂到课程根知识点，
-                        # 保证导入的题目始终在课程题目列表中可见。
-                        merged_ids = [root_knowledge_point_id]
-                    matched_kps_result = await db.execute(
-                        select(KnowledgePoint).where(KnowledgePoint.id.in_(merged_ids))
-                    )
-                    question.knowledge_points = list(matched_kps_result.scalars().all())
-                    if matched_ids:
+                    if matched:
                         matched_count += 1
                     else:
                         unmatched_count += 1
@@ -3450,6 +3477,131 @@ def _question_create_from_existing(question: Question) -> QuestionCreate:
     )
 
 
+def _question_summary_for_knowledge_completion(question: Question) -> dict[str, Any]:
+    question_data = _question_create_from_existing(question)
+    content_text = ""
+    if isinstance(question_data.content, dict):
+        content_text = str(
+            question_data.content.get("text") or question_data.content.get("html") or ""
+        ).strip()
+    return {
+        "id": str(question.id),
+        "type": (
+            question_data.type.value
+            if hasattr(question_data.type, "value")
+            else str(question_data.type)
+        ),
+        "title": question_data.title,
+        "content": content_text[:800],
+        "options": question_data.options or {},
+    }
+
+
+async def _suggest_course_child_knowledge_points_from_questions(
+    db: AsyncSession,
+    *,
+    root_knowledge_point_id: uuid.UUID,
+    user_id: uuid.UUID,
+    questions: list[Question],
+) -> list[KnowledgePoint]:
+    """Create direct child knowledge points inferred from course questions.
+
+    This is only used when the course has no child knowledge points yet. It avoids
+    treating the course root itself as the answer for every question.
+    """
+    if not questions:
+        return []
+    root = await db.get(KnowledgePoint, root_knowledge_point_id)
+    if root is None:
+        return []
+
+    question_payload = [
+        _question_summary_for_knowledge_completion(question)
+        for question in questions[:100]
+    ]
+    prompt = f"""
+你是课程知识目录设计助手。当前课程还没有任何子知识点，请根据题目内容为课程补全可用于归类题目的直接子知识点。
+
+课程名称：{root.name}
+题目样本（JSON 列表，最多 100 题）：
+{json.dumps(question_payload, ensure_ascii=False)}
+
+要求：
+1. 只生成直接挂在课程下的子知识点，数量 3 到 12 个；题目很少时可少于 3 个。
+2. 子知识点必须来自题目实际考查内容，不能把课程名称本身作为通用知识点。
+3. 名称要具体、可复用，避免“综合应用”“课程基础”这类过宽泛表达。
+4. 如果题目之间没有可归纳的明确知识点，可以返回空数组。
+5. 只返回合法 JSON，字段为 knowledge_points: [{{"name":"...", "description":"..."}}]。
+""".strip()
+
+    try:
+        data = await _request_deepseek_json(prompt)
+    except Exception:
+        return []
+
+    raw_items = data.get("knowledge_points") if isinstance(data, dict) else None
+    if not isinstance(raw_items, list):
+        return []
+
+    created: list[KnowledgePoint] = []
+    seen_names: set[str] = set()
+    root_name = root.name.strip()
+    for raw in raw_items[:12]:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or "").strip()
+        if not name or name == root_name or name in seen_names:
+            continue
+        seen_names.add(name)
+        existing = (
+            await db.execute(
+                select(KnowledgePoint).where(
+                    KnowledgePoint.parent_id == root_knowledge_point_id,
+                    KnowledgePoint.name == name,
+                    KnowledgePoint.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            created.append(existing)
+            continue
+        description = str(raw.get("description") or "").strip() or None
+        kp = await create_knowledge_point(
+            db,
+            KnowledgePointCreate(
+                name=name,
+                parent_id=root_knowledge_point_id,
+                description=description,
+            ),
+            user_id,
+        )
+        created.append(kp)
+    return created
+
+
+async def _set_question_matched_course_knowledge_points(
+    db: AsyncSession,
+    *,
+    question: Question,
+    question_data: QuestionCreate,
+    candidates: list[KnowledgePoint],
+    root_knowledge_point_id: uuid.UUID,
+) -> bool:
+    matched_ids = await match_knowledge_points_with_ai(question_data, candidates)
+    existing_ids = [
+        kp.id for kp in question.knowledge_points if kp.id != root_knowledge_point_id
+    ]
+    merged_ids = list(dict.fromkeys([*existing_ids, *matched_ids]))
+    if merged_ids:
+        matched_kps_result = await db.execute(
+            select(KnowledgePoint).where(KnowledgePoint.id.in_(merged_ids))
+        )
+        question.knowledge_points = list(matched_kps_result.scalars().all())
+    else:
+        question.knowledge_points = []
+    return bool(matched_ids)
+
+
 async def process_existing_question_knowledge_match_job(
     *,
     job_id: uuid.UUID,
@@ -3473,8 +3625,15 @@ async def process_existing_question_knowledge_match_job(
         error_message: str | None = None
 
         try:
-            candidates = await _load_root_descendant_knowledge_points(db, root_knowledge_point_id)
             questions_by_id = await _load_questions_for_import_job(db, question_ids)
+            candidates = await _load_root_descendant_knowledge_points(db, root_knowledge_point_id)
+            if not candidates:
+                candidates = await _suggest_course_child_knowledge_points_from_questions(
+                    db,
+                    root_knowledge_point_id=root_knowledge_point_id,
+                    user_id=user_id,
+                    questions=list(questions_by_id.values()),
+                )
 
             for question_id in question_ids:
                 question = questions_by_id.get(question_id)
@@ -3486,17 +3645,17 @@ async def process_existing_question_knowledge_match_job(
 
                 try:
                     question_data = _question_create_from_existing(question)
-                    matched_ids = await match_knowledge_points_with_ai(question_data, candidates)
-                    if matched_ids:
-                        target_ids = matched_ids
+                    matched = await _set_question_matched_course_knowledge_points(
+                        db,
+                        question=question,
+                        question_data=question_data,
+                        candidates=candidates,
+                        root_knowledge_point_id=root_knowledge_point_id,
+                    )
+                    if matched:
                         matched_count += 1
                     else:
-                        target_ids = [root_knowledge_point_id]
                         unmatched_count += 1
-                    matched_kps_result = await db.execute(
-                        select(KnowledgePoint).where(KnowledgePoint.id.in_(target_ids))
-                    )
-                    question.knowledge_points = list(matched_kps_result.scalars().all())
                 except Exception as exc:  # noqa: BLE001
                     failed_count += 1
                     error_message = str(exc)

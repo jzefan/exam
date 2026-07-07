@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useList } from "@refinedev/core";
 import { useNavigate } from "react-router-dom";
-import { ChevronDown, ChevronRight, Copy, Download, Eye, Loader2, Maximize2, Network, Pencil, Plus, RefreshCcw, Search, Sparkles, Trash2, X } from "lucide-react";
+import { ChevronRight, Copy, Download, Eye, Loader2, Maximize2, Network, Pencil, Plus, RefreshCcw, Search, Sparkles, Trash2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { TooltipButton } from "@/components/ui/tooltip-button";
@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
 import { exportPaper, type ExportPaperFormat } from "@/lib/exam-export";
 import type {
@@ -316,10 +317,14 @@ export function PaperListBody({
                         size="icon"
                         onClick={() =>
                           navigate(`/papers/${paper.id}`, {
-                            state: detailNavState,
+                            state: {
+                              ...detailNavState,
+                              courseQuestionBankName,
+                              knowledgePointOptions,
+                            },
                           })
                         }
-                        tooltip="查看"
+                        tooltip="详情"
                       >
                         <Eye className="h-4 w-4" />
                       </TooltipButton>
@@ -345,15 +350,6 @@ export function PaperListBody({
                           <Network className="h-4 w-4" />
                         </TooltipButton>
                       ) : null}
-                      <TooltipButton
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setEditingPaper(paper)}
-                        disabled={isBusy}
-                        tooltip="修改试卷"
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </TooltipButton>
                       <TooltipButton
                         variant="ghost"
                         size="icon"
@@ -468,6 +464,102 @@ function getPaperQuestionTitle(item: IPaperQuestion): string {
   return "未命名题目";
 }
 
+function getQuestionKnowledgePointIds(
+  question: IQuestion,
+  fallbackKnowledgePointId?: string | null,
+): string[] {
+  const ids = (question.knowledge_points ?? []).map((kp) => kp.id).filter(Boolean);
+  if (ids.length > 0) return ids;
+  return fallbackKnowledgePointId ? [fallbackKnowledgePointId] : [];
+}
+
+function getQuestionPlainText(question: IQuestion): string {
+  const content = question.content as { text?: unknown; html?: unknown } | string | null | undefined;
+  if (typeof content === "string" && content.trim()) return content.trim();
+  if (content && typeof content === "object") {
+    if (typeof content.text === "string" && content.text.trim()) return content.text.trim();
+    if (typeof content.html === "string" && content.html.trim()) {
+      return content.html.replace(/<[^>]+>/g, " ").trim();
+    }
+  }
+  return question.title ?? "";
+}
+
+function buildPaperReplacementPrompt(question: IQuestion, rootKnowledgePointName?: string | null): string {
+  const typeLabel = QUESTION_TYPE_LABELS[question.type] ?? question.type;
+  const kpNames = (question.knowledge_points ?? []).map((kp) => kp.name).join("、") || rootKnowledgePointName || "当前课程";
+  const content = getQuestionPlainText(question).slice(0, 500);
+  return `请基于下面的原题生成一道替换题，要求保持同一课程、同一知识点范围、同一题型和接近难度。
+- 课程/知识点范围：${kpNames}
+- 题型：${typeLabel}
+- 不要生成与课程无关的题目，也不要照抄原题。
+
+原题题干：
+${content}`.trim();
+}
+
+async function streamGenerateReplacementQuestion({
+  question,
+  knowledgePointIds,
+  examTitle,
+  rootKnowledgePointName,
+}: {
+  question: IQuestion;
+  knowledgePointIds: string[];
+  examTitle: string;
+  rootKnowledgePointName?: string | null;
+}): Promise<Record<string, unknown>> {
+  const token = localStorage.getItem("access_token");
+  const response = await fetch("/api/questions/ai-generate/stream", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({
+      total_count: 1,
+      difficulty: question.difficulty,
+      type_distribution: { [question.type]: 1 },
+      knowledge_point_ids: knowledgePointIds,
+      exam_title: examTitle,
+      prompt: buildPaperReplacementPrompt(question, rootKnowledgePointName),
+      model: "deepseek",
+    }),
+  });
+
+  if (!response.ok || !response.body) {
+    throw new Error("AI 生成请求失败");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let generated: Record<string, unknown> | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+    for (const part of parts) {
+      const dataLine = part.split("\n").find((line) => line.startsWith("data:"));
+      if (!dataLine) continue;
+      const event = JSON.parse(dataLine.replace(/^data:\s*/, "")) as Record<string, unknown>;
+      if (event.type === "question") {
+        generated = event.data as Record<string, unknown>;
+      } else if (event.type === "error") {
+        throw new Error((event.message as string) || "AI 生成失败");
+      }
+    }
+  }
+
+  if (!generated) {
+    throw new Error("AI 未返回题目数据");
+  }
+  return generated;
+}
+
 function createManualQuestionDraft({
   type,
   bank,
@@ -494,7 +586,10 @@ function createManualQuestionDraft({
     id: "manual-draft",
     type: backendType,
     title: "",
-    content: { html: "", text: "" },
+    content:
+      backendType === "choice"
+        ? { html: "", text: "", multi: type === "multi_choice" }
+        : { html: "", text: "" },
     options:
       backendType === "choice"
         ? { A: "", B: "", C: "", D: "" }
@@ -565,6 +660,8 @@ function PaperEditDialog({
   const [pendingQuestionById, setPendingQuestionById] = useState<Map<string, IPaperQuestion>>(
     () => new Map(),
   );
+  const [replacingQuestionId, setReplacingQuestionId] = useState<string | null>(null);
+  const [recentlyReplacedQuestionId, setRecentlyReplacedQuestionId] = useState<string | null>(null);
   // 左栏题型分组的展开状态：默认全部收起，点击题型标题展开/收起。
   const [expandedTypes, setExpandedTypes] = useState<Set<string>>(() => new Set());
 
@@ -785,16 +882,20 @@ function PaperEditDialog({
   const handleAIAppend = async () => {
     setAiAppending(true);
     try {
+      const targetBank = courseQuestionBankName ? await ensureCourseQuestionBank() : courseBank;
       const before = await persistCurrent();
       const updated = await appendPaperQuestionsWithAI<IPaperDetail>(paper.id, {
         question_count: aiCount,
         difficulty_strategy: aiDifficulty,
         prefer_root_knowledge_point: true,
         model: "deepseek",
+        ...(targetBank ? { question_bank_id: targetBank.id } : {}),
       });
       setDetail(updated);
       setTitle(updated.title);
       setSelectedIds(updated.questions.map((item) => item.question_id));
+      setAiPanelOpen(false);
+      setSelectorRefreshKey((value) => value + 1);
       toast({
         title: "AI 题目已加入",
         description: `新增 ${Math.max(0, updated.questions.length - before.questions.length)} 道题。`,
@@ -912,6 +1013,185 @@ function PaperEditDialog({
     }
   };
 
+  const handleReplaceQuestion = async (item: IPaperQuestion) => {
+    const currentQuestion = item.question;
+    if (!currentQuestion || !detail) return;
+    setReplacingQuestionId(item.question_id);
+    try {
+      const targetBank = courseQuestionBankName ? await ensureCourseQuestionBank() : courseBank;
+      if (!targetBank) {
+        throw new Error("当前课程题库未就绪，无法换题。");
+      }
+
+      const fallbackKnowledgePointId = detail.root_knowledge_point_id ?? paper.root_knowledge_point_id;
+      const knowledgePointIds = getQuestionKnowledgePointIds(currentQuestion, fallbackKnowledgePointId);
+      const existingSet = new Set(selectedIds);
+      let candidates: IQuestion[] = [];
+      const params = new URLSearchParams({
+        _start: "0",
+        _end: "500",
+        type: currentQuestion.type,
+        question_bank_id: targetBank.id,
+      });
+      const bankQuestions = await paperApiRequest<IQuestion[]>(`/questions?${params}`);
+      const knowledgePointSet = new Set(knowledgePointIds);
+      candidates = bankQuestions.filter(
+        (question) =>
+          question.id !== currentQuestion.id &&
+          !existingSet.has(question.id) &&
+          (knowledgePointSet.size === 0 ||
+            (question.knowledge_points ?? []).some((kp) => knowledgePointSet.has(kp.id))),
+      );
+
+      let replacementQuestion: IQuestion;
+      let fromAI = false;
+      if (candidates.length > 0) {
+        const picked = candidates[Math.floor(Math.random() * candidates.length)];
+        replacementQuestion = await paperApiRequest<IQuestion>(
+          `/questions/${picked.id}/complete-answer`,
+          { method: "POST" },
+        );
+      } else {
+        const generated = await streamGenerateReplacementQuestion({
+          question: currentQuestion,
+          knowledgePointIds,
+          examTitle: detail.title,
+          rootKnowledgePointName: detail.root_knowledge_point?.name,
+        });
+        replacementQuestion = await paperApiRequest<IQuestion>("/questions", {
+          method: "POST",
+          body: JSON.stringify({
+            type: (generated.type as QuestionType | undefined) ?? currentQuestion.type,
+            title:
+              (generated.title as string | undefined) ||
+              ((generated.content as { text?: string } | undefined)?.text?.slice(0, 120) ?? currentQuestion.title),
+            content: (generated.content as IQuestion["content"] | undefined) ?? { text: "" },
+            options: (generated.options as IQuestion["options"] | undefined) ?? null,
+            answer: (generated.answer as IQuestion["answer"] | undefined) ?? {},
+            analysis: (generated.analysis as string | null | undefined) ?? null,
+            difficulty: (generated.difficulty as number | undefined) ?? currentQuestion.difficulty,
+            score: currentQuestion.score,
+            source: "ai_generated",
+            tag_ids: [],
+            knowledge_point_ids: knowledgePointIds,
+            question_bank_id: targetBank.id,
+          }),
+        });
+        fromAI = true;
+      }
+
+      setPendingQuestionById((prev) => {
+        const next = new Map(prev);
+        next.delete(item.question_id);
+        next.set(replacementQuestion.id, {
+          question_id: replacementQuestion.id,
+          order: item.order,
+          score_override: item.score_override,
+          question: replacementQuestion,
+        });
+        return next;
+      });
+      setSelectedIds((prev) =>
+        prev.map((questionId) =>
+          questionId === item.question_id ? replacementQuestion.id : questionId,
+        ),
+      );
+      setRecentlyReplacedQuestionId(replacementQuestion.id);
+      window.setTimeout(() => {
+        setRecentlyReplacedQuestionId((current) =>
+          current === replacementQuestion.id ? null : current,
+        );
+      }, 260);
+      setSelectorRefreshKey((value) => value + 1);
+      toast({
+        title: "已换一题",
+        description: fromAI
+          ? `题库中没有同知识点可替换题，已用 AI 生成并保存到「${targetBank.name}」。`
+          : "已从课程题库中替换为同知识点题目，保存修改后生效。",
+      });
+    } catch (error) {
+      toast({
+        title: "换题失败",
+        description: error instanceof Error ? error.message : "请稍后重试",
+        variant: "destructive",
+      });
+    } finally {
+      setReplacingQuestionId(null);
+    }
+  };
+
+  const renderAIAppendPopover = () => (
+    <Popover open={aiPanelOpen} onOpenChange={setAiPanelOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={saving}
+          className="border-primary/30 text-primary hover:bg-primary/5 hover:text-primary"
+        >
+          <Sparkles className="h-4 w-4" />
+          AI 生成并加入
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" sideOffset={8} className="w-[360px] p-4">
+        <div className="space-y-4">
+          <div>
+            <p className="text-sm font-semibold text-foreground">AI 生成并加入</p>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              基于当前试卷题型、难度和课程知识点生成新题，生成后加入当前试卷。
+            </p>
+          </div>
+          <div className="grid grid-cols-[110px_1fr] gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="paper-ai-count">数量</Label>
+              <Input
+                id="paper-ai-count"
+                type="number"
+                min={1}
+                max={50}
+                value={aiCount}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  setAiCount(Number.isFinite(value) ? Math.min(50, Math.max(1, value)) : 1);
+                }}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="paper-ai-difficulty">难度</Label>
+              <select
+                id="paper-ai-difficulty"
+                value={aiDifficulty}
+                onChange={(event) => setAiDifficulty(event.target.value as PaperDifficultyStrategy)}
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+              >
+                {(["similar", "easier", "harder"] as const).map((strategy) => (
+                  <option key={strategy} value={strategy}>
+                    {getDifficultyStrategyLabel(strategy)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {!canAIAppend ? (
+            <p className="rounded-md bg-muted/60 px-3 py-2 text-xs leading-5 text-muted-foreground">
+              当前试卷没有源题或已归档，暂不能基于试卷 AI 追加。
+            </p>
+          ) : null}
+          <Button
+            type="button"
+            className="w-full"
+            disabled={!canAIAppend || aiAppending || saving}
+            onClick={handleAIAppend}
+          >
+            {aiAppending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            生成加入
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+
   return (
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent className="flex h-[calc(100dvh-2rem)] max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-[1500px] flex-col gap-3 overflow-hidden p-4">
@@ -929,8 +1209,8 @@ function PaperEditDialog({
           </div>
         ) : detail ? (
           <div className="grid min-h-0 flex-1 gap-5 overflow-hidden lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-            <section className="flex min-h-0 flex-col gap-4 overflow-y-auto pr-1">
-              <div className="space-y-2">
+            <section className="flex min-h-0 flex-col gap-4 overflow-hidden pr-1">
+              <div className="shrink-0 space-y-2">
                 <Label htmlFor="paper-edit-title">试卷名称</Label>
                 <Input
                   id="paper-edit-title"
@@ -940,8 +1220,8 @@ function PaperEditDialog({
                 />
               </div>
 
-              <div className="rounded-xl border border-border/60 bg-muted/10">
-                <div className="flex items-center justify-between border-b border-border/60 px-3 py-2">
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/60 bg-muted/10">
+                <div className="flex shrink-0 items-center justify-between border-b border-border/60 px-3 py-2">
                   <div className="flex min-w-0 items-baseline gap-2">
                     <p className="shrink-0 text-sm font-semibold text-foreground">当前试卷题目</p>
                     <p className="truncate text-xs text-muted-foreground">
@@ -959,7 +1239,7 @@ function PaperEditDialog({
                     清空
                   </Button>
                 </div>
-                <div className="max-h-[min(42vh,420px)] overflow-y-auto">
+                <div className="min-h-0 flex-1 overflow-y-auto">
                   {selectedQuestionItems.length === 0 ? (
                     <div className="px-4 py-10 text-center text-sm text-muted-foreground">
                       暂无已选题目，可从右侧题库选择。
@@ -995,26 +1275,63 @@ function PaperEditDialog({
                           >
                             {items.map((item, itemIndex) =>
                               item.question ? (
-                                <QuestionPreviewCard
+                                <div
                                   key={item.question_id}
-                                  question={item.question}
-                                  index={groupStartIndex + itemIndex + 1}
-                                  className="cursor-pointer transition-all hover:border-primary hover:shadow-md"
-                                  expandOnClick
-                                  hideAnswer
-                                  actions={
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      size="sm"
-                                      className="h-7 px-1.5 text-xs text-muted-foreground hover:text-red-600 sm:px-2 dark:hover:text-red-400"
-                                      onClick={() => removeQuestion(item.question_id)}
-                                    >
-                                      <X size={13} className="sm:mr-1" />
-                                      <span className="hidden sm:inline">移除</span>
-                                    </Button>
-                                  }
-                                />
+                                  className={`transition-all duration-200 motion-reduce:transition-none ${
+                                    replacingQuestionId === item.question_id
+                                      ? "translate-y-1 opacity-35"
+                                      : recentlyReplacedQuestionId === item.question_id
+                                        ? "animate-in fade-in-0 slide-in-from-bottom-1 duration-200 motion-reduce:animate-none"
+                                        : ""
+                                  }`}
+                                >
+                                  <QuestionPreviewCard
+                                    question={item.question}
+                                    index={groupStartIndex + itemIndex + 1}
+                                    className="cursor-pointer transition-all hover:border-primary hover:shadow-md"
+                                    expandOnClick
+                                    hideAnswer
+                                    actions={
+                                      <div className="flex items-center gap-1">
+                                        <TooltipButton
+                                          type="button"
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-7 w-7"
+                                          onClick={() => setEditingQuestion(item.question)}
+                                          tooltip="编辑题目"
+                                        >
+                                          <Pencil className="h-3.5 w-3.5" />
+                                        </TooltipButton>
+                                        <TooltipButton
+                                          type="button"
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-7 w-7"
+                                          disabled={Boolean(replacingQuestionId)}
+                                          onClick={() => handleReplaceQuestion(item)}
+                                          tooltip="换一题"
+                                        >
+                                          {replacingQuestionId === item.question_id ? (
+                                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                          ) : (
+                                            <RefreshCcw className="h-3.5 w-3.5" />
+                                          )}
+                                        </TooltipButton>
+                                        <TooltipButton
+                                          type="button"
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                                          onClick={() => removeQuestion(item.question_id)}
+                                          tooltip="从试卷中移除"
+                                        >
+                                          <X className="h-3.5 w-3.5" />
+                                        </TooltipButton>
+                                      </div>
+                                    }
+                                  />
+                                </div>
                               ) : (
                                 <div
                                   key={item.question_id}
@@ -1046,81 +1363,6 @@ function PaperEditDialog({
                   )}
                 </div>
               </div>
-
-              <div className="rounded-xl border border-primary/20 bg-primary/[0.03]">
-                <button
-                  type="button"
-                  className="flex w-full items-start justify-between gap-3 p-4 text-left"
-                  onClick={() => setAiPanelOpen((open) => !open)}
-                  aria-expanded={aiPanelOpen}
-                >
-                  <div>
-                    <p className="text-sm font-semibold text-foreground">AI 生成并加入</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {aiPanelOpen
-                        ? "基于当前试卷题型、难度和课程知识点生成新题，直接追加到当前试卷。"
-                        : "点击展开 AI 生成配置。"}
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2 text-primary">
-                    <Sparkles className="mt-0.5 h-4 w-4" />
-                    <ChevronDown
-                      className={`h-4 w-4 transition-transform ${aiPanelOpen ? "rotate-180" : ""}`}
-                    />
-                  </div>
-                </button>
-                {aiPanelOpen ? (
-                  <div className="border-t border-primary/15 p-4 pt-3">
-                    <div className="grid gap-3 sm:grid-cols-[120px_1fr_auto]">
-                      <div className="space-y-1.5">
-                        <Label htmlFor="paper-ai-count">数量</Label>
-                        <Input
-                          id="paper-ai-count"
-                          type="number"
-                          min={1}
-                          max={50}
-                          value={aiCount}
-                          onChange={(event) => {
-                            const value = Number(event.target.value);
-                            setAiCount(Number.isFinite(value) ? Math.min(50, Math.max(1, value)) : 1);
-                          }}
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor="paper-ai-difficulty">难度</Label>
-                        <select
-                          id="paper-ai-difficulty"
-                          value={aiDifficulty}
-                          onChange={(event) => setAiDifficulty(event.target.value as PaperDifficultyStrategy)}
-                          className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                        >
-                          {(["similar", "easier", "harder"] as const).map((strategy) => (
-                            <option key={strategy} value={strategy}>
-                              {getDifficultyStrategyLabel(strategy)}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="flex items-end">
-                        <Button
-                          type="button"
-                          className="w-full"
-                          disabled={!canAIAppend || aiAppending || saving}
-                          onClick={handleAIAppend}
-                        >
-                          {aiAppending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                          生成加入
-                        </Button>
-                      </div>
-                    </div>
-                    {!canAIAppend ? (
-                      <p className="mt-2 text-xs text-muted-foreground">
-                        当前试卷没有源题或已归档，暂不能基于试卷 AI 追加。
-                      </p>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
             </section>
 
             <section className="flex min-h-0 min-w-0 flex-col rounded-xl border border-border/60 p-4">
@@ -1128,15 +1370,18 @@ function PaperEditDialog({
                 <>
                   <div className="mb-3 flex shrink-0 items-center justify-between gap-3">
                     <p className="text-sm font-semibold text-foreground">从课程题库选择</p>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setManualAddOpen(true)}
-                    >
-                      <Plus className="h-4 w-4" />
-                      添加题目
-                    </Button>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setManualAddOpen(true)}
+                      >
+                        <Plus className="h-4 w-4" />
+                        添加题目
+                      </Button>
+                      {renderAIAppendPopover()}
+                    </div>
                   </div>
                   <div className="flex min-h-0 flex-1 items-center justify-center rounded-lg border border-dashed border-border/70 text-sm text-muted-foreground">
                     {ensuringCourseBank ? "正在准备课程题库..." : "课程题库未就绪"}
@@ -1189,6 +1434,7 @@ function PaperEditDialog({
                           <Plus className="h-4 w-4" />
                           添加题目
                         </Button>
+                        {renderAIAppendPopover()}
                       </div>
                     </div>
                   )}

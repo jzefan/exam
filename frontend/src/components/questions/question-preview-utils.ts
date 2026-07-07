@@ -1,4 +1,4 @@
-import type { IQuestion, QuestionType } from "@/types";
+import type { IQuestion, QuestionDisplayType, QuestionType } from "@/types";
 import type { BadgeProps } from "@/components/ui/badge";
 
 const QUESTION_TYPE_ALIASES: Record<string, QuestionType> = {
@@ -54,6 +54,26 @@ export const questionTypeFullLabel: Record<QuestionType, string> = {
   code: "编程题",
 };
 
+export const questionDisplayTypeFullLabel: Record<QuestionDisplayType, string> = {
+  single_choice: "单选题",
+  multi_choice: "多选题",
+  true_false: "判断题",
+  fill_in: "填空题",
+  short_answer: "简答题",
+  essay: "论述题",
+  code: "编程题",
+};
+
+export const questionDisplayTypeShortLabel: Record<QuestionDisplayType, string> = {
+  single_choice: "单选",
+  multi_choice: "多选",
+  true_false: "判断",
+  fill_in: "填空",
+  short_answer: "简答",
+  essay: "论述",
+  code: "编程",
+};
+
 export const questionTypeColorClass: Record<QuestionType, string> = {
   choice: "bg-blue-500 text-white",
   true_false: "bg-teal-500 text-white",
@@ -94,7 +114,26 @@ export function getQuestionContentHtml(question: IQuestion): string | null {
 }
 
 export function isMultiChoice(question: IQuestion): boolean {
-  return normalizeQuestionType(question.type) === "choice" && Array.isArray(question.answer?.correct);
+  return (
+    normalizeQuestionType(question.type) === "choice" &&
+    (question.content?.multi === true || Array.isArray(question.answer?.correct))
+  );
+}
+
+export function getQuestionDisplayType(question: IQuestion): QuestionDisplayType | null {
+  const normalizedType = normalizeQuestionType(question.type);
+  if (!normalizedType) {
+    return null;
+  }
+  if (normalizedType === "choice") {
+    return isMultiChoice(question) ? "multi_choice" : "single_choice";
+  }
+  return normalizedType;
+}
+
+export function getQuestionDisplayTypeLabel(question: IQuestion): string {
+  const displayType = getQuestionDisplayType(question);
+  return displayType ? questionDisplayTypeFullLabel[displayType] : "题目";
 }
 
 export function getQuestionAnswerText(question: IQuestion): string {

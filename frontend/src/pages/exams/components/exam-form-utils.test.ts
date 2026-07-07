@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  calculateDurationMinutes,
   DEFAULT_NOTES,
   getPublishedExamStatus,
   toSubmitDateTime,
@@ -108,5 +109,16 @@ describe("toSubmitDateTime", () => {
 
   it("returns null for an empty datetime input", () => {
     expect(toSubmitDateTime("")).toBeNull();
+  });
+});
+
+describe("calculateDurationMinutes", () => {
+  it("calculates the minute difference between start and end time", () => {
+    expect(calculateDurationMinutes("2026-07-04T10:30", "2026-07-04T14:30")).toBe(240);
+  });
+
+  it("returns null when the time range is invalid", () => {
+    expect(calculateDurationMinutes("2026-07-04T10:30", "2026-07-04T10:30")).toBeNull();
+    expect(calculateDurationMinutes("2026-07-04T10:30", "")).toBeNull();
   });
 });

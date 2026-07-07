@@ -366,6 +366,7 @@ export function QuestionPreviewCard({
   index,
   trailing,
   actions,
+  actionsPlacement = "footer",
   expanded,
   defaultExpanded = false,
   hideTypeBadge = false,
@@ -390,6 +391,7 @@ export function QuestionPreviewCard({
   index?: number;
   trailing?: ReactNode;
   actions?: ReactNode;
+  actionsPlacement?: "footer" | "header";
   expanded?: boolean;
   defaultExpanded?: boolean;
   hideTypeBadge?: boolean;
@@ -480,6 +482,8 @@ export function QuestionPreviewCard({
     ? knowledgeRecognitionConfig[knowledgeRecognitionStatus]
     : null;
   const RecognitionIcon = recognitionMeta?.icon;
+  const headerActions = actionsPlacement === "header" ? actions : null;
+  const footerActions = actionsPlacement === "footer" ? actions : null;
 
   useEffect(() => {
     if (!expandOnHover) {
@@ -610,6 +614,14 @@ export function QuestionPreviewCard({
           ) : null}
           {trailing ? (
             <span className="ml-1 inline-flex items-center">{trailing}</span>
+          ) : null}
+          {headerActions ? (
+            <span
+              className="ml-1 inline-flex items-center gap-1"
+              data-no-card-toggle="true"
+            >
+              {headerActions}
+            </span>
           ) : null}
         </div>
       ) : null}
@@ -794,7 +806,7 @@ export function QuestionPreviewCard({
 
               {/* footer */}
               {!hideMeta &&
-              (updatedLabel || question.usage_count > 0 || actions) ? (
+              (updatedLabel || question.usage_count > 0 || footerActions) ? (
                 <div className="flex items-center justify-between gap-3 border-t border-border pt-3">
                   <span className="inline-flex items-center gap-2 whitespace-nowrap text-xs text-muted-foreground">
                     {updatedLabel ? <span>更新于 {updatedLabel}</span> : null}
@@ -807,8 +819,8 @@ export function QuestionPreviewCard({
                       </>
                     ) : null}
                   </span>
-                  {actions ? (
-                    <div className="flex items-center gap-1">{actions}</div>
+                  {footerActions ? (
+                    <div className="flex items-center gap-1">{footerActions}</div>
                   ) : null}
                 </div>
               ) : null}

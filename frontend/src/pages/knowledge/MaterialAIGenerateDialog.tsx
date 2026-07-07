@@ -41,27 +41,43 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import {
   AI_DIFFICULTY_LABELS,
+  EMPTY_AI_TYPE_ALLOC,
   AI_MODEL_OPTIONS,
   AI_TYPE_LABELS,
   type AIModelProvider,
+  type AIQuestionType,
 } from "@/components/questions/ai-question-config-constants";
 import { useToast } from "@/hooks/use-toast";
 import type { QuestionType } from "@/types";
 
 const DEFAULT_TARGET_QUESTION_BANK_NAME = "主知识对应题库";
 
-type TypeAllocation = Record<QuestionType, number>;
+type TypeAllocation = Record<AIQuestionType, number>;
 
 interface GeneratedQuestion {
   index: number;
   type: QuestionType;
   title: string;
-  content: { text: string };
+  content: { text: string; multi?: boolean };
   options: Record<string, string> | null;
-  answer: { text?: string; correct?: string };
+  answer: { text?: string; correct?: string | string[] };
   analysis: string | null;
   difficulty: number;
   selected: boolean;
+}
+
+function backendTypeForAIType(type: AIQuestionType | undefined): QuestionType | undefined {
+  if (!type) return undefined;
+  return type === "single_choice" || type === "multi_choice" ? "choice" : type;
+}
+
+function getGeneratedQuestionDisplayType(question: GeneratedQuestion): AIQuestionType {
+  if (question.type === "choice") {
+    return question.content?.multi === true || Array.isArray(question.answer?.correct)
+      ? "multi_choice"
+      : "single_choice";
+  }
+  return question.type;
 }
 
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
@@ -95,8 +111,27 @@ function difficultyDots(level: number) {
 function getAnswerText(answer: GeneratedQuestion["answer"] | null | undefined) {
   if (!answer) return "";
   if (typeof answer.text === "string") return answer.text.trim();
+  if (Array.isArray(answer.correct)) {
+    return answer.correct
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .join("、");
+  }
   if (typeof answer.correct === "string") return answer.correct.trim();
   return "";
+}
+
+function getCorrectAnswerKeys(answer: GeneratedQuestion["answer"] | null | undefined) {
+  const correct = answer?.correct;
+  const values = Array.isArray(correct)
+    ? correct
+    : typeof correct === "string"
+      ? [correct]
+      : [];
+
+  return new Set(
+    values.map((value) => value.trim().toUpperCase()).filter(Boolean),
+  );
 }
 
 function inferCourseNameFromKnowledgePath(
@@ -224,12 +259,8 @@ export function MaterialAIGenerateDialog({
 
   const [difficulty, setDifficulty] = useState(3);
   const [typeAlloc, setTypeAlloc] = useState<TypeAllocation>({
-    choice: 10,
-    true_false: 0,
-    fill_in: 0,
-    short_answer: 0,
-    essay: 0,
-    code: 0,
+    ...EMPTY_AI_TYPE_ALLOC,
+    single_choice: 10,
   });
   const [model, setModel] = useState<AIModelProvider>("deepseek");
   const [customPrompt, setCustomPrompt] = useState("");
@@ -286,7 +317,7 @@ export function MaterialAIGenerateDialog({
       if (v > 0) typeDistribution[k] = v;
     }
     const expectedTypes = Object.entries(typeAlloc).flatMap(([type, count]) =>
-      Array.from({ length: count }, () => type as QuestionType),
+      Array.from({ length: count }, () => type as AIQuestionType),
     );
 
     const requestBody = {
@@ -339,10 +370,11 @@ export function MaterialAIGenerateDialog({
             if (questionIndex >= totalCount) return;
             const expectedType = expectedTypes[questionIndex];
             const generatedType = event.data.type ?? "choice";
-            if (expectedType && generatedType !== expectedType) {
+            const expectedBackendType = backendTypeForAIType(expectedType);
+            if (expectedBackendType && generatedType !== expectedBackendType) {
               toast({
                 title: "生成题型不符合要求",
-                description: `第 ${questionIndex + 1} 题要求生成「${AI_TYPE_LABELS[expectedType]}」，但 AI 返回了「${AI_TYPE_LABELS[generatedType as QuestionType] ?? generatedType}」。请重新生成。`,
+                description: `第 ${questionIndex + 1} 题要求生成「${AI_TYPE_LABELS[expectedType]}」，但 AI 返回了「${generatedType}」。请重新生成。`,
                 variant: "destructive",
               });
               streamFailed = true;
@@ -365,6 +397,7 @@ export function MaterialAIGenerateDialog({
               title: event.data.title ?? "",
               content: {
                 text: event.data.content?.text ?? event.data.title ?? "",
+                multi: event.data.content?.multi === true,
               },
               options: event.data.options ?? null,
               answer: event.data.answer ?? {},
@@ -730,7 +763,7 @@ export function MaterialAIGenerateDialog({
               </span>
             </div>
             <div className="grid w-3/4 grid-cols-3 gap-2">
-              {(Object.keys(AI_TYPE_LABELS) as QuestionType[]).map((type) => (
+              {(Object.keys(AI_TYPE_LABELS) as AIQuestionType[]).map((type) => (
                 <TypeChip
                   key={type}
                   label={AI_TYPE_LABELS[type]}
@@ -822,7 +855,7 @@ export function MaterialAIGenerateDialog({
             </div>
           ) : (
             questions.map((q) => {
-              const correctKey = q.answer?.correct?.trim().toUpperCase();
+              const correctKeys = getCorrectAnswerKeys(q.answer);
 
               return (
                 <article
@@ -843,7 +876,7 @@ export function MaterialAIGenerateDialog({
                       #{q.index + 1}
                     </span>
                     <span className="rounded-[7px] bg-primary/10 px-[9px] py-[2px] text-[12.5px] font-semibold text-primary">
-                      {AI_TYPE_LABELS[q.type as keyof TypeAllocation] ?? q.type}
+                      {AI_TYPE_LABELS[getGeneratedQuestionDisplayType(q)] ?? q.type}
                     </span>
                     <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
                       <span className="inline-flex gap-[3px]">
@@ -887,7 +920,7 @@ export function MaterialAIGenerateDialog({
                     {q.options && Object.keys(q.options).length > 0 && (
                       <div className="mb-4 flex flex-col gap-2">
                         {Object.entries(q.options).map(([key, value]) => {
-                          const isCorrect = correctKey === key.toUpperCase();
+                          const isCorrect = correctKeys.has(key.toUpperCase());
                           return (
                             <div
                               key={key}
@@ -945,11 +978,7 @@ export function MaterialAIGenerateDialog({
                         <span className="font-semibold text-primary">
                           答案：
                         </span>
-                        <LatexText>
-                          {q.answer.correct ??
-                            q.answer.text ??
-                            JSON.stringify(q.answer)}
-                        </LatexText>
+                        <LatexText>{getAnswerText(q.answer) || JSON.stringify(q.answer)}</LatexText>
                       </div>
                     )}
 

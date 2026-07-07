@@ -166,7 +166,9 @@ export function QuestionCreate() {
       });
     }
 
-    return { html: form.contentHtml, text: plainText };
+    return type === "choice"
+      ? { html: form.contentHtml, text: plainText, multi: isMultiChoice }
+      : { html: form.contentHtml, text: plainText };
   };
 
   const buildOptions = (): Record<string, string> | null => {

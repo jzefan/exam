@@ -153,6 +153,43 @@ describe("paper view utils", () => {
     ]);
   });
 
+  it("splits single choice and multiple choice summaries when requested", () => {
+    const previewItems = buildPaperPreviewItems(
+      [
+        { question_id: "q1", order: 1, score_override: 6 },
+        { question_id: "q2", order: 2, score_override: 4 },
+      ],
+      [
+        mockQuestions[0],
+        {
+          ...mockQuestions[1],
+          answer: { correct: ["A", "B"] },
+        },
+      ],
+    );
+
+    const summaries = buildQuestionTypeSummaries(previewItems, { splitChoice: true });
+
+    expect(summaries).toMatchObject([
+      {
+        key: "single_choice",
+        label: "单选题",
+        type: "choice",
+        count: 1,
+        totalScore: 6,
+        questionIds: ["q1"],
+      },
+      {
+        key: "multi_choice",
+        label: "多选题",
+        type: "choice",
+        count: 1,
+        totalScore: 4,
+        questionIds: ["q2"],
+      },
+    ]);
+  });
+
   it("orders preview questions by fixed question type sequence and keeps order inside each type", () => {
     const previewItems = buildPaperPreviewItems(
       [

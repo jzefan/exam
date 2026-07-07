@@ -7,6 +7,7 @@ from app.auth.dependencies import CurrentUser, user_has_role
 from app.database import get_db
 from app.rbac.schemas import StudentCreate, StudentRead, ClassCreate, ClassResponse, BatchImportResponse
 from app.rbac.schemas import StudentBatchDeleteRequest, StudentBatchDeleteResponse
+from app.rbac.schemas import StudentPasswordResetResponse
 from app.rbac.service import (
     create_or_link_student,
     create_student, 
@@ -17,7 +18,8 @@ from app.rbac.service import (
     get_user_primary_org, 
     create_class, 
     list_org_classes, 
-    delete_class
+    delete_class,
+    reset_student_password_for_actor,
 )
 
 router = APIRouter(tags=["students"])
@@ -181,6 +183,32 @@ async def batch_delete_students(
         failed_count=failed_count,
         errors=errors,
     )
+
+
+@router.post("/{student_id}/reset-password", response_model=StudentPasswordResetResponse)
+async def reset_student_password(
+    student_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+    org_id: Annotated[uuid.UUID, Depends(get_teacher_org_id)],
+):
+    student_admin = await is_student_admin(db, user)
+    try:
+        _student, password_source = await reset_student_password_for_actor(
+            db,
+            student_id,
+            org_id,
+            actor_is_admin=student_admin,
+            teacher_id=None if student_admin else user.id,
+        )
+        await db.commit()
+        return StudentPasswordResetResponse(password_source=password_source)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.delete("/{student_id}", status_code=status.HTTP_204_NO_CONTENT)

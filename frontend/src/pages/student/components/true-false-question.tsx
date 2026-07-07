@@ -22,7 +22,9 @@ export function TrueFalseQuestion({ question, answer, onChange }: Props) {
         className="prose prose-sm dark:prose-invert max-w-none leading-relaxed"
         dangerouslySetInnerHTML={{
           __html: renderLatexInHtml(
-            (question.content as { text?: string }).text ?? question.title,
+            (question.content as { html?: string; text?: string }).html ??
+            (question.content as { text?: string }).text ??
+            question.title,
           ),
         }}
       />

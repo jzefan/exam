@@ -544,6 +544,23 @@ export function clearCourseQuestions(courseId: string) {
   }>(`/teacher/courses/${courseId}/questions`, { method: "DELETE" });
 }
 
+export interface CourseQuestionKnowledgeCompletionJob {
+  job_id: string;
+  total_count: number;
+  question_ids: string[];
+}
+
+export function completeCourseQuestionKnowledge(courseId: string, questionIds: string[]) {
+  return apiRequest<CourseQuestionKnowledgeCompletionJob>(
+    `/teacher/courses/${courseId}/questions/complete-knowledge`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question_ids: questionIds }),
+    },
+  );
+}
+
 export interface CourseKnowledgeNode {
   id: string;
   name: string;

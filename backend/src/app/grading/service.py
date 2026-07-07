@@ -1895,6 +1895,30 @@ async def _has_pending_exam_submission_tasks(
     then narrows by student/submission in Python. Without the SQL prefix scan
     this used to load every exam_submission task in the system into memory.
     """
+    return bool(
+        await list_active_exam_submission_task_question_ids(
+            db,
+            exam_id=exam_id,
+            student_id=student_id,
+            submission_id=submission_id,
+        )
+    )
+
+
+async def list_active_exam_submission_task_question_ids(
+    db: AsyncSession,
+    *,
+    exam_id: uuid.UUID,
+    student_id: uuid.UUID,
+    submission_id: uuid.UUID | None = None,
+) -> set[uuid.UUID]:
+    """Return question ids with active exam-submission grading tasks.
+
+    ``ExamStudent.grading_status`` is intentionally coarse-grained: it marks
+    that at least one question is still being graded. Result pages need this
+    narrower set so a single-question regrade does not make every subjective
+    question look pending.
+    """
     exam_prefix = f"{exam_id}:"
     tasks = (
         await db.execute(
@@ -1906,16 +1930,19 @@ async def _has_pending_exam_submission_tasks(
         )
     ).scalars().all()
     student_id_str = str(student_id)
+    question_ids: set[uuid.UUID] = set()
     for task in tasks:
         try:
-            task_exam_id, _question_id, task_student_id, task_submission_id = _parse_exam_submission_locator(task.source_business_id)
+            task_exam_id, question_id, task_student_id, task_submission_id = _parse_exam_submission_locator(
+                task.source_business_id
+            )
         except ValueError:
             continue
         if submission_id is not None and task_submission_id != submission_id:
             continue
         if str(task_exam_id) == str(exam_id) and str(task_student_id) == student_id_str:
-            return True
-    return False
+            question_ids.add(question_id)
+    return question_ids
 
 
 async def apply_grading_task_result_to_exam_submission(db: AsyncSession, task_id: str) -> dict[str, Any]:

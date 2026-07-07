@@ -10,11 +10,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import type { QuestionType } from "@/types";
 import {
   AI_DIFFICULTY_LABELS,
   AI_MODEL_OPTIONS,
   type AIModelProvider,
+  type AIQuestionType,
   AI_TYPE_LABELS,
 } from "./ai-question-config-constants";
 import {
@@ -40,8 +40,8 @@ type AIQuestionConfigPanelProps = {
   onTotalCountChange: (value: number) => void;
   difficulty: number;
   onDifficultyChange: (value: number) => void;
-  typeAlloc: Record<QuestionType, number>;
-  onTypeAllocChange: (value: Record<QuestionType, number>) => void;
+  typeAlloc: Record<AIQuestionType, number>;
+  onTypeAllocChange: (value: Record<AIQuestionType, number>) => void;
   model: AIModelProvider;
   onModelChange: (value: AIModelProvider) => void;
   selectedKnowledgePoints: SelectedKnowledgePoint[];
@@ -158,7 +158,7 @@ export function AIQuestionConfigPanel({
     if (totalCount !== allocatedTotal) onTotalCountChange(allocatedTotal);
   }, [allocatedTotal, totalCount, onTotalCountChange]);
 
-  const handleTypeChange = (type: QuestionType, raw: number) =>
+  const handleTypeChange = (type: AIQuestionType, raw: number) =>
     onTypeAllocChange({ ...typeAlloc, [type]: Math.max(0, raw) });
 
   return (
@@ -203,7 +203,7 @@ export function AIQuestionConfigPanel({
           <p className="text-xs text-destructive">{allocationError}</p>
         ) : null}
         <div className="grid grid-cols-2 gap-2">
-          {(Object.keys(AI_TYPE_LABELS) as QuestionType[]).map((type) => (
+          {(Object.keys(AI_TYPE_LABELS) as AIQuestionType[]).map((type) => (
             <TypeStepper
               key={type}
               label={AI_TYPE_LABELS[type]}

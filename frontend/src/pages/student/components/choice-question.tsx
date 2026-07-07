@@ -41,7 +41,9 @@ export function ChoiceQuestion({ question, answer, onChange }: Props) {
           className="prose prose-sm dark:prose-invert min-w-0 max-w-none flex-1 break-words leading-relaxed [overflow-wrap:anywhere] [&_*]:max-w-full"
           dangerouslySetInnerHTML={{
             __html: renderLatexInHtml(
-              (question.content as { text?: string }).text ?? question.title,
+              (question.content as { html?: string; text?: string }).html ??
+              (question.content as { text?: string }).text ??
+              question.title,
             ),
           }}
         />

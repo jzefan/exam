@@ -314,18 +314,36 @@ export function MyExams() {
               completed.map((exam) => (
                 <button
                   key={exam.id}
-                  className="w-full rounded-xl border border-border/40 bg-card/30 px-4 py-3.5 text-left"
+                  className="w-full rounded-xl border border-border/40 bg-card/30 px-4 py-3 text-left"
                   onClick={() => navigate(`/my-exams/${exam.id}/result`)}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="truncate font-semibold text-sm text-foreground">{exam.title}</span>
-                    {exam.score !== null && (
-                      <span className="shrink-0 text-sm font-bold text-primary">{exam.score} 分</span>
-                    )}
+                    <div className="min-w-0">
+                      <span className="block truncate text-sm font-semibold text-foreground">{exam.title}</span>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">
+                        {exam.submitted_at ? formatDateShort(exam.submitted_at) : "--"}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {exam.score !== null ? (
+                        <span className="text-sm font-bold text-primary">{exam.score} 分</span>
+                      ) : null}
+                      {exam.canRetake ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 px-3 text-xs"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            navigate(`/my-exams/${exam.id}/take?retake=1`);
+                          }}
+                        >
+                          重考
+                        </Button>
+                      ) : null}
+                    </div>
                   </div>
-                  <p className="mt-0.5 text-[11px] text-muted-foreground">
-                    {exam.submitted_at ? formatDateShort(exam.submitted_at) : "--"}
-                  </p>
                 </button>
               ))
             )}

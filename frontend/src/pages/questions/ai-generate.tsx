@@ -31,8 +31,10 @@ import { validateTypeAllocation } from "./ai-generate-utils";
 import {
   AI_DIFFICULTY_LABELS,
   AI_MODEL_OPTIONS,
+  EMPTY_AI_TYPE_ALLOC,
   AI_TYPE_LABELS,
   type AIModelProvider,
+  type AIQuestionType,
 } from "@/components/questions/ai-question-config-constants";
 import {
   AIQuestionConfigPanel,
@@ -43,12 +45,7 @@ import { PageIntroHeader } from "@/components/ui/page-intro-header";
 import { cn } from "@/lib/utils";
 
 const EMPTY_TYPE_ALLOC: TypeAllocation = {
-  choice: 0,
-  true_false: 0,
-  fill_in: 0,
-  short_answer: 0,
-  essay: 0,
-  code: 0,
+  ...EMPTY_AI_TYPE_ALLOC,
 };
 
 /* ------------------------------------------------------------------ */
@@ -59,15 +56,15 @@ interface GeneratedQuestion {
   index: number;
   type: QuestionType;
   title: string;
-  content: { text: string };
+  content: { text: string; multi?: boolean };
   options: Record<string, string> | null;
-  answer: { text?: string; correct?: string };
+  answer: { text?: string; correct?: string | string[] };
   analysis: string | null;
   difficulty: number;
   selected: boolean;
 }
 
-type TypeAllocation = Record<QuestionType, number>;
+type TypeAllocation = Record<AIQuestionType, number>;
 const AI_GENERATE_PREFILL_KEY = "ai_generate_prefill_v1";
 
 type AIGeneratePrefill = {
@@ -108,7 +105,8 @@ function rootKnowledgeQuestionBankName(rootName: string | undefined) {
 }
 
 const TYPE_COLORS: Record<keyof TypeAllocation, string> = {
-  choice: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+  single_choice: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+  multi_choice: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300",
   true_false:
     "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
   fill_in:
@@ -118,6 +116,15 @@ const TYPE_COLORS: Record<keyof TypeAllocation, string> = {
   essay: "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300",
   code: "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300",
 };
+
+function getGeneratedQuestionDisplayType(question: GeneratedQuestion): AIQuestionType {
+  if (question.type === "choice") {
+    return question.content?.multi === true || Array.isArray(question.answer?.correct)
+      ? "multi_choice"
+      : "single_choice";
+  }
+  return question.type;
+}
 
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const token = localStorage.getItem("access_token");
@@ -154,6 +161,22 @@ function normalizeTrueFalseAnswer(answer: GeneratedQuestion["answer"]) {
     return ["true", "正确", "对", "是"].includes(value.trim().toLowerCase());
   }
   return false;
+}
+
+function getAnswerDisplayText(answer: GeneratedQuestion["answer"]) {
+  if (typeof answer.text === "string" && answer.text.trim()) {
+    return answer.text.trim();
+  }
+  if (Array.isArray(answer.correct)) {
+    return answer.correct
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .join("、");
+  }
+  if (typeof answer.correct === "string") {
+    return answer.correct.trim();
+  }
+  return "";
 }
 
 function escapeHtml(value: string) {
@@ -240,7 +263,7 @@ function GenerationPreview({
   knowledgePoints: SelectedKnowledgePoint[];
   customPrompt: string;
 }) {
-  const breakdown = (Object.keys(AI_TYPE_LABELS) as QuestionType[])
+  const breakdown = (Object.keys(AI_TYPE_LABELS) as AIQuestionType[])
     .filter((type) => typeAlloc[type] > 0)
     .map((type) => ({
       type,
@@ -351,12 +374,8 @@ export function AIGeneratePage() {
   const [totalCount, setTotalCount] = useState(10);
   const [difficulty, setDifficulty] = useState(3);
   const [typeAlloc, setTypeAlloc] = useState<TypeAllocation>({
-    choice: 0,
-    true_false: 0,
-    fill_in: 0,
-    short_answer: 0,
-    essay: 0,
-    code: 0,
+    ...EMPTY_TYPE_ALLOC,
+    single_choice: 10,
   });
   const [model, setModel] = useState<AIModelProvider>("deepseek");
   const [selectedKPs, setSelectedKPs] = useState<SelectedKnowledgePoint[]>([]);
@@ -898,15 +917,19 @@ export function AIGeneratePage() {
                       <span className="text-sm font-medium text-muted-foreground">
                         #{q.index + 1}
                       </span>
+                      {(() => {
+                        const displayType = getGeneratedQuestionDisplayType(q);
+                        return (
                       <Badge
                         variant="secondary"
                         className={
-                          TYPE_COLORS[q.type as keyof TypeAllocation] ?? ""
+                          TYPE_COLORS[displayType] ?? ""
                         }
                       >
-                        {AI_TYPE_LABELS[q.type as keyof TypeAllocation] ??
-                          q.type}
+                        {AI_TYPE_LABELS[displayType] ?? q.type}
                       </Badge>
+                        );
+                      })()}
                       <div className="flex items-center gap-0.5">
                         {difficultyDots(q.difficulty)}
                       </div>
@@ -958,9 +981,7 @@ export function AIGeneratePage() {
                     <div className="mt-2 rounded bg-muted/28 p-2 text-sm">
                       <span className="font-medium text-primary">答案：</span>
                       <LatexText>
-                        {q.answer.correct ??
-                          q.answer.text ??
-                          JSON.stringify(q.answer)}
+                        {getAnswerDisplayText(q.answer) || JSON.stringify(q.answer)}
                       </LatexText>
                     </div>
 

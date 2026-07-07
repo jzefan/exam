@@ -191,7 +191,9 @@ function toBackendQuestionType(uiType: UIQuestionType): QuestionType {
 
 function getInitialUiQuestionType(question: IQuestion): UIQuestionType {
   if (question.type === "choice") {
-    return Array.isArray(question.answer?.correct) ? "multi_choice" : "single_choice";
+    return question.content?.multi === true || Array.isArray(question.answer?.correct)
+      ? "multi_choice"
+      : "single_choice";
   }
   return question.type;
 }
@@ -202,7 +204,9 @@ function getUiQuestionTypeLabel(uiType: UIQuestionType): string {
 
 function getQuestionTypeDisplay(question: IQuestion): string {
   if (question.type === "choice") {
-    return Array.isArray(question.answer?.correct) ? "多选题" : "单选题";
+    return question.content?.multi === true || Array.isArray(question.answer?.correct)
+      ? "多选题"
+      : "单选题";
   }
   return questionTypeLabel[question.type];
 }
@@ -350,7 +354,9 @@ export function QuestionEditFormContent({
       });
     }
 
-    return { html: form.contentHtml, text: plainText };
+    return type === "choice"
+      ? { html: form.contentHtml, text: plainText, multi: isMultiChoice }
+      : { html: form.contentHtml, text: plainText };
   };
 
   const buildOptions = (): Record<string, string> | null => {

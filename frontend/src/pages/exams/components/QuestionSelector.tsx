@@ -14,12 +14,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
-import { getQuestionContentHtml, getQuestionTitle } from "@/components/questions/question-preview-utils";
+import {
+  getQuestionContentHtml,
+  getQuestionDisplayType,
+  getQuestionTitle,
+  questionDisplayTypeShortLabel,
+} from "@/components/questions/question-preview-utils";
 import { LatexText } from "@/components/ui/latex-text";
 import { RichContent } from "@/components/ui/rich-content";
 import { formatQuestionBankLabel } from "@/lib/question-banks";
 import { cn } from "@/lib/utils";
-import type { IQuestion, IQuestionBank, QuestionType } from "@/types";
+import type { IQuestion, IQuestionBank, QuestionDisplayType, QuestionType } from "@/types";
 import { getUserRole } from "@/types/rbac";
 import type { SelectedKnowledgePoint } from "@/components/questions/knowledge-point-selector";
 
@@ -27,7 +32,8 @@ const ALL_BANKS = "__all_banks__";
 const ALL_TYPES = "__all_types__";
 
 const typeLabels: Record<string, { label: string; className: string }> = {
-  choice: { label: "选择", className: "border-primary/20 bg-primary/10 text-primary" },
+  single_choice: { label: "单选", className: "border-primary/20 bg-primary/10 text-primary" },
+  multi_choice: { label: "多选", className: "border-indigo-500/20 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300" },
   true_false: { label: "判断", className: "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" },
   fill_in: { label: "填空", className: "border-sky-500/20 bg-sky-500/10 text-sky-700 dark:text-sky-300" },
   short_answer: { label: "简答", className: "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300" },
@@ -78,7 +84,7 @@ export function QuestionSelector({
   /** 进入时默认全选当前题库 + 知识点过滤下的全部题目（一次性）。 */
   autoSelectAll?: boolean;
   /** 初始题型：进入时默认按该题型过滤，但保留题型下拉，用户可改。 */
-  initialType?: QuestionType;
+  initialType?: QuestionDisplayType | QuestionType;
   /** 知识点下拉只展示传入的 knowledgePointOptions（用于限定课程相关知识点）。 */
   restrictKnowledgePointsToOptions?: boolean;
   /** 嵌入大弹窗/分栏布局时，让题目列表吃满父容器剩余高度。 */
@@ -94,7 +100,9 @@ export function QuestionSelector({
   const [search, setSearch] = useState("");
   const [bankFilter, setBankFilter] = useState<string | null>(null);
   const [bankNameInitialised, setBankNameInitialised] = useState(false);
-  const [typeFilter, setTypeFilter] = useState<QuestionType | null>(initialType ?? null);
+  const [typeFilter, setTypeFilter] = useState<QuestionDisplayType | null>(
+    initialType === "choice" ? null : (initialType ?? null),
+  );
   const [knowledgePointFilter, setKnowledgePointFilter] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [internalIsFullscreen, setInternalIsFullscreen] = useState(false);
@@ -300,7 +308,7 @@ export function QuestionSelector({
       <Select
         value={typeFilter ?? ALL_TYPES}
         onValueChange={(value) => {
-          setTypeFilter(value === ALL_TYPES ? null : (value as QuestionType));
+          setTypeFilter(value === ALL_TYPES ? null : (value as QuestionDisplayType));
           setPage(1);
         }}
       >
@@ -358,7 +366,10 @@ export function QuestionSelector({
         questions.map((q) => {
           const isSelected = selectedSet.has(q.id);
           const isExpanded = expandedId === q.id;
-          const t = typeLabels[q.type] ?? { label: q.type, className: "" };
+          const displayType = getQuestionDisplayType(q);
+          const t = displayType
+            ? (typeLabels[displayType] ?? { label: questionDisplayTypeShortLabel[displayType], className: "" })
+            : { label: q.type, className: "" };
           const questionText = getQuestionTitle(q);
           const questionHtml = getQuestionContentHtml(q);
           return (

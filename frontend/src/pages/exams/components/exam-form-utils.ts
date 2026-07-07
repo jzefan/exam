@@ -59,6 +59,22 @@ export function toSubmitDateTime(value: string): string | null {
   return next.toISOString();
 }
 
+export function calculateDurationMinutes(
+  startTime: string,
+  endTime: string,
+): number | null {
+  if (!startTime || !endTime) return null;
+
+  const start = new Date(startTime).getTime();
+  const end = new Date(endTime).getTime();
+
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return null;
+  }
+
+  return Math.max(1, Math.round((end - start) / 60_000));
+}
+
 interface ValidateExamFormOptions {
   allowPastStartTime?: boolean;
   startTimeGraceMinutes?: number;

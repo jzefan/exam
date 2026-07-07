@@ -1,6 +1,6 @@
 import { useList, useCreate, useDelete, useGetIdentity, useInvalidate, useNavigation, useUpdate } from "@refinedev/core";
 import type { CrudFilter } from "@refinedev/core";
-import type { IQuestion, IQuestionBank, ITag, QuestionType } from "../../types";
+import type { IQuestion, IQuestionBank, ITag } from "../../types";
 import { Search, BookOpen, Pencil, Trash2, Plus, ChevronDown, ChevronUp, Library, Check, PackageOpen, GraduationCap, SlidersHorizontal, Link2, Save, ChevronRight, Lock, Upload, Sparkles, Loader2, Eraser, AlertTriangle, FolderInput, FilePlus2 } from "lucide-react";
 import { useState, useCallback, useEffect, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -91,14 +91,14 @@ type QuestionBulkMoveResult = {
   moved: number;
 };
 
-const FILTER_TYPE_ITEMS: { key: FilterTypeKey; label: string; backendType: QuestionType }[] = [
-  { key: "single_choice", label: "单选题", backendType: "choice" },
-  { key: "multi_choice", label: "多选题", backendType: "choice" },
-  { key: "true_false", label: "判断题", backendType: "true_false" },
-  { key: "fill_in", label: "填空题", backendType: "fill_in" },
-  { key: "short_answer", label: "简答题", backendType: "short_answer" },
-  { key: "essay", label: "论述题", backendType: "essay" },
-  { key: "code", label: "编程题", backendType: "code" },
+const FILTER_TYPE_ITEMS: { key: FilterTypeKey; label: string }[] = [
+  { key: "single_choice", label: "单选题" },
+  { key: "multi_choice", label: "多选题" },
+  { key: "true_false", label: "判断题" },
+  { key: "fill_in", label: "填空题" },
+  { key: "short_answer", label: "简答题" },
+  { key: "essay", label: "论述题" },
+  { key: "code", label: "编程题" },
 ];
 
 const ALL_FILTER_TYPE_KEYS = new Set<FilterTypeKey>(FILTER_TYPE_ITEMS.map((i) => i.key));
@@ -311,16 +311,9 @@ export function QuestionList() {
         next.push({ field: "knowledge_point_id", operator: "eq", value: knowledgePointId } as CrudFilter);
       }
 
-      // Types — dedupe FilterTypeKey -> backend QuestionType
+      // Types — keep single/multi choice as virtual backend filters so pagination totals stay correct.
       if (types.size > 0 && types.size < ALL_FILTER_TYPE_KEYS.size) {
-        const backendTypes = new Set<string>();
-        for (const key of types) {
-          const item = FILTER_TYPE_ITEMS.find((i) => i.key === key);
-          if (item) backendTypes.add(item.backendType);
-        }
-        if (backendTypes.size > 0) {
-          next.push({ field: "type", operator: "in", value: [...backendTypes].join(",") } as CrudFilter);
-        }
+        next.push({ field: "type", operator: "in", value: [...types].join(",") } as CrudFilter);
       }
 
       // Difficulties
@@ -445,20 +438,8 @@ export function QuestionList() {
     refreshQuestions();
     refreshBanks();
   };
-  // Client-side filtering for single/multi choice distinction
-  // (backend only has "choice" type, can't distinguish single vs multi)
   const rawQuestions = data?.data ?? [];
-  const needChoiceFilter =
-    activeTypes.size < ALL_FILTER_TYPE_KEYS.size &&
-    (activeTypes.has("single_choice") !== activeTypes.has("multi_choice"));
-  const questions = needChoiceFilter
-    ? rawQuestions.filter((q) => {
-        if (q.type !== "choice") return true;
-        const isMulti = Array.isArray(q.answer?.correct);
-        if (isMulti) return activeTypes.has("multi_choice");
-        return activeTypes.has("single_choice");
-      })
-    : rawQuestions;
+  const questions = rawQuestions;
   const visibleQuestionIds = new Set(questions.map((question) => question.id));
   const selectedQuestionIds = [...selected].filter((id) => visibleQuestionIds.has(id));
   const selectedQuestionCount = selectedQuestionIds.length;

@@ -154,3 +154,7 @@ class StudentBatchDeleteResponse(BaseModel):
     success_count: int
     failed_count: int
     errors: list[str] = []
+
+
+class StudentPasswordResetResponse(BaseModel):
+    password_source: Literal["student_id", "username"]

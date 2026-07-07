@@ -15,6 +15,7 @@ interface Props {
 }
 
 interface ShortAnswerContent extends Record<string, unknown> {
+  html?: string;
   text?: string;
   language?: string;
   answer_language?: string;
@@ -86,7 +87,7 @@ export function ShortAnswerQuestion({ question, answer, onChange }: Props) {
     const starter = content.starter_code;
     return typeof starter === "string" ? starter : "";
   }, [answer?.code, content.starter_code, html]);
-  const promptHtml = (content.text as string | undefined) ?? question.title;
+  const promptHtml = (content.html as string | undefined) ?? (content.text as string | undefined) ?? question.title;
   const sqlHints = Array.isArray(content.sql_hints)
     ? content.sql_hints
     : Array.isArray(content.hints)

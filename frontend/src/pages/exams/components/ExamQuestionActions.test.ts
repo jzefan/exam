@@ -7,7 +7,7 @@ import {
   buildExamAnswerAnalysisPrompt,
   buildExamAIReplacementKnowledgePointIds,
   buildExamAIReplacementPrompt,
-} from "./ExamQuestionActions";
+} from "./ExamQuestionActions.helpers";
 
 const baseQuestion: IQuestion = {
   id: "question-1",

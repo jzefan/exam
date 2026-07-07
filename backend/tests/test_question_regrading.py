@@ -712,3 +712,188 @@ async def test_regrade_code_question_enqueues_grading_tasks_for_submitted_attemp
     assert refreshed_exam_student.grading_status == GradingStatus.PENDING_AI.value
     assert refreshed_submission is not None
     assert refreshed_submission.grading_status == GradingStatus.PENDING_AI.value
+
+
+@pytest.mark.asyncio
+async def test_subjective_question_answer_regrade_marks_only_changed_question_pending(
+    client: AsyncClient,
+    db_session,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("app.questions.service.async_session", lambda: _SessionFactory(db_session))
+
+    async def fake_run(task_ids: list[str]) -> None:
+        return None
+
+    monkeypatch.setattr("app.exams.student_router._run_subjective_grading_tasks", fake_run)
+
+    org = await _create_org_with_teacher_role(db_session)
+    teacher = await create_user(
+        db_session,
+        UserCreate(
+            username="question-regrade-subjective-teacher",
+            email="question-regrade-subjective-teacher@example.com",
+            password="teacherpass123",
+            full_name="Question Regrade Subjective Teacher",
+            role_name="teacher",
+            org_id=org.id,
+        ),
+    )
+    student = await create_user(
+        db_session,
+        UserCreate(
+            username="question-regrade-subjective-student",
+            email="question-regrade-subjective-student@example.com",
+            password="studentpass123",
+            full_name="Question Regrade Subjective Student",
+            role_name="student",
+            org_id=org.id,
+        ),
+    )
+    await _seed_role_binding(db_session)
+
+    changed_question = Question(
+        type=QuestionType.SHORT_ANSWER,
+        title="待修改答案的简答题",
+        content={"text": "<p>解释索引覆盖。</p>"},
+        options=None,
+        answer={"points": ["减少回表"]},
+        analysis="旧解析",
+        difficulty=2,
+        score=10.0,
+        usage_count=0,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    untouched_question = Question(
+        type=QuestionType.ESSAY,
+        title="未修改的论述题",
+        content={"text": "<p>论述事务隔离。</p>"},
+        options=None,
+        answer={"points": ["隔离级别"]},
+        analysis="旧解析",
+        difficulty=3,
+        score=15.0,
+        usage_count=0,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    db_session.add_all([changed_question, untouched_question])
+    await db_session.flush()
+
+    now = datetime.now(timezone.utc)
+    exam = Exam(
+        title="单题主观重评考试",
+        description=None,
+        start_time=now - timedelta(minutes=15),
+        end_time=now + timedelta(minutes=45),
+        duration_minutes=60,
+        total_score=25,
+        status="ongoing",
+        max_switch_count=0,
+        show_result=True,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    db_session.add(exam)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            ExamQuestion(exam_id=exam.id, question_id=changed_question.id, order=0),
+            ExamQuestion(exam_id=exam.id, question_id=untouched_question.id, order=1),
+        ]
+    )
+    await db_session.flush()
+
+    submission = StudentExamSubmission(
+        exam_id=exam.id,
+        student_id=student.id,
+        attempt_no=1,
+        submitted_at=now - timedelta(minutes=5),
+        grading_status=GradingStatus.AI_SCORED.value,
+        objective_score=0.0,
+        subjective_score=18.0,
+        score=18.0,
+    )
+    db_session.add(submission)
+    await db_session.flush()
+    db_session.add(
+        ExamStudent(
+            exam_id=exam.id,
+            student_id=student.id,
+            started_at=now - timedelta(minutes=20),
+            submitted_at=now - timedelta(minutes=5),
+            latest_submission_id=submission.id,
+            submission_count=1,
+            grading_status=GradingStatus.AI_SCORED.value,
+            objective_score=0.0,
+            subjective_score=18.0,
+            score=18.0,
+            ai_scored_at=now - timedelta(minutes=4),
+            graded_at=now - timedelta(minutes=4),
+        )
+    )
+    db_session.add_all(
+        [
+            StudentExamAnswer(
+                exam_id=exam.id,
+                student_id=student.id,
+                question_id=changed_question.id,
+                answer_content={"html": "<p>减少回表</p>"},
+                score_awarded=8.0,
+                is_correct=True,
+                feedback={"dimensions": [{"name": "准确性", "score": 8}]},
+            ),
+            StudentExamAnswer(
+                exam_id=exam.id,
+                student_id=student.id,
+                question_id=untouched_question.id,
+                answer_content={"html": "<p>隔离级别</p>"},
+                score_awarded=10.0,
+                is_correct=True,
+                feedback={"dimensions": [{"name": "完整性", "score": 10}]},
+            ),
+            StudentExamSubmissionAnswer(
+                submission_id=submission.id,
+                exam_id=exam.id,
+                student_id=student.id,
+                question_id=changed_question.id,
+                answer_content={"html": "<p>减少回表</p>"},
+                score_awarded=8.0,
+                is_correct=True,
+                feedback={"dimensions": [{"name": "准确性", "score": 8}]},
+            ),
+            StudentExamSubmissionAnswer(
+                submission_id=submission.id,
+                exam_id=exam.id,
+                student_id=student.id,
+                question_id=untouched_question.id,
+                answer_content={"html": "<p>隔离级别</p>"},
+                score_awarded=10.0,
+                is_correct=True,
+                feedback={"dimensions": [{"name": "完整性", "score": 10}]},
+            ),
+        ]
+    )
+    changed_question.answer = {"points": ["覆盖查询列", "减少回表"]}
+    await db_session.commit()
+
+    await regrade_submitted_attempts_for_question_update(changed_question.id, {"answer"})
+
+    tasks = (await db_session.execute(select(GradingTask))).scalars().all()
+    assert len(tasks) == 1
+    assert tasks[0].source_business_id == f"{exam.id}:{changed_question.id}:{student.id}:{submission.id}"
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    response = await client.get(f"/api/exams/{exam.id}/students/{student.id}/result")
+    assert response.status_code == 200
+    questions = {item["question_id"]: item for item in response.json()["questions"]}
+    assert questions[str(changed_question.id)]["grading_pending"] is True
+    assert questions[str(untouched_question.id)]["grading_pending"] is False
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(student.id, '')}"})
+    student_response = await client.get(f"/api/student/exams/{exam.id}/result")
+    assert student_response.status_code == 200
+    student_questions = {item["question_id"]: item for item in student_response.json()["questions"]}
+    assert student_questions[str(changed_question.id)]["grading_pending"] is True
+    assert student_questions[str(untouched_question.id)]["grading_pending"] is False

@@ -5,14 +5,7 @@ type KnowledgeNode = {
   direction_id: string | null;
 };
 
-type TypeAllocationLike = {
-  choice: number;
-  true_false: number;
-  fill_in: number;
-  short_answer: number;
-  essay: number;
-  code: number;
-};
+type TypeAllocationLike = Record<string, number>;
 
 type RecentKnowledgePoint = {
   id: string;

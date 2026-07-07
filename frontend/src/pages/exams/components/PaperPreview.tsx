@@ -6,8 +6,9 @@ import {
   QuestionPreviewCard,
   DIFFICULTY_LABELS,
 } from "@/components/questions/question-preview-card";
+import { getQuestionDisplayTypeLabel } from "@/components/questions/question-preview-utils";
 import { cn } from "@/lib/utils";
-import type { IQuestion, QuestionType } from "@/types";
+import type { IQuestion } from "@/types";
 
 import { ExamQuestionActions } from "./ExamQuestionActions";
 import type { PaperPreviewItem, QuestionTypeSummary } from "./paper-view-utils";
@@ -36,7 +37,7 @@ export function PaperPreview({
   scoreMode: ScoreViewMode;
   onScoreModeChange: (mode: ScoreViewMode) => void;
   questionTypeSummaries: QuestionTypeSummary[];
-  typeScoreDrafts: Partial<Record<QuestionType, string>>;
+  typeScoreDrafts: Partial<Record<string, string>>;
   onTypeScoreChange: (summary: QuestionTypeSummary, value: string) => void;
   onQuestionScoreChange: (questionId: string, value: string) => void;
   onReplaceQuestion?: (oldId: string, newId: string) => void;
@@ -99,11 +100,11 @@ export function PaperPreview({
 
           {scoreMode === "type"
             ? groupedItems.map(({ summary, items: groupedQuestions }) => (
-                <section key={summary.type} className="space-y-4">
+                <section key={summary.key ?? summary.type} className="space-y-4">
                   <div className="w-full border-b border-primary/20 bg-gradient-to-r from-primary/12 via-primary/8 to-transparent px-4 py-2.5">
                     <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-2 text-left">
                       <span className="text-base font-semibold text-foreground">
-                        {questionTypeLabels[summary.type]}
+                        {summary.label ?? questionTypeLabels[summary.type]}
                       </span>
                       <span className="text-base font-semibold text-primary">
                         {summary.count}
@@ -119,7 +120,7 @@ export function PaperPreview({
                         type="number"
                         min={0}
                         step="0.5"
-                        value={typeScoreDrafts[summary.type] ?? ""}
+                        value={typeScoreDrafts[summary.key ?? summary.type] ?? ""}
                         onChange={(event) =>
                           onTypeScoreChange(summary, event.target.value)
                         }
@@ -152,7 +153,7 @@ export function PaperPreview({
                               </Badge>
                             ) : null}
                             <span className="text-sm font-medium text-muted-foreground">
-                              {questionTypeLabels[item.question.type] ?? "题目"}
+                              {getQuestionDisplayTypeLabel(item.question)}
                             </span>
                             <span className="text-xs text-muted-foreground">
                               {DIFFICULTY_LABELS[item.question.difficulty] ??
@@ -244,7 +245,7 @@ export function PaperPreview({
                         </Badge>
                       ) : null}
                       <span className="text-sm font-medium text-muted-foreground">
-                        {questionTypeLabels[item.question.type] ?? "题目"}
+                        {getQuestionDisplayTypeLabel(item.question)}
                       </span>
                       <span className="text-xs text-muted-foreground">
                         {DIFFICULTY_LABELS[item.question.difficulty] ??

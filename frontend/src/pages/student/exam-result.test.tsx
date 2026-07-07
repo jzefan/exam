@@ -1,4 +1,4 @@
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 
@@ -34,7 +34,21 @@ vi.mock("@/components/ui/code-block", () => ({
   ),
 }));
 
+function LocationDisplay() {
+  const location = useLocation();
+  return <div data-testid="location">{location.pathname}{location.search}</div>;
+}
+
 describe("ExamResultPage", () => {
+  const renderResultPage = (initialPath: string) => (
+    <MemoryRouter initialEntries={[initialPath]}>
+      <Routes>
+        <Route path="/my-exams/:id/result" element={<ExamResultPage />} />
+        <Route path="/my-exams/:id/take" element={<LocationDisplay />} />
+      </Routes>
+    </MemoryRouter>
+  );
+
   it("shows question navigation and uses feedback wording instead of appeal status", async () => {
     const user = userEvent.setup();
     getMock.mockResolvedValue({
@@ -45,6 +59,7 @@ describe("ExamResultPage", () => {
         total_score: 100,
         score: 88,
         can_view: true,
+        can_retake: false,
         blocked_reason: null,
         questions: [
           {
@@ -99,13 +114,7 @@ describe("ExamResultPage", () => {
       },
     });
 
-    render(
-      <MemoryRouter initialEntries={["/my-exams/exam-1/result"]}>
-        <Routes>
-          <Route path="/my-exams/:id/result" element={<ExamResultPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
+    render(renderResultPage("/my-exams/exam-1/result"));
 
     await waitFor(() => {
       expect(getMock).toHaveBeenCalledWith("/api/student/exams/exam-1/result");
@@ -149,6 +158,7 @@ describe("ExamResultPage", () => {
         total_score: 100,
         score: 92,
         can_view: true,
+        can_retake: false,
         blocked_reason: null,
         questions: [
           {
@@ -199,13 +209,7 @@ describe("ExamResultPage", () => {
       },
     });
 
-    render(
-      <MemoryRouter initialEntries={["/my-exams/exam-2/result"]}>
-        <Routes>
-          <Route path="/my-exams/:id/result" element={<ExamResultPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
+    render(renderResultPage("/my-exams/exam-2/result"));
 
     expect(await screen.findByRole("tab", { name: "全部查看" })).toBeInTheDocument();
 
@@ -255,6 +259,7 @@ describe("ExamResultPage", () => {
         total_score: 20,
         score: 18,
         can_view: true,
+        can_retake: false,
         blocked_reason: null,
         questions: [
           {
@@ -279,13 +284,7 @@ describe("ExamResultPage", () => {
       },
     });
 
-    render(
-      <MemoryRouter initialEntries={["/my-exams/exam-sql/result"]}>
-        <Routes>
-          <Route path="/my-exams/:id/result" element={<ExamResultPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
+    render(renderResultPage("/my-exams/exam-sql/result"));
 
     const codeBlocks = await screen.findAllByTestId("code-block");
     expect(codeBlocks).toHaveLength(2);
@@ -304,6 +303,7 @@ describe("ExamResultPage", () => {
         total_score: 2,
         score: 1.33,
         can_view: true,
+        can_retake: false,
         blocked_reason: null,
         questions: [
           {
@@ -341,13 +341,7 @@ describe("ExamResultPage", () => {
       },
     });
 
-    render(
-      <MemoryRouter initialEntries={["/my-exams/exam-fill-in/result"]}>
-        <Routes>
-          <Route path="/my-exams/:id/result" element={<ExamResultPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
+    render(renderResultPage("/my-exams/exam-fill-in/result"));
 
     expect((await screen.findAllByText("1.33 / 2")).length).toBeGreaterThan(0);
     expect(screen.getByText("模型评估输出")).toBeInTheDocument();
@@ -365,6 +359,7 @@ describe("ExamResultPage", () => {
         total_score: 10,
         score: 10,
         can_view: true,
+        can_retake: false,
         blocked_reason: null,
         questions: [
           {
@@ -390,15 +385,105 @@ describe("ExamResultPage", () => {
       },
     });
 
-    render(
-      <MemoryRouter initialEntries={["/my-exams/exam-analysis-html/result"]}>
-        <Routes>
-          <Route path="/my-exams/:id/result" element={<ExamResultPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
+    render(renderResultPage("/my-exams/exam-analysis-html/result"));
+
 
     expect(await screen.findByText("先看箭头方向。")).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "流程图解析" })).toBeInTheDocument();
+  });
+
+  it("shows a retake entry on the result page when retake is allowed", async () => {
+    const user = userEvent.setup();
+    getMock.mockResolvedValue({
+      data: {
+        exam_id: "exam-retake",
+        title: "可重考练习",
+        submitted_at: "2026-04-10T10:00:00.000Z",
+        total_score: 100,
+        score: 86,
+        objective_score: 86,
+        subjective_score: null,
+        grading_status: "reviewed",
+        can_view: false,
+        can_retake: true,
+        blocked_reason: "教师暂未开放查看结果权限",
+        questions: [],
+      },
+    });
+
+    render(renderResultPage("/my-exams/exam-retake/result"));
+
+    expect(await screen.findByText("教师暂未开放查看结果权限")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "重考" }));
+
+    expect(screen.getByTestId("location")).toHaveTextContent("/my-exams/exam-retake/take?retake=1");
+  });
+
+  it("renders a compact mobile result card with retake access", async () => {
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = vi.fn().mockImplementation((query) => ({
+      matches: query === "(max-width: 767px)",
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+
+    try {
+      const user = userEvent.setup();
+      getMock.mockResolvedValue({
+        data: {
+          exam_id: "exam-mobile-retake",
+          title: "手机端可重考练习",
+          submitted_at: "2026-04-10T10:00:00.000Z",
+          total_score: 10,
+          score: 8,
+          objective_score: 8,
+          subjective_score: null,
+          grading_status: "reviewed",
+          can_view: true,
+          can_retake: true,
+          blocked_reason: null,
+          questions: [
+            {
+              question_id: "q-mobile",
+              order: 0,
+              type: "choice",
+              title: "移动端结果题",
+              content: { text: "<p>移动端结果页题干。</p>" },
+              options: { A: "选项 A", B: "选项 B" },
+              total_score: 10,
+              score_awarded: 8,
+              is_correct: false,
+              answer_content: { selected: ["A"] },
+              standard_answer: { correct: "B" },
+              analysis: "移动端解析内容。",
+              feedback: { dimensions: [], deductions: [], suggestions: [] },
+              appeal_status: null,
+              appeal_reason: null,
+              appeal_reply: null,
+            },
+          ],
+        },
+      });
+
+      render(renderResultPage("/my-exams/exam-mobile-retake/result"));
+
+      expect(await screen.findByText("手机端可重考练习")).toBeInTheDocument();
+      expect(screen.getByText("移动端结果页题干。")).toBeInTheDocument();
+      expect(screen.getByText("8")).toBeInTheDocument();
+      expect(screen.getByText("/10")).toBeInTheDocument();
+      expect(screen.getByText("移动端解析内容。")).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "重考" }));
+
+      expect(screen.getByTestId("location")).toHaveTextContent("/my-exams/exam-mobile-retake/take?retake=1");
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
   });
 });

@@ -72,6 +72,7 @@ export type AppendPaperQuestionsWithAIRequest = {
   difficulty_strategy: PaperDifficultyStrategy;
   prefer_root_knowledge_point: boolean;
   model?: "qwen" | "deepseek" | "claude";
+  question_bank_id?: string;
 };
 
 export async function appendPaperQuestionsWithAI<TPaperDetail>(

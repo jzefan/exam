@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -26,11 +26,13 @@ from app.exams.models import (
 )
 from app.job_models.models import LearningResource
 from app.learning.models import Direction, KnowledgePoint, Major
-from app.questions.models import Question, QuestionBank, question_knowledge_points
+from app.questions.models import Question, QuestionBank, QuestionImportJobStatus, question_knowledge_points
 from app.questions.router import _build_question_response
 from app.questions.service import (
     can_hard_delete_question,
+    create_question_import_job,
     get_or_create_root_knowledge_question_bank,
+    process_existing_question_knowledge_match_job,
     root_knowledge_question_bank_name,
     soft_delete_question,
 )
@@ -54,6 +56,8 @@ from app.teacher_courses.schemas import (
     CourseMasteryStudent,
     CourseMasterySummary,
     CourseMasteryUnit,
+    CourseQuestionKnowledgeCompleteRequest,
+    CourseQuestionKnowledgeCompleteResponse,
     CourseSemesterClassesUpdate,
     CourseSemesterCreate,
     CourseSemesterResponse,
@@ -1123,6 +1127,79 @@ async def list_teacher_course_questions(
         stmt = stmt.where(teacher_owned_resource_filter(Question, user.id))
     questions = (await db.execute(stmt)).scalars().unique().all()
     return [await _build_question_response(db, question) for question in questions]
+
+
+@router.post(
+    "/{course_id}/questions/complete-knowledge",
+    response_model=CourseQuestionKnowledgeCompleteResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def complete_teacher_course_question_knowledge(
+    course_id: uuid.UUID,
+    body: CourseQuestionKnowledgeCompleteRequest,
+    background_tasks: BackgroundTasks,
+    db: DB,
+    user: CurrentUser,
+) -> CourseQuestionKnowledgeCompleteResponse:
+    is_admin = await _is_course_admin(db, user)
+    course, *_ = await _get_visible_course(
+        db,
+        course_id,
+        user=user,
+        is_admin=is_admin,
+        include_deleted=False,
+    )
+    if not can_write_owned_resource(
+        is_platform_admin=is_admin,
+        current_user_id=user.id,
+        owner_id=course.owner_id,
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权修改该课程")
+
+    default_bank = await _get_course_default_question_bank(db, course)
+    requested_ids = list(dict.fromkeys(body.question_ids))
+    questions: list[Question] = []
+    if default_bank is not None:
+        stmt = (
+            select(Question)
+            .where(
+                Question.deleted_at.is_(None),
+                Question.question_bank_id == default_bank.id,
+            )
+            .options(selectinload(Question.knowledge_points))
+            .order_by(Question.updated_at.desc())
+        )
+        if requested_ids:
+            stmt = stmt.where(Question.id.in_(requested_ids))
+        if not is_admin:
+            stmt = stmt.where(teacher_owned_resource_filter(Question, user.id))
+        questions = list((await db.execute(stmt)).scalars().unique().all())
+
+    found_ids = {question.id for question in questions}
+    missing_ids = [question_id for question_id in requested_ids if question_id not in found_ids]
+    if missing_ids:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="部分题目不属于当前课程或无权访问")
+
+    question_ids = [question.id for question in questions]
+    job = await create_question_import_job(db, user_id=user.id, total_count=len(question_ids))
+    job.created_question_ids = [str(question_id) for question_id in question_ids]
+    if question_ids:
+        background_tasks.add_task(
+            process_existing_question_knowledge_match_job,
+            job_id=job.id,
+            user_id=user.id,
+            root_knowledge_point_id=course.id,
+            question_ids=question_ids,
+        )
+    else:
+        job.status = QuestionImportJobStatus.COMPLETED
+        job.completed_at = datetime.now(timezone.utc)
+    await db.commit()
+    return CourseQuestionKnowledgeCompleteResponse(
+        job_id=job.id,
+        total_count=len(question_ids),
+        question_ids=question_ids,
+    )
 
 
 @router.delete("/{course_id}/questions", status_code=status.HTTP_200_OK)

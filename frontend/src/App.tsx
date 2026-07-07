@@ -88,6 +88,10 @@ const ExamPaperViewPage = lazyNamed(() => import("./pages/exams/view"), "ExamPap
 const PaperListPage = lazyNamed(() => import("./pages/papers/list"), "PaperListPage");
 const PaperDetailPage = lazyNamed(() => import("./pages/papers/detail"), "PaperDetailPage");
 const PaperImportPage = lazyNamed(() => import("./pages/papers/import"), "PaperImportPage");
+const CoursePaperCreatePage = lazyNamed(
+  () => import("./pages/papers/course-create"),
+  "CoursePaperCreatePage",
+);
 const PaperKnowledgeCoveragePage = lazyNamed(
   () => import("./pages/papers/knowledge-coverage"),
   "PaperKnowledgeCoveragePage",
@@ -308,6 +312,7 @@ function App() {
                     <Route path="/courses">
                       <Route index element={<CourseListPage />} />
                       <Route path=":id" element={<CourseDetailPage />} />
+                      <Route path=":id/papers/create" element={<CoursePaperCreatePage />} />
                       <Route path=":id/question-skills" element={<QuestionGenTemplatesPage />} />
                     </Route>
                     <Route path="/tags" element={<TagList />} />

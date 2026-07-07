@@ -1,14 +1,19 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+
+import { ChevronDown } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import type { QuestionType } from "@/types";
 import { cn } from "@/lib/utils";
+import { getQuestionDisplayTypeLabel } from "@/components/questions/question-preview-utils";
 
 import type { ExamQuestionFormItem } from "./exam-form-utils";
 import type { PaperPreviewItem, QuestionTypeSummary } from "./paper-view-utils";
-import { buildQuestionJumpGroups, questionTypeLabels } from "./paper-view-utils";
+import {
+  buildQuestionJumpGroups,
+  getQuestionTypeGroupLabel,
+} from "./paper-view-utils";
 
 export type ScoreViewMode = "order" | "type";
 
@@ -38,8 +43,8 @@ export function PaperScorePanel({
   onModeChange: (mode: ScoreViewMode) => void;
   onQuestionScoreChange: (questionId: string, value: string) => void;
   questionTypeSummaries: QuestionTypeSummary[];
-  typeScoreDrafts: Partial<Record<QuestionType, string>>;
-  onTypeDraftChange: (type: QuestionType, value: string) => void;
+  typeScoreDrafts: Partial<Record<string, string>>;
+  onTypeDraftChange: (type: string, value: string) => void;
   onApplyTypeScore: (summary: QuestionTypeSummary) => void;
   totalScore: number;
   dirty: boolean;
@@ -74,6 +79,16 @@ export function PaperScorePanel({
     () => buildQuestionJumpGroups(items, questionTypeSummaries),
     [items, questionTypeSummaries],
   );
+
+  const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set());
+  const toggleTypeExpanded = (type: string) => {
+    setExpandedTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(type)) next.delete(type);
+      else next.add(type);
+      return next;
+    });
+  };
 
   const renderScoreTile = ({
     questionId,
@@ -162,49 +177,69 @@ export function PaperScorePanel({
           </div>
         ) : (
           <div className="flex flex-col gap-4">
-            {jumpGroups.map((group) => (
-              <section key={group.summary.type} className="flex flex-col gap-2">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-foreground">
-                      {questionTypeLabels[group.summary.type]}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      共 {group.summary.count} 题 · 合计 {group.summary.totalScore} 分
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <Input
-                      aria-label={`${questionTypeLabels[group.summary.type]}题型总分`}
-                      className="h-9 w-24 text-center"
-                      type="number"
-                      min={0}
-                      step="0.5"
-                      value={typeScoreDrafts[group.summary.type] ?? ""}
-                      onChange={(event) => onTypeDraftChange(group.summary.type, event.target.value)}
-                    />
-                    <Button
+            {jumpGroups.map((group) => {
+              const typeKey = group.summary.key ?? group.summary.type;
+              const expanded = expandedTypes.has(typeKey);
+              return (
+                <section key={typeKey} className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <button
                       type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onApplyTypeScore(group.summary)}
+                      onClick={() => toggleTypeExpanded(typeKey)}
+                      className="flex min-w-0 items-center gap-1.5 text-left transition-opacity hover:opacity-80"
                     >
-                      均分
-                    </Button>
+                      <ChevronDown
+                        className={cn(
+                          "size-4 shrink-0 text-muted-foreground transition-transform",
+                          !expanded && "-rotate-90",
+                        )}
+                      />
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-foreground">
+                          {getQuestionTypeGroupLabel(group.summary)}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          共 {group.summary.count} 题 · 合计 {group.summary.totalScore} 分
+                        </p>
+                      </div>
+                    </button>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Input
+                        aria-label={`${getQuestionTypeGroupLabel(group.summary)}题型总分`}
+                        className="h-9 w-24 text-center"
+                        type="number"
+                        min={0}
+                        step="0.5"
+                        value={typeScoreDrafts[typeKey] ?? ""}
+                        onChange={(event) =>
+                          onTypeDraftChange(typeKey, event.target.value)
+                        }
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => onApplyTypeScore(group.summary)}
+                      >
+                        均分
+                      </Button>
+                    </div>
                   </div>
-                </div>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  {group.items.map((item) =>
-                    renderScoreTile({
-                      questionId: item.previewItem.question.id,
-                      displayIndex:
-                        displayIndexByQuestionId.get(item.previewItem.question.id) ??
-                        item.displayIndex,
-                    }),
+                  {expanded && (
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {group.items.map((item) =>
+                        renderScoreTile({
+                          questionId: item.previewItem.question.id,
+                          displayIndex:
+                            displayIndexByQuestionId.get(item.previewItem.question.id) ??
+                            item.displayIndex,
+                        }),
+                      )}
+                    </div>
                   )}
-                </div>
-              </section>
-            ))}
+                </section>
+              );
+            })}
           </div>
         )
       ) : mode === "order" ? (
@@ -219,7 +254,7 @@ export function PaperScorePanel({
                 <div key={item.question_id} className="flex items-center justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-foreground">
-                      第 {index + 1} 题 · {questionTypeLabels[previewItem.question.type] ?? "题目"}
+                      第 {index + 1} 题 · {getQuestionDisplayTypeLabel(previewItem.question)}
                     </p>
                     <p className="truncate text-xs text-muted-foreground">{previewItem.question.title}</p>
                   </div>
@@ -239,10 +274,10 @@ export function PaperScorePanel({
       ) : (
         <div className="space-y-4">
           {questionTypeSummaries.map((summary) => (
-            <div key={summary.type} className="space-y-3 rounded-2xl border border-border/60 bg-background/80 p-4">
+            <div key={summary.key ?? summary.type} className="space-y-3 rounded-2xl border border-border/60 bg-background/80 p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-sm font-semibold text-foreground">{questionTypeLabels[summary.type]}</p>
+                  <p className="text-sm font-semibold text-foreground">{getQuestionTypeGroupLabel(summary)}</p>
                   <p className="text-xs text-muted-foreground">共 {summary.count} 题，当前合计 {summary.totalScore} 分</p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -251,8 +286,10 @@ export function PaperScorePanel({
                     type="number"
                     min={0}
                     step="0.5"
-                    value={typeScoreDrafts[summary.type] ?? ""}
-                    onChange={(event) => onTypeDraftChange(summary.type, event.target.value)}
+                    value={typeScoreDrafts[summary.key ?? summary.type] ?? ""}
+                    onChange={(event) =>
+                      onTypeDraftChange(summary.key ?? summary.type, event.target.value)
+                    }
                   />
                   <Button type="button" variant="outline" size="sm" onClick={() => onApplyTypeScore(summary)}>
                     均分到每题

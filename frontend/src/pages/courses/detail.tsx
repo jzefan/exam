@@ -101,6 +101,8 @@ import {
   CreateFromSelectionDialog,
   type CreateFromSelectionCategory,
 } from "@/pages/questions/components/create-from-selection-dialog";
+import type { QuestionImportJobResponse } from "@/pages/questions/import-types";
+import { isTerminalQuestionImportJobStatus } from "@/pages/questions/question-knowledge-recognition";
 import {
   type CourseKnowledgeUploadTarget,
   flattenKnowledgeUploadTargets,
@@ -125,6 +127,7 @@ import {
   archiveExamToSemester,
   clearCourseKnowledgePoints,
   clearCourseQuestions,
+  completeCourseQuestionKnowledge,
   deleteCourseMaterial,
   exportExam,
   getCourseAssignmentScoreSummary,
@@ -1898,6 +1901,7 @@ function ExamRows({
   items,
   kind,
   courseId,
+  courseName,
   semesters,
   canWrite,
   onSummarize,
@@ -1912,6 +1916,7 @@ function ExamRows({
   items: TeacherCourseExam[];
   kind: "exam" | "assignment";
   courseId: string;
+  courseName: string;
   semesters: CourseSemester[];
   canWrite: boolean;
   onSummarize?: () => void;
@@ -1934,6 +1939,8 @@ function ExamRows({
     backTo,
     backLabel: "返回课程详情",
     successTo: backTo,
+    courseName,
+    defaultBankName: courseQuestionBankName(courseName),
   };
   const header =
     kind === "assignment" || canWrite ? (
@@ -2046,14 +2053,6 @@ function ExamRows({
             key={item.id}
             exam={item}
             onView={() => navigate(`/exams/${item.id}/view`, { state: backState })}
-            onEdit={() =>
-              navigate(
-                item.category === "practice"
-                  ? `/exams/practice/edit/${item.id}`
-                  : `/exams/edit/${item.id}`,
-                { state: backState },
-              )
-            }
             onAnalysis={() => navigate(`/exams/${item.id}/analysis`, { state: backState })}
             onGrade={
               item.submitted_count > 0 && item.has_gradable_questions
@@ -2126,6 +2125,7 @@ function QuestionsTab({
   onPublishedExamOrAssignment,
   onClearAllQuestions,
   onQuestionDeleted,
+  onKnowledgeCompleted,
 }: {
   questions: IQuestion[];
   courseId: string;
@@ -2152,14 +2152,17 @@ function QuestionsTab({
   ) => void | Promise<void>;
   onClearAllQuestions: () => void;
   onQuestionDeleted?: (questionId: string) => void;
+  onKnowledgeCompleted?: () => void | Promise<void>;
 }) {
   const navigate = useNavigate();
   const { mutate: deleteQuestion } = useDelete();
+  const { toast } = useToast();
   const [deleteQuestionTarget, setDeleteQuestionTarget] =
     useState<IQuestion | null>(null);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [createFromSelectionOpen, setCreateFromSelectionOpen] = useState(false);
+  const [knowledgeCompleting, setKnowledgeCompleting] = useState(false);
   const [allQuestionsExpanded, setAllQuestionsExpanded] = useState(false);
   const [selectedQuestionTypes, setSelectedQuestionTypes] = useState<
     Set<QuestionType>
@@ -2269,6 +2272,65 @@ function QuestionsTab({
     });
   };
 
+  const pollKnowledgeCompletionJob = async (
+    jobId: string,
+  ): Promise<QuestionImportJobResponse> => {
+    while (true) {
+      await new Promise((resolve) => window.setTimeout(resolve, 2000));
+      const job = await apiRequest<QuestionImportJobResponse>(
+        `/questions/import/jobs/${jobId}`,
+      );
+      if (isTerminalQuestionImportJobStatus(job.status)) {
+        return job;
+      }
+    }
+  };
+
+  const handleCompleteKnowledge = async () => {
+    const targetQuestionIds =
+      selectedQuestionCount > 0
+        ? selectedQuestionIds
+        : questions.map((question) => question.id);
+    if (targetQuestionIds.length === 0) {
+      toast({ title: "暂无可补全的题目" });
+      return;
+    }
+
+    setKnowledgeCompleting(true);
+    try {
+      const started = await completeCourseQuestionKnowledge(
+        courseId,
+        targetQuestionIds,
+      );
+      if (started.total_count === 0) {
+        toast({ title: "暂无可补全的题目" });
+        return;
+      }
+      toast({
+        title: "知识点补全已开始",
+        description:
+          selectedQuestionCount > 0
+            ? `正在为已选择的 ${started.total_count} 道题识别知识点。`
+            : `正在为课程内 ${started.total_count} 道题识别知识点。`,
+      });
+      const job = await pollKnowledgeCompletionJob(started.job_id);
+      await onKnowledgeCompleted?.();
+      toast({
+        title: "知识点补全完成",
+        description: `成功匹配 ${job.matched_count} 道，未匹配 ${job.unmatched_count} 道，失败 ${job.failed_count} 道。`,
+        variant: job.status === "failed" ? "destructive" : "default",
+      });
+    } catch (err) {
+      toast({
+        title: "知识点补全失败",
+        description: err instanceof Error ? err.message : "请稍后重试",
+        variant: "destructive",
+      });
+    } finally {
+      setKnowledgeCompleting(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
@@ -2327,6 +2389,21 @@ function QuestionsTab({
             >
               <Upload size={14} className="mr-1.5" />
               导入
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={knowledgeCompleting || questions.length === 0}
+              onClick={handleCompleteKnowledge}
+            >
+              {knowledgeCompleting ? (
+                <LoaderCircle size={14} className="mr-1.5 animate-spin" />
+              ) : (
+                <Wand2 size={14} className="mr-1.5" />
+              )}
+              {selectedQuestionCount > 0
+                ? `补全知识点(${selectedQuestionCount})`
+                : "补全知识点"}
             </Button>
             {showClearAllQuestions && questions.length > 0 ? (
               <Button
@@ -6600,6 +6677,7 @@ export function CourseDetailPage() {
                     items={exams}
                     kind="exam"
                     courseId={id ?? ""}
+                    courseName={course.name}
                     semesters={semesters}
                     canWrite={course.can_write}
                     onArchive={handleArchive}
@@ -6647,6 +6725,7 @@ export function CourseDetailPage() {
                       items={filteredAssignments}
                       kind="assignment"
                       courseId={id ?? ""}
+                      courseName={course.name}
                       semesters={semesters}
                       canWrite={course.can_write}
                       onSummarize={handleOpenAssignmentScoreSummary}
@@ -6712,6 +6791,18 @@ export function CourseDetailPage() {
                           prev.filter((q) => q.id !== questionId),
                         );
                       }}
+                      onKnowledgeCompleted={async () => {
+                        if (!id) return;
+                        const [nextQuestions, nextTree, nextCourse] =
+                          await Promise.all([
+                            listCourseQuestions(id),
+                            getCourseKnowledgeTree(id),
+                            getTeacherCourse(id, semesterFilter),
+                          ]);
+                        setQuestions(nextQuestions);
+                        setTree(nextTree);
+                        setCourse(nextCourse);
+                      }}
                     />
                   </div>
                 )}
@@ -6763,24 +6854,44 @@ export function CourseDetailPage() {
                   }}
                   rightSlot={
                     course.can_write ? (
-                      <Button
-                        size="sm"
-                        onClick={() =>
-                          navigate("/papers/import", {
-                            state: {
-                              backTo: `/courses/${id}?tab=papers`,
-                              backLabel: "返回课程详情",
-                              successTo: `/courses/${id}?tab=papers`,
-                              courseOrigin: true,
-                              rootKnowledgePointId: tree?.id ?? id,
-                              rootKnowledgePointName: course.name,
-                            },
-                          })
-                        }
-                      >
-                        <Upload size={14} className="mr-1.5" />
-                        导入试卷
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          onClick={() =>
+                            navigate(`/courses/${id}/papers/create`, {
+                              state: {
+                                backTo: `/courses/${id}?tab=papers`,
+                                backLabel: "返回课程详情",
+                                courseOrigin: true,
+                                rootKnowledgePointId: tree?.id ?? id,
+                                rootKnowledgePointName: course.name,
+                              },
+                            })
+                          }
+                        >
+                          <FilePlus2 size={14} className="mr-1.5" />
+                          创建试卷
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            navigate("/papers/import", {
+                              state: {
+                                backTo: `/courses/${id}?tab=papers`,
+                                backLabel: "返回课程详情",
+                                successTo: `/courses/${id}?tab=papers`,
+                                courseOrigin: true,
+                                rootKnowledgePointId: tree?.id ?? id,
+                                rootKnowledgePointName: course.name,
+                              },
+                            })
+                          }
+                        >
+                          <Upload size={14} className="mr-1.5" />
+                          导入试卷
+                        </Button>
+                      </div>
                     ) : null
                   }
                 />

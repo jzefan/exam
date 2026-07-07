@@ -548,6 +548,7 @@ async def generate_question_items_from_source_items(
     user: User,
     is_admin: bool,
     exam_title: str | None = None,
+    generated_question_bank_id: uuid.UUID | None = None,
 ) -> GeneratedQuestionItemsResult:
     source_items = [item for item in sorted(source_items, key=lambda value: value.order) if item.question is not None]
     if not source_items:
@@ -683,9 +684,9 @@ async def generate_question_items_from_source_items(
                 break
         if generated is None:
             raise ValueError("AI 生成题目与已有题过于相似，无法生成足够的不重复题目")
-        source_bank_id = getattr(slot.source_item.question, "question_bank_id", None)
-        if source_bank_id is not None:
-            generated = generated.model_copy(update={"question_bank_id": source_bank_id})
+        target_bank_id = generated_question_bank_id or getattr(slot.source_item.question, "question_bank_id", None)
+        if target_bank_id is not None:
+            generated = generated.model_copy(update={"question_bank_id": target_bank_id})
         generated.score = _source_item_score(slot.source_item) or generated.score
         generated_questions.append(generated)
         selected_questions.append(generated)
@@ -761,6 +762,11 @@ def _question_create_from_ai_payload(
     question_type = str(payload.get("type") or "choice")
     if question_type not in {"choice", "true_false", "fill_in", "short_answer", "essay", "code"}:
         question_type = "choice"
+    if question_type == "choice":
+        content = {
+            **content,
+            "multi": isinstance(answer, dict) and isinstance(answer.get("correct"), list),
+        }
 
     return QuestionCreate(
         type=question_type,
@@ -1141,7 +1147,8 @@ def question_create_from_import_draft(
 ) -> QuestionCreate:
     answer_text = draft.answer_text or ""
     if draft.type.value == "choice":
-        answer = {"correct": answer_text}
+        answer_parts = [part.strip() for part in re.split(r"[,，;；、\n]", answer_text) if part.strip()]
+        answer = {"correct": answer_parts if len(answer_parts) > 1 else (answer_parts[0] if answer_parts else answer_text)}
     elif draft.type.value == "true_false":
         answer = {"correct": answer_text.strip().lower() in {"正确", "对", "true", "t", "√"}}
     elif draft.type.value == "fill_in":
@@ -1445,6 +1452,14 @@ async def append_ai_questions_to_paper(
 ) -> Paper:
     if not can_write_owned_resource(is_platform_admin=is_admin, current_user_id=user.id, owner_id=paper.owner_id):
         raise ValueError("paper not found or not writable")
+    if body.question_bank_id is not None:
+        target_bank = await db.get(QuestionBank, body.question_bank_id)
+        if target_bank is None or not can_write_owned_resource(
+            is_platform_admin=is_admin,
+            current_user_id=user.id,
+            owner_id=target_bank.owner_id,
+        ):
+            raise ValueError("question bank not found or not writable")
 
     source_items: list[PaperQuestion] = [
         item
@@ -1467,6 +1482,7 @@ async def append_ai_questions_to_paper(
         user=user,
         is_admin=is_admin,
         exam_title=paper.title,
+        generated_question_bank_id=body.question_bank_id,
     )
 
     append_items = [

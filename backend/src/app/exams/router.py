@@ -67,6 +67,7 @@ from app.exams.time_utils import (
     coerce_exam_input_datetime_to_utc,
     coerce_persisted_exam_datetime_to_utc,
 )
+from app.grading.service import list_active_exam_submission_task_question_ids
 from app.papers.service import generate_question_items_from_source_items
 from app.questions.schemas import QuestionResponse
 from app.questions.service import cleanup_soft_deleted_question_if_orphaned
@@ -77,6 +78,21 @@ router = APIRouter()
 
 _OBJECTIVE_QUESTION_TYPES = {"choice", "true_false", "fill_in"}
 _GRADABLE_QUESTION_TYPES = {"short_answer", "essay", "code"}
+
+
+def _can_student_retake_exam(exam: Exam, exam_student: ExamStudent) -> bool:
+    if not exam.allow_retake or exam_student.submitted_at is None:
+        return False
+    now = datetime.now(timezone.utc)
+    start_time = coerce_persisted_exam_datetime_to_utc(exam.start_time)
+    end_time = coerce_persisted_exam_datetime_to_utc(exam.end_time)
+    if exam.status == "closed":
+        return False
+    if start_time and start_time > now:
+        return False
+    if end_time and end_time < now:
+        return False
+    return True
 
 
 def _exam_has_gradable_questions(exam: Exam) -> bool:
@@ -886,6 +902,7 @@ async def get_student_result_for_teacher(
             subjective_score=exam_student.subjective_score,
             grading_status=exam_student.grading_status,
             can_view=False,
+            can_retake=False,
             blocked_reason="该考生尚未提交考试",
             teacher_comment=exam_student.teacher_comment,
         )
@@ -909,6 +926,16 @@ async def get_student_result_for_teacher(
     appeals = {item.question_id: item for item in appeals_result.scalars().all()}
 
     _SUBJECTIVE_TYPES = {"short_answer", "essay", "code"}
+    pending_question_ids = (
+        await list_active_exam_submission_task_question_ids(
+            db,
+            exam_id=exam.id,
+            student_id=student_id,
+            submission_id=exam_student.latest_submission_id,
+        )
+        if is_pending_ai
+        else set()
+    )
     question_items: list[StudentExamResultQuestionResponse] = []
     for exam_question in sorted(exam.exam_questions, key=lambda item: item.order):
         question = exam_question.question
@@ -917,7 +944,11 @@ async def get_student_result_for_teacher(
         answer_feedback = (answer.feedback or {}) if answer else {}
         grading_failed = bool(answer_feedback.get("grading_failed"))
         needs_human_review = bool(answer_feedback.get("needs_human_review"))
-        grading_pending = is_pending_ai and question.type.value in _SUBJECTIVE_TYPES and not grading_failed
+        grading_pending = (
+            question.id in pending_question_ids
+            and question.type.value in _SUBJECTIVE_TYPES
+            and not grading_failed
+        )
         question_items.append(
             StudentExamResultQuestionResponse(
                 question_id=question.id,
@@ -954,6 +985,7 @@ async def get_student_result_for_teacher(
         subjective_score=exam_student.subjective_score,
         grading_status=exam_student.grading_status,
         can_view=True,
+        can_retake=_can_student_retake_exam(exam, exam_student),
         blocked_reason=(
             "主观题正在进行 AI 评分，主观题分数将在评估完成后更新。客观题分数已可见。" if is_pending_ai else None
         ),

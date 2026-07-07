@@ -77,6 +77,26 @@ class QuestionBankResponse(BaseModel):
 
 # --- Question ---
 
+def _is_choice_type(question_type: QuestionType | None) -> bool:
+    return question_type == QuestionType.CHOICE
+
+
+def _choice_answer_is_multi(answer: dict[str, Any] | None) -> bool:
+    if not isinstance(answer, dict):
+        return False
+    return isinstance(answer.get("correct"), list)
+
+
+def _normalize_choice_content(
+    question_type: QuestionType | None,
+    content: dict[str, Any] | None,
+    answer: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not _is_choice_type(question_type) or content is None:
+        return content
+    return {**content, "multi": _choice_answer_is_multi(answer)}
+
+
 class QuestionCreate(BaseModel):
     type: QuestionType
     title: str = Field(max_length=500)
@@ -104,6 +124,8 @@ class QuestionCreate(BaseModel):
                 raise ValueError("代码题必须填写参考答案")
             if isinstance(self.answer, dict) and not self.answer.get("code"):
                 self.answer = {**self.answer, "code": answer_text}
+        if self.type == QuestionType.CHOICE:
+            self.content = _normalize_choice_content(self.type, self.content, self.answer) or self.content
         return self
 
 
@@ -119,6 +141,12 @@ class QuestionUpdate(BaseModel):
     tag_ids: list[uuid.UUID] | None = None
     knowledge_point_ids: list[uuid.UUID] | None = None
     question_bank_id: uuid.UUID | None = None
+
+    @model_validator(mode="after")
+    def normalize_choice_content(self) -> "QuestionUpdate":
+        if self.type == QuestionType.CHOICE and self.content is not None:
+            self.content = _normalize_choice_content(self.type, self.content, self.answer) or self.content
+        return self
 
 
 class QuestionEditLockInfo(BaseModel):
@@ -395,7 +423,7 @@ class QuestionBankClearResponse(BaseModel):
 class QuestionTypeCountResponse(BaseModel):
     """单个题型的可用题量，用于自动出题的题型分布展示。"""
 
-    type: QuestionType
+    type: str
     count: int
 
 

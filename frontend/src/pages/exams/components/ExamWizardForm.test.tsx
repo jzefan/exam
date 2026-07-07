@@ -17,12 +17,20 @@ let locationStateMock: unknown = null;
 // 始终相对当前时间生成，避免测试依赖具体日期（固定日期会随时间流逝变成过去而导致校验失败）。
 function futureLocalDateTime(offsetMs: number): string {
   const date = new Date(Date.now() + offsetMs);
+  return formatLocalDateTime(date);
+}
+function formatLocalDateTime(date: Date): string {
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FUTURE_START_TIME = futureLocalDateTime(7 * DAY_MS);
 const FUTURE_END_TIME = futureLocalDateTime(7 * DAY_MS + 2 * 60 * 60 * 1000);
+function localDateTimeFrom(value: string, offsetMinutes: number): string {
+  return formatLocalDateTime(
+    new Date(new Date(value).getTime() + offsetMinutes * 60_000),
+  );
+}
 
 const QUESTION_FIXTURES = [
   {
@@ -107,6 +115,29 @@ const QUESTION_FIXTURES = [
   },
 ];
 
+type TestQuestionForDistribution = {
+  type: string;
+  answer?: { correct?: unknown } | null;
+};
+
+function createTypeDistributionData(
+  questions: TestQuestionForDistribution[],
+) {
+  const counts = new Map<string, number>();
+
+  for (const question of questions) {
+    const type =
+      question.type === "choice"
+        ? Array.isArray(question.answer?.correct)
+          ? "multi_choice"
+          : "single_choice"
+        : question.type;
+    counts.set(type, (counts.get(type) ?? 0) + 1);
+  }
+
+  return Array.from(counts, ([type, count]) => ({ type, count }));
+}
+
 vi.mock("@refinedev/core", () => ({
   useGetIdentity: (...args: unknown[]) => useGetIdentityMock(...args),
   useList: (...args: unknown[]) => useListMock(...args),
@@ -153,9 +184,39 @@ vi.mock("./StudentSelector", () => ({
   StudentSelector: () => <div data-testid="student-selector" />,
 }));
 
-vi.mock("@/components/ui/date-picker", () => ({
-  DatePicker: () => <div data-testid="date-picker" />,
-}));
+vi.mock("@/components/ui/date-picker", () => {
+  function formatLocalDateTime(value?: Date): string {
+    if (!value) return "";
+    const pad = (next: number) => String(next).padStart(2, "0");
+    return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}T${pad(value.getHours())}:${pad(value.getMinutes())}`;
+  }
+
+  return {
+    DatePicker: ({
+      value,
+      onChange,
+      placeholder,
+    }: {
+      value?: Date;
+      onChange?: (date: Date | undefined) => void;
+      placeholder?: string;
+    }) => (
+      <input
+        aria-label={placeholder ?? "日期时间"}
+        data-testid={`date-picker-${placeholder ?? "default"}`}
+        type="datetime-local"
+        value={formatLocalDateTime(value)}
+        onChange={(event) =>
+          onChange?.(
+            event.currentTarget.value
+              ? new Date(event.currentTarget.value)
+              : undefined,
+          )
+        }
+      />
+    ),
+  };
+});
 
 vi.mock("@/pages/grading/api", () => ({
   apiRequest: apiRequestMock,
@@ -207,6 +268,17 @@ describe("ExamWizardForm", () => {
     useListMock.mockImplementation(({ resource, filters }: { resource: string; filters?: Array<{ field: string; value: unknown }> }) => {
       if (resource === "question-banks") {
         return { query: { data: { data: [] }, isLoading: false } };
+      }
+
+      if (resource === "questions/type-distribution") {
+        const data = createTypeDistributionData(QUESTION_FIXTURES);
+        return {
+          query: {
+            data: { data, total: QUESTION_FIXTURES.length },
+            isFetching: false,
+            isLoading: false,
+          },
+        };
       }
 
       if (resource === "questions") {
@@ -262,6 +334,52 @@ describe("ExamWizardForm", () => {
     await user.type(screen.getByLabelText("考试名称"), "Java 后端岗位笔试（调整版）");
 
     expect(screen.getByRole("button", { name: "保存修改" })).toBeEnabled();
+  });
+
+  it("updates duration when the end time changes", async () => {
+    render(
+      <ExamWizardForm
+        mode="create"
+        initialValues={createInitialValues()}
+        isPending={false}
+        submitError={null}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("结束时间"), {
+      target: { value: localDateTimeFrom(FUTURE_START_TIME, 240) },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("考试时长（分钟）")).toHaveValue(240);
+    });
+  });
+
+  it("updates duration when the start time changes", async () => {
+    const endTime = localDateTimeFrom(FUTURE_START_TIME, 240);
+
+    render(
+      <ExamWizardForm
+        mode="create"
+        initialValues={{
+          ...createInitialValues(),
+          end_time: endTime,
+          duration_minutes: 240,
+        }}
+        isPending={false}
+        submitError={null}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("开始时间"), {
+      target: { value: localDateTimeFrom(FUTURE_START_TIME, 60) },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("考试时长（分钟）")).toHaveValue(180);
+    });
   });
 
   it("restores AI question mode in edit mode when the exam was created by AI", async () => {
@@ -443,6 +561,17 @@ describe("ExamWizardForm", () => {
         };
       }
 
+      if (resource === "questions/type-distribution") {
+        const data = createTypeDistributionData(QUESTION_FIXTURES);
+        return {
+          query: {
+            data: { data, total: QUESTION_FIXTURES.length },
+            isFetching: false,
+            isLoading: false,
+          },
+        };
+      }
+
       if (resource === "questions") {
         const questionIds = filters?.find((filter) => filter.field === "id")?.value;
         if (Array.isArray(questionIds)) {
@@ -494,6 +623,17 @@ describe("ExamWizardForm", () => {
         };
       }
 
+      if (resource === "questions/type-distribution") {
+        const data = createTypeDistributionData(QUESTION_FIXTURES);
+        return {
+          query: {
+            data: { data, total: QUESTION_FIXTURES.length },
+            isFetching: false,
+            isLoading: false,
+          },
+        };
+      }
+
       if (resource === "questions") {
         const questionIds = filters?.find((filter) => filter.field === "id")?.value;
         if (Array.isArray(questionIds)) {
@@ -527,7 +667,7 @@ describe("ExamWizardForm", () => {
       />,
     );
 
-    const choiceCount = screen.getByLabelText("选择题数量");
+    const choiceCount = screen.getByLabelText("单选题数量");
     await user.clear(choiceCount);
     await user.type(choiceCount, "2");
 
@@ -535,7 +675,7 @@ describe("ExamWizardForm", () => {
     await user.clear(codeCount);
     await user.type(codeCount, "1");
 
-    expect(screen.getByLabelText("选择题每题分值")).toHaveValue(1);
+    expect(screen.getByLabelText("单选题每题分值")).toHaveValue(1);
     expect(screen.getByLabelText("编程题每题分值")).toHaveValue(10);
     expect(screen.getByText("12 分")).toBeInTheDocument();
   });
@@ -605,6 +745,17 @@ describe("ExamWizardForm", () => {
         };
       }
 
+      if (resource === "questions/type-distribution") {
+        const data = createTypeDistributionData(questions);
+        return {
+          query: {
+            data: { data, total: questions.length },
+            isFetching: false,
+            isLoading: false,
+          },
+        };
+      }
+
       if (resource === "questions") {
         const questionIds = filters?.find((filter) => filter.field === "id")?.value;
         if (Array.isArray(questionIds)) {
@@ -638,8 +789,8 @@ describe("ExamWizardForm", () => {
       />,
     );
 
-    await user.clear(screen.getByLabelText("选择题数量"));
-    await user.type(screen.getByLabelText("选择题数量"), "3");
+    await user.clear(screen.getByLabelText("单选题数量"));
+    await user.type(screen.getByLabelText("单选题数量"), "3");
     await user.clear(screen.getByLabelText("编程题数量"));
     await user.type(screen.getByLabelText("编程题数量"), "2");
     await user.click(screen.getByRole("button", { name: /技能知识点配额/ }));
@@ -835,8 +986,8 @@ describe("ExamWizardForm", () => {
     await user.click(screen.getByRole("button", { name: /AI出题/i }));
     expect(screen.getByText("AI出题设置")).toBeInTheDocument();
 
-    // 题目总数由题型分配自动得出：设置 2 道选择题即总数 2。
-    const choiceCountInput = screen.getByLabelText("选择题数量");
+    // 题目总数由题型分配自动得出：设置 2 道单选题即总数 2。
+    const choiceCountInput = screen.getByLabelText("单选题数量");
     await user.clear(choiceCountInput);
     await user.type(choiceCountInput, "2");
 
@@ -890,21 +1041,15 @@ describe("ExamWizardForm", () => {
     await user.click(screen.getByRole("button", { name: "预览与设置分数" }));
     await user.click(screen.getByRole("button", { name: "按题型展示" }));
 
-    const choiceTotalInput = screen.getByLabelText("题型总分", { selector: "#type-total-score-choice" });
+    const choiceTotalInput = screen.getByLabelText("题型总分", { selector: "#type-total-score-single_choice" });
     await user.clear(choiceTotalInput);
     await user.type(choiceTotalInput, "12");
-    await user.click(screen.getByRole("button", { name: "将选择题总分均分到每题" }));
+    await user.click(screen.getByRole("button", { name: "将单选题总分均分到每题" }));
 
     await waitFor(() => {
-      expect(
-        screen.getByLabelText("考试分数", { selector: "#fullscreen-exam-question-score-question-1" }),
-      ).toHaveValue(6);
-      expect(
-        screen.getByLabelText("考试分数", { selector: "#fullscreen-exam-question-score-question-2" }),
-      ).toHaveValue(6);
-      expect(
-        screen.getByLabelText("考试分数", { selector: "#fullscreen-exam-question-score-question-3" }),
-      ).toHaveValue(20);
+      expect(document.getElementById("fullscreen-exam-question-score-question-1")).toHaveValue(6);
+      expect(document.getElementById("fullscreen-exam-question-score-question-2")).toHaveValue(6);
+      expect(document.getElementById("fullscreen-exam-question-score-question-3")).toHaveValue(20);
     });
   });
 

@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import String, cast, func, or_, select
+from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.activity_logs.service import CATEGORY_QUESTION, log_event
@@ -16,7 +16,7 @@ from app.auth.models import User
 from app.common.pagination import PaginationParams, apply_filters, apply_pagination, get_total_count, parse_filters, parse_pagination
 from app.common.resource_access import can_read_shared_resource, can_write_owned_resource, teacher_visible_resource_filter
 from app.database import get_db
-from app.questions.models import KnowledgePoint, Question, QuestionImportJobStatus, QuestionSource
+from app.questions.models import KnowledgePoint, Question, QuestionImportJobStatus, QuestionSource, QuestionType
 from app.questions.models import question_knowledge_points, question_tags
 from app.questions.schemas import (
     KnowledgePointCreate,
@@ -104,6 +104,42 @@ questions_router = APIRouter()
 tags_router = APIRouter()
 knowledge_points_router = APIRouter()
 question_banks_router = APIRouter()
+
+_CHOICE_DISPLAY_TYPES = {"single_choice", "multi_choice"}
+
+
+def _choice_multi_condition():
+    content_text = cast(Question.content, String)
+    answer_text = cast(Question.answer, String)
+    return or_(
+        content_text.ilike('%"multi": true%'),
+        content_text.ilike('%"multi":true%'),
+        answer_text.ilike('%"correct": [%'),
+        answer_text.ilike('%"correct":[%'),
+    )
+
+
+def _apply_question_type_filter(query, raw_type: str | None, raw_type_in: str | None):
+    values: set[str] = set()
+    if raw_type:
+        values.add(raw_type)
+    if raw_type_in:
+        values.update(item.strip() for item in raw_type_in.split(",") if item.strip())
+    if not values:
+        return query
+
+    regular_types = {value for value in values if value not in _CHOICE_DISPLAY_TYPES}
+    display_types = values & _CHOICE_DISPLAY_TYPES
+    clauses = []
+    if regular_types:
+        clauses.append(Question.type.in_(regular_types))
+    if "single_choice" in display_types and "multi_choice" in display_types:
+        clauses.append(Question.type == QuestionType.CHOICE)
+    elif "multi_choice" in display_types:
+        clauses.append(and_(Question.type == QuestionType.CHOICE, _choice_multi_condition()))
+    elif "single_choice" in display_types:
+        clauses.append(and_(Question.type == QuestionType.CHOICE, ~_choice_multi_condition()))
+    return query.where(or_(*clauses)) if clauses else query
 
 
 def _build_question_bank_response(
@@ -266,6 +302,8 @@ async def list_questions(
         else None
     )
     search_text = (filters.pop("search_text_like", None) or filters.pop("search_text", None) or "").strip()
+    question_type_raw = filters.pop("type", None)
+    question_type_in_raw = filters.pop("type_in", None)
 
     if tag_ids:
         base_query = base_query.join(question_tags).where(question_tags.c.tag_id.in_(tag_ids))
@@ -273,6 +311,7 @@ async def list_questions(
         base_query = base_query.join(question_knowledge_points).where(
             question_knowledge_points.c.knowledge_point_id == knowledge_point_id
         )
+    base_query = _apply_question_type_filter(base_query, question_type_raw, question_type_in_raw)
     if search_text:
         like_pattern = f"%{search_text}%"
         base_query = base_query.where(
@@ -303,6 +342,7 @@ async def list_questions(
         full_query = full_query.join(question_knowledge_points).where(
             question_knowledge_points.c.knowledge_point_id == knowledge_point_id
         )
+    full_query = _apply_question_type_filter(full_query, question_type_raw, question_type_in_raw)
     if search_text:
         like_pattern = f"%{search_text}%"
         full_query = full_query.where(

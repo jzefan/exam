@@ -4,7 +4,7 @@ from sqlalchemy import select
 
 from app.auth.models import User
 from app.auth.schemas import UserCreate
-from app.auth.security import create_access_token
+from app.auth.security import create_access_token, hash_password, verify_password
 from app.auth.service import create_user
 from app.rbac.models import Class, Organization, Role, TeacherStudent
 from app.rbac.schemas import StudentCreate
@@ -326,6 +326,111 @@ async def test_teacher_delete_only_removes_current_teacher_link_for_shared_stude
     assert remaining_links == [teacher_b.id]
     assert shared_student.deleted_at is None
     assert shared_student.owner_teacher_id == teacher_b.id
+
+
+@pytest.mark.asyncio
+async def test_teacher_can_reset_owned_student_password_to_student_id(
+    client: AsyncClient, db_session
+) -> None:
+    org = await _create_org_with_roles(db_session)
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-reset-owned",
+        email="teacher-reset-owned@example.com",
+        full_name="Teacher Reset Owned",
+    )
+    student = await create_student(
+        db_session,
+        org.id,
+        StudentCreate(full_name="Reset Owned Student", phone="13900000021", student_id="S021"),
+        owner_teacher_id=teacher.id,
+    )
+    student.must_change_password = False
+    student.session_token = "existing-session"
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    response = await client.post(f"/api/rbac/students/{student.id}/reset-password")
+
+    assert response.status_code == 200
+    assert response.json() == {"password_source": "student_id"}
+
+    await db_session.refresh(student)
+    assert verify_password("S021", student.password_hash)
+    assert not verify_password("13900000021", student.password_hash)
+    assert student.must_change_password is True
+    assert student.session_token is None
+
+
+@pytest.mark.asyncio
+async def test_teacher_reset_student_password_falls_back_to_username_without_student_id(
+    client: AsyncClient, db_session
+) -> None:
+    org = await _create_org_with_roles(db_session)
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-reset-username",
+        email="teacher-reset-username@example.com",
+        full_name="Teacher Reset Username",
+    )
+    student = await create_student(
+        db_session,
+        org.id,
+        StudentCreate(full_name="Reset Username Student", phone="13900000023", student_id=None),
+        owner_teacher_id=teacher.id,
+    )
+    student.password_hash = hash_password("temporary-password")
+    student.must_change_password = False
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    response = await client.post(f"/api/rbac/students/{student.id}/reset-password")
+
+    assert response.status_code == 200
+    assert response.json() == {"password_source": "username"}
+
+    await db_session.refresh(student)
+    assert verify_password(student.username, student.password_hash)
+    assert student.must_change_password is True
+
+
+@pytest.mark.asyncio
+async def test_teacher_cannot_reset_other_teacher_student_password(
+    client: AsyncClient, db_session
+) -> None:
+    org = await _create_org_with_roles(db_session)
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-reset-denied",
+        email="teacher-reset-denied@example.com",
+        full_name="Teacher Reset Denied",
+    )
+    other_teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-reset-owner",
+        email="teacher-reset-owner@example.com",
+        full_name="Teacher Reset Owner",
+    )
+    student = await create_student(
+        db_session,
+        org.id,
+        StudentCreate(full_name="Reset Foreign Student", phone="13900000022", student_id="S022"),
+        owner_teacher_id=other_teacher.id,
+    )
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    response = await client.post(f"/api/rbac/students/{student.id}/reset-password")
+
+    assert response.status_code == 403
+
+    await db_session.refresh(student)
+    assert verify_password("13900000022", student.password_hash)
+    assert not verify_password("S022", student.password_hash)
 
 
 @pytest.mark.asyncio

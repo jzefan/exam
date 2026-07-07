@@ -195,6 +195,16 @@ class ExamSemesterArchiveRequest(BaseModel):
     semester_id: uuid.UUID | None = None  # null clears the assignment
 
 
+class CourseQuestionKnowledgeCompleteRequest(BaseModel):
+    question_ids: list[uuid.UUID] = Field(default_factory=list, max_length=5000)
+
+
+class CourseQuestionKnowledgeCompleteResponse(BaseModel):
+    job_id: uuid.UUID
+    total_count: int
+    question_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
 class TeacherCourseCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2000)

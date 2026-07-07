@@ -394,7 +394,10 @@ function createManualQuestionDraft({
     id: "manual-draft",
     type: backendType,
     title: "",
-    content: { html: "", text: "" },
+    content:
+      backendType === "choice"
+        ? { html: "", text: "", multi: type === "multi_choice" }
+        : { html: "", text: "" },
     options:
       backendType === "choice"
         ? { A: "", B: "", C: "", D: "" }

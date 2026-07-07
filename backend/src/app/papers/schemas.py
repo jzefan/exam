@@ -130,6 +130,7 @@ class PaperAIAppendRequest(BaseModel):
     difficulty_strategy: Literal["similar", "easier", "harder"] = "similar"
     prefer_root_knowledge_point: bool = True
     model: Literal["qwen", "deepseek", "claude"] = "deepseek"
+    question_bank_id: uuid.UUID | None = None
 
 
 class PaperImportQuestionDraft(BaseModel):

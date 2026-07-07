@@ -563,8 +563,8 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
   const activeRunIdRef = useRef(0);
 
   const descriptionHtml = useMemo(
-    () => renderPromptHtml(content.description ?? content.text ?? question.title),
-    [content.description, content.text, question.title],
+    () => renderPromptHtml(content.html ?? content.description ?? content.text ?? question.title),
+    [content.html, content.description, content.text, question.title],
   );
   const inputDescriptionHtml = useMemo(
     () => renderPromptHtml(content.input_description ?? ""),

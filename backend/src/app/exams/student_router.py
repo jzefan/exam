@@ -67,6 +67,7 @@ from app.grading.service import (
     apply_grading_task_failure_to_exam_submission,
     apply_grading_task_result_to_exam_submission,
     create_grading_task,
+    list_active_exam_submission_task_question_ids,
     run_grading_task_with_role_binding,
 )
 from app.lsp_runner.client import proxy_lsp_websocket
@@ -695,6 +696,10 @@ def _normalize_fill_in_match_payload(item: dict[str, Any]) -> dict[str, Any]:
 def _build_student_question_content(question: Question) -> dict[str, Any]:
     content = deepcopy(question.content) if isinstance(question.content, dict) else {}
     question_type = question.type.value if isinstance(question.type, QuestionType) else str(question.type)
+    if question_type == QuestionType.CHOICE.value:
+        answer = question.answer or {}
+        if isinstance(answer, dict):
+            content["multi"] = content.get("multi") is True or isinstance(answer.get("correct"), list)
     if question_type == QuestionType.FILL_IN.value:
         explicit_count = content.get("blank_count")
         counts = [
@@ -2166,6 +2171,7 @@ async def get_exam_result(
             subjective_score=exam_student.subjective_score,
             grading_status=exam_student.grading_status,
             can_view=False,
+            can_retake=_can_start_retake(exam, exam_student),
             blocked_reason="教师暂未开放查看结果权限",
         )
 
@@ -2189,6 +2195,16 @@ async def get_exam_result(
     }
 
     _SUBJECTIVE_TYPES = {"short_answer", "essay", "code"}
+    pending_question_ids = (
+        await list_active_exam_submission_task_question_ids(
+            db,
+            exam_id=exam.id,
+            student_id=user.id,
+            submission_id=exam_student.latest_submission_id,
+        )
+        if is_pending_ai
+        else set()
+    )
 
     question_items: list[StudentExamResultQuestionResponse] = []
     for exam_question in sorted(exam.exam_questions, key=lambda item: item.order):
@@ -2199,7 +2215,7 @@ async def get_exam_result(
         grading_failed = bool(answer_feedback.get("grading_failed"))
         needs_human_review = bool(answer_feedback.get("needs_human_review"))
         grading_pending = (
-            is_pending_ai
+            question.id in pending_question_ids
             and question.type.value in _SUBJECTIVE_TYPES
             and not grading_failed
         )
@@ -2237,6 +2253,7 @@ async def get_exam_result(
         subjective_score=exam_student.subjective_score,
         grading_status=exam_student.grading_status,
         can_view=True,
+        can_retake=_can_start_retake(exam, exam_student),
         blocked_reason=(
             "主观题正在进行 AI 评分，主观题分数将在评估完成后更新。客观题分数已可见。"
             if is_pending_ai

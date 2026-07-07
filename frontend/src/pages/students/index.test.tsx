@@ -63,6 +63,10 @@ const { apiRequestMock, toastMock, usePermissionsMock, useGetIdentityMock, reset
       return Promise.resolve(undefined);
     }
 
+    if (path.startsWith("/rbac/students/") && path.endsWith("/reset-password") && options?.method === "POST") {
+      return Promise.resolve({ password_source: "student_id" });
+    }
+
     if (path === "/rbac/students/batch-delete" && options?.method === "POST") {
       const body = JSON.parse(options.body ?? "{\"student_ids\":[]}") as { student_ids: string[] };
       currentStudents = currentStudents.filter((student) => !body.student_ids.includes(student.id));
@@ -227,6 +231,27 @@ describe("StudentManagementPage", () => {
       expect(screen.queryByText("张三")).not.toBeInTheDocument();
     });
     expect(screen.getByText("李四")).toBeInTheDocument();
+  });
+
+  it("supports resetting a student password from the list", async () => {
+    const user = userEvent.setup();
+    render(<StudentManagementPage />);
+
+    expect(await screen.findByText("张三")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "重置密码 张三" }));
+
+    await waitFor(() => {
+      expect(apiRequestMock).toHaveBeenCalledWith("/rbac/students/student-1/reset-password", { method: "POST" });
+    });
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "密码已重置",
+          description: "张三 的初始密码已重置为学号：S001。",
+        })
+      );
+    });
   });
 
   it("supports selecting current students and deleting them in batch", async () => {

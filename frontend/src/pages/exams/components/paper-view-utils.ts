@@ -1,4 +1,7 @@
-import { normalizeQuestionType } from "@/components/questions/question-preview-utils";
+import {
+  isMultiChoice,
+  normalizeQuestionType,
+} from "@/components/questions/question-preview-utils";
 import type { IQuestion, QuestionType } from "@/types";
 
 import type { ExamQuestionFormItem } from "./exam-form-utils";
@@ -21,6 +24,21 @@ const questionTypeDisplayOrder: Record<QuestionType, number> = {
   code: 5,
 };
 
+export const splitChoiceTypeLabels = {
+  single_choice: "单选题",
+  multi_choice: "多选题",
+} as const;
+
+export const splitQuestionTypeDisplayOrder: Record<string, number> = {
+  single_choice: 0,
+  multi_choice: 1,
+  true_false: 2,
+  fill_in: 3,
+  short_answer: 4,
+  essay: 5,
+  code: 6,
+};
+
 export type PaperPreviewItem = {
   question: IQuestion;
   order: number;
@@ -36,6 +54,8 @@ export function getPaperQuestionAnchorId(questionId: string) {
 
 export type QuestionTypeSummary = {
   type: QuestionType;
+  key?: string;
+  label?: string;
   count: number;
   totalScore: number;
   questionIds: string[];
@@ -50,6 +70,21 @@ export type QuestionJumpGroup = {
   summary: QuestionTypeSummary;
   items: QuestionJumpItem[];
 };
+
+export function getQuestionTypeGroupKey(question: IQuestion): string | null {
+  const normalizedType = normalizeQuestionType(question.type);
+  if (!normalizedType) {
+    return null;
+  }
+  if (normalizedType === "choice") {
+    return isMultiChoice(question) ? "multi_choice" : "single_choice";
+  }
+  return normalizedType;
+}
+
+export function getQuestionTypeGroupLabel(summary: QuestionTypeSummary): string {
+  return summary.label ?? questionTypeLabels[summary.type] ?? "题目";
+}
 
 export function buildPaperPreviewItems(
   questionItems: ExamQuestionFormItem[],
@@ -96,8 +131,11 @@ export function buildPaperPreviewItems(
     });
 }
 
-export function buildQuestionTypeSummaries(items: PaperPreviewItem[]): QuestionTypeSummary[] {
-  const grouped = new Map<QuestionType, QuestionTypeSummary>();
+export function buildQuestionTypeSummaries(
+  items: PaperPreviewItem[],
+  options: { splitChoice?: boolean } = {},
+): QuestionTypeSummary[] {
+  const grouped = new Map<string, QuestionTypeSummary>();
 
   for (const item of items) {
     const normalizedType = normalizeQuestionType(item.question.type);
@@ -105,7 +143,13 @@ export function buildQuestionTypeSummaries(items: PaperPreviewItem[]): QuestionT
       continue;
     }
 
-    const existing = grouped.get(normalizedType);
+    const key = options.splitChoice
+      ? getQuestionTypeGroupKey(item.question)
+      : normalizedType;
+    if (!key) {
+      continue;
+    }
+    const existing = grouped.get(key);
     if (existing) {
       existing.count += 1;
       existing.totalScore = Number((existing.totalScore + (Number(item.scoreOverride) || 0)).toFixed(2));
@@ -113,12 +157,31 @@ export function buildQuestionTypeSummaries(items: PaperPreviewItem[]): QuestionT
       continue;
     }
 
-    grouped.set(normalizedType, {
+    grouped.set(key, {
       type: normalizedType,
+      ...(options.splitChoice
+        ? {
+            key,
+            label:
+              key === "single_choice"
+                ? splitChoiceTypeLabels.single_choice
+                : key === "multi_choice"
+                  ? splitChoiceTypeLabels.multi_choice
+                  : questionTypeLabels[normalizedType],
+          }
+        : {}),
       count: 1,
       totalScore: Number((Number(item.scoreOverride) || 0).toFixed(2)),
       questionIds: [item.question.id],
     });
+  }
+
+  if (options.splitChoice) {
+    return Array.from(grouped.values()).sort(
+      (left, right) =>
+        (splitQuestionTypeDisplayOrder[left.key ?? left.type] ?? Number.MAX_SAFE_INTEGER) -
+        (splitQuestionTypeDisplayOrder[right.key ?? right.type] ?? Number.MAX_SAFE_INTEGER),
+    );
   }
 
   return (Object.keys(questionTypeLabels) as QuestionType[])

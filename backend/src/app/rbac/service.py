@@ -282,6 +282,65 @@ async def get_active_student_by_id(db: AsyncSession, student_id: uuid.UUID) -> U
     return result.scalar_one_or_none()
 
 
+async def get_active_student_by_id_in_org(
+    db: AsyncSession,
+    student_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> User | None:
+    result = await db.execute(
+        select(User)
+        .join(UserOrganization, UserOrganization.user_id == User.id)
+        .join(Role, Role.id == UserOrganization.role_id)
+        .where(
+            User.id == student_id,
+            UserOrganization.org_id == org_id,
+            User.deleted_at.is_(None),
+            Role.name == "student",
+        )
+        .distinct()
+    )
+    return result.scalar_one_or_none()
+
+
+async def reset_student_password_for_actor(
+    db: AsyncSession,
+    student_id: uuid.UUID,
+    org_id: uuid.UUID,
+    *,
+    actor_is_admin: bool,
+    teacher_id: uuid.UUID | None = None,
+) -> tuple[User, str]:
+    student = await get_active_student_by_id_in_org(db, student_id, org_id)
+    if student is None:
+        raise LookupError("student not found")
+
+    if not actor_is_admin:
+        if teacher_id is None:
+            raise PermissionError("teacher context is required")
+
+        link = await db.get(
+            TeacherStudent,
+            {"teacher_id": teacher_id, "student_id": student_id},
+        )
+        is_owner = student.owner_teacher_id == teacher_id
+        if link is None and not is_owner:
+            raise PermissionError("cannot reset a student outside current teacher scope")
+
+    reset_password = (student.student_id or "").strip()
+    password_source = "student_id"
+    if not reset_password:
+        reset_password = student.username.strip()
+        password_source = "username"
+    if not reset_password:
+        raise ValueError("student account has no usable password seed")
+
+    student.password_hash = hash_password(reset_password)
+    student.must_change_password = True
+    student.session_token = None
+    await db.flush()
+    return student, password_source
+
+
 async def delete_student_for_actor(
     db: AsyncSession,
     student_id: uuid.UUID,

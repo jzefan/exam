@@ -122,6 +122,8 @@ type StudentMessageKey =
   | "result_expand_all"
   | "result_collapse_all"
   | "result_all_view_hint"
+  | "result_quick_nav"
+  | "result_quick_nav_hint"
   | "result_analysis_section"
   | "result_feedback_panel"
   | "result_show_details"
@@ -298,6 +300,8 @@ const STUDENT_DICTIONARY: Record<StudentLocale, Record<StudentMessageKey, string
     result_expand_all: "全部展开",
     result_collapse_all: "全部收起",
     result_all_view_hint: "全部查看模式下，每题默认先展示题目和答案，评分详情、题目解析与反馈可按需展开。",
+    result_quick_nav: "题目序号",
+    result_quick_nav_hint: "点击序号跳转到对应题目",
     result_analysis_section: "题目解析",
     result_feedback_panel: "反馈",
     result_show_details: "展开评分详情、题目解析和反馈",
@@ -473,6 +477,8 @@ const STUDENT_DICTIONARY: Record<StudentLocale, Record<StudentMessageKey, string
     result_expand_all: "Expand All",
     result_collapse_all: "Collapse All",
     result_all_view_hint: "In view-all mode, each question starts with the prompt and answers only. Expand scoring, analysis, and feedback when needed.",
+    result_quick_nav: "Questions",
+    result_quick_nav_hint: "Click a number to jump to that question",
     result_analysis_section: "Analysis",
     result_feedback_panel: "Feedback",
     result_show_details: "Show scoring, analysis, and feedback",
