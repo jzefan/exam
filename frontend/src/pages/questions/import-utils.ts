@@ -1,4 +1,5 @@
 import type { QuestionType } from "@/types";
+import { getDefaultScore } from "@/lib/question-defaults";
 import type {
   ImportConfidence,
   ImportRecognitionMode,
@@ -479,7 +480,7 @@ export function buildImportableQuestions(drafts: QuestionImportDraft[], question
         answer,
         analysis: draft.analysis || null,
         difficulty: clampedDifficulty,
-        score: 10,
+        score: getDefaultScore(draft.type, Array.isArray(answer.correct)),
         source: "imported" as const,
         tag_ids: [],
         knowledge_point_ids: draft.suggested_knowledge_points?.map((kp) => kp.id) ?? [],

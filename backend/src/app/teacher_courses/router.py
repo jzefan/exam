@@ -22,13 +22,17 @@ from app.exams.models import (
     ExamQuestion,
     ExamStudent,
     GradingStatus,
+    StudentExamAnswer,
     StudentExamSubmissionAnswer,
 )
 from app.job_models.models import LearningResource
 from app.learning.models import Direction, KnowledgePoint, Major
 from app.questions.models import Question, QuestionBank, QuestionImportJobStatus, question_knowledge_points
 from app.questions.router import _build_question_response
+from app.questions.schemas import QuestionEditLockInfo, QuestionResponse
 from app.questions.service import (
+    IN_USE_ALLOWED_FIELDS,
+    IN_USE_REGRADE_FIELDS,
     can_hard_delete_question,
     create_question_import_job,
     get_or_create_root_knowledge_question_bank,
@@ -74,6 +78,7 @@ from app.teacher_courses.schemas import (
     TeacherCourseExamKnowledgePoint,
     TeacherCourseMaterial,
     TeacherCourseQuestion,
+    TeacherCourseQuestionList,
     TeacherCourseSummary,
 )
 
@@ -1127,6 +1132,185 @@ async def list_teacher_course_questions(
         stmt = stmt.where(teacher_owned_resource_filter(Question, user.id))
     questions = (await db.execute(stmt)).scalars().unique().all()
     return [await _build_question_response(db, question) for question in questions]
+
+
+async def _question_ids_with_submitted_attempts(
+    db: AsyncSession,
+    question_ids: list[uuid.UUID],
+) -> set[uuid.UUID]:
+    if not question_ids:
+        return set()
+    stmt = (
+        select(StudentExamAnswer.question_id)
+        .distinct()
+        .join(Exam, Exam.id == StudentExamAnswer.exam_id)
+        .join(
+            ExamStudent,
+            and_(
+                ExamStudent.exam_id == StudentExamAnswer.exam_id,
+                ExamStudent.student_id == StudentExamAnswer.student_id,
+            ),
+        )
+        .where(
+            StudentExamAnswer.question_id.in_(question_ids),
+            Exam.deleted_at.is_(None),
+            ExamStudent.submitted_at.is_not(None),
+        )
+    )
+    rows = await db.execute(stmt)
+    return {row[0] for row in rows}
+
+
+@router.get("/{course_id}/questions/paginated", response_model=TeacherCourseQuestionList)
+async def list_teacher_course_questions_paginated(
+    course_id: uuid.UUID,
+    db: DB,
+    user: CurrentUser,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=200)] = 50,
+    knowledge_point_id: Annotated[uuid.UUID | None, Query()] = None,
+    types: Annotated[list[str] | None, Query()] = None,
+    q: Annotated[str | None, Query(max_length=200)] = None,
+) -> TeacherCourseQuestionList:
+    is_admin = await _is_course_admin(db, user)
+    course, *_ = await _get_visible_course(
+        db,
+        course_id,
+        user=user,
+        is_admin=is_admin,
+        include_deleted=True,
+    )
+    default_bank = await _get_course_default_question_bank(db, course)
+    if default_bank is None:
+        return TeacherCourseQuestionList(items=[], total=0, type_counts={})
+
+    q_clean = q.strip() if q else None
+    kp_filter = knowledge_point_id is not None
+
+    conditions: list = [
+        Question.deleted_at.is_(None),
+        Question.question_bank_id == default_bank.id,
+    ]
+    if not is_admin:
+        conditions.append(teacher_owned_resource_filter(Question, user.id))
+    if types:
+        conditions.append(Question.type.in_(types))
+
+    if kp_filter:
+        subtree = _course_subtree_cte(knowledge_point_id)
+        conditions.append(question_knowledge_points.c.knowledge_point_id.in_(select(subtree.c.id)))
+
+    if q_clean:
+        conditions.append(
+            or_(
+                Question.title.ilike(f"%{q_clean}%"),
+                KnowledgePoint.name.ilike(f"%{q_clean}%"),
+            )
+        )
+
+    where_clause = and_(*conditions)
+
+    # Total count for pagination (respects all filters including types).
+    count_stmt = select(func.count(func.distinct(Question.id))).select_from(Question)
+    if kp_filter or q_clean:
+        count_stmt = count_stmt.join(
+            question_knowledge_points, question_knowledge_points.c.question_id == Question.id
+        )
+    if q_clean:
+        count_stmt = count_stmt.join(
+            KnowledgePoint, KnowledgePoint.id == question_knowledge_points.c.knowledge_point_id
+        )
+    count_stmt = count_stmt.where(where_clause)
+    total = await db.scalar(count_stmt) or 0
+
+    # Type counts ignore the `types` filter so the UI can show available counts.
+    type_conditions: list = [
+        Question.deleted_at.is_(None),
+        Question.question_bank_id == default_bank.id,
+    ]
+    if not is_admin:
+        type_conditions.append(teacher_owned_resource_filter(Question, user.id))
+    if kp_filter:
+        type_conditions.append(question_knowledge_points.c.knowledge_point_id.in_(select(subtree.c.id)))
+    type_where = and_(*type_conditions)
+    if q_clean:
+        type_where = and_(
+            type_where,
+            or_(
+                Question.title.ilike(f"%{q_clean}%"),
+                KnowledgePoint.name.ilike(f"%{q_clean}%"),
+            ),
+        )
+    type_stmt = (
+        select(Question.type, func.count(func.distinct(Question.id)))
+        .select_from(Question)
+    )
+    if kp_filter or q_clean:
+        type_stmt = type_stmt.join(
+            question_knowledge_points, question_knowledge_points.c.question_id == Question.id
+        )
+    if q_clean:
+        type_stmt = type_stmt.join(
+            KnowledgePoint, KnowledgePoint.id == question_knowledge_points.c.knowledge_point_id
+        )
+    type_stmt = type_stmt.where(type_where).group_by(Question.type)
+    type_counts: dict[str, int] = {}
+    for row in await db.execute(type_stmt):
+        key = row[0].value if hasattr(row[0], "value") else row[0]
+        type_counts[key] = row[1]
+
+    # Paginated items. Select distinct question IDs first (so the joins used
+    # for knowledge-point / search filtering do not multiply rows and shrink
+    # the page below page_size), then load full rows with relationships.
+    id_stmt = select(func.distinct(Question.id)).select_from(Question)
+    if kp_filter or q_clean:
+        id_stmt = id_stmt.join(
+            question_knowledge_points, question_knowledge_points.c.question_id == Question.id
+        )
+    if q_clean:
+        id_stmt = id_stmt.join(
+            KnowledgePoint, KnowledgePoint.id == question_knowledge_points.c.knowledge_point_id
+        )
+    id_stmt = (
+        id_stmt.where(where_clause)
+        .order_by(Question.updated_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    page_question_ids = list((await db.execute(id_stmt)).scalars().all())
+    # func.distinct(Question.id) can return the raw stored value (a hex string
+    # on SQLite) instead of a UUID object; coerce so the IN clause binds correctly.
+    page_question_ids = [qid if isinstance(qid, uuid.UUID) else uuid.UUID(str(qid)) for qid in page_question_ids]
+
+    questions: list = []
+    if page_question_ids:
+        items_stmt = (
+            select(Question)
+            .options(
+                selectinload(Question.creator),
+                selectinload(Question.question_bank),
+                selectinload(Question.tags),
+                selectinload(Question.knowledge_points),
+            )
+            .where(Question.id.in_(page_question_ids))
+            .order_by(Question.updated_at.desc())
+        )
+        questions = list((await db.execute(items_stmt)).scalars().unique().all())
+
+    submitted_ids = await _question_ids_with_submitted_attempts(db, [question.id for question in questions])
+    items: list[TeacherCourseQuestion] = []
+    for question in questions:
+        in_use = question.id in submitted_ids
+        edit_lock = QuestionEditLockInfo(
+            in_use=in_use,
+            allowed_fields=IN_USE_ALLOWED_FIELDS if in_use else [],
+            regrade_on_fields=IN_USE_REGRADE_FIELDS if in_use else [],
+            has_submitted_attempts=in_use,
+        )
+        response = QuestionResponse.from_question(question, edit_lock=edit_lock)
+        items.append(TeacherCourseQuestion.model_validate(response))
+
+    return TeacherCourseQuestionList(items=items, total=total, type_counts=type_counts)
 
 
 @router.post(

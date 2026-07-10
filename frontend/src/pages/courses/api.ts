@@ -1,5 +1,5 @@
 import { apiRequest } from "@/pages/grading/api";
-import type { IQuestion } from "@/types";
+import type { IQuestion, QuestionType } from "@/types";
 
 /**
  * Dedupe concurrent GETs to the same URL. React 19 StrictMode + lazy + Suspense
@@ -534,6 +534,41 @@ export function listCourseQuestions(courseId: string) {
   // 题目 tab 会一次性加载课程全部题目，再在前端按知识点/搜索过滤，
   // 因此需要请求足够大的上限覆盖整门课程的题量（避免按知识点筛选时漏题）。
   return dedupedGet<IQuestion[]>(`/teacher/courses/${courseId}/questions?limit=5000`);
+}
+
+export interface CourseQuestionListParams {
+  page?: number;
+  page_size?: number;
+  knowledge_point_id?: string | null;
+  types?: QuestionType[];
+  q?: string;
+}
+
+export interface CourseQuestionListResponse {
+  items: IQuestion[];
+  total: number;
+  type_counts: Partial<Record<QuestionType, number>>;
+}
+
+export function listCourseQuestionsPaginated(
+  courseId: string,
+  params: CourseQuestionListParams = {},
+) {
+  const search = new URLSearchParams();
+  if (params.page) search.set("page", String(params.page));
+  if (params.page_size) search.set("page_size", String(params.page_size));
+  if (params.knowledge_point_id) {
+    search.set("knowledge_point_id", params.knowledge_point_id);
+  }
+  if (params.types?.length) {
+    for (const type of params.types) {
+      search.append("types", type);
+    }
+  }
+  if (params.q) search.set("q", params.q);
+  return apiRequest<CourseQuestionListResponse>(
+    `/teacher/courses/${courseId}/questions/paginated?${search.toString()}`,
+  );
 }
 
 export function clearCourseQuestions(courseId: string) {

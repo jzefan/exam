@@ -94,7 +94,6 @@ import { cn } from "@/lib/utils";
 import type { IPaper, IQuestion, QuestionType } from "@/types";
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
 import {
-  normalizeQuestionType,
   questionTypeFullLabel,
 } from "@/components/questions/question-preview-utils";
 import {
@@ -136,7 +135,7 @@ import {
   listCourseAssignments,
   listCourseExams,
   listCourseMaterials,
-  listCourseQuestions,
+  listCourseQuestionsPaginated,
   listCourseSemesters,
   updateCourseKnowledgePointName,
   updateCourseMaterial,
@@ -632,21 +631,6 @@ function filterMaterialsForKnowledgeNode(
   if (nodeIds.size === 0) return [];
   return materials.filter((material) => nodeIds.has(material.node_id));
 }
-
-function filterQuestionsForKnowledgeNode(
-  questions: IQuestion[],
-  tree: CourseKnowledgeNode | null,
-  nodeId: string | null,
-) {
-  if (!nodeId) return questions;
-  const node = findCourseKnowledgeNode(tree, nodeId);
-  const nodeIds = collectCourseKnowledgeNodeIds(node);
-  if (nodeIds.size === 0) return [];
-  return questions.filter((question) =>
-    question.knowledge_points.some((kp) => nodeIds.has(kp.id)),
-  );
-}
-
 
 function courseQuestionBankName(courseName: string | undefined) {
   const normalized = courseName?.trim();
@@ -2109,6 +2093,16 @@ function buildQuestionPaginationPages(
 
 function QuestionsTab({
   questions,
+  total,
+  typeCounts,
+  query,
+  onQueryChange,
+  selectedQuestionTypes,
+  onSelectedQuestionTypesChange,
+  page,
+  onPageChange,
+  pageSize,
+  onPageSizeChange,
   courseId,
   courseName,
   courseSemesterId,
@@ -2128,6 +2122,16 @@ function QuestionsTab({
   onKnowledgeCompleted,
 }: {
   questions: IQuestion[];
+  total: number;
+  typeCounts: Partial<Record<QuestionType, number>>;
+  query: string;
+  onQueryChange: (query: string) => void;
+  selectedQuestionTypes: Set<QuestionType>;
+  onSelectedQuestionTypesChange: (types: Set<QuestionType>) => void;
+  page: number;
+  onPageChange: (page: number) => void;
+  pageSize: number;
+  onPageSizeChange: (size: number) => void;
   courseId: string;
   courseName: string;
   courseSemesterId: string | null;
@@ -2159,40 +2163,19 @@ function QuestionsTab({
   const { toast } = useToast();
   const [deleteQuestionTarget, setDeleteQuestionTarget] =
     useState<IQuestion | null>(null);
-  const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [createFromSelectionOpen, setCreateFromSelectionOpen] = useState(false);
   const [knowledgeCompleting, setKnowledgeCompleting] = useState(false);
   const [allQuestionsExpanded, setAllQuestionsExpanded] = useState(false);
-  const [selectedQuestionTypes, setSelectedQuestionTypes] = useState<
-    Set<QuestionType>
-  >(new Set());
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
-
-  useEffect(() => {
-    const questionIds = new Set(questions.map((question) => question.id));
-    setSelected((current) => {
-      const next = new Set([...current].filter((id) => questionIds.has(id)));
-      return next.size === current.size ? current : next;
-    });
-  }, [questions]);
-
-  // 筛选条件或每页数量变化时回到第一页
-  useEffect(() => {
-    setPage(1);
-  }, [query, selectedQuestionTypes, knowledgeFilterNodeId, pageSize]);
 
   const questionTypeCounts = useMemo(() => {
     const counts = new Map<QuestionType, number>();
-    for (const question of questions) {
-      const type = normalizeQuestionType(question.type);
-      if (!type) continue;
-      counts.set(type, (counts.get(type) ?? 0) + 1);
+    for (const [type, count] of Object.entries(typeCounts)) {
+      const t = type as QuestionType;
+      if (typeof count === "number") counts.set(t, count);
     }
     return counts;
-  }, [questions]);
-
+  }, [typeCounts]);
   const availableQuestionTypes = QUESTION_TYPE_FILTERS.filter((type) =>
     questionTypeCounts.has(type),
   );
@@ -2204,38 +2187,24 @@ function QuestionsTab({
         : `${selectedQuestionTypes.size} 种题型`;
 
   const toggleQuestionTypeFilter = (type: QuestionType) => {
-    setSelectedQuestionTypes((current) => {
-      const next = new Set(current);
-      if (next.has(type)) {
-        next.delete(type);
-      } else {
-        next.add(type);
-      }
-      return next;
-    });
+    const next = new Set(selectedQuestionTypes);
+    if (next.has(type)) {
+      next.delete(type);
+    } else {
+      next.add(type);
+    }
+    onSelectedQuestionTypesChange(next);
   };
 
-  const filtered = questions.filter((question) => {
-    const normalizedType = normalizeQuestionType(question.type);
-    const matchesType =
-      selectedQuestionTypes.size === 0 ||
-      (normalizedType ? selectedQuestionTypes.has(normalizedType) : false);
-    if (!matchesType) return false;
-
-    const text =
-      `${question.title} ${question.knowledge_points.map((kp) => kp.name).join(" ")}`.toLowerCase();
-    return !query.trim() || text.includes(query.trim().toLowerCase());
-  });
-  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const safePage = Math.min(page, pageCount);
-  const pagedQuestions = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
   const paginationPages = buildQuestionPaginationPages(safePage, pageCount);
-  const visibleQuestionIds = new Set(filtered.map((question) => question.id));
+  const visibleQuestionIds = new Set(questions.map((question) => question.id));
   const selectedQuestionIds = [...selected].filter((id) =>
     visibleQuestionIds.has(id),
   );
   const selectedQuestionCount = selectedQuestionIds.length;
-  const selectedQuestionsInOrder = filtered.filter((question) =>
+  const selectedQuestionsInOrder = questions.filter((question) =>
     selectedQuestionIds.includes(question.id),
   );
   const selectedKnowledgeOption = knowledgeFilterOptions.find(
@@ -2261,14 +2230,14 @@ function QuestionsTab({
 
   const toggleSelectAll = () => {
     setSelected((current) => {
-      if (selectedQuestionCount === filtered.length) {
+      if (selectedQuestionCount === questions.length) {
         const next = new Set(current);
-        for (const question of filtered) {
+        for (const question of questions) {
           next.delete(question.id);
         }
         return next;
       }
-      return new Set([...current, ...filtered.map((question) => question.id)]);
+      return new Set([...current, ...questions.map((question) => question.id)]);
     });
   };
 
@@ -2287,14 +2256,12 @@ function QuestionsTab({
   };
 
   const handleCompleteKnowledge = async () => {
-    const targetQuestionIds =
-      selectedQuestionCount > 0
-        ? selectedQuestionIds
-        : questions.map((question) => question.id);
-    if (targetQuestionIds.length === 0) {
+    if (selectedQuestionCount === 0 && total === 0) {
       toast({ title: "暂无可补全的题目" });
       return;
     }
+    const targetQuestionIds =
+      selectedQuestionCount > 0 ? selectedQuestionIds : [];
 
     setKnowledgeCompleting(true);
     try {
@@ -2365,7 +2332,7 @@ function QuestionsTab({
           />
           <Input
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => onQueryChange(event.target.value)}
             placeholder="搜索题目..."
             className="h-9 pl-9"
           />
@@ -2484,12 +2451,12 @@ function QuestionsTab({
           </span>
         )}
       </div>
-      {canWrite && filtered.length > 0 ? (
+      {canWrite && questions.length > 0 ? (
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex h-9 items-center gap-2 rounded-md border border-border bg-muted/30 px-3">
             <Checkbox
               checked={
-                selectedQuestionCount === filtered.length && filtered.length > 0
+                selectedQuestionCount === questions.length && questions.length > 0
               }
               onCheckedChange={toggleSelectAll}
               aria-label="全选题目"
@@ -2527,7 +2494,7 @@ function QuestionsTab({
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-44">
                 <DropdownMenuItem
-                  onClick={() => setSelectedQuestionTypes(new Set())}
+                  onClick={() => onSelectedQuestionTypesChange(new Set())}
                 >
                   全部题型
                 </DropdownMenuItem>
@@ -2561,7 +2528,7 @@ function QuestionsTab({
           </Button>
         </div>
       ) : null}
-      {filtered.length === 0 ? (
+      {questions.length === 0 ? (
         <EmptyPanel
           icon={<BookOpen size={22} />}
           title="暂无题目"
@@ -2570,7 +2537,7 @@ function QuestionsTab({
       ) : (
         <div className="flex flex-col gap-3">
           <div className="space-y-3">
-            {pagedQuestions.map((question, idx) => (
+            {questions.map((question, idx) => (
               <QuestionPreviewCard
                 key={question.id}
                 question={question}
@@ -2640,9 +2607,9 @@ function QuestionsTab({
 
           <div className="flex flex-col gap-3 pt-1 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground sm:text-sm">
-              <span>共 {filtered.length} 题</span>
+              <span>共 {total} 题</span>
               <span>每页</span>
-              <Select value={String(pageSize)} onValueChange={(value) => setPageSize(Number(value))}>
+              <Select value={String(pageSize)} onValueChange={(value) => onPageSizeChange(Number(value))}>
                 <SelectTrigger className="h-8 w-[76px] text-xs">
                   <SelectValue />
                 </SelectTrigger>
@@ -2662,7 +2629,7 @@ function QuestionsTab({
                   <PaginationItem>
                     <PaginationPrevious
                       onClick={() => {
-                        if (safePage > 1) setPage(safePage - 1);
+                        if (safePage > 1) onPageChange(safePage - 1);
                       }}
                       className={
                         safePage <= 1 ? "pointer-events-none opacity-50" : "cursor-pointer"
@@ -2678,7 +2645,7 @@ function QuestionsTab({
                       <PaginationItem key={pageItem}>
                         <PaginationLink
                           isActive={pageItem === safePage}
-                          onClick={() => setPage(pageItem)}
+                          onClick={() => onPageChange(pageItem)}
                           className="cursor-pointer"
                         >
                           {pageItem}
@@ -2689,7 +2656,7 @@ function QuestionsTab({
                   <PaginationItem>
                     <PaginationNext
                       onClick={() => {
-                        if (safePage < pageCount) setPage(safePage + 1);
+                        if (safePage < pageCount) onPageChange(safePage + 1);
                       }}
                       className={
                         safePage >= pageCount ? "pointer-events-none opacity-50" : "cursor-pointer"
@@ -3999,12 +3966,12 @@ function TodoRail({
   exams,
   assignments,
   materials,
-  questions,
+  course,
 }: {
   exams: TeacherCourseExam[];
   assignments: TeacherCourseExam[];
   materials: TeacherCourseMaterial[];
-  questions: IQuestion[];
+  course?: TeacherCourseDetail | null;
 }) {
   const pendingExams = exams.filter((item) => item.pending_count > 0).length;
   const pendingAssignments = assignments.filter(
@@ -4039,7 +4006,7 @@ function TodoRail({
     },
     {
       title: "题目池",
-      detail: `${questions.length} 道题可用于组卷`,
+      detail: `${course?.question_count ?? 0} 道题可用于组卷`,
       icon: <BookOpen size={15} />,
       tone: "soft",
     },
@@ -4130,6 +4097,16 @@ export function CourseDetailPage() {
   const [exams, setExams] = useState<TeacherCourseExam[]>([]);
   const [assignments, setAssignments] = useState<TeacherCourseExam[]>([]);
   const [questions, setQuestions] = useState<IQuestion[]>([]);
+  const [questionTotal, setQuestionTotal] = useState(0);
+  const [questionTypeCounts, setQuestionTypeCounts] = useState<
+    Partial<Record<QuestionType, number>>
+  >({});
+  const [questionPage, setQuestionPage] = useState(1);
+  const [questionPageSize, setQuestionPageSize] = useState(50);
+  const [questionQuery, setQuestionQuery] = useState("");
+  const [questionSelectedTypes, setQuestionSelectedTypes] = useState<
+    Set<QuestionType>
+  >(new Set());
   const [tree, setTree] = useState<CourseKnowledgeNode | null>(null);
   const [selectedMaterialUploadNodeId, setSelectedMaterialUploadNodeId] =
     useState("");
@@ -4202,6 +4179,51 @@ export function CourseDetailPage() {
   const [tabLoading, setTabLoading] = useState<CourseTab | null>(null);
   const [error, setError] = useState<string | null>(null);
   const restoredKnowledgeNodeIdRef = useRef<string | null>(null);
+
+  const loadQuestions = useCallback(async () => {
+    if (!id) return;
+    setTabLoading("questions");
+    try {
+      const res = await listCourseQuestionsPaginated(id, {
+        page: questionPage,
+        page_size: questionPageSize,
+        knowledge_point_id: questionFilterNodeId,
+        types:
+          questionSelectedTypes.size > 0
+            ? [...questionSelectedTypes]
+            : undefined,
+        q: questionQuery.trim() || undefined,
+      });
+      setQuestions(res.items);
+      setQuestionTotal(res.total);
+      setQuestionTypeCounts(res.type_counts);
+    } catch (err) {
+      toast({
+        title: "题目加载失败",
+        description: err instanceof Error ? err.message : "请稍后重试",
+        variant: "destructive",
+      });
+    } finally {
+      setTabLoading((current) => (current === "questions" ? null : current));
+    }
+  }, [
+    id,
+    questionPage,
+    questionPageSize,
+    questionFilterNodeId,
+    questionSelectedTypes,
+    questionQuery,
+    toast,
+  ]);
+
+  useEffect(() => {
+    setQuestionPage(1);
+  }, [questionQuery, questionSelectedTypes, questionFilterNodeId, questionPageSize]);
+
+  useEffect(() => {
+    if (!id || activeTab !== "questions") return;
+    void loadQuestions();
+  }, [id, activeTab, loadQuestions]);
 
   const semesterFilter =
     activeSemesterId === ALL_SEMESTERS ? null : activeSemesterId;
@@ -4307,28 +4329,16 @@ export function CourseDetailPage() {
       filterMaterialsForKnowledgeNode(materials, tree, materialFilterNodeId),
     [materials, materialFilterNodeId, tree],
   );
-  const filteredQuestions = useMemo(
-    () =>
-      filterQuestionsForKnowledgeNode(questions, tree, questionFilterNodeId),
-    [questions, questionFilterNodeId, tree],
-  );
   const questionCountByNodeId = useMemo(() => {
     const counts: Record<string, number> = {};
-    // Initialize all tree node IDs to 0 so even nodes with no questions show up
-    const initFromTree = (node: CourseKnowledgeNode | null) => {
+    const walk = (node: CourseKnowledgeNode | null) => {
       if (!node) return;
-      counts[node.id] = 0;
-      for (const child of node.children) initFromTree(child);
+      counts[node.id] = node.question_count;
+      for (const child of node.children) walk(child);
     };
-    initFromTree(tree);
-    // Count questions per associated knowledge point
-    for (const q of questions) {
-      for (const kp of q.knowledge_points) {
-        counts[kp.id] = (counts[kp.id] ?? 0) + 1;
-      }
-    }
+    walk(tree);
     return counts;
-  }, [questions, tree]);
+  }, [tree]);
   const questionKnowledgeFilterOptions = useMemo(
     () => flattenCourseKnowledgeNodes(tree).filter((item) => item.depth > 0),
     [tree],
@@ -4383,15 +4393,14 @@ export function CourseDetailPage() {
     restoredKnowledgeNodeIdRef.current = nodeId;
     setSelectedKnowledgeNodeId(nodeId);
     if (id) {
+      void loadQuestions();
       void Promise.all([
         listCourseMaterials(id),
-        listCourseQuestions(id),
         getTeacherCourse(id, semesterFilter),
       ])
-        .then(([nextMaterials, nextQuestions, nextCourse]) => {
+        .then(([nextMaterials, nextCourse]) => {
           if (ignore) return;
           setMaterials(nextMaterials);
-          setQuestions(nextQuestions);
           setCourse(nextCourse);
         })
         .catch((err) => {
@@ -4406,7 +4415,7 @@ export function CourseDetailPage() {
     return () => {
       ignore = true;
     };
-  }, [activeTab, id, searchParams, semesterFilter, toast, tree]);
+  }, [activeTab, id, loadQuestions, searchParams, semesterFilter, toast, tree]);
 
   useEffect(() => {
     if (!materialToAssociate) return;
@@ -4504,10 +4513,9 @@ export function CourseDetailPage() {
         .catch(fail)
         .finally(finishTabLoading);
     } else if (activeTab === "questions") {
-      Promise.all([listCourseQuestions(id), getCourseKnowledgeTree(id)])
-        .then(([questionData, treeData]) => {
+      getCourseKnowledgeTree(id)
+        .then((treeData) => {
           if (!ignore) {
-            setQuestions(questionData);
             setTree(treeData);
           }
         })
@@ -5094,10 +5102,10 @@ export function CourseDetailPage() {
     (nodeId: string) => {
       setSelectedKnowledgeNodeId(nodeId);
       if (!id) return;
-      void Promise.all([listCourseMaterials(id), listCourseQuestions(id)])
-        .then(([nextMaterials, nextQuestions]) => {
+      void loadQuestions();
+      void listCourseMaterials(id)
+        .then((nextMaterials) => {
           setMaterials(nextMaterials);
-          setQuestions(nextQuestions);
         })
         .catch((err) => {
           toast({
@@ -5107,7 +5115,7 @@ export function CourseDetailPage() {
           });
         });
     },
-    [id, toast],
+    [id, loadQuestions, toast],
   );
 
   const handleDeleteMaterial = useCallback(async () => {
@@ -5412,7 +5420,7 @@ export function CourseDetailPage() {
         }
 
         await Promise.all([
-          listCourseQuestions(id).then(setQuestions),
+          loadQuestions(),
           refreshCourseSummary(),
           refreshKnowledgeTree(),
         ]);
@@ -5436,6 +5444,7 @@ export function CourseDetailPage() {
       extractExistingMaterial,
       generateQuestionsForBatchMaterial,
       id,
+      loadQuestions,
       materialContentById,
       refreshCourseSummary,
       refreshKnowledgeTree,
@@ -6082,7 +6091,7 @@ export function CourseDetailPage() {
               exams={exams}
               assignments={assignments}
               materials={materials}
-              questions={questions}
+              course={course}
             />
           </div>
         </div>
@@ -6756,7 +6765,7 @@ export function CourseDetailPage() {
                           正在查看「{questionFilterNode.name}」相关题目
                         </span>
                         <span className="text-primary/75">
-                          共 {filteredQuestions.length} 道
+                          共 {questionTotal} 道
                         </span>
                         <Button
                           type="button"
@@ -6770,7 +6779,17 @@ export function CourseDetailPage() {
                       </div>
                     ) : null}
                     <QuestionsTab
-                      questions={filteredQuestions}
+                      questions={questions}
+                      total={questionTotal}
+                      typeCounts={questionTypeCounts}
+                      query={questionQuery}
+                      onQueryChange={setQuestionQuery}
+                      selectedQuestionTypes={questionSelectedTypes}
+                      onSelectedQuestionTypesChange={setQuestionSelectedTypes}
+                      page={questionPage}
+                      onPageChange={setQuestionPage}
+                      pageSize={questionPageSize}
+                      onPageSizeChange={setQuestionPageSize}
                       courseId={id ?? ""}
                       courseName={course.name}
                       courseSemesterId={semesterFilter}
@@ -6786,20 +6805,16 @@ export function CourseDetailPage() {
                       seedUsage={seedUsage}
                       onPublishedExamOrAssignment={handlePublishedFromSelection}
                       onClearAllQuestions={() => setClearQuestionsOpen(true)}
-                      onQuestionDeleted={(questionId) => {
-                        setQuestions((prev) =>
-                          prev.filter((q) => q.id !== questionId),
-                        );
+                      onQuestionDeleted={() => {
+                        void loadQuestions();
                       }}
                       onKnowledgeCompleted={async () => {
                         if (!id) return;
-                        const [nextQuestions, nextTree, nextCourse] =
-                          await Promise.all([
-                            listCourseQuestions(id),
-                            getCourseKnowledgeTree(id),
-                            getTeacherCourse(id, semesterFilter),
-                          ]);
-                        setQuestions(nextQuestions);
+                        const [nextTree, nextCourse] = await Promise.all([
+                          getCourseKnowledgeTree(id),
+                          getTeacherCourse(id, semesterFilter),
+                          loadQuestions(),
+                        ]);
                         setTree(nextTree);
                         setCourse(nextCourse);
                       }}
@@ -7088,7 +7103,7 @@ export function CourseDetailPage() {
             onSaved={() => {
               if (id) {
                 void Promise.all([
-                  listCourseQuestions(id).then(setQuestions),
+                  loadQuestions(),
                   refreshKnowledgeTree(),
                   refreshCourseSummary(),
                 ]).catch(() => {});

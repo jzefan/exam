@@ -97,6 +97,25 @@ def _normalize_choice_content(
     return {**content, "multi": _choice_answer_is_multi(answer)}
 
 
+def _default_score_for_type(question_type: QuestionType, answer: dict[str, Any]) -> float:
+    """按题型返回默认分值。
+
+    - 判断题、单选题 → 1 分
+    - 多选题、填空题 → 2 分
+    - 简答题 → 5 分
+    - 论述题、编程题 → 10 分
+    """
+    if question_type == QuestionType.CHOICE:
+        return 2.0 if _choice_answer_is_multi(answer) else 1.0
+    if question_type == QuestionType.TRUE_FALSE:
+        return 1.0
+    if question_type == QuestionType.FILL_IN:
+        return 2.0
+    if question_type == QuestionType.SHORT_ANSWER:
+        return 5.0
+    return 10.0
+
+
 class QuestionCreate(BaseModel):
     type: QuestionType
     title: str = Field(max_length=500)
@@ -105,7 +124,7 @@ class QuestionCreate(BaseModel):
     answer: dict[str, Any]
     analysis: str | None = None
     difficulty: int = Field(ge=1, le=5)
-    score: float = 10.0
+    score: float | None = None
     source: QuestionSource = QuestionSource.MANUAL
     tag_ids: list[uuid.UUID] = Field(default_factory=list)
     knowledge_point_ids: list[uuid.UUID] = Field(default_factory=list)
@@ -126,6 +145,8 @@ class QuestionCreate(BaseModel):
                 self.answer = {**self.answer, "code": answer_text}
         if self.type == QuestionType.CHOICE:
             self.content = _normalize_choice_content(self.type, self.content, self.answer) or self.content
+        if self.score is None:
+            self.score = _default_score_for_type(self.type, self.answer)
         return self
 
 

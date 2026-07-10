@@ -43,6 +43,7 @@ import {
 import { QuestionEditFormContent, type QuestionEditSubmitValues } from "./edit";
 import { PageIntroHeader } from "@/components/ui/page-intro-header";
 import { cn } from "@/lib/utils";
+import { getDefaultScore } from "@/lib/question-defaults";
 
 const EMPTY_TYPE_ALLOC: TypeAllocation = {
   ...EMPTY_AI_TYPE_ALLOC,
@@ -208,7 +209,10 @@ function generatedQuestionToEditableQuestion(
     answer,
     analysis: question.analysis,
     difficulty: question.difficulty,
-    score: 10,
+    score: getDefaultScore(
+      question.type,
+      question.content?.multi === true || Array.isArray(question.answer?.correct),
+    ),
     usage_count: 0,
     question_bank_id: null,
     question_bank_name: null,
@@ -667,7 +671,10 @@ export function AIGeneratePage() {
           answer: q.answer,
           analysis: q.analysis,
           difficulty: q.difficulty,
-          score: 10,
+          score: getDefaultScore(
+            q.type,
+            q.content?.multi === true || Array.isArray(q.answer?.correct),
+          ),
           tag_ids: [],
           knowledge_point_ids: selectedKnowledgePointIds,
         }));
@@ -726,7 +733,10 @@ export function AIGeneratePage() {
         answer: q.answer,
         analysis: q.analysis,
         difficulty: q.difficulty,
-        score: 10,
+        score: getDefaultScore(
+          q.type,
+          q.content?.multi === true || Array.isArray(q.answer?.correct),
+        ),
         source: "ai_generated",
         tag_ids: [],
         knowledge_point_ids: [],

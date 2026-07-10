@@ -24,6 +24,7 @@ import { TagSelector } from "@/components/ui/tag-selector";
 import { formatQuestionBankLabel } from "@/lib/question-banks";
 import { getUserRole } from "@/types/rbac";
 import { cn } from "@/lib/utils";
+import { getDefaultScore } from "@/lib/question-defaults";
 import {
   buildCodeQuestionContent,
   createEmptyCodeQuestionDetails,
@@ -97,7 +98,7 @@ export function QuestionCreate() {
     contentHtml: "",
     analysis: "",
     difficulty: "3",
-    score: "10",
+    score: String(getDefaultScore("single_choice")),
     answer: "",
   });
   const [options, setOptions] = useState<OptionItem[]>([
@@ -223,8 +224,10 @@ export function QuestionCreate() {
                 <Select
                   value={uiType}
                   onValueChange={(v) => {
-                    setUiType(v as UIQuestionType);
+                    const nextType = v as UIQuestionType;
+                    setUiType(nextType);
                     setSelectedAnswers([]);
+                    updateField("score", String(getDefaultScore(nextType)));
                   }}
                 >
                   <SelectTrigger>

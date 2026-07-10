@@ -341,6 +341,12 @@ class TeacherCourseQuestion(QuestionResponse):
     pass
 
 
+class TeacherCourseQuestionList(BaseModel):
+    items: list[TeacherCourseQuestion]
+    total: int
+    type_counts: dict[str, int] = Field(default_factory=dict)
+
+
 class CourseKnowledgeNode(BaseModel):
     """One node of the course knowledge tree. Counts are rolled up over descendants."""
 

@@ -43,6 +43,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { getDefaultScore } from "@/lib/question-defaults";
 import { apiRequest } from "@/pages/grading/api";
 import type {
   IExam,
@@ -211,7 +212,7 @@ function createManualQuestionDraft({
     answer: baseAnswer,
     analysis: null,
     difficulty: 3,
-    score: 10,
+    score: getDefaultScore(type),
     source: "manual",
     usage_count: 0,
     question_bank_id: bank?.id ?? null,
@@ -1001,7 +1002,10 @@ export function ExamPaperViewPage() {
               answer: question.answer,
               analysis: question.analysis,
               difficulty: question.difficulty,
-              score: 10,
+              score: getDefaultScore(
+                question.type,
+                Array.isArray(question.answer?.correct),
+              ),
               source: "ai_generated",
               tag_ids: [],
               knowledge_point_ids: knowledgePointIds,
