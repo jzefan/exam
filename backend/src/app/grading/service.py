@@ -6,8 +6,11 @@ import json
 import logging
 import os
 import re
+import unicodedata
 import uuid
+from copy import deepcopy
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -172,6 +175,17 @@ def _parse_task_locator(task: GradingTask) -> dict[str, str | None]:
     }
 
 
+def _exam_submission_task_identity(task: GradingTask) -> tuple[str, str, str, str | None] | None:
+    """Return the exam/question/student/submission identity embedded in a task."""
+    if task.source_type != "exam_submission" or not task.source_business_id:
+        return None
+
+    parts = task.source_business_id.split(":")
+    if len(parts) not in {3, 4}:
+        return None
+    return parts[0], parts[1], parts[2], parts[3] if len(parts) == 4 else None
+
+
 async def _hydrate_task_locators(
     db: AsyncSession,
     tasks: list[GradingTask],
@@ -294,6 +308,79 @@ async def _filter_tasks_by_exam_access(
     ]
 
 
+async def _select_current_exam_submission_tasks(
+    db: AsyncSession,
+    tasks: list[GradingTask],
+) -> list[GradingTask]:
+    """Keep one current grading task per exam question and student.
+
+    A subjective question may have a historical task for an older submission or
+    several tasks from a later batch regrade. The grading workspace should only
+    show the latest submission, and the latest-created task for that submission.
+    """
+    task_identities = {task.id: _exam_submission_task_identity(task) for task in tasks}
+    exam_ids = {
+        exam_id
+        for identity in task_identities.values()
+        if identity is not None and (exam_id := _try_parse_uuid(identity[0])) is not None
+    }
+    student_ids = {
+        student_id
+        for identity in task_identities.values()
+        if identity is not None and (student_id := _try_parse_uuid(identity[2])) is not None
+    }
+
+    latest_submission_ids: dict[tuple[str, str], str] = {}
+    if exam_ids and student_ids:
+        rows = (
+            await db.execute(
+                select(ExamStudent.exam_id, ExamStudent.student_id, ExamStudent.latest_submission_id).where(
+                    ExamStudent.exam_id.in_(exam_ids),
+                    ExamStudent.student_id.in_(student_ids),
+                    ExamStudent.latest_submission_id.is_not(None),
+                )
+            )
+        ).all()
+        latest_submission_ids = {
+            (str(exam_id), str(student_id)): str(submission_id)
+            for exam_id, student_id, submission_id in rows
+            if submission_id is not None
+        }
+
+    grouped_tasks: dict[tuple[str, str, str], list[tuple[GradingTask, str | None]]] = {}
+    passthrough_task_ids: set[uuid.UUID] = set()
+    for task in tasks:
+        identity = task_identities[task.id]
+        if identity is None:
+            passthrough_task_ids.add(task.id)
+            continue
+
+        exam_id, question_id, student_id, submission_id = identity
+        latest_submission_id = latest_submission_ids.get((exam_id, student_id))
+        if submission_id is not None and latest_submission_id is not None and submission_id != latest_submission_id:
+            continue
+        grouped_tasks.setdefault((exam_id, question_id, student_id), []).append((task, submission_id))
+
+    selected_task_ids = set(passthrough_task_ids)
+    minimum_time = datetime.min.replace(tzinfo=timezone.utc)
+    for (exam_id, _question_id, student_id), candidates in grouped_tasks.items():
+        latest_submission_id = latest_submission_ids.get((exam_id, student_id))
+        if latest_submission_id is not None:
+            latest_submission_candidates = [
+                candidate for candidate in candidates if candidate[1] == latest_submission_id
+            ]
+            if latest_submission_candidates:
+                candidates = latest_submission_candidates
+
+        selected_task = max(
+            candidates,
+            key=lambda candidate: (candidate[0].created_at or minimum_time, str(candidate[0].id)),
+        )[0]
+        selected_task_ids.add(selected_task.id)
+
+    return [task for task in tasks if task.id in selected_task_ids]
+
+
 async def _ensure_task_access(
     db: AsyncSession,
     task: GradingTask,
@@ -363,6 +450,7 @@ async def _load_workspace_tasks(
     is_platform_admin: bool = True,
     exam_id: str | None = None,
     lightweight: bool = False,
+    current_submission_only: bool = False,
 ) -> list[GradingTask]:
     # 列表态（收件箱 / 按题目考生列表）只需终评快照与审计事件即可算出状态与分数；
     # 完整的多模型快照 + model_config 只有单条详情页才需要，列表态不加载以减少数据量。
@@ -392,12 +480,15 @@ async def _load_workspace_tasks(
         )
     result = await db.execute(query)
     tasks = list(result.scalars().all())
-    return await _filter_tasks_by_exam_access(
+    tasks = await _filter_tasks_by_exam_access(
         db,
         tasks,
         current_user_id=current_user_id,
         is_platform_admin=is_platform_admin,
     )
+    if current_submission_only:
+        return await _select_current_exam_submission_tasks(db, tasks)
+    return tasks
 
 
 def format_evidence_summary(summary: dict[str, Any]) -> list[str]:
@@ -694,6 +785,327 @@ async def create_grading_task(
     return task
 
 
+def _normalize_answer_for_score_reuse(answer: str) -> str:
+    normalized = unicodedata.normalize("NFKC", answer)
+    return re.sub(r"\s+", " ", normalized).strip().casefold()
+
+
+def _score_reuse_signature(task: GradingTask) -> str:
+    """Capture every grading input that must stay stable before reuse."""
+    return json.dumps(
+        {
+            "question_type": task.question_type,
+            "question_content": task.question_content,
+            "max_score": task.max_score,
+            "knowledge_tags": task.knowledge_tags,
+            "standard_answers": task.standard_answers,
+            "rubric_definition": task.rubric_definition,
+            "scoring_points": task.scoring_points,
+            "dimension_weights": task.dimension_weights,
+            "deduction_rules": task.deduction_rules,
+            "fatal_error_rules": task.fatal_error_rules,
+            "prompt_template_version": task.prompt_template_version,
+            "role_binding_version": task.role_binding_version,
+            "language": task.language,
+            "programming_language": task.programming_language,
+            "execution_env": task.execution_env,
+            "test_summary": task.test_summary,
+            "compile_result": task.compile_result,
+            "runtime_result": task.runtime_result,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def _is_score_reuse_eligible(task: GradingTask) -> bool:
+    return bool(
+        task.source_type == "exam_submission"
+        and _exam_submission_task_identity(task) is not None
+        and _normalize_answer_for_score_reuse(task.student_answer_raw)
+        and not task.attachment_refs
+        and not task.ocr_raw_text
+        and not task.ocr_repaired_text
+    )
+
+
+def _clone_snapshot_for_score_reuse(
+    task: GradingTask,
+    source_snapshot: GradingResultSnapshot,
+    reuse_metadata: dict[str, Any],
+) -> GradingResultSnapshot:
+    evidence_summary = deepcopy(source_snapshot.evidence_summary)
+    evidence_summary["score_reuse"] = reuse_metadata
+    return GradingResultSnapshot(
+        task_id=task.id,
+        snapshot_type=source_snapshot.snapshot_type,
+        score_total=source_snapshot.score_total,
+        dimension_scores=deepcopy(source_snapshot.dimension_scores),
+        dimension_comments=deepcopy(source_snapshot.dimension_comments),
+        deduction_reasons=deepcopy(source_snapshot.deduction_reasons),
+        strengths=deepcopy(source_snapshot.strengths),
+        improvement_suggestions=deepcopy(source_snapshot.improvement_suggestions),
+        evidence_summary=evidence_summary,
+        risk_flags=deepcopy(source_snapshot.risk_flags),
+        provider_config_id=source_snapshot.provider_config_id,
+        model_config_id=source_snapshot.model_config_id,
+        prompt_template_version=source_snapshot.prompt_template_version,
+        role_binding_version=task.role_binding_version,
+        created_by="system:answer-reuse",
+    )
+
+
+async def _reuse_exact_answer_score(
+    db: AsyncSession,
+    task: GradingTask,
+) -> dict[str, Any] | None:
+    """Clone a prior completed score for the same exact answer and rubric."""
+    if not _is_score_reuse_eligible(task):
+        return None
+
+    answer = _normalize_answer_for_score_reuse(task.student_answer_raw)
+    source_task = next(
+        (
+            candidate
+            for candidate in await _find_score_reuse_sources(db, task)
+            if _normalize_answer_for_score_reuse(candidate.student_answer_raw) == answer
+        ),
+        None,
+    )
+    if source_task is None:
+        return None
+
+    return await _apply_score_reuse(db, task, source_task, mode="exact", similarity=1.0)
+
+
+async def _find_score_reuse_sources(
+    db: AsyncSession,
+    task: GradingTask,
+) -> list[GradingTask]:
+    if not _is_score_reuse_eligible(task):
+        return []
+
+    identity = _exam_submission_task_identity(task)
+    if identity is None:
+        return []
+    exam_id, question_id, _student_id, _submission_id = identity
+    signature = _score_reuse_signature(task)
+    source_tasks = (
+        await db.execute(
+            select(GradingTask)
+            .options(
+                selectinload(GradingTask.latest_primary_snapshot),
+                selectinload(GradingTask.latest_review_snapshot),
+                selectinload(GradingTask.latest_arbitration_snapshot),
+                selectinload(GradingTask.latest_final_snapshot),
+                selectinload(GradingTask.latest_manual_snapshot),
+            )
+            .where(
+                GradingTask.source_type == "exam_submission",
+                GradingTask.id != task.id,
+                GradingTask.source_business_id.like(f"{exam_id}:{question_id}:%"),
+                GradingTask.latest_final_snapshot_id.is_not(None),
+            )
+            .order_by(GradingTask.created_at.asc(), GradingTask.id.asc())
+        )
+    ).scalars().all()
+    return [
+        candidate
+        for candidate in source_tasks
+        if _is_score_reuse_eligible(candidate)
+        and _score_reuse_signature(candidate) == signature
+        and candidate.latest_final_snapshot is not None
+    ]
+
+
+async def _apply_score_reuse(
+    db: AsyncSession,
+    task: GradingTask,
+    source_task: GradingTask,
+    *,
+    mode: str,
+    similarity: float,
+) -> dict[str, Any]:
+    if source_task.latest_final_snapshot is None:
+        raise ValueError("score reuse source has no final snapshot")
+
+    reuse_metadata = {
+        "mode": mode,
+        "similarity": round(similarity, 4),
+        "source_task_id": str(source_task.id),
+        "source_snapshot_id": str(source_task.latest_final_snapshot.id),
+    }
+    source_to_clone = {
+        "latest_primary_snapshot": source_task.latest_primary_snapshot,
+        "latest_review_snapshot": source_task.latest_review_snapshot,
+        "latest_arbitration_snapshot": source_task.latest_arbitration_snapshot,
+        "latest_final_snapshot": source_task.latest_final_snapshot,
+        "latest_manual_snapshot": source_task.latest_manual_snapshot,
+    }
+    cloned_by_source_id: dict[uuid.UUID, GradingResultSnapshot] = {}
+    for snapshot in source_to_clone.values():
+        if snapshot is None or snapshot.id in cloned_by_source_id:
+            continue
+        clone = _clone_snapshot_for_score_reuse(task, snapshot, reuse_metadata)
+        db.add(clone)
+        cloned_by_source_id[snapshot.id] = clone
+    await db.flush()
+
+    for relation_name, source_snapshot in source_to_clone.items():
+        if source_snapshot is not None:
+            setattr(task, relation_name, cloned_by_source_id[source_snapshot.id])
+    task.status = "completed"
+    db.add_all(
+        [
+            GradingAuditEvent(
+                task_id=task.id,
+                event_type="grading.answer_reused",
+                event_payload=reuse_metadata,
+                operator_type="system",
+                operator_id="system",
+            ),
+            GradingAuditEvent(
+                task_id=task.id,
+                event_type="grading.finalized",
+                event_payload={
+                    "snapshot_id": str(task.latest_final_snapshot.id),
+                    "source": f"answer_reuse_{mode}",
+                },
+                operator_type="system",
+                operator_id="system",
+            ),
+        ]
+    )
+    await db.flush()
+    return {"status": task.status, "arbitration_required": False, "reason": None, "score_reused": True}
+
+
+def _answer_similarity(left: str, right: str) -> float:
+    return SequenceMatcher(None, left, right, autojunk=False).ratio()
+
+
+def _build_score_equivalence_prompt(
+    task: GradingTask,
+    source_task: GradingTask,
+    similarity: float,
+    locale: str | None,
+) -> tuple[str, str]:
+    language_instruction = "Use English for all explanation fields." if locale and locale.lower().startswith("en") else "所有说明字段必须使用简体中文。"
+    source_snapshot = source_task.latest_final_snapshot
+    source_score = source_snapshot.score_total if source_snapshot is not None else None
+    source_dimensions = source_snapshot.dimension_scores if source_snapshot is not None else {}
+    system_prompt = f"""你是评分一致性审核器。你的唯一任务是判断两份答案在给定评分标准下，是否应得到完全相同的总分和每个评分维度分数。
+{language_instruction}
+不能因为表述相似就判定等价；只要任一要点、逻辑、完整性、规范性或代码可执行性会影响评分，就必须判定不等价。
+严格只输出 JSON：
+{{
+  \"score_total\": 1 或 0,
+  \"dimension_scores\": {{\"equivalent\": 1 或 0}},
+  \"dimension_comments\": {{\"equivalent\": \"简短理由\"}},
+  \"deduction_reasons\": [],
+  \"strengths\": [],
+  \"improvement_suggestions\": [],
+  \"evidence_summary\": {{\"decision\": \"equivalent 或 not_equivalent\", \"reason\": \"理由\"}},
+  \"risk_flags\": []
+}}"""
+    user_prompt = json.dumps(
+        {
+            "question": task.question_content,
+            "max_score": task.max_score,
+            "knowledge_tags": task.knowledge_tags,
+            "rubric_definition": task.rubric_definition,
+            "scoring_points": task.scoring_points,
+            "reference_answer": source_task.student_answer_raw,
+            "reference_score": source_score,
+            "reference_dimension_scores": source_dimensions,
+            "candidate_answer": task.student_answer_raw,
+            "text_similarity": round(similarity, 4),
+        },
+        ensure_ascii=False,
+    )
+    return system_prompt, user_prompt
+
+
+def _is_equivalence_gate_approved(result: GradingProviderResult) -> bool:
+    try:
+        dimension_decision = float(result.dimension_scores.get("equivalent", 0))
+    except (TypeError, ValueError):
+        dimension_decision = 0.0
+    decision = result.evidence_summary.get("decision") if isinstance(result.evidence_summary, dict) else None
+    return result.score_total >= 1 and dimension_decision >= 1 and decision == "equivalent"
+
+
+async def _reuse_scoring_equivalent_answer_score(
+    db: AsyncSession,
+    task: GradingTask,
+    provider: GradingProvider,
+    locale: str | None,
+) -> dict[str, Any] | None:
+    if not _is_score_reuse_eligible(task) or task.question_type == "code":
+        return None
+
+    answer = _normalize_answer_for_score_reuse(task.student_answer_raw)
+    if len(answer) < settings.grading_answer_reuse_min_answer_length:
+        return None
+
+    candidates = [
+        (source_task, _answer_similarity(answer, _normalize_answer_for_score_reuse(source_task.student_answer_raw)))
+        for source_task in await _find_score_reuse_sources(db, task)
+    ]
+    candidates = [
+        candidate
+        for candidate in candidates
+        if settings.grading_answer_reuse_similarity_threshold <= candidate[1] < 1
+    ]
+    if not candidates:
+        return None
+
+    minimum_time = datetime.min.replace(tzinfo=timezone.utc)
+    source_task, similarity = max(
+        candidates,
+        key=lambda candidate: (candidate[1], candidate[0].created_at or minimum_time),
+    )
+    system_prompt, user_prompt = _build_score_equivalence_prompt(task, source_task, similarity, locale)
+    try:
+        equivalence_result = await provider.score(system_prompt, user_prompt)
+    except Exception as exc:
+        logger.info("score reuse equivalence gate failed for task %s: %s", task.id, _exception_message(exc))
+        return None
+
+    decision = "equivalent" if _is_equivalence_gate_approved(equivalence_result) else "not_equivalent"
+    db.add(
+        GradingAuditEvent(
+            task_id=task.id,
+            event_type="grading.answer_reuse_checked",
+            event_payload={
+                "mode": "semantic_equivalence_gate",
+                "similarity": round(similarity, 4),
+                "source_task_id": str(source_task.id),
+                "decision": decision,
+                "reason": (
+                    equivalence_result.evidence_summary.get("reason")
+                    if isinstance(equivalence_result.evidence_summary, dict)
+                    else None
+                ),
+            },
+            operator_type="system",
+            operator_id="system",
+        )
+    )
+    await db.flush()
+    if decision != "equivalent":
+        return None
+    return await _apply_score_reuse(
+        db,
+        task,
+        source_task,
+        mode="semantic_equivalent",
+        similarity=similarity,
+    )
+
+
 async def list_grading_tasks(
     db: AsyncSession,
     *,
@@ -746,6 +1158,7 @@ async def get_grading_inbox(
         is_platform_admin=is_platform_admin,
         exam_id=exam_id,
         lightweight=True,
+        current_submission_only=True,
     )
     locators = await _hydrate_task_locators(db, tasks)
 
@@ -824,6 +1237,7 @@ async def list_grading_export_exams(
         db,
         current_user_id=current_user_id,
         is_platform_admin=is_platform_admin,
+        current_submission_only=True,
     )
     locators = await _hydrate_task_locators(db, tasks)
 
@@ -874,6 +1288,7 @@ async def get_grading_exam_score_export(
         db,
         current_user_id=current_user_id,
         is_platform_admin=is_platform_admin,
+        current_submission_only=True,
     )
     locators = await _hydrate_task_locators(db, tasks)
     matched = [
@@ -1007,6 +1422,7 @@ async def get_grading_question_candidates(
         is_platform_admin=is_platform_admin,
         exam_id=exam_id if exam_id and exam_id != "standalone" else None,
         lightweight=True,
+        current_submission_only=True,
     )
     locators = await _hydrate_task_locators(db, tasks)
     matched: list[tuple[GradingTask, dict[str, str | None]]] = []
@@ -1280,6 +1696,29 @@ async def get_grading_candidate_detail(
     elif task.latest_final_snapshot is None and task.status in {"pending", "running"}:
         evaluation_note = "AI 正在评估中，请稍后刷新。"
 
+    score_reuse_event = next(
+        (
+            event
+            for event in sorted(
+                task.audit_events,
+                key=lambda item: item.created_at or datetime.min.replace(tzinfo=timezone.utc),
+                reverse=True,
+            )
+            if event.event_type == "grading.answer_reused" and isinstance(event.event_payload, dict)
+        ),
+        None,
+    )
+    score_reuse = None
+    if score_reuse_event is not None:
+        payload = score_reuse_event.event_payload
+        source_task_id = payload.get("source_task_id")
+        if isinstance(source_task_id, str):
+            score_reuse = {
+                "mode": str(payload.get("mode") or "exact"),
+                "similarity": float(payload.get("similarity") or 0),
+                "source_task_id": source_task_id,
+            }
+
     return {
         "task_id": str(task.id),
         "candidate_name": locator["candidate_name"],
@@ -1287,6 +1726,7 @@ async def get_grading_candidate_detail(
         "status": _task_display_status(task),
         "viewed": _task_viewed_by(task, current_user_id),
         "evaluation_note": evaluation_note,
+        "score_reuse": score_reuse,
         "suggested_score": task.latest_final_snapshot.score_total if task.latest_final_snapshot else None,
         "max_score": task.max_score,
         "question_type": task.question_type,
@@ -2762,6 +3202,19 @@ async def run_grading_task(
     task = await db.get(GradingTask, uuid.UUID(task_id))
     if task is None:
         raise ValueError("grading task not found")
+
+    reused = await _reuse_exact_answer_score(db, task)
+    if reused is not None:
+        return reused
+
+    semantic_reuse = await _reuse_scoring_equivalent_answer_score(
+        db,
+        task,
+        primary_provider,
+        locale,
+    )
+    if semantic_reuse is not None:
+        return semantic_reuse
 
     task.status = "running"
     await db.flush()

@@ -13,7 +13,10 @@ used as a static fallback token.
 
 from __future__ import annotations
 
+import asyncio
+import math
 import os
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 import httpx
@@ -130,6 +133,20 @@ def _request_authorization(ctx: Context | None) -> str | None:
     return authorization.strip() if isinstance(authorization, str) and authorization.strip() else None
 
 
+def _request_header(ctx: Context | None, name: str) -> str | None:
+    if ctx is None:
+        return None
+    try:
+        request = ctx.request_context.request
+    except ValueError:
+        return None
+    headers = getattr(request, "headers", None)
+    if headers is None:
+        return None
+    value = headers.get(name) or headers.get(name.lower())
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
 def _static_agent_token_allowed() -> bool:
     if os.environ.get("EXAM_MCP_ALLOW_STATIC_TOKEN", "").strip().lower() in {"1", "true", "yes"}:
         return True
@@ -198,6 +215,23 @@ async def verify_request_token(ctx: Context | None, *, scopes: tuple[str, ...]) 
     organization isolation, and activity logging.
     """
     token = _request_bearer_token(ctx)
+    # Native Exam login sessions are already authenticated by Exam's own REST
+    # dependency. The explicit header is stored in ArkLoop's encrypted, per-profile
+    # MCP auth secret; it only selects the verifier and does not bypass downstream
+    # Exam permission checks.
+    if (_request_header(ctx, "X-Exam-Auth-Mode") or "").lower() == "native":
+        expires_at = _request_header(ctx, "X-Exam-Session-Expires-At")
+        if not expires_at:
+            raise MCPAuthError("Native Exam session is missing its expiry boundary.")
+        try:
+            expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise MCPAuthError("Native Exam session has an invalid expiry boundary.") from exc
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) >= expiry.astimezone(timezone.utc):
+            raise MCPAuthError("Native Exam session has expired; please sign in again.")
+        return token, None
     oidc = _mcp_oidc_client()
     if oidc is None:
         return token, None
@@ -721,6 +755,505 @@ async def exam_create_paper(
         },
         scopes=WRITE_SCOPES,
     )
+
+
+SUBJECTIVE_QUESTION_TYPES = {"short_answer", "essay", "code"}
+CONFIRMED_GRADING_STATUSES = {"已确认", "人工改分", "confirmed", "reviewed"}
+
+
+def _grading_status_confirmed(value: Any) -> bool:
+    return str(value or "").strip().lower() in {item.lower() for item in CONFIRMED_GRADING_STATUSES}
+
+
+async def _exam_grading_matrix(exam_id: str, ctx: Context | None) -> dict[str, Any]:
+    inbox = await request_agent_api(
+        "GET",
+        "/api/grading/inbox",
+        ctx=ctx,
+        params={"exam_id": exam_id},
+    )
+    groups = inbox.get("exams", []) if isinstance(inbox, dict) else []
+    exam_group = next(
+        (item for item in groups if isinstance(item, dict) and str(item.get("exam_id") or "") == exam_id),
+        None,
+    )
+    if exam_group is None:
+        return {"exam_id": exam_id, "exam_label": "", "questions": [], "candidate_tasks": {}}
+
+    questions: list[dict[str, Any]] = []
+    candidate_tasks: dict[str, list[dict[str, Any]]] = {}
+    for question in exam_group.get("questions", []):
+        if not isinstance(question, dict):
+            continue
+        question_id = str(question.get("question_id") or "")
+        if not question_id:
+            continue
+        detail = await request_agent_api(
+            "GET",
+            f"/api/grading/inbox/questions/{exam_id}/{question_id}",
+            ctx=ctx,
+        )
+        normalized_question = {
+            "question_id": question_id,
+            "question_label": detail.get("question_label") or question.get("question_label") or question_id,
+            "question_type": detail.get("question_type") or question.get("question_type"),
+            "question_content": detail.get("question_content") or question.get("question_content") or "",
+            "max_score": detail.get("max_score") or question.get("max_score") or 0,
+            "pending_count": question.get("pending_count", 0),
+            "completed_count": question.get("completed_count", 0),
+        }
+        questions.append(normalized_question)
+        for candidate in detail.get("candidates", []):
+            if not isinstance(candidate, dict):
+                continue
+            student_id = str(candidate.get("student_id") or "").strip()
+            fallback_key = str(candidate.get("candidate_code") or candidate.get("candidate_name") or "").strip()
+            candidate_key = student_id or fallback_key
+            if not candidate_key:
+                continue
+            candidate_tasks.setdefault(candidate_key, []).append(
+                {
+                    **normalized_question,
+                    "task_id": candidate.get("task_id"),
+                    "student_id": student_id or None,
+                    "candidate_name": candidate.get("candidate_name"),
+                    "candidate_code": candidate.get("candidate_code"),
+                    "status": candidate.get("status"),
+                    "score": candidate.get("score"),
+                    "manual_override": bool(candidate.get("manual_override")),
+                    "arbitration_required": bool(candidate.get("arbitration_required")),
+                }
+            )
+    return {
+        "exam_id": exam_id,
+        "exam_label": exam_group.get("exam_label") or "",
+        "questions": questions,
+        "candidate_tasks": candidate_tasks,
+    }
+
+
+def _candidate_task_rows(matrix: dict[str, Any], student: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates = matrix.get("candidate_tasks", {})
+    student_id = str(student.get("student_id") or "")
+    if student_id and student_id in candidates:
+        return list(candidates[student_id])
+    for fallback in (student.get("username"), student.get("phone"), student.get("full_name")):
+        key = str(fallback or "").strip()
+        if key and key in candidates:
+            return list(candidates[key])
+    return []
+
+
+def _candidate_review_status(student: dict[str, Any], tasks: list[dict[str, Any]]) -> str:
+    if not student.get("submitted_at"):
+        return "unsubmitted"
+    if not tasks:
+        return "objective_only"
+    confirmed = sum(1 for task in tasks if _grading_status_confirmed(task.get("status")))
+    if confirmed == len(tasks):
+        return "completed"
+    if confirmed > 0:
+        return "partially_confirmed"
+    return "pending_confirmation"
+
+
+async def _grading_task_evaluations(tasks: list[dict[str, Any]], ctx: Context | None) -> dict[str, dict[str, Any]]:
+    """Load native grading detail for each task without blocking on one bad row."""
+    task_ids = [str(task.get("task_id") or "") for task in tasks]
+    task_ids = list(dict.fromkeys(task_id for task_id in task_ids if task_id))
+    if not task_ids:
+        return {}
+    responses = await asyncio.gather(
+        *(
+            request_agent_api("GET", f"/api/grading/inbox/tasks/{task_id}", ctx=ctx)
+            for task_id in task_ids
+        ),
+        return_exceptions=True,
+    )
+    return {
+        task_id: response
+        for task_id, response in zip(task_ids, responses, strict=True)
+        if isinstance(response, dict)
+    }
+
+
+@mcp.tool(description="Return grading-provider capabilities for the native Exam integration.")
+async def exam_get_grading_capabilities(ctx: Context | None = None) -> dict[str, Any]:
+    # Validate the current native/acting-user token even though this tool does not
+    # need a REST round-trip. This keeps capability discovery user-scoped.
+    await verify_request_token(ctx, scopes=READ_SCOPES)
+    return {
+        "provider": "exam",
+        "display_name": "智评线",
+        "pregraded": True,
+        "supports_score_override": True,
+        "supports_optional_override_reason": True,
+        "supports_objective_details": True,
+        "supports_printable_report": True,
+    }
+
+
+@mcp.tool(description="List every Exam visible to the logged-in teacher and annotate current grading availability.")
+async def exam_list_grading_exams(ctx: Context | None = None) -> dict[str, Any]:
+    exams = await request_agent_api("GET", "/api/exams", ctx=ctx)
+    inbox = await request_agent_api("GET", "/api/grading/inbox", ctx=ctx)
+    inbox_by_id = {
+        str(item.get("exam_id")): item
+        for item in (inbox.get("exams", []) if isinstance(inbox, dict) else [])
+        if isinstance(item, dict) and item.get("exam_id")
+    }
+    items: list[dict[str, Any]] = []
+    for exam in exams if isinstance(exams, list) else exams.get("items", []):
+        if not isinstance(exam, dict):
+            continue
+        exam_id = str(exam.get("id") or "")
+        grading_group = inbox_by_id.get(exam_id, {})
+        grading_questions = grading_group.get("questions", []) if isinstance(grading_group, dict) else []
+        pending_count = sum(int(question.get("pending_count") or 0) for question in grading_questions)
+        completed_count = sum(int(question.get("completed_count") or 0) for question in grading_questions)
+        items.append(
+            {
+                "exam_id": exam_id,
+                "title": exam.get("title") or "未命名考试",
+                "status": exam.get("status"),
+                "start_time": exam.get("start_time"),
+                "end_time": exam.get("end_time"),
+                "total_score": exam.get("total_score"),
+                "total_questions": exam.get("total_questions", 0),
+                "total_students": exam.get("total_students", 0),
+                "submitted_count": exam.get("submitted_count", 0),
+                "has_subjective_questions": bool(exam.get("has_gradable_questions")),
+                "subjective_question_count": len(grading_questions),
+                "pending_confirmation_count": pending_count,
+                "confirmed_count": completed_count,
+                "can_review": int(exam.get("submitted_count") or 0) > 0,
+            }
+        )
+    items.sort(key=lambda item: str(item.get("start_time") or ""), reverse=True)
+    return {"provider": "exam", "pregraded": True, "items": items, "total": len(items)}
+
+
+@mcp.tool(description="List all assigned candidates for an Exam, including unsubmitted and objective-only candidates.")
+async def exam_list_grading_candidates(exam_id: str, ctx: Context | None = None) -> dict[str, Any]:
+    analysis = await request_agent_api("GET", f"/api/exams/{exam_id}/analysis", ctx=ctx)
+    matrix = await _exam_grading_matrix(exam_id, ctx)
+    candidates: list[dict[str, Any]] = []
+    for student in analysis.get("students", []):
+        if not isinstance(student, dict):
+            continue
+        tasks = _candidate_task_rows(matrix, student)
+        confirmed_count = sum(1 for task in tasks if _grading_status_confirmed(task.get("status")))
+        candidates.append(
+            {
+                "student_id": str(student.get("student_id") or ""),
+                "candidate_name": student.get("full_name") or student.get("username") or "未命名考生",
+                "candidate_code": student.get("username") or student.get("phone"),
+                "submitted_at": student.get("submitted_at"),
+                "status": _candidate_review_status(student, tasks),
+                "grading_status": student.get("grading_status"),
+                "objective_score": student.get("objective_score"),
+                "subjective_score": student.get("subjective_score"),
+                "total_score": student.get("score"),
+                "subjective_question_count": len(tasks),
+                "confirmed_count": confirmed_count,
+                "pending_count": max(0, len(tasks) - confirmed_count),
+                "subjective_scores": {
+                    str(task.get("question_id")): task.get("score") for task in tasks
+                },
+            }
+        )
+    status_order = {
+        "pending_confirmation": 0,
+        "partially_confirmed": 1,
+        "completed": 2,
+        "objective_only": 3,
+        "unsubmitted": 4,
+    }
+    candidates.sort(
+        key=lambda item: (
+            status_order.get(str(item.get("status")), 9),
+            str(item.get("candidate_name") or ""),
+        )
+    )
+    return {
+        "provider": "exam",
+        "pregraded": True,
+        "exam_id": exam_id,
+        "exam_title": analysis.get("title") or matrix.get("exam_label") or "",
+        "total_score": analysis.get("overall", {}).get("total_score"),
+        "items": candidates,
+        "total": len(candidates),
+    }
+
+
+@mcp.tool(description="Get one candidate's pregraded subjective questions and optional objective-question details.")
+async def exam_get_candidate_review(
+    exam_id: str,
+    student_id: str,
+    include_objective_details: bool = False,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    result = await request_agent_api(
+        "GET", f"/api/exams/{exam_id}/students/{student_id}/result", ctx=ctx,
+    )
+    matrix = await _exam_grading_matrix(exam_id, ctx)
+    student_stub = {"student_id": student_id}
+    tasks = _candidate_task_rows(matrix, student_stub)
+    if not tasks:
+        # The grading inbox may key a task by candidate_code/name when its row
+        # lacks student_id. Resolve the same fallback identity used by the
+        # candidate list before treating this as an objective-only submission.
+        analysis = await request_agent_api("GET", f"/api/exams/{exam_id}/analysis", ctx=ctx)
+        students = analysis.get("students", []) if isinstance(analysis, dict) else []
+        student = next(
+            (
+                item
+                for item in students
+                if isinstance(item, dict) and str(item.get("student_id") or "") == student_id
+            ),
+            None,
+        )
+        if student is not None:
+            tasks = _candidate_task_rows(matrix, student)
+    tasks_by_question = {str(task.get("question_id")): task for task in tasks}
+    task_evaluations = await _grading_task_evaluations(tasks, ctx)
+    subjective_questions: list[dict[str, Any]] = []
+    objective_questions: list[dict[str, Any]] = []
+    included_subjective_question_ids: set[str] = set()
+    for question in result.get("questions", []):
+        if not isinstance(question, dict):
+            continue
+        question_id = str(question.get("question_id") or "")
+        task = tasks_by_question.get(question_id, {})
+        # The grading inbox is the authority for questions that need teacher
+        # confirmation. Keep its task even if the score-detail response is
+        # temporarily incomplete or uses an unexpected type value.
+        if question.get("type") in SUBJECTIVE_QUESTION_TYPES or task:
+            evaluation = task_evaluations.get(str(task.get("task_id") or ""), {})
+            subjective_questions.append(
+                {
+                    **question,
+                    "task_id": task.get("task_id"),
+                    "review_status": task.get("status"),
+                    "confirmed": _grading_status_confirmed(task.get("status")),
+                    "manual_override": bool(task.get("manual_override")),
+                    "arbitration_required": bool(task.get("arbitration_required")),
+                    "ai_models": evaluation.get("models", []),
+                    "ai_feedback": evaluation.get("feedback"),
+                }
+            )
+            included_subjective_question_ids.add(question_id)
+        elif include_objective_details:
+            objective_questions.append(question)
+
+    # A submitted candidate can still have an incomplete score-detail payload
+    # while the grading inbox has an actionable task. Preserve that task so the
+    # native review UI never misreports the candidate as already completed.
+    for task in tasks:
+        question_id = str(task.get("question_id") or "")
+        if not question_id or question_id in included_subjective_question_ids:
+            continue
+        evaluation = task_evaluations.get(str(task.get("task_id") or ""), {})
+        subjective_questions.append(
+            {
+                "question_id": question_id,
+                "order": task.get("order") or 0,
+                "type": task.get("question_type") or "short_answer",
+                "title": task.get("question_label") or "题目",
+                "content": task.get("question_content") or "",
+                "total_score": task.get("max_score") or 0,
+                "score_awarded": task.get("score") or 0,
+                "answer_content": {},
+                "feedback": {},
+                "task_id": task.get("task_id"),
+                "review_status": task.get("status"),
+                "confirmed": _grading_status_confirmed(task.get("status")),
+                "manual_override": bool(task.get("manual_override")),
+                "arbitration_required": bool(task.get("arbitration_required")),
+                "ai_models": evaluation.get("models", []),
+                "ai_feedback": evaluation.get("feedback"),
+            }
+        )
+    subjective_questions.sort(key=lambda item: int(item.get("order") or 0))
+    pending = [question for question in subjective_questions if not question.get("confirmed")]
+    return {
+        "provider": "exam",
+        "pregraded": True,
+        "exam_id": exam_id,
+        "student_id": student_id,
+        "exam_title": result.get("title"),
+        "submitted_at": result.get("submitted_at"),
+        "grading_status": result.get("grading_status"),
+        "objective_score": result.get("objective_score"),
+        "subjective_score": result.get("subjective_score"),
+        "total_score": result.get("score"),
+        "max_score": result.get("total_score"),
+        "subjective_questions": subjective_questions,
+        "objective_details_included": include_objective_details,
+        "objective_questions": objective_questions,
+        "next_pending_question": pending[0] if pending else None,
+        "pending_count": len(pending),
+        "completed": bool(subjective_questions) and not pending,
+        "can_view": result.get("can_view", False),
+        "blocked_reason": result.get("blocked_reason"),
+    }
+
+
+@mcp.tool(description="Confirm one pregraded subjective question, optionally overriding its score first.")
+async def exam_confirm_grading_question(
+    exam_id: str,
+    student_id: str,
+    question_id: str,
+    task_id: str,
+    score: float | None = None,
+    reason: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    review = await exam_get_candidate_review(exam_id, student_id, False, ctx)
+    question = next(
+        (item for item in review.get("subjective_questions", []) if str(item.get("question_id")) == question_id),
+        None,
+    )
+    if question is None or str(question.get("task_id") or "") != task_id:
+        raise RuntimeError("The grading question changed or no longer belongs to this candidate. Refresh before confirming.")
+    if question.get("confirmed"):
+        return {"ok": True, "already_confirmed": True, "review": review}
+
+    current_score = float(question.get("score_awarded") or 0.0)
+    target_score = current_score if score is None else float(score)
+    max_score = float(question.get("total_score") or 0.0)
+    if not math.isfinite(target_score) or target_score < 0 or target_score > max_score:
+        raise RuntimeError(f"Score must be between 0 and {max_score}.")
+    score_changed = abs(target_score - current_score) > 1e-9
+    if score_changed:
+        await request_agent_api(
+            "POST",
+            f"/api/grading/tasks/{task_id}/manual-score",
+            ctx=ctx,
+            json={
+                "score_total": target_score,
+                "reason": (reason or "").strip() or "阅卷智能体人工改分",
+            },
+            scopes=WRITE_SCOPES,
+        )
+    await request_agent_api(
+        "POST", f"/api/grading/tasks/{task_id}/confirm", ctx=ctx, scopes=WRITE_SCOPES,
+    )
+    refreshed = await exam_get_candidate_review(exam_id, student_id, False, ctx)
+    return {
+        "ok": True,
+        "already_confirmed": False,
+        "score_changed": score_changed,
+        "confirmed_question_id": question_id,
+        "confirmed_score": target_score,
+        "review": refreshed,
+    }
+
+
+def _score_shape(scores: list[float]) -> dict[str, Any]:
+    sample_size = len(scores)
+    if sample_size < 8:
+        return {
+            "sample_size": sample_size,
+            "assessment": "insufficient_sample",
+            "approximately_normal": None,
+            "message": "有效成绩少于 8 份，只展示分布图，不作正态分布判断。",
+        }
+    mean = sum(scores) / sample_size
+    variance = sum((score - mean) ** 2 for score in scores) / sample_size
+    standard_deviation = math.sqrt(variance)
+    if standard_deviation == 0:
+        return {
+            "sample_size": sample_size,
+            "assessment": "not_normal",
+            "approximately_normal": False,
+            "mean": mean,
+            "standard_deviation": 0.0,
+            "skewness": 0.0,
+            "excess_kurtosis": -3.0,
+            "message": "所有有效成绩相同，不呈现正态分布形态。",
+        }
+    skewness = sum(((score - mean) / standard_deviation) ** 3 for score in scores) / sample_size
+    excess_kurtosis = (
+        sum(((score - mean) / standard_deviation) ** 4 for score in scores) / sample_size - 3
+    )
+    approximately_normal = abs(skewness) <= 0.75 and abs(excess_kurtosis) <= 1.5
+    return {
+        "sample_size": sample_size,
+        "assessment": "approximately_normal" if approximately_normal else "not_normal",
+        "approximately_normal": approximately_normal,
+        "mean": round(mean, 2),
+        "standard_deviation": round(standard_deviation, 2),
+        "skewness": round(skewness, 3),
+        "excess_kurtosis": round(excess_kurtosis, 3),
+        "message": (
+            "按偏度和峰度的描述性规则，当前成绩形态近似正态分布。"
+            if approximately_normal
+            else "按偏度和峰度的描述性规则，当前成绩形态不接近正态分布。"
+        ),
+        "method_note": "这是描述性判断，不替代正式统计检验。",
+    }
+
+
+@mcp.tool(description="Build current printable grading-report data with ranks, per-question subjective scores, and distribution analysis.")
+async def exam_get_grading_report(exam_id: str, ctx: Context | None = None) -> dict[str, Any]:
+    analysis = await request_agent_api("GET", f"/api/exams/{exam_id}/analysis", ctx=ctx)
+    matrix = await _exam_grading_matrix(exam_id, ctx)
+    students: list[dict[str, Any]] = []
+    for student in analysis.get("students", []):
+        if not isinstance(student, dict):
+            continue
+        tasks = _candidate_task_rows(matrix, student)
+        confirmed_count = sum(1 for task in tasks if _grading_status_confirmed(task.get("status")))
+        students.append(
+            {
+                "student_id": str(student.get("student_id") or ""),
+                "candidate_name": student.get("full_name") or student.get("username") or "未命名考生",
+                "candidate_code": student.get("username") or student.get("phone"),
+                "submitted_at": student.get("submitted_at"),
+                "status": _candidate_review_status(student, tasks),
+                "objective_score": student.get("objective_score"),
+                "subjective_score": student.get("subjective_score"),
+                "total_score": student.get("score"),
+                "subjective_scores": {
+                    str(task.get("question_id")): task.get("score") for task in tasks
+                },
+                "confirmed_count": confirmed_count,
+                "subjective_question_count": len(tasks),
+            }
+        )
+    ranked = sorted(
+        [student for student in students if student.get("submitted_at") and student.get("total_score") is not None],
+        key=lambda item: (-float(item["total_score"]), str(item.get("candidate_name") or "")),
+    )
+    for index, student in enumerate(ranked, start=1):
+        student["rank"] = index
+    ranked_ids = {student["student_id"] for student in ranked}
+    unranked = [student for student in students if student["student_id"] not in ranked_ids]
+    for student in unranked:
+        student["rank"] = None
+    scores = [float(student["total_score"]) for student in ranked]
+    overall = analysis.get("overall", {})
+    return {
+        "provider": "exam",
+        "pregraded": True,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "exam_id": exam_id,
+        "exam_title": analysis.get("title") or matrix.get("exam_label") or "",
+        "summary": {
+            **overall,
+            "unsubmitted_count": sum(1 for student in students if not student.get("submitted_at")),
+            "pending_confirmation_count": sum(
+                max(0, student["subjective_question_count"] - student["confirmed_count"])
+                for student in students
+            ),
+        },
+        "subjective_questions": matrix.get("questions", []),
+        "students": ranked + sorted(unranked, key=lambda item: str(item.get("candidate_name") or "")),
+        "score_distribution": analysis.get("score_distribution", []),
+        "normality": _score_shape(scores),
+        "report_scope_note": "未提交考生保留在名单中，但不参与排名、平均分、及格率和分布判断。",
+    }
 
 
 @mcp.prompt(description="Guide an agent to generate a job competency model from a JD.")

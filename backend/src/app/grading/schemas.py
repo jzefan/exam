@@ -271,6 +271,12 @@ class GradingCandidateFeedbackRead(BaseModel):
     evidence_lines: list[str] = Field(default_factory=list)
 
 
+class GradingScoreReuseRead(BaseModel):
+    mode: str
+    similarity: float
+    source_task_id: str
+
+
 class GradingInboxCandidateDetailRead(BaseModel):
     task_id: str
     candidate_name: str
@@ -278,6 +284,7 @@ class GradingInboxCandidateDetailRead(BaseModel):
     status: str
     viewed: bool = False
     evaluation_note: str | None = None
+    score_reuse: GradingScoreReuseRead | None = None
     suggested_score: float | None = None
     max_score: int
     question_type: str

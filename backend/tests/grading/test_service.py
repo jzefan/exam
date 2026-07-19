@@ -178,6 +178,179 @@ async def test_run_grading_task_creates_primary_review_and_final_snapshots(db_se
 
 
 @pytest.mark.asyncio
+async def test_run_grading_task_reuses_exact_answer_score_without_calling_models(db_session: AsyncSession) -> None:
+    await _create_role_binding_stack(db_session)
+
+    common_fields = {
+        "source_type": "exam_submission",
+        "question_type": "short_answer",
+        "question_content": "简述事务的四个特性。",
+        "max_score": 5,
+        "knowledge_tags": ["事务"],
+        "student_answer_raw": "原子性 一致性 隔离性 持久性",
+        "standard_answers": [{"summary": "ACID"}],
+        "rubric_definition": {"dimensions": [{"key": "coverage", "weight": 1}]},
+        "scoring_points": [{"key": "acid", "weight": 1}],
+        "dimension_weights": {"coverage": 1},
+        "role_binding_version": 1,
+        "status": "pending",
+    }
+    source_task = GradingTask(
+        **common_fields,
+        source_business_id="exam-cache:question-cache:student-1:submission-1",
+    )
+    db_session.add(source_task)
+    await db_session.flush()
+
+    source_result = GradingProviderResult(
+        raw_content={"provider": "source"},
+        score_total=4.0,
+        dimension_scores={"coverage": 4.0},
+        deduction_reasons=["缺少解释"],
+        strengths=["列出了四项特性"],
+        improvement_suggestions=["补充每项含义"],
+        evidence_summary={"matched_points": 4},
+        risk_flags=[],
+        provider_key="qwen-direct",
+        provider_name="qwen",
+        model_name="qwen-plus",
+        metadata={},
+    )
+    await run_grading_task(
+        db_session,
+        str(source_task.id),
+        FakeProvider(source_result),
+        FakeProvider(source_result),
+    )
+
+    target_task = GradingTask(
+        **common_fields,
+        source_business_id="exam-cache:question-cache:student-2:submission-2",
+    )
+    db_session.add(target_task)
+    await db_session.flush()
+    blocked_primary = FailingProvider(RuntimeError("exact answer should be reused"))
+    blocked_review = FailingProvider(RuntimeError("exact answer should be reused"))
+
+    result = await run_grading_task(
+        db_session,
+        str(target_task.id),
+        blocked_primary,
+        blocked_review,
+    )
+
+    assert result["status"] == "completed"
+    assert result["score_reused"] is True
+    assert blocked_primary.calls == []
+    assert blocked_review.calls == []
+
+    refreshed_target = await db_session.get(GradingTask, target_task.id)
+    assert refreshed_target is not None
+    assert refreshed_target.latest_final_snapshot is not None
+    assert refreshed_target.latest_final_snapshot.score_total == 4.0
+    events = (
+        await db_session.execute(
+            select(GradingAuditEvent).where(GradingAuditEvent.task_id == target_task.id)
+        )
+    ).scalars().all()
+    reuse_event = next(event for event in events if event.event_type == "grading.answer_reused")
+    assert reuse_event.event_payload["mode"] == "exact"
+    assert reuse_event.event_payload["source_task_id"] == str(source_task.id)
+
+
+@pytest.mark.asyncio
+async def test_run_grading_task_reuses_semantically_equivalent_answer_after_gate(db_session: AsyncSession) -> None:
+    await _create_role_binding_stack(db_session)
+
+    common_fields = {
+        "source_type": "exam_submission",
+        "question_type": "short_answer",
+        "question_content": "简述事务的四个特性。",
+        "max_score": 5,
+        "knowledge_tags": ["事务"],
+        "student_answer_raw": "原子性 一致性 隔离性 持久性",
+        "standard_answers": [{"summary": "ACID"}],
+        "rubric_definition": {"dimensions": [{"key": "coverage", "weight": 1}]},
+        "scoring_points": [{"key": "acid", "weight": 1}],
+        "dimension_weights": {"coverage": 1},
+        "role_binding_version": 1,
+        "status": "pending",
+    }
+    source_task = GradingTask(
+        **common_fields,
+        source_business_id="exam-near:question-near:student-1:submission-1",
+    )
+    db_session.add(source_task)
+    await db_session.flush()
+
+    source_result = GradingProviderResult(
+        raw_content={"provider": "source"},
+        score_total=4.0,
+        dimension_scores={"coverage": 4.0},
+        deduction_reasons=["缺少解释"],
+        strengths=["列出了四项特性"],
+        improvement_suggestions=["补充每项含义"],
+        evidence_summary={"matched_points": 4},
+        risk_flags=[],
+        provider_key="qwen-direct",
+        provider_name="qwen",
+        model_name="qwen-plus",
+        metadata={},
+    )
+    await run_grading_task(
+        db_session,
+        str(source_task.id),
+        FakeProvider(source_result),
+        FakeProvider(source_result),
+    )
+
+    target_task = GradingTask(
+        **{**common_fields, "student_answer_raw": "原子性 一致性 隔离性 持久性。"},
+        source_business_id="exam-near:question-near:student-2:submission-2",
+    )
+    db_session.add(target_task)
+    await db_session.flush()
+    gate_provider = FakeProvider(
+        GradingProviderResult(
+            raw_content={"provider": "equivalence-gate"},
+            score_total=1,
+            dimension_scores={"equivalent": 1},
+            dimension_comments={"equivalent": "仅标点差异，不影响任何评分维度。"},
+            deduction_reasons=[],
+            strengths=[],
+            improvement_suggestions=[],
+            evidence_summary={"decision": "equivalent", "reason": "仅标点差异"},
+            risk_flags=[],
+            provider_key="qwen-direct",
+            provider_name="qwen",
+            model_name="qwen-plus",
+            metadata={},
+        )
+    )
+    blocked_review = FailingProvider(RuntimeError("semantic equivalent answer should be reused"))
+
+    result = await run_grading_task(
+        db_session,
+        str(target_task.id),
+        gate_provider,
+        blocked_review,
+    )
+
+    assert result["status"] == "completed"
+    assert result["score_reused"] is True
+    assert len(gate_provider.calls) == 1
+    assert blocked_review.calls == []
+    events = (
+        await db_session.execute(
+            select(GradingAuditEvent).where(GradingAuditEvent.task_id == target_task.id)
+        )
+    ).scalars().all()
+    assert any(event.event_type == "grading.answer_reuse_checked" for event in events)
+    reuse_event = next(event for event in events if event.event_type == "grading.answer_reused")
+    assert reuse_event.event_payload["mode"] == "semantic_equivalent"
+
+
+@pytest.mark.asyncio
 async def test_run_grading_task_calls_arbiter_provider_for_model_output_even_without_conflict(
     db_session: AsyncSession,
 ) -> None:

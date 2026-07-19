@@ -154,6 +154,11 @@ export interface GradingCandidateDetailResponse {
   status: string;
   viewed: boolean;
   evaluation_note?: string | null;
+  score_reuse?: {
+    mode: string;
+    similarity: number;
+    source_task_id: string;
+  } | null;
   suggested_score: number | null;
   max_score: number;
   question_type: "short_answer" | "code";

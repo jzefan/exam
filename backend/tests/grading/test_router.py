@@ -996,6 +996,37 @@ async def test_grading_question_candidates_endpoint_returns_question_workspace(a
 
 
 @pytest.mark.asyncio
+async def test_grading_inbox_deduplicates_regraded_submission_tasks(admin_client) -> None:
+    source_business_id = "exam-java-midterm:essay-q3:A-102:submission-1"
+    for _ in range(2):
+        response = await admin_client.post(
+            "/api/grading/tasks",
+            json={
+                "source_type": "exam_submission",
+                "source_business_id": source_business_id,
+                "question_type": "short_answer",
+                "question_content": "什么是幂等性？",
+                "max_score": 20,
+                "student_answer_raw": "重复执行结果一致",
+                "standard_answers": [{"summary": "重复执行结果一致"}],
+                "rubric_definition": {"dimensions": [{"key": "coverage", "weight": 1}]},
+                "role_binding_version": 1,
+            },
+        )
+        assert response.status_code == 201
+
+    question_response = await admin_client.get("/api/grading/inbox/questions/exam-java-midterm/essay-q3")
+    assert question_response.status_code == 200
+    assert len(question_response.json()["candidates"]) == 1
+
+    inbox_response = await admin_client.get("/api/grading/inbox")
+    assert inbox_response.status_code == 200
+    question = inbox_response.json()["exams"][0]["questions"][0]
+    assert question["candidate_count"] == 1
+    assert question["pending_count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_mark_grading_candidate_viewed_does_not_change_grading_status(admin_client) -> None:
     create_response = await admin_client.post(
         "/api/grading/tasks",

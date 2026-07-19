@@ -3,11 +3,16 @@
 .mcp.json
 .pnpm-store/
 .superpowers/
+.pytest_cache/
+.reasonix/
 
 docs/miitec_pdfs
+docs/jd-samples
+docs/misc
 miitec_pdfs
 
 .remember/
+.workbuddy/
 tasks/
 
 backend/test.db

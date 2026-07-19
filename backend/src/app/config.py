@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     arbiter_enabled: bool = False
     grading_score_diff_threshold: float = 0.15
     grading_dimension_diff_threshold: float = 0.20
+    grading_answer_reuse_similarity_threshold: float = 0.94
+    grading_answer_reuse_min_answer_length: int = 12
     judge_runner_url: str | None = None
     lsp_runner_url: str | None = None
     frontend_base_url: str = "http://localhost:4000"

@@ -2058,7 +2058,14 @@ export function GradingCenterPage() {
                           ) : null}
                         </span>
                       ) : (
-                        <span className="font-medium">{candidateDetail?.candidate_name ?? "-"}</span>
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className="font-medium">{candidateDetail?.candidate_name ?? "-"}</span>
+                          {candidateDetail?.score_reuse ? (
+                            <span className="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-primary">
+                              复用评分
+                            </span>
+                          ) : null}
+                        </span>
                       )}
                       {!showCandidateList ? (
                         <TooltipProvider delayDuration={150}>

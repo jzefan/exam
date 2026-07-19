@@ -1,5 +1,7 @@
 """Tests for the job-model MCP adapter helpers."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from app.job_models import agent_mcp
@@ -35,6 +37,20 @@ class FakeClient:
         return FakeResponse(payload)
 
 
+def native_context(token="exam-token", expires_at="2099-07-14T08:00:00Z"):
+    return SimpleNamespace(
+        request_context=SimpleNamespace(
+            request=SimpleNamespace(
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "X-Exam-Auth-Mode": "native",
+                    "X-Exam-Session-Expires-At": expires_at,
+                }
+            )
+        )
+    )
+
+
 @pytest.mark.asyncio
 async def test_agent_mcp_request_adds_auth_and_org_headers(monkeypatch):
     fake_client = FakeClient()
@@ -65,6 +81,27 @@ async def test_agent_mcp_requires_per_request_token_for_http(monkeypatch):
 
     with pytest.raises(RuntimeError, match="Missing per-request Authorization"):
         await agent_mcp.agent_api_headers(None)
+
+
+@pytest.mark.asyncio
+async def test_native_exam_session_skips_arkloop_oidc_verification(monkeypatch):
+    monkeypatch.setenv("ARKLOOP_OIDC_ISSUER", "http://arkloop.local")
+
+    token, claims = await agent_mcp.verify_request_token(native_context(), scopes=agent_mcp.READ_SCOPES)
+
+    assert token == "exam-token"
+    assert claims is None
+
+
+@pytest.mark.asyncio
+async def test_native_exam_session_rejects_expired_boundary(monkeypatch):
+    monkeypatch.setenv("ARKLOOP_OIDC_ISSUER", "http://arkloop.local")
+
+    with pytest.raises(RuntimeError, match="session has expired"):
+        await agent_mcp.verify_request_token(
+            native_context(expires_at="2020-01-01T00:00:00Z"),
+            scopes=agent_mcp.READ_SCOPES,
+        )
 
 
 def test_normalize_agent_question_payload_accepts_arkloop_contract_shape():
@@ -120,8 +157,8 @@ async def test_exam_mcp_tools_call_existing_exam_rest_endpoints(monkeypatch):
     fake_client = FakeClient()
     fake_client.responses = [
         [{"id": "kp-1", "name": "数据库索引"}],
-        {"id": "course-bank-1", "name": "课程题库"},
         {"created": 1, "existing": 0, "failed": 0},
+        [],
         {"id": "paper-1", "title": "数据库测验", "question_count": 1},
     ]
 
@@ -158,10 +195,13 @@ async def test_exam_mcp_tools_call_existing_exam_rest_endpoints(monkeypatch):
 
     assert fake_client.calls[0][0:2] == ("GET", "http://exam.local/api/knowledge-points")
     assert fake_client.calls[0][2]["params"] == {"exam_scope_id": "scope-1", "limit": 20, "offset": 5}
-    assert fake_client.calls[1][0:2] == ("POST", "http://exam.local/api/question-banks/ensure-course-bank")
-    assert fake_client.calls[2][0:2] == ("POST", "http://exam.local/api/questions/bulk")
-    assert fake_client.calls[2][2]["json"]["questions"][0]["type"] == "choice"
-    assert fake_client.calls[2][2]["json"]["questions"][0]["question_bank_id"] == "course-bank-1"
+    assert fake_client.calls[1][0:2] == (
+        "POST",
+        "http://exam.local/api/questions/save-generated-to-course-bank",
+    )
+    assert fake_client.calls[1][2]["json"]["questions"][0]["type"] == "choice"
+    assert fake_client.calls[1][2]["json"]["questions"][0]["knowledge_point_ids"] == []
+    assert fake_client.calls[2][0:2] == ("GET", "http://exam.local/api/papers")
     assert fake_client.calls[3][0:2] == ("POST", "http://exam.local/api/papers")
     assert fake_client.calls[3][2]["json"] == {
         "title": "数据库测验",
@@ -170,3 +210,176 @@ async def test_exam_mcp_tools_call_existing_exam_rest_endpoints(monkeypatch):
         "root_knowledge_point_id": "kp-root",
         "question_items": [{"question_id": "q-1", "order": 0, "score_override": None}],
     }
+
+
+@pytest.mark.asyncio
+async def test_grading_tools_use_pregraded_exam_data_and_confirm_override(monkeypatch):
+    fake_client = FakeClient()
+    fake_client.responses = [
+        # Initial candidate review.
+        {
+            "title": "期末考试",
+            "submitted_at": "2026-07-13T01:00:00Z",
+            "grading_status": "ai_scored",
+            "objective_score": 40,
+            "subjective_score": 8,
+            "score": 48,
+            "total_score": 100,
+            "can_view": True,
+            "questions": [
+                {
+                    "question_id": "q-1",
+                    "order": 1,
+                    "type": "short_answer",
+                    "total_score": 10,
+                    "score_awarded": 8,
+                    "feedback": {"summary": "要点基本完整"},
+                }
+            ],
+        },
+        {"exams": [{"exam_id": "exam-1", "exam_label": "期末考试", "questions": [
+            {"question_id": "q-1", "question_label": "第1题", "question_type": "short_answer", "max_score": 10}
+        ]}]},
+        {"question_id": "q-1", "question_label": "第1题", "question_type": "short_answer", "max_score": 10,
+         "candidates": [{"task_id": "task-1", "student_id": "student-1", "status": "待确认", "score": 8}]},
+        {"models": [{"stage": "primary", "model_label": "Qwen / qwen-plus", "score": 8, "summary": "要点基本完整", "process": [], "risk_flags": []}],
+         "feedback": {"dimensions": [{"name": "准确性", "score": 8, "max_score": 10, "comment": "基本准确"}], "strengths": [], "deductions": [], "suggestions": [], "risk_flags": [], "evidence_lines": []}},
+        # Manual score and confirm writes.
+        {"id": "snapshot-1", "snapshot_type": "manual", "score_total": 9},
+        {"status": "completed", "grading_status": "reviewed"},
+        # Refreshed candidate review.
+        {
+            "title": "期末考试",
+            "submitted_at": "2026-07-13T01:00:00Z",
+            "grading_status": "reviewed",
+            "objective_score": 40,
+            "subjective_score": 9,
+            "score": 49,
+            "total_score": 100,
+            "can_view": True,
+            "questions": [
+                {"question_id": "q-1", "order": 1, "type": "short_answer", "total_score": 10, "score_awarded": 9}
+            ],
+        },
+        {"exams": [{"exam_id": "exam-1", "exam_label": "期末考试", "questions": [
+            {"question_id": "q-1", "question_label": "第1题", "question_type": "short_answer", "max_score": 10}
+        ]}]},
+        {"question_id": "q-1", "question_label": "第1题", "question_type": "short_answer", "max_score": 10,
+         "candidates": [{"task_id": "task-1", "student_id": "student-1", "status": "已确认", "score": 9}]},
+        {"models": [{"stage": "primary", "model_label": "Qwen / qwen-plus", "score": 9, "summary": "已确认", "process": [], "risk_flags": []}], "feedback": None},
+    ]
+
+    monkeypatch.setenv("EXAM_AGENT_BASE_URL", "http://exam.local")
+    monkeypatch.setattr(agent_mcp.httpx, "AsyncClient", lambda timeout: fake_client)
+
+    result = await agent_mcp.exam_confirm_grading_question(
+        exam_id="exam-1",
+        student_id="student-1",
+        question_id="q-1",
+        task_id="task-1",
+        score=9,
+        reason=None,
+        ctx=native_context(),
+    )
+
+    assert result["ok"] is True
+    assert result["score_changed"] is True
+    assert result["review"]["completed"] is True
+    assert result["review"]["subjective_questions"][0]["ai_models"][0]["model_label"] == "Qwen / qwen-plus"
+    assert fake_client.calls[4][0:2] == ("POST", "http://exam.local/api/grading/tasks/task-1/manual-score")
+    assert fake_client.calls[4][2]["json"] == {
+        "score_total": 9.0,
+        "reason": "阅卷智能体人工改分",
+    }
+    assert fake_client.calls[5][0:2] == ("POST", "http://exam.local/api/grading/tasks/task-1/confirm")
+
+
+@pytest.mark.asyncio
+async def test_candidate_review_uses_candidate_identity_fallback_when_task_lacks_student_id(monkeypatch):
+    fake_client = FakeClient()
+    fake_client.responses = [
+        {
+            "title": "期末考试",
+            "submitted_at": "2026-07-13T01:00:00Z",
+            "objective_score": 2,
+            "subjective_score": 6,
+            "score": 8,
+            "total_score": 24,
+            "questions": [
+                {
+                    "question_id": "q-3",
+                    "order": 3,
+                    "type": "short_answer",
+                    "total_score": 3,
+                    "score_awarded": 2,
+                }
+            ],
+        },
+        {"exams": [{"exam_id": "exam-1", "exam_label": "期末考试", "questions": [
+            {"question_id": "q-3", "question_label": "第3题", "question_type": "short_answer", "max_score": 3}
+        ]}]},
+        {"question_id": "q-3", "question_label": "第3题", "question_type": "short_answer", "max_score": 3,
+         "candidates": [{"task_id": "task-3", "candidate_code": "13585116509", "candidate_name": "stud-2", "status": "待确认", "score": 2}]},
+        {"students": [{"student_id": "student-2", "username": "13585116509"}]},
+        {"models": [], "feedback": None},
+    ]
+
+    monkeypatch.setenv("EXAM_AGENT_BASE_URL", "http://exam.local")
+    monkeypatch.setattr(agent_mcp.httpx, "AsyncClient", lambda timeout: fake_client)
+
+    result = await agent_mcp.exam_get_candidate_review(
+        exam_id="exam-1",
+        student_id="student-2",
+        ctx=native_context(),
+    )
+
+    assert result["pending_count"] == 1
+    assert result["next_pending_question"]["question_id"] == "q-3"
+    assert result["next_pending_question"]["task_id"] == "task-3"
+    assert fake_client.calls[3][0:2] == ("GET", "http://exam.local/api/exams/exam-1/analysis")
+
+
+@pytest.mark.asyncio
+async def test_candidate_review_keeps_inbox_task_when_result_has_no_subjective_question(monkeypatch):
+    fake_client = FakeClient()
+    fake_client.responses = [
+        {
+            "title": "期末考试",
+            "submitted_at": "2026-07-13T01:00:00Z",
+            "objective_score": 2,
+            "subjective_score": 6,
+            "score": 8,
+            "total_score": 24,
+            "questions": [{"question_id": "objective-1", "order": 1, "type": "choice", "total_score": 2}],
+        },
+        {"exams": [{"exam_id": "exam-1", "exam_label": "期末考试", "questions": [
+            {"question_id": "q-3", "question_label": "第3题", "question_type": "short_answer", "max_score": 3}
+        ]}]},
+        {"question_id": "q-3", "question_label": "第3题", "question_type": "short_answer", "max_score": 3,
+         "question_content": "请说明答案", "candidates": [{"task_id": "task-3", "student_id": "student-2", "status": "待确认", "score": 2}]},
+        {"models": [], "feedback": None},
+    ]
+
+    monkeypatch.setenv("EXAM_AGENT_BASE_URL", "http://exam.local")
+    monkeypatch.setattr(agent_mcp.httpx, "AsyncClient", lambda timeout: fake_client)
+
+    result = await agent_mcp.exam_get_candidate_review(
+        exam_id="exam-1",
+        student_id="student-2",
+        ctx=native_context(),
+    )
+
+    assert result["pending_count"] == 1
+    assert result["next_pending_question"]["question_id"] == "q-3"
+    assert result["next_pending_question"]["task_id"] == "task-3"
+    assert result["next_pending_question"]["content"] == "请说明答案"
+
+
+def test_score_shape_is_cautious_for_small_samples_and_descriptive_for_larger_sets():
+    small = agent_mcp._score_shape([55, 65, 75])
+    symmetric = agent_mcp._score_shape([55, 60, 65, 70, 75, 80, 85, 90])
+
+    assert small["assessment"] == "insufficient_sample"
+    assert small["approximately_normal"] is None
+    assert symmetric["sample_size"] == 8
+    assert "method_note" in symmetric
