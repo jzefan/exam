@@ -42,6 +42,7 @@ function toExamForm(exam: ExamDetail): ExamFormValues {
     max_switch_count: exam.max_switch_count ?? 0,
     allow_retake: exam.allow_retake ?? false,
     show_result: exam.show_result ?? true,
+    show_score: exam.show_score ?? true,
     notes_template: exam.notes_template || "",
     question_mode: exam.question_mode ?? null,
     question_ids: exam.questions.map((q) => q.question_id),

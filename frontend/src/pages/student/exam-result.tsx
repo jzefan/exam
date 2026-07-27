@@ -410,6 +410,7 @@ export function ExamResultPage() {
                 </Button>
               </div>
             ) : null}
+            {result.show_score ? (
             <div className="text-right">
               <p className="text-[12px] text-muted-foreground">{tStudent("result_score", undefined, locale)}</p>
               {question.grading_pending ? (
@@ -433,6 +434,7 @@ export function ExamResultPage() {
                 </p>
               )}
             </div>
+            ) : null}
           </div>
 
           {renderQuestionPrompt(question)}
@@ -665,6 +667,7 @@ export function ExamResultPage() {
               第 {index + 1} 题
             </span>
           </div>
+          {result.show_score ? (
           <span className="shrink-0 text-[13px] font-semibold tabular-nums">
             {question.grading_pending ? (
               <span className="text-amber-600">评分中</span>
@@ -678,6 +681,21 @@ export function ExamResultPage() {
               </span>
             )}
           </span>
+          ) : (
+          <span className="shrink-0 text-[13px] font-semibold tabular-nums">
+            {question.grading_pending ? (
+              <span className="text-amber-600">评分中</span>
+            ) : question.needs_human_review ? (
+              <span className="text-amber-600">待复核</span>
+            ) : question.grading_failed ? (
+              <span className="text-destructive">评分失败</span>
+            ) : (
+              <span className={question.is_correct ? "text-emerald-600" : "text-destructive"}>
+                {tStudent(question.is_correct ? "result_correct" : "result_incorrect", undefined, locale)}
+              </span>
+            )}
+          </span>
+          )}
         </div>
 
         <div className="flex flex-col gap-3 px-3 pb-3">
@@ -757,8 +775,8 @@ export function ExamResultPage() {
       <button
         key={question.question_id}
         type="button"
-        aria-label={`${tStudent("result_jump_to_question", { number: question.order + 1 }, locale)}，${getStudentQuestionTypeLabel(question.type, locale)}，${statusLabel}，${question.score_awarded}/${question.total_score}`}
-        title={`${tStudent("result_question_number", { number: question.order + 1 }, locale)} · ${statusLabel} · ${question.score_awarded}/${question.total_score}`}
+        aria-label={`${tStudent("result_jump_to_question", { number: question.order + 1 }, locale)}，${getStudentQuestionTypeLabel(question.type, locale)}，${statusLabel}，${result.show_score ? `${question.score_awarded}/${question.total_score}` : statusLabel}`}
+        title={`${tStudent("result_question_number", { number: question.order + 1 }, locale)} · ${statusLabel} · ${result.show_score ? `${question.score_awarded}/${question.total_score}` : statusLabel}`}
         onClick={() => setActiveQuestionIndex(index)}
         className={cn(
           "group flex min-h-14 flex-col items-center justify-center gap-1 rounded-xl border text-center transition-all",
@@ -785,7 +803,7 @@ export function ExamResultPage() {
           />
         )}
         <span className="text-[10px] font-medium tabular-nums text-muted-foreground">
-          {question.grading_pending ? "—" : `${question.score_awarded}/${question.total_score}`}
+          {question.grading_pending ? "—" : result.show_score ? `${question.score_awarded}/${question.total_score}` : (question.is_correct ? tStudent("result_correct", undefined, locale) : tStudent("result_incorrect", undefined, locale))}
         </span>
       </button>
     );
@@ -804,7 +822,7 @@ export function ExamResultPage() {
         key={question.question_id}
         type="button"
         aria-label={tStudent("result_jump_to_question", { number: question.order + 1 }, locale)}
-        title={`${tStudent("result_question_number", { number: question.order + 1 }, locale)} · ${question.grading_pending ? "—" : `${question.score_awarded}/${question.total_score}`}`}
+        title={`${tStudent("result_question_number", { number: question.order + 1 }, locale)} · ${question.grading_pending ? "—" : (result.show_score ? `${question.score_awarded}/${question.total_score}` : (question.is_correct ? tStudent("result_correct", undefined, locale) : tStudent("result_incorrect", undefined, locale)))}`}
         onClick={() => scrollToQuestion(index)}
         className={cn(
           size === "sm"
@@ -838,6 +856,7 @@ export function ExamResultPage() {
         </header>
 
         <div className="flex flex-col gap-3 px-3 py-3">
+          {result.show_score ? (
           <section className="rounded-2xl bg-card px-3 py-3 shadow-sm ring-1 ring-border/60">
             {result.grading_status === "pending_ai" && result.objective_score != null ? (
               <div className="flex items-center justify-between gap-3">
@@ -872,6 +891,16 @@ export function ExamResultPage() {
             )}
             {renderRetakeButton("mt-3 h-9 w-full text-sm font-semibold")}
           </section>
+          ) : (
+            <section className="rounded-2xl bg-card px-3 py-3 shadow-sm ring-1 ring-border/60">
+              {result.submitted_at ? (
+                <p className="text-[12px] text-muted-foreground">
+                  {formatStudentDate(result.submitted_at)}
+                </p>
+              ) : null}
+              {renderRetakeButton("mt-3 h-9 w-full text-sm font-semibold")}
+            </section>
+          )}
 
           {questions.length > 1 ? (
             <div className="sticky top-12 z-10 rounded-2xl bg-background/95 px-3 py-2 shadow-sm ring-1 ring-border/60 backdrop-blur">
@@ -916,7 +945,8 @@ export function ExamResultPage() {
             <p className="mt-2 text-[14px] text-muted-foreground">{tStudent("result_intro", undefined, locale)}</p>
           </div>
           <div className="flex flex-col items-end gap-2">
-            {result.grading_status === "pending_ai" && result.objective_score != null ? (
+            {result.show_score ? (
+            result.grading_status === "pending_ai" && result.objective_score != null ? (
               <>
                 <div className="rounded-2xl bg-muted px-5 py-3 text-right">
                   <p className="text-[12px] text-muted-foreground">{tStudent("result_objective_score", undefined, locale) || "客观题得分"}</p>
@@ -936,7 +966,8 @@ export function ExamResultPage() {
                   {result.score ?? 0} / {result.total_score}
                 </p>
               </div>
-            )}
+            )
+            ) : null}
             {renderRetakeButton()}
           </div>
         </div>

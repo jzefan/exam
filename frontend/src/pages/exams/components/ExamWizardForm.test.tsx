@@ -236,6 +236,7 @@ function createInitialValues(): ExamFormValues {
     max_switch_count: 2,
     allow_retake: false,
     show_result: true,
+    show_score: true,
     notes_template: DEFAULT_NOTES,
     question_mode: "manual",
     question_ids: ["question-1"],

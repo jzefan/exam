@@ -33,6 +33,7 @@ function buildResult(studentId: string): IExamResult {
     grading_status: "reviewed",
     can_view: true,
     can_retake: false,
+    show_score: true,
     blocked_reason: null,
     questions: [],
   };

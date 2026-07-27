@@ -2172,6 +2172,7 @@ async def get_exam_result(
             grading_status=exam_student.grading_status,
             can_view=False,
             can_retake=_can_start_retake(exam, exam_student),
+            show_score=exam.show_score,
             blocked_reason="教师暂未开放查看结果权限",
         )
 
@@ -2254,6 +2255,7 @@ async def get_exam_result(
         grading_status=exam_student.grading_status,
         can_view=True,
         can_retake=_can_start_retake(exam, exam_student),
+        show_score=exam.show_score,
         blocked_reason=(
             "主观题正在进行 AI 评分，主观题分数将在评估完成后更新。客观题分数已可见。"
             if is_pending_ai

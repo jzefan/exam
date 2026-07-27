@@ -89,6 +89,7 @@ class ExamCreate(BaseModel):
     max_switch_count: int = Field(default=0, ge=0)
     allow_retake: bool = False
     show_result: bool = True
+    show_score: bool = True
     notes_template: str | None = None
     question_mode: ExamQuestionMode | None = None
     course_kp_id: uuid.UUID | None = None
@@ -111,6 +112,7 @@ class ExamUpdate(BaseModel):
     max_switch_count: int | None = Field(default=None, ge=0)
     allow_retake: bool | None = None
     show_result: bool | None = None
+    show_score: bool | None = None
     notes_template: str | None = None
     question_mode: ExamQuestionMode | None = None
     question_ids: list[uuid.UUID] | None = None
@@ -135,6 +137,7 @@ class ExamResponse(BaseModel):
     max_switch_count: int
     allow_retake: bool
     show_result: bool
+    show_score: bool
     notes_template: str | None
     question_mode: ExamQuestionMode | None = None
     total_questions: int = 0

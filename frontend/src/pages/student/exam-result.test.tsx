@@ -60,6 +60,7 @@ describe("ExamResultPage", () => {
         score: 88,
         can_view: true,
         can_retake: false,
+        show_score: true,
         blocked_reason: null,
         questions: [
           {
@@ -159,6 +160,7 @@ describe("ExamResultPage", () => {
         score: 92,
         can_view: true,
         can_retake: false,
+        show_score: true,
         blocked_reason: null,
         questions: [
           {
@@ -260,6 +262,7 @@ describe("ExamResultPage", () => {
         score: 18,
         can_view: true,
         can_retake: false,
+        show_score: true,
         blocked_reason: null,
         questions: [
           {
@@ -304,6 +307,7 @@ describe("ExamResultPage", () => {
         score: 1.33,
         can_view: true,
         can_retake: false,
+        show_score: true,
         blocked_reason: null,
         questions: [
           {
@@ -360,6 +364,7 @@ describe("ExamResultPage", () => {
         score: 10,
         can_view: true,
         can_retake: false,
+        show_score: true,
         blocked_reason: null,
         questions: [
           {
@@ -406,6 +411,7 @@ describe("ExamResultPage", () => {
         grading_status: "reviewed",
         can_view: false,
         can_retake: true,
+        show_score: true,
         blocked_reason: "教师暂未开放查看结果权限",
         questions: [],
       },
@@ -446,8 +452,9 @@ describe("ExamResultPage", () => {
           subjective_score: null,
           grading_status: "reviewed",
           can_view: true,
-          can_retake: true,
-          blocked_reason: null,
+        can_retake: true,
+        show_score: true,
+        blocked_reason: null,
           questions: [
             {
               question_id: "q-mobile",

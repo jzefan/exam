@@ -3850,6 +3850,26 @@ export function ExamWizardForm({
                         }
                       />
                     </div>
+
+                    <div className="border-t border-border/40" />
+
+                    <div className="flex flex-col gap-3 py-3 md:flex-row md:items-center md:justify-between">
+                      <div className="min-w-0 space-y-0.5">
+                        <p className="text-sm font-medium text-foreground">
+                          允许查看考试分数
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          考生提交后是否可以查看总分与每道题的得分。
+                        </p>
+                      </div>
+                      <Switch
+                        id="exam-show-score"
+                        checked={form.show_score}
+                        onCheckedChange={(checked) =>
+                          updateField("show_score", checked)
+                        }
+                      />
+                    </div>
                   </div>
                 </div>
 

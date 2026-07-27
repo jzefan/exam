@@ -7,6 +7,7 @@ export type ViewSettingsValues = {
   max_switch_count: number;
   show_result: boolean;
   allow_retake: boolean;
+  show_score: boolean;
 };
 
 export function ExamSettingsPanel({
@@ -67,6 +68,26 @@ export function ExamSettingsPanel({
               onChange({
                 ...values,
                 show_result: checked,
+              })
+            }
+          />
+        </div>
+
+        <div className="flex items-center justify-between gap-4">
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-foreground">
+              允许查看考试分数
+            </p>
+            <p className="text-xs text-muted-foreground">
+              学生提交后是否可以查看总分与每道题的得分。
+            </p>
+          </div>
+          <Switch
+            checked={values.show_score}
+            onCheckedChange={(checked) =>
+              onChange({
+                ...values,
+                show_score: checked,
               })
             }
           />

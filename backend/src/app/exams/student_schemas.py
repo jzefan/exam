@@ -128,6 +128,7 @@ class StudentExamResultResponse(BaseModel):
     grading_status: str | None = None
     can_view: bool
     can_retake: bool = False
+    show_score: bool = True
     blocked_reason: str | None = None
     teacher_comment: str | None = None
     questions: list[StudentExamResultQuestionResponse] = Field(default_factory=list)

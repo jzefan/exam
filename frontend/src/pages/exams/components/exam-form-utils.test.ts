@@ -23,6 +23,7 @@ function createForm(overrides: Partial<ExamFormValues> = {}): ExamFormValues {
     max_switch_count: 3,
     allow_retake: false,
     show_result: true,
+    show_score: true,
     notes_template: DEFAULT_NOTES,
     question_mode: "manual",
     question_ids: ["question-1"],

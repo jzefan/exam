@@ -1161,6 +1161,38 @@ async def _question_ids_with_submitted_attempts(
     return {row[0] for row in rows}
 
 
+def _build_paginated_question_id_stmt(
+    *,
+    where_clause,
+    include_question_knowledge_points: bool,
+    include_knowledge_points: bool,
+    page: int,
+    page_size: int,
+):
+    """Return the ordered, deduplicated question IDs for one result page.
+
+    PostgreSQL requires every expression used to order a ``SELECT DISTINCT``
+    query to be present in its select list.  Keep ``updated_at`` in this
+    intermediate query even though callers only consume the question ID.
+    """
+    stmt = select(Question.id, Question.updated_at).select_from(Question)
+    if include_question_knowledge_points:
+        stmt = stmt.join(
+            question_knowledge_points, question_knowledge_points.c.question_id == Question.id
+        )
+    if include_knowledge_points:
+        stmt = stmt.join(
+            KnowledgePoint, KnowledgePoint.id == question_knowledge_points.c.knowledge_point_id
+        )
+    return (
+        stmt.where(where_clause)
+        .distinct()
+        .order_by(Question.updated_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+
+
 @router.get("/{course_id}/questions/paginated", response_model=TeacherCourseQuestionList)
 async def list_teacher_course_questions_paginated(
     course_id: uuid.UUID,
@@ -1262,24 +1294,16 @@ async def list_teacher_course_questions_paginated(
     # Paginated items. Select distinct question IDs first (so the joins used
     # for knowledge-point / search filtering do not multiply rows and shrink
     # the page below page_size), then load full rows with relationships.
-    id_stmt = select(func.distinct(Question.id)).select_from(Question)
-    if kp_filter or q_clean:
-        id_stmt = id_stmt.join(
-            question_knowledge_points, question_knowledge_points.c.question_id == Question.id
-        )
-    if q_clean:
-        id_stmt = id_stmt.join(
-            KnowledgePoint, KnowledgePoint.id == question_knowledge_points.c.knowledge_point_id
-        )
-    id_stmt = (
-        id_stmt.where(where_clause)
-        .order_by(Question.updated_at.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
+    id_stmt = _build_paginated_question_id_stmt(
+        where_clause=where_clause,
+        include_question_knowledge_points=bool(kp_filter or q_clean),
+        include_knowledge_points=bool(q_clean),
+        page=page,
+        page_size=page_size,
     )
     page_question_ids = list((await db.execute(id_stmt)).scalars().all())
-    # func.distinct(Question.id) can return the raw stored value (a hex string
-    # on SQLite) instead of a UUID object; coerce so the IN clause binds correctly.
+    # SQLite can return the raw stored value (a hex string) instead of a UUID
+    # object; coerce so the IN clause binds correctly.
     page_question_ids = [qid if isinstance(qid, uuid.UUID) else uuid.UUID(str(qid)) for qid in page_question_ids]
 
     questions: list = []

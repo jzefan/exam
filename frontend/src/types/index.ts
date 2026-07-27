@@ -112,6 +112,7 @@ export interface IExam {
   max_switch_count: number;
   allow_retake: boolean;
   show_result: boolean;
+  show_score: boolean;
   notes_template: string | null;
   course_kp_id: string | null;
   total_questions: number;
@@ -403,6 +404,7 @@ export interface IExamResult {
   grading_status: ExamGradingStatus | null;
   can_view: boolean;
   can_retake: boolean;
+  show_score: boolean;
   blocked_reason: string | null;
   teacher_comment?: string | null;
   questions: IExamResultQuestion[];

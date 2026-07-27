@@ -1,5 +1,7 @@
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import and_
+from sqlalchemy.dialects import postgresql
 
 from app.auth.schemas import UserCreate
 from app.auth.security import create_access_token
@@ -14,6 +16,7 @@ from app.questions.models import (
 )
 from app.questions.service import root_knowledge_question_bank_name
 from app.rbac.models import Organization, Role
+from app.teacher_courses.router import _build_paginated_question_id_stmt
 
 
 async def _create_teacher(db_session, *, username: str) -> object:
@@ -56,6 +59,22 @@ def _make_question(teacher, bank, type_: QuestionType, title: str, kps):
 
 def _auth(client, teacher) -> None:
     client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+
+
+def test_paginated_id_query_is_valid_for_postgresql_distinct_ordering() -> None:
+    """PostgreSQL requires every DISTINCT ORDER BY expression to be selected."""
+    stmt = _build_paginated_question_id_stmt(
+        where_clause=and_(Question.deleted_at.is_(None)),
+        include_question_knowledge_points=False,
+        include_knowledge_points=False,
+        page=1,
+        page_size=50,
+    )
+
+    sql = str(stmt.compile(dialect=postgresql.dialect()))
+
+    assert "SELECT DISTINCT questions.id, questions.updated_at" in sql
+    assert "ORDER BY questions.updated_at DESC" in sql
 
 
 @pytest.mark.asyncio

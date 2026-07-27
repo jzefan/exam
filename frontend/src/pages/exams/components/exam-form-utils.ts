@@ -19,6 +19,7 @@ export interface ExamFormValues {
   max_switch_count: number;
   allow_retake: boolean;
   show_result: boolean;
+  show_score: boolean;
   notes_template: string;
   question_mode: "manual" | "auto" | "ai" | null;
   question_ids: string[];

@@ -247,6 +247,7 @@ function toSettingsValues(exam: ExamViewDetail): ViewSettingsValues {
     max_switch_count: exam.max_switch_count ?? 0,
     show_result: exam.show_result ?? true,
     allow_retake: exam.allow_retake ?? false,
+    show_score: exam.show_score ?? true,
   };
 }
 
@@ -1202,11 +1203,12 @@ export function ExamPaperViewPage() {
         id,
         values:
           exam.category === "practice"
-            ? { show_result: settings.show_result }
+            ? { show_result: settings.show_result, show_score: settings.show_score }
             : {
                 max_switch_count: settings.max_switch_count,
                 show_result: settings.show_result,
                 allow_retake: settings.allow_retake,
+                show_score: settings.show_score,
               },
       },
       {
