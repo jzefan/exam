@@ -72,7 +72,9 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -90,6 +92,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { formatKnowledgeDisplayPath } from "@/lib/knowledge-display";
 import { writeExamSeed } from "@/lib/exam-seed";
+import {
+  exportExamGradingDetails,
+  type GradingDetailExportFormat,
+} from "@/lib/grading-detail-export";
 import { cn } from "@/lib/utils";
 import type { IPaper, IQuestion, QuestionType } from "@/types";
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
@@ -100,6 +106,8 @@ import {
   CreateFromSelectionDialog,
   type CreateFromSelectionCategory,
 } from "@/pages/questions/components/create-from-selection-dialog";
+import { SmartPracticeDialog } from "./SmartPracticeDialog";
+import { SmartPracticeChatDialog } from "./SmartPracticeChatDialog";
 import type { QuestionImportJobResponse } from "@/pages/questions/import-types";
 import { isTerminalQuestionImportJobStatus } from "@/pages/questions/question-knowledge-recognition";
 import {
@@ -1894,8 +1902,10 @@ function ExamRows({
   onClose,
   onDelete,
   onGenerateMock,
+  onSmartCreate,
   onCreate,
   onExport,
+  onExportGradingDetails,
 }: {
   items: TeacherCourseExam[];
   kind: "exam" | "assignment";
@@ -1909,12 +1919,17 @@ function ExamRows({
   onClose: (exam: TeacherCourseExam) => void;
   onDelete: (exam: TeacherCourseExam) => void;
   onGenerateMock?: (exam: TeacherCourseExam) => void;
+  onSmartCreate?: () => void;
   onCreate: () => void;
   onExport?: (
     exam: TeacherCourseExam,
     format: "docx" | "pdf",
     answers: boolean,
   ) => void;
+  onExportGradingDetails?: (
+    exam: TeacherCourseExam,
+    format: GradingDetailExportFormat,
+  ) => Promise<void> | void;
 }) {
   const navigate = useNavigate();
   // 从课程详情进入查看/修改时，让目标页的「返回」（及保存后跳转）回到课程详情对应模块。
@@ -1943,6 +1958,12 @@ function ExamRows({
           >
             <Users size={14} className="mr-1.5" />
             考试考生
+          </Button>
+        ) : null}
+        {kind === "assignment" && canWrite && onSmartCreate ? (
+          <Button variant="outline" size="sm" onClick={onSmartCreate}>
+            <Sparkles size={14} className="mr-1.5" />
+            智能练习
           </Button>
         ) : null}
         {canWrite ? (
@@ -2063,6 +2084,11 @@ function ExamRows({
                 ? (format, answers) => onExport(item, format, answers)
                 : undefined
             }
+            onExportGradingDetails={
+              onExportGradingDetails
+                ? (format) => onExportGradingDetails(item, format)
+                : undefined
+            }
             extraBadges={semesterBadge}
             moreActions={archiveMenuItems}
             collapseSecondaryActions
@@ -2165,6 +2191,7 @@ function QuestionsTab({
     useState<IQuestion | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [createFromSelectionOpen, setCreateFromSelectionOpen] = useState(false);
+  const [smartPracticeOpen, setSmartPracticeOpen] = useState(false);
   const [knowledgeCompleting, setKnowledgeCompleting] = useState(false);
   const [allQuestionsExpanded, setAllQuestionsExpanded] = useState(false);
 
@@ -2210,6 +2237,42 @@ function QuestionsTab({
   const selectedKnowledgeOption = knowledgeFilterOptions.find(
     (item) => item.id === knowledgeFilterNodeId,
   );
+  const knowledgeFilterGroups = useMemo(() => {
+    const rootNodes = knowledgeTree?.children ?? [];
+    if (rootNodes.length === 0) {
+      return knowledgeFilterOptions.length > 0
+        ? [{ label: null, items: knowledgeFilterOptions }]
+        : [];
+    }
+
+    const optionsById = new Map(
+      knowledgeFilterOptions.map((option) => [option.id, option]),
+    );
+    const included = new Set<string>();
+    const groups = rootNodes.flatMap((rootNode) => {
+      const items = flattenCourseKnowledgeNodes(rootNode)
+        .map((item) => optionsById.get(item.id))
+        .filter(
+          (item): item is (typeof knowledgeFilterOptions)[number] =>
+            Boolean(item),
+        );
+      for (const item of items) included.add(item.id);
+      if (items.length === 0) return [];
+
+      return [
+        {
+          label: rootNode.children.length > 0 ? rootNode.name : null,
+          items,
+        },
+      ];
+    });
+    const ungrouped = knowledgeFilterOptions.filter(
+      (option) => !included.has(option.id),
+    );
+    return ungrouped.length > 0
+      ? [...groups, { label: null, items: ungrouped }]
+      : groups;
+  }, [knowledgeFilterOptions, knowledgeTree]);
   const defaultCreateTitle = (() => {
     const d = new Date();
     const pad = (n: number) => String(n).padStart(2, "0");
@@ -2301,29 +2364,6 @@ function QuestionsTab({
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
-        {knowledgeFilterOptions.length > 0 ? (
-          <Select
-            value={knowledgeFilterNodeId ?? ALL_QUESTION_KNOWLEDGE}
-            onValueChange={(value) =>
-              onKnowledgeFilterChange(
-                value === ALL_QUESTION_KNOWLEDGE ? null : value,
-              )
-            }
-          >
-            <SelectTrigger className="h-9 min-w-[180px] flex-1 sm:max-w-[240px] lg:flex-none">
-              <SelectValue placeholder="全部知识点" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL_QUESTION_KNOWLEDGE}>全部知识点</SelectItem>
-              {knowledgeFilterOptions.map((item) => (
-                <SelectItem key={item.id} value={item.id}>
-                  {"　".repeat(Math.max(0, item.depth - 1))}
-                  {item.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : null}
         <div className="flex-1" />
         <div className="relative min-w-[220px] flex-1 sm:max-w-[280px] lg:flex-none">
           <Search
@@ -2339,39 +2379,6 @@ function QuestionsTab({
         </div>
         {canWrite ? (
           <>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() =>
-                navigate("/questions/import", {
-                  state: {
-                    backTo: `/courses/${courseId}?tab=questions`,
-                    backLabel: "返回课程详情",
-                    successTo: `/courses/${courseId}?tab=questions`,
-                    courseKpId: targetCourseKpId,
-                    courseName,
-                  },
-                })
-              }
-            >
-              <Upload size={14} className="mr-1.5" />
-              导入
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={knowledgeCompleting || questions.length === 0}
-              onClick={handleCompleteKnowledge}
-            >
-              {knowledgeCompleting ? (
-                <LoaderCircle size={14} className="mr-1.5 animate-spin" />
-              ) : (
-                <Wand2 size={14} className="mr-1.5" />
-              )}
-              {selectedQuestionCount > 0
-                ? `补全知识点(${selectedQuestionCount})`
-                : "补全知识点"}
-            </Button>
             {showClearAllQuestions && questions.length > 0 ? (
               <Button
                 variant="outline"
@@ -2383,6 +2390,14 @@ function QuestionsTab({
                 清除
               </Button>
             ) : null}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setSmartPracticeOpen(true)}
+            >
+              <Sparkles size={14} className="mr-1.5" />
+              智能创建练习
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -2426,6 +2441,39 @@ function QuestionsTab({
             >
               <ClipboardList size={14} className="mr-1.5" />
               发布考试
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={knowledgeCompleting || questions.length === 0}
+              onClick={handleCompleteKnowledge}
+            >
+              {knowledgeCompleting ? (
+                <LoaderCircle size={14} className="mr-1.5 animate-spin" />
+              ) : (
+                <Wand2 size={14} className="mr-1.5" />
+              )}
+              {selectedQuestionCount > 0
+                ? `补全知识点(${selectedQuestionCount})`
+                : "补全知识点"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                navigate("/questions/import", {
+                  state: {
+                    backTo: `/courses/${courseId}?tab=questions`,
+                    backLabel: "返回课程详情",
+                    successTo: `/courses/${courseId}?tab=questions`,
+                    courseKpId: targetCourseKpId,
+                    courseName,
+                  },
+                })
+              }
+            >
+              <Upload size={14} className="mr-1.5" />
+              导入
             </Button>
             <Button
               size="sm"
@@ -2479,6 +2527,49 @@ function QuestionsTab({
             </Button>
           ) : null}
           <div className="flex-1" />
+          <Select
+            value={knowledgeFilterNodeId ?? ALL_QUESTION_KNOWLEDGE}
+            onValueChange={(value) =>
+              onKnowledgeFilterChange(
+                value === ALL_QUESTION_KNOWLEDGE ? null : value,
+              )
+            }
+          >
+            <SelectTrigger
+              aria-label="知识点筛选"
+              className="h-9 w-[220px] shrink-0 px-3 text-xs"
+            >
+              <span className="shrink-0 font-medium">知识点：</span>
+              <SelectValue placeholder="全部知识点" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value={ALL_QUESTION_KNOWLEDGE}>
+                  全部知识点
+                </SelectItem>
+              </SelectGroup>
+              {knowledgeFilterGroups.map((group, groupIndex) => (
+                <SelectGroup key={`${group.label ?? "points"}-${groupIndex}`}>
+                  {group.label ? <SelectLabel>{group.label}</SelectLabel> : null}
+                  {group.items.map((item) => {
+                    const isChapter = item.depth === 1 && Boolean(group.label);
+                    return (
+                      <SelectItem key={item.id} value={item.id}>
+                        {isChapter
+                          ? "本章全部"
+                          : `${"　".repeat(
+                              Math.max(
+                                0,
+                                item.depth - (group.label ? 2 : 1),
+                              ),
+                            )}${item.name}`}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectGroup>
+              ))}
+            </SelectContent>
+          </Select>
           {availableQuestionTypes.length > 0 ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -2683,6 +2774,25 @@ function QuestionsTab({
         courseSemesterId={courseSemesterId}
         onPublished={(_, category) => {
           void onPublishedExamOrAssignment(category);
+        }}
+      />
+
+      <SmartPracticeDialog
+        open={smartPracticeOpen}
+        onOpenChange={setSmartPracticeOpen}
+        courseId={courseId}
+        courseName={courseName}
+        courseKpId={targetCourseKpId}
+        courseSemesterId={courseSemesterId}
+        selectedQuestionIds={[...selected]}
+        knowledgeOptions={knowledgeFilterOptions.map((option) => ({
+          id: option.id,
+          name: option.name,
+          path: option.path,
+        }))}
+        initialKnowledgePointId={knowledgeFilterNodeId}
+        onPublished={async () => {
+          await onPublishedExamOrAssignment("practice");
         }}
       />
 
@@ -4137,6 +4247,7 @@ export function CourseDetailPage() {
     useState<CourseMaterialBatchProgress | null>(null);
   const [assignmentScoreSummaryOpen, setAssignmentScoreSummaryOpen] =
     useState(false);
+  const [smartAssignmentOpen, setSmartAssignmentOpen] = useState(false);
   const [assignmentScoreSummaryLoading, setAssignmentScoreSummaryLoading] =
     useState(false);
   const [assignmentScoreSummary, setAssignmentScoreSummary] =
@@ -4542,9 +4653,15 @@ export function CourseDetailPage() {
         .catch(fail)
         .finally(finishTabLoading);
     } else if (activeTab === "assignments") {
-      listCourseAssignments(id, semesterFilter)
-        .then((data) => {
-          if (!ignore) setAssignments(data);
+      Promise.all([
+        listCourseAssignments(id, semesterFilter),
+        getCourseKnowledgeTree(id),
+      ])
+        .then(([assignmentData, treeData]) => {
+          if (!ignore) {
+            setAssignments(assignmentData);
+            setTree(treeData);
+          }
         })
         .catch(fail)
         .finally(finishTabLoading);
@@ -4624,7 +4741,7 @@ export function CourseDetailPage() {
   );
 
   const handleRecognizeCatalogPhoto = useCallback(
-    async (payload: { fileName: string; images: string[] }) => {
+    async (payload: { fileName: string; images: string[]; imageGroups: string[][] }) => {
       const response = await apiRequest<{ paths: KnowledgeImportPath[] }>(
         "/knowledge/catalog-photo/recognize",
         {
@@ -4633,6 +4750,7 @@ export function CourseDetailPage() {
           body: JSON.stringify({
             file_name: payload.fileName,
             images: payload.images,
+            image_groups: payload.imageGroups,
           }),
         },
       );
@@ -5756,6 +5874,21 @@ export function CourseDetailPage() {
     [toast],
   );
 
+  const handleExportExamGradingDetails = useCallback(
+    async (exam: TeacherCourseExam, format: GradingDetailExportFormat) => {
+      try {
+        await exportExamGradingDetails(exam.id, format);
+      } catch (err) {
+        toast({
+          title: "导出失败",
+          description: err instanceof Error ? err.message : "请稍后重试",
+          variant: "destructive",
+        });
+      }
+    },
+    [toast],
+  );
+
   const loadAssignmentScoreSummary = useCallback(async () => {
     if (!id) return;
     setAssignmentScoreSummaryLoading(true);
@@ -6197,6 +6330,23 @@ export function CourseDetailPage() {
         semesterLabel={selectedSemesterLabel}
         onOpenChange={setAssignmentScoreSummaryOpen}
         onRefresh={loadAssignmentScoreSummary}
+      />
+
+      <SmartPracticeChatDialog
+        open={smartAssignmentOpen}
+        onOpenChange={setSmartAssignmentOpen}
+        courseName={course.name}
+        courseKpId={assignmentFilterNode?.id ?? tree?.id ?? id ?? ""}
+        courseSemesterId={semesterFilter}
+        knowledgeOptions={questionKnowledgeFilterOptions.map((option) => ({
+          id: option.id,
+          name: option.name,
+          path: option.path,
+        }))}
+        initialKnowledgePointId={assignmentFilterNodeId}
+        onPublished={async () => {
+          await handlePublishedFromSelection("practice");
+        }}
       />
 
       <AssociateMaterialKnowledgeDialog
@@ -6702,6 +6852,7 @@ export function CourseDetailPage() {
                         })
                       }
                     onExport={handleExportExam}
+                    onExportGradingDetails={handleExportExamGradingDetails}
                   />
                 )}
               </TabsContent>
@@ -6742,6 +6893,7 @@ export function CourseDetailPage() {
                       onNewSemester={() => setNewSemesterOpen(true)}
                       onClose={(exam) => setExamToClose(exam)}
                       onDelete={(exam) => setExamToDelete(exam)}
+                      onSmartCreate={() => setSmartAssignmentOpen(true)}
                       onCreate={() =>
                         goCreateExamOrAssignment("assignment", {
                           mainKnowledgePointId: tree?.id,

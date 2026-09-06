@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from json import JSONDecodeError
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -172,9 +173,27 @@ def _validate_result_types(normalized_payload: dict[str, Any]) -> None:
     _require_type(normalized_payload["score_total"], (int, float), "score_total")
     if isinstance(normalized_payload["score_total"], bool):
         raise ValueError("normalized provider payload field 'score_total' must be a number")
+    if not math.isfinite(float(normalized_payload["score_total"])):
+        raise ValueError("normalized provider payload field 'score_total' must be finite")
+    normalized_payload["score_total"] = float(normalized_payload["score_total"])
 
     if not isinstance(normalized_payload["dimension_scores"], dict):
         raise ValueError("normalized provider payload field 'dimension_scores' must be a dict")
+    normalized_dimensions: dict[str, float] = {}
+    for key, value in normalized_payload["dimension_scores"].items():
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError("normalized provider payload field 'dimension_scores' keys must be non-empty strings")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(
+                f"normalized provider payload dimension score '{key}' must be a number"
+            )
+        numeric_value = float(value)
+        if not math.isfinite(numeric_value):
+            raise ValueError(
+                f"normalized provider payload dimension score '{key}' must be finite"
+            )
+        normalized_dimensions[key] = numeric_value
+    normalized_payload["dimension_scores"] = normalized_dimensions
     normalized_payload["deduction_reasons"] = _coerce_list_of_strings(
         normalized_payload["deduction_reasons"], "deduction_reasons"
     )

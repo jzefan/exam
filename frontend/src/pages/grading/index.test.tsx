@@ -51,6 +51,13 @@ describe("GradingCenterPage", () => {
     expect(await screen.findByText("Qwen")).toBeInTheDocument();
   });
 
+  it("shows each AI scoring dimension's awarded and maximum scores", async () => {
+    renderGradingCenter();
+
+    expect(await screen.findByText("要点覆盖")).toBeInTheDocument();
+    expect(screen.getByText("4 / 5")).toBeInTheDocument();
+  });
+
   it("switches to candidate mode and renders the per-candidate workspace", async () => {
     const user = userEvent.setup();
     renderGradingCenter();

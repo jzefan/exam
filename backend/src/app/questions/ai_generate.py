@@ -435,6 +435,17 @@ def _extract_stream_delta_text(choice: Any) -> str | None:
     return None
 
 
+def _extract_stream_reasoning_text(choice: Any) -> str | None:
+    """Read provider reasoning deltas for progress only; never expose their content."""
+    if not isinstance(choice, dict):
+        return None
+    delta = choice.get("delta")
+    if not isinstance(delta, dict):
+        return None
+    reasoning = delta.get("reasoning_content")
+    return reasoning if isinstance(reasoning, str) and reasoning else None
+
+
 async def generate_questions_stream(
     db: AsyncSession,
     request: AIGenerateRequest,
@@ -442,6 +453,11 @@ async def generate_questions_stream(
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream AI-generated questions as parsed JSON events."""
     _validate_generate_request(request)
+    yield {
+        "type": "status",
+        "stage": "preparing",
+        "message": "正在理解要求并匹配知识点",
+    }
 
     knowledge_contexts: list[KnowledgePointPromptContext] = []
     if request.knowledge_point_ids:
@@ -491,6 +507,13 @@ async def generate_questions_stream(
     generated_titles: list[str] = []
     accepted_questions: list[dict[str, Any]] = []
     expected_types = _expected_question_types(request.type_distribution)
+    reasoning_status_messages = (
+        "正在规划题型与考点",
+        "正在核对知识范围与难度",
+        "正在组织题干、答案与解析",
+    )
+    reasoning_char_count = 0
+    reasoning_status_index = -1
 
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -520,6 +543,16 @@ async def generate_questions_stream(
                     "stream": True,
                 }
 
+                yield {
+                    "type": "status",
+                    "stage": "generating",
+                    "message": (
+                        f"正在生成题目（{question_count}/{request.total_count}）"
+                        if question_count
+                        else "正在构思题目"
+                    ),
+                }
+
                 accumulated = ""
                 brace_depth = 0
                 in_string = False
@@ -545,6 +578,20 @@ async def generate_questions_stream(
                         choices = parsed.get("choices")
                         if not isinstance(choices, list) or not choices:
                             continue
+                        reasoning = _extract_stream_reasoning_text(choices[0])
+                        if reasoning:
+                            reasoning_char_count += len(reasoning)
+                            next_status_index = min(
+                                len(reasoning_status_messages) - 1,
+                                reasoning_char_count // 240,
+                            )
+                            if next_status_index > reasoning_status_index:
+                                reasoning_status_index = next_status_index
+                                yield {
+                                    "type": "status",
+                                    "stage": "reasoning",
+                                    "message": reasoning_status_messages[reasoning_status_index],
+                                }
                         content = _extract_stream_delta_text(choices[0])
                         if not isinstance(content, str) or not content:
                             continue
@@ -622,6 +669,11 @@ async def generate_questions_stream(
                                                 "index": question_count,
                                                 "data": parsed_question,
                                             }
+                                            yield {
+                                                "type": "status",
+                                                "stage": "validating",
+                                                "message": f"已生成 {question_count}/{request.total_count} 道，正在校验",
+                                            }
                                     except json.JSONDecodeError:
                                         logger.warning(
                                             "Failed to parse question JSON: %s",
@@ -642,6 +694,11 @@ async def generate_questions_stream(
             }
             return
 
+        yield {
+            "type": "status",
+            "stage": "complete",
+            "message": "题型、答案与重复性检查完成",
+        }
         yield {"type": "done", "total": question_count}
     except httpx.HTTPStatusError as e:
         logger.error(
@@ -698,4 +755,12 @@ async def ai_generate_stream_endpoint(
         async for event in generate_questions_stream(db, request, user.id):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

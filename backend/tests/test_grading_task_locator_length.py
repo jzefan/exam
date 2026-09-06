@@ -136,6 +136,9 @@ def test_subjective_grading_payload_builds_code_rubric_from_execution_requiremen
             "analysis": "解析内容",
         }
     ]
+    assert payload["student_answer_raw"] == "print(0)"
+    assert payload["student_answer_structured"] == {"language": "python", "code": "print(0)"}
+    assert payload["programming_language"] == "python"
     assert [item["key"] for item in payload["rubric_definition"]["dimensions"]] == [
         "test_correctness",
         "functional_completeness",

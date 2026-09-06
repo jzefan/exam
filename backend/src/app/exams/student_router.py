@@ -714,14 +714,11 @@ def _build_student_question_content(question: Question) -> dict[str, Any]:
 def _extract_answer_text(answer_content: dict[str, Any]) -> str:
     code = answer_content.get("code")
     if isinstance(code, str) and code.strip():
-        language = answer_content.get("language")
-        custom_input = answer_content.get("custom_input")
-        parts = [code.strip()]
-        if isinstance(language, str) and language.strip():
-            parts.append(language.strip())
-        if isinstance(custom_input, str) and custom_input.strip():
-            parts.append(custom_input.strip())
-        return " ".join(parts)
+        # Keep the answer body separate from editor/runtime metadata.  The
+        # grading task already persists language and the full structured
+        # payload in dedicated fields; appending them here makes tokens such
+        # as ``python`` look like part of the student's source code.
+        return code.strip()
 
     html = answer_content.get("html")
     if isinstance(html, str) and html.strip():

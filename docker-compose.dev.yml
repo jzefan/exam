@@ -43,9 +43,26 @@ services:
     healthcheck:
       test:
         [
-          "CMD-SHELL",
-          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8020/health', timeout=5)\"",
-        ]
+            "CMD-SHELL",
+            "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8020/health', timeout=5)\"",
+          ]
       interval: 10s
       timeout: 5s
       retries: 12
+
+  db:
+    image: postgres:17-alpine
+    container_name: exam-db
+    environment:
+      POSTGRES_DB: exam
+      POSTGRES_USER: exam
+      POSTGRES_PASSWORD: exam
+    ports:
+      - "5432:5432"
+    volumes:
+      - exam_postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  exam_postgres_data:
+    external: true

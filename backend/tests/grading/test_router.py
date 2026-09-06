@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,7 +8,14 @@ from app.auth.schemas import UserCreate
 from app.auth.security import create_access_token
 from app.auth.service import create_user
 from app.auth.models import User
-from app.exams.models import Exam, StudentExamAppeal
+from app.exams.models import (
+    Exam,
+    ExamQuestion,
+    ExamStudent,
+    StudentExamAppeal,
+    StudentExamSubmission,
+    StudentExamSubmissionAnswer,
+)
 from app.grading.models import GradingResultSnapshot, GradingTask, ModelConfig, ProviderConfig, RoleBinding
 from app.questions.models import Question, QuestionType
 
@@ -946,6 +954,152 @@ async def test_grading_export_exam_scores_returns_candidate_score_matrix(admin_c
 
 
 @pytest.mark.asyncio
+async def test_grading_detail_export_includes_answers_rubric_dimensions_and_feedback(
+    admin_client,
+    db_session: AsyncSession,
+) -> None:
+    teacher = await create_user(
+        db_session,
+        UserCreate(
+            username="detail_export_teacher",
+            email="detail_export_teacher@example.com",
+            password="teacherpass123",
+            full_name="导出教师",
+        ),
+    )
+    student = await create_user(
+        db_session,
+        UserCreate(
+            username="detail_export_student",
+            email="detail_export_student@example.com",
+            password="studentpass123",
+            full_name="李四",
+        ),
+    )
+    student.student_id = "S2026002"
+    exam = Exam(
+        title="评分明细导出考试",
+        description=None,
+        duration_minutes=60,
+        total_score=10,
+        status="completed",
+        position_id=None,
+        max_switch_count=0,
+        show_result=False,
+        notes_template=None,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    question = Question(
+        type=QuestionType.SHORT_ANSWER,
+        title="解释幂等性",
+        content={"text": "解释接口幂等性"},
+        options=None,
+        answer={"points": ["重复执行结果一致"]},
+        analysis="关注重复请求的业务结果。",
+        difficulty=3,
+        score=10,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    db_session.add_all([exam, question])
+    await db_session.flush()
+    db_session.add(ExamQuestion(exam_id=exam.id, question_id=question.id, order=1))
+    submission = StudentExamSubmission(
+        exam_id=exam.id,
+        student_id=student.id,
+        attempt_no=1,
+        submitted_at=datetime.now(timezone.utc),
+        grading_status="reviewed",
+        objective_score=0,
+        subjective_score=8,
+        score=8,
+    )
+    db_session.add(submission)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            ExamStudent(
+                exam_id=exam.id,
+                student_id=student.id,
+                attempt_state="graded",
+                submitted_at=submission.submitted_at,
+                latest_submission_id=submission.id,
+                grading_status="reviewed",
+                objective_score=0,
+                subjective_score=8,
+                score=8,
+                teacher_comment="请继续补充边界场景。",
+            ),
+            StudentExamSubmissionAnswer(
+                submission_id=submission.id,
+                exam_id=exam.id,
+                student_id=student.id,
+                question_id=question.id,
+                answer_content={"text": "重复请求不会改变最终结果。"},
+                score_awarded=8,
+                is_correct=False,
+                feedback={"note": "基本正确"},
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    task_response = await admin_client.post(
+        "/api/grading/tasks",
+        json={
+            "source_type": "exam_submission",
+            "source_business_id": f"{exam.id}:{question.id}:{student.id}:{submission.id}",
+            "question_type": "short_answer",
+            "question_content": "解释接口幂等性",
+            "max_score": 10,
+            "student_answer_raw": "重复请求不会改变最终结果。",
+            "standard_answers": [{"summary": "重复执行结果一致"}],
+            "rubric_definition": {"dimensions": [{"key": "coverage", "weight": 1}]},
+            "scoring_points": [{"point": "说明重复执行的结果"}],
+            "dimension_weights": {"coverage": 1},
+            "deduction_rules": [{"rule": "未解释结果一致性扣分"}],
+            "role_binding_version": 1,
+        },
+    )
+    task = await db_session.get(GradingTask, uuid.UUID(task_response.json()["id"]))
+    assert task is not None
+    snapshot = GradingResultSnapshot(
+        task_id=task.id,
+        snapshot_type="final",
+        score_total=8,
+        dimension_scores={"coverage": 8},
+        dimension_comments={"coverage": "说明了核心结果，但边界条件不足。"},
+        deduction_reasons=["未明确说明服务端去重策略。"],
+        strengths=["抓住了重复请求的结果一致性。"],
+        improvement_suggestions=["补充幂等键或状态机的实现方式。"],
+        evidence_summary={},
+        risk_flags=[],
+        role_binding_version=1,
+        created_by="system",
+    )
+    db_session.add(snapshot)
+    await db_session.flush()
+    task.latest_final_snapshot = snapshot
+    task.status = "completed"
+    await db_session.commit()
+
+    response = await admin_client.get(f"/api/grading/export/exams/{exam.id}/details")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["exam_label"] == "评分明细导出考试"
+    assert payload["questions"][0]["standard_answer"] == "重复执行结果一致"
+    assert payload["questions"][0]["dimension_weights"] == {"coverage": 1}
+    answer = payload["students"][0]["answers"][0]
+    assert answer["answer_text"] == "重复请求不会改变最终结果。"
+    assert answer["score_awarded"] == 8.0
+    assert answer["dimension_scores"] == {"coverage": 8.0}
+    assert answer["improvement_suggestions"] == ["补充幂等键或状态机的实现方式。"]
+    assert answer["teacher_comment"] == "请继续补充边界场景。"
+
+
+@pytest.mark.asyncio
 async def test_grading_question_candidates_endpoint_returns_question_workspace(admin_client) -> None:
     first_response = await admin_client.post(
         "/api/grading/tasks",
@@ -1132,6 +1286,14 @@ async def test_grading_candidate_detail_endpoint_returns_llm_comments(
     assert [model["stage"] for model in payload["models"]] == ["primary", "review", "arbiter"]
     assert payload["models"][0]["model_label"] == "Qwen Grader / qwen-plus"
     assert payload["models"][0]["process"]
+    assert payload["feedback"]["dimensions"] == [
+        {
+            "name": "coverage",
+            "score": 16.0,
+            "max_score": 10.0,
+            "comment": "",
+        }
+    ]
 
     # Re-grade the same task. After the second run, the inbox detail must
     # still show exactly one snapshot per role — not 2× Qwen / 2× DeepSeek /

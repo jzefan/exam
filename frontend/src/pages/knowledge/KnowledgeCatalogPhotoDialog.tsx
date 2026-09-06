@@ -24,6 +24,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import {
   extractCatalogPhotoImages,
+  prepareCatalogPhotoImageGroupsForRecognition,
   type CatalogPhotoImage,
 } from "./import-knowledge-photo-utils";
 import type {
@@ -39,6 +40,7 @@ type KnowledgeCatalogPhotoDialogProps = {
   onRecognize: (payload: {
     fileName: string;
     images: string[];
+    imageGroups: string[][];
   }) => Promise<KnowledgeImportPath[]>;
   onImport: (paths: KnowledgeImportPath[]) => Promise<void>;
   selectedTargetName: string | null;
@@ -170,13 +172,15 @@ export function KnowledgeCatalogPhotoDialog({
     setRecognizing(true);
     setError(null);
     try {
+      const imageGroups = await prepareCatalogPhotoImageGroupsForRecognition(images);
       setPaths(
         await onRecognize({
           fileName:
             images.length === 1
               ? images[0].name
               : `目录照片共 ${images.length} 张`,
-          images: images.map((image) => image.src),
+          images: imageGroups.flat(),
+          imageGroups,
         }),
       );
     } catch (nextError) {
@@ -273,7 +277,7 @@ export function KnowledgeCatalogPhotoDialog({
             {selectedTargetName
               ? `将目录识别结果导入到“${selectedTargetName}”。`
               : "请先选择专业或方向。"}
-            上传目录照片或扫描版 PDF，系统按章、节识别后以层级树方式显示。
+            上传目录照片或扫描版 PDF，系统按章、节识别后以层级树方式显示。检测为双栏时，会先完整识别左栏，复核右栏顶部后再继续右栏。
           </DialogDescription>
         </DialogHeader>
 

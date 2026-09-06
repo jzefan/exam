@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,9 +20,17 @@ from app.grading.service import (
     _build_follow_up_prompt_pair,
     _build_prompt_pair,
     _build_provider_for_model,
+    _export_account_flags,
+    _export_answer_body,
+    _export_detail_question_type_label,
+    _export_student_score_summary,
+    _export_value_text,
     _humanize_grading_failure_message,
+    _build_exam_submission_feedback,
+    _normalize_result_for_task,
     run_grading_task,
 )
+from app.questions.models import QuestionType
 
 
 class FakeProvider:
@@ -47,6 +57,140 @@ def test_humanize_grading_failure_message_maps_provider_errors() -> None:
     assert _humanize_grading_failure_message("OpenRouter provider API key is not configured") == "Claude 模型未正确配置，当前未完成 AI 评估。"
     assert _humanize_grading_failure_message("Qwen provider API key is not configured") == "Qwen 模型未正确配置，当前未完成 AI 评估。"
     assert _humanize_grading_failure_message("response content must decode to a JSON object") == "AI 返回结果格式异常，请稍后重试。"
+
+
+def test_detail_export_question_type_labels_split_single_and_multiple_choice() -> None:
+    single_choice = SimpleNamespace(
+        type=QuestionType.CHOICE,
+        content={"multi": False},
+        answer={"correct": "A"},
+    )
+    multiple_choice = SimpleNamespace(
+        type=QuestionType.CHOICE,
+        content={"multi": True},
+        answer={"correct": ["A", "C"]},
+    )
+
+    assert _export_detail_question_type_label(single_choice) == "单选题"
+    assert _export_detail_question_type_label(multiple_choice) == "多选题"
+    assert _export_detail_question_type_label(
+        SimpleNamespace(type=QuestionType.SHORT_ANSWER, content={}, answer={})
+    ) == "论述题"
+
+
+def test_export_value_text_unwraps_reference_code() -> None:
+    reference_code = "-- 创建数据库\nCREATE DATABASE library_db;"
+
+    assert _export_value_text({"reference_code": reference_code}) == reference_code
+
+
+def test_detail_export_separates_code_from_language_and_custom_input() -> None:
+    task = SimpleNamespace(
+        student_answer_raw="print(0) python 1 2",
+        student_answer_structured={"code": "print(0)", "language": "python", "custom_input": "1 2"},
+        programming_language="python",
+    )
+    submission_answer = SimpleNamespace(
+        answer_content={"code": "print(0)", "language": "python", "custom_input": "1 2"},
+    )
+
+    answer, language, custom_input, flags = _export_answer_body(task, submission_answer)
+
+    assert answer == "print(0)"
+    assert language == "python"
+    assert custom_input == "1 2"
+    assert flags == ["历史评分输入曾混入编程语言或运行输入；本报告已分栏还原"]
+
+
+def test_detail_export_marks_but_does_not_remove_suspected_test_account() -> None:
+    user = SimpleNamespace(full_name="a-test", username="test-user", student_id="13500001111")
+
+    assert _export_account_flags(user) == ["疑似测试账号"]
+
+
+def test_detail_export_recalculates_total_from_final_question_scores() -> None:
+    answers = [
+        {"question_type": "true_false", "score_awarded": 4},
+        {"question_type": "choice", "score_awarded": 30},
+        {"question_type": "fill_in", "score_awarded": 7},
+        {"question_type": "short_answer", "score_awarded": 12.25},
+        {"question_type": "code", "score_awarded": 16.5},
+    ]
+
+    summary = _export_student_score_summary(answers, recorded_total=69.25)
+
+    assert summary == {
+        "objective_score": 41.0,
+        "subjective_score": 28.75,
+        "total_score": 69.75,
+        "recorded_total_score": 69.25,
+        "score_difference": 0.5,
+        "score_consistent": False,
+    }
+
+
+def test_normalize_result_caps_dimension_scores_to_explicit_rubric_limits() -> None:
+    task = SimpleNamespace(
+        max_score=5,
+        rubric_definition={
+            "dimensions": [
+                {"key": "expression_quality", "label": "表达规范性", "max_score": 0.25},
+            ]
+        },
+    )
+    result = GradingProviderResult(
+        raw_content={"score_total": 1.5},
+        score_total=1.5,
+        dimension_scores={"expression_quality": 0.5},
+        deduction_reasons=[],
+        strengths=[],
+        improvement_suggestions=[],
+        evidence_summary={},
+        risk_flags=[],
+    )
+
+    normalized = _normalize_result_for_task(task, result)
+
+    assert normalized.score_total == 1.5
+    assert normalized.dimension_scores == {"expression_quality": 0.25}
+    assert "评分结果已按评分标准上限校正，请复核" in normalized.risk_flags
+    assert normalized.evidence_summary["score_normalization"]["adjustments"] == [
+        {
+            "field": "维度:表达规范性",
+            "original": 0.5,
+            "normalized": 0.25,
+            "max_score": 0.25,
+        }
+    ]
+
+
+def test_exam_submission_feedback_caps_legacy_snapshot_dimension_scores() -> None:
+    task = SimpleNamespace(
+        max_score=5,
+        rubric_definition={
+            "dimensions": [
+                {"key": "expression_quality", "label": "表达规范性", "max_score": 0.25},
+            ]
+        },
+        dimension_weights={"expression_quality": 0.05},
+    )
+    snapshot = SimpleNamespace(
+        score_total=1.5,
+        dimension_scores={"expression_quality": 0.5},
+        dimension_comments={},
+        strengths=[],
+        deduction_reasons=[],
+        improvement_suggestions=[],
+        risk_flags=[],
+        evidence_summary={},
+    )
+
+    feedback = _build_exam_submission_feedback(snapshot, task)
+
+    assert feedback["dimensions"] == [
+        {"name": "expression_quality", "score": 0.25, "max_score": 0.25, "comment": ""}
+    ]
+    assert "评分结果已按评分标准上限校正，请复核" in feedback["risk_flags"]
 
 
 async def _create_role_binding_stack(db_session: AsyncSession) -> tuple[ProviderConfig, ModelConfig, RoleBinding]:

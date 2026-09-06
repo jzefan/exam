@@ -51,6 +51,10 @@ Environment variables:
   DEPLOY_PORT    Public app port. Default: ${DEPLOY_PORT}
   APP_ROOT       Remote app root. Default: ${APP_ROOT}
   DEPLOY_TARGET  Same as --target. Default all when no argument is provided.
+  DEPLOY_PRUNE_IMAGES   After a successful deploy, run \`docker image prune -f\` to remove
+                        dangling images left by the build. Default: 1 (on).
+  DEPLOY_PRUNE_BUILDER  After a successful deploy, run \`docker builder prune -f\` to reclaim
+                        build cache (next build starts from scratch). Default: 0 (off).
 EOF
 }
 
@@ -126,7 +130,7 @@ scp "$ARCHIVE_PATH" "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_ARCHIVE}"
 
 log "Running remote deployment"
 ssh "${DEPLOY_USER}@${DEPLOY_HOST}" \
-  "APP_ROOT='${APP_ROOT}' DEPLOY_PORT='${DEPLOY_PORT}' DEPLOY_TARGET='${DEPLOY_TARGET}' REMOTE_ARCHIVE='${REMOTE_ARCHIVE}' bash -s" <<'REMOTE'
+  "APP_ROOT='${APP_ROOT}' DEPLOY_PORT='${DEPLOY_PORT}' DEPLOY_TARGET='${DEPLOY_TARGET}' REMOTE_ARCHIVE='${REMOTE_ARCHIVE}' DEPLOY_PRUNE_IMAGES='${DEPLOY_PRUNE_IMAGES:-1}' DEPLOY_PRUNE_BUILDER='${DEPLOY_PRUNE_BUILDER:-0}' bash -s" <<'REMOTE'
 set -euo pipefail
 
 APP_ROOT="${APP_ROOT:?missing APP_ROOT}"
@@ -457,6 +461,18 @@ ls -1dt "${RELEASES_DIR}"/* 2>/dev/null | tail -n +6 | xargs -r rm -rf
 
 log "Deployment complete"
 echo "Application URL: http://$(hostname -I | awk '{print $1}'):${DEPLOY_PORT}"
+
+# Cleanup built/packaged Docker images after a successful deployment to reclaim disk space.
+# Only runs on the success path (any earlier failure exits the script before reaching here).
+if [[ "${DEPLOY_PRUNE_IMAGES:-1}" == "1" ]]; then
+  log "Pruning dangling Docker images from the build"
+  docker image prune -f || true
+fi
+
+if [[ "${DEPLOY_PRUNE_BUILDER:-0}" == "1" ]]; then
+  log "Pruning Docker build cache (next build will start from scratch)"
+  docker builder prune -f || true
+fi
 REMOTE
 
 log "Deployment finished"

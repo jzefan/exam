@@ -122,7 +122,10 @@ RecommendationModel = Literal["deepseek", "qwen", "kimi"]
 
 class CatalogPhotoRecognizeRequest(BaseModel):
     file_name: str = Field(min_length=1, max_length=255)
-    images: list[str] = Field(min_length=1, max_length=30)
+    # A 30-page upload can contain a left crop, a focused right-top crop, and
+    # the complete right crop after two-column splitting.
+    images: list[str] = Field(min_length=1, max_length=90)
+    image_groups: list[list[str]] | None = Field(default=None, max_length=30)
 
 
 class CatalogPhotoRecognizeResponse(BaseModel):

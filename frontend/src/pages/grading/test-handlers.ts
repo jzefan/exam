@@ -134,6 +134,16 @@ function candidateDetail(
     viewed: false,
     evaluation_note: null,
     attachment_refs: [],
+    feedback: {
+      dimensions: [
+        { name: "answer_point_coverage", score: 4, max_score: 5, comment: "覆盖了主要知识点。" },
+      ],
+      strengths: [],
+      deductions: [],
+      suggestions: [],
+      risk_flags: [],
+      evidence_lines: [],
+    },
     models,
     follow_ups: [],
   };

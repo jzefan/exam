@@ -12,6 +12,7 @@ from app.auth.dependencies import CurrentUser, user_has_role
 from app.database import get_db
 from app.grading.schemas import (
     ExamCandidateScoresRead,
+    GradingDetailExportRead,
     FinalGradingReportRead,
     GradingExportExamListRead,
     GradingExportScoreRead,
@@ -37,6 +38,7 @@ from app.grading.service import (
     get_exam_candidate_scores,
     get_final_report,
     get_grading_exam_score_export,
+    get_grading_exam_detail_export,
     get_grading_candidate_detail,
     get_grading_inbox,
     get_grading_question_candidates,
@@ -147,6 +149,28 @@ async def get_grading_exam_score_export_endpoint(
         return GradingExportScoreRead(
             **(
                 await get_grading_exam_score_export(
+                    db,
+                    exam_id,
+                    current_user_id=user.id,
+                    is_platform_admin=await _is_grading_admin(db, user),
+                )
+            )
+        )
+    except ValueError as exc:
+        raise _not_found(exc) from exc
+
+
+@router.get("/export/exams/{exam_id}/details", response_model=GradingDetailExportRead)
+async def get_grading_exam_detail_export_endpoint(
+    exam_id: str,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> GradingDetailExportRead:
+    """Export-ready exam answers, grading evidence, and scoring standards."""
+    try:
+        return GradingDetailExportRead(
+            **(
+                await get_grading_exam_detail_export(
                     db,
                     exam_id,
                     current_user_id=user.id,

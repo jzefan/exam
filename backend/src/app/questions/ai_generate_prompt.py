@@ -180,7 +180,8 @@ def build_ai_generate_system_prompt(
         parts = [f"{type_names.get(qtype, qtype)} {count}题" for qtype, count in type_distribution.items()]
         type_instruction = (
             f"题型分布要求：{', '.join(parts)}。必须严格满足该分布，"
-            "不得擅自替换题型；例如要求 code 时，不能生成 choice/选择题。"
+            "不得擅自替换题型；不得把代码题、简答题等改成选择题结构；"
+            "例如要求 code 时，不能生成 choice/选择题。"
         )
     else:
         type_instruction = f"共生成 {total_count} 道题目，题型自行合理分配。"

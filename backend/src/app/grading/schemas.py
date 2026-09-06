@@ -242,6 +242,81 @@ class GradingExportScoreRead(BaseModel):
     students: list[GradingExportStudentScoreRead] = Field(default_factory=list)
 
 
+class GradingDetailExportQuestionRead(BaseModel):
+    """Question-level scoring basis included in the detailed workbook export."""
+
+    question_id: str
+    question_label: str
+    question_type: str
+    question_type_label: str
+    question_content: str
+    order: int
+    max_score: float
+    standard_answer: str = ""
+    analysis: str = ""
+    rubric_definition: dict = Field(default_factory=dict)
+    scoring_points: list = Field(default_factory=list)
+    dimension_weights: dict = Field(default_factory=dict)
+    deduction_rules: list = Field(default_factory=list)
+    fatal_error_rules: list = Field(default_factory=list)
+
+
+class GradingDetailExportAnswerRead(BaseModel):
+    """One candidate's answer and grading evidence for one question."""
+
+    question_id: str
+    question_label: str
+    question_type: str
+    question_type_label: str
+    max_score: float
+    answer_text: str = ""
+    score_awarded: float | None = None
+    is_correct: bool | None = None
+    grading_status: str
+    dimension_scores: dict[str, float] = Field(default_factory=dict)
+    dimension_comments: dict[str, str] = Field(default_factory=dict)
+    deduction_reasons: list[str] = Field(default_factory=list)
+    strengths: list[str] = Field(default_factory=list)
+    improvement_suggestions: list[str] = Field(default_factory=list)
+    risk_flags: list[str] = Field(default_factory=list)
+    feedback_text: str = ""
+    teacher_comment: str = ""
+    score_source: str = ""
+    manual_score_reason: str = ""
+    programming_language: str = ""
+    custom_input: str = ""
+    model_label: str = ""
+    prompt_template_version: str = ""
+    role_binding_version: int | None = None
+    scoring_evidence: dict = Field(default_factory=dict)
+    execution_evidence: dict = Field(default_factory=dict)
+    answer_quality_flags: list[str] = Field(default_factory=list)
+
+
+class GradingDetailExportStudentRead(BaseModel):
+    student_id: str
+    candidate_name: str
+    candidate_code: str | None = None
+    submitted_at: str | None = None
+    objective_score: float | None = None
+    subjective_score: float | None = None
+    total_score: float | None = None
+    recorded_total_score: float | None = None
+    score_difference: float | None = None
+    score_consistent: bool = True
+    account_flags: list[str] = Field(default_factory=list)
+    teacher_comment: str = ""
+    answers: list[GradingDetailExportAnswerRead] = Field(default_factory=list)
+
+
+class GradingDetailExportRead(BaseModel):
+    exam_id: str
+    exam_label: str
+    generated_at: str
+    questions: list[GradingDetailExportQuestionRead] = Field(default_factory=list)
+    students: list[GradingDetailExportStudentRead] = Field(default_factory=list)
+
+
 class GradingInboxModelCommentRead(BaseModel):
     stage: str
     model_label: str

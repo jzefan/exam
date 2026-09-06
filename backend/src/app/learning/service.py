@@ -787,7 +787,9 @@ def _ensure_data_url(image: str) -> str:
     return f"data:image/jpeg;base64,{image}"
 
 
-_CATALOG_VL_PROMPT = """你是图书目录结构化助手。请仔细阅读用户提供的一张或多张书籍目录照片，按从上到下、从第一张到最后一张的顺序，完整提取所有目录条目并还原层级关系（章、节、小节等）。
+_CATALOG_VL_PROMPT = """你是图书目录结构化助手。请仔细阅读用户提供的一张或多张书籍目录照片，按人类阅读顺序完整提取所有目录条目并还原层级关系（章、节、小节等）。
+
+识别步骤：先判断当前图片是否为双栏或多栏排版。单栏图片从上到下读取；双栏或多栏图片必须先完整读取最左栏的所有条目，再依次读取右侧各栏，绝不能按同一行从左到右交错读取。系统可能已将双栏页面拆成单栏图片并逐栏调用你；此时当前图片就是一个完整栏，必须从该栏最上方第一条带编号目录行开始，逐行读取到最下方，不能因为缺少重复的章、节标题而跳过栏首条目。某些图片会是右栏顶部的放大复核裁片；即使它只包含该栏开头的一小段，也必须提取其中的全部编号条目。
 
 要求：
 1. 只输出合法 JSON，不要任何解释、不要 Markdown 代码块。
@@ -796,9 +798,10 @@ _CATALOG_VL_PROMPT = """你是图书目录结构化助手。请仔细阅读用�
 4. 去除页码、前后空白；保留书名号、顿号等正文符号。
 5. 同一目录条目跨页出现时仅输出一次，不要重复。
 6. 不要编造目录中不存在的内容。
-7. 必须尽量完整提取当前图片中所有可见目录行，不要只输出每章前几个条目，也不要只输出示例或摘要。"""
+7. 每一栏都必须核对最上方和最下方的带编号目录行。新栏最上方的条目可能是上一栏最后一个条目的后续项，即使没有重复显示父节点也必须提取，不能遗漏。
+8. 只提取章、节及带编号的正文目录条目；跳过学习目标、小结、实训及其下属条目，也不要把它们作为父节点。
+9. 必须尽量完整提取当前图片中所有符合条件的目录行，不要只输出每章前几个条目，也不要只输出示例或摘要。"""
 _CATALOG_SINGLE_IMAGE_TIMEOUT_SECONDS = 75.0
-_CATALOG_VISION_MAX_CONCURRENCY = 4
 
 
 async def _recognize_catalog_with_qwen_vl(images: list[str]) -> list[list[str]]:
@@ -952,6 +955,9 @@ def _is_catalog_excluded_segment(segment: str) -> bool:
         return False
     cleaned_lower = cleaned.lower()
     excluded_keywords = (
+        "学习目标",
+        "小结",
+        "实训",
         "附录",
         "习题",
         "练习题",
@@ -1141,6 +1147,33 @@ def _page_chapter_anchors(paths: list[list[str]]) -> dict[str, str]:
     return anchors
 
 
+def _split_catalog_path_at_numbered_siblings(path: list[str]) -> list[list[str]]:
+    """Split a model path when it incorrectly places a sibling under a leaf."""
+    split_paths: list[list[str]] = []
+    current: list[str] = []
+    previous_numbered_level: int | None = None
+
+    for segment in path:
+        parsed = _catalog_line_level(segment)
+        current_level = parsed[0] if parsed else None
+        if (
+            current
+            and current_level is not None
+            and previous_numbered_level is not None
+            and current_level <= previous_numbered_level
+        ):
+            split_paths.append(current)
+            current = []
+
+        current.append(segment)
+        if current_level is not None:
+            previous_numbered_level = current_level
+
+    if current:
+        split_paths.append(current)
+    return split_paths
+
+
 def _stitch_catalog_paths_across_pages(image_paths: list[list[list[str]]]) -> list[list[str]]:
     stitched: list[list[str]] = []
     last_stack: list[str] = []
@@ -1148,7 +1181,12 @@ def _stitch_catalog_paths_across_pages(image_paths: list[list[list[str]]]) -> li
 
     for paths in image_paths:
         page_chapter_anchors = _page_chapter_anchors(paths)
-        for path in paths:
+        split_paths = [
+            split_path
+            for path in paths
+            for split_path in _split_catalog_path_at_numbered_siblings(path)
+        ]
+        for path in split_paths:
             resolved: list[str] = []
             for index, segment in enumerate(path):
                 parsed = _catalog_line_level(segment)
@@ -1213,11 +1251,22 @@ def _reattach_paths_to_global_anchors(paths: list[list[str]]) -> list[list[str]]
             explicit_anchor_by_key[anchor_key] = path[0]
 
     corrected: list[list[str]] = []
-    for path in paths:
+    for source_path in paths:
+        path = source_path
         if not path:
             continue
 
         first_anchor_key = _catalog_explicit_anchor_key(path[0])
+        # A continuation page can make the vision model invent a shortened
+        # chapter title (for example, "第4章 绘制图形") even though the first
+        # page already supplied the canonical title for the same chapter.
+        # Keep the first verified title and only use the continuation page for
+        # its numbered descendants.
+        if first_anchor_key:
+            replacement_anchor = explicit_anchor_by_key.get(first_anchor_key)
+            if replacement_anchor and replacement_anchor != path[0]:
+                path = [replacement_anchor, *path[1:]]
+
         if first_anchor_key is None:
             leading_key = _catalog_chapter_key_for_segment(path[0])
             replacement_anchor = explicit_anchor_by_key.get(leading_key or "")
@@ -1283,72 +1332,58 @@ def _order_catalog_paths(paths: list[list[str]]) -> list[list[str]]:
     return ordered
 
 
-async def _recognize_catalog_single_image(
+async def _recognize_catalog_image_region(
     recognizer: Callable[[list[str]], Awaitable[list[list[str]]]],
     image: str,
     *,
-    image_index: int,
-    semaphore: asyncio.Semaphore,
+    group_index: int,
 ) -> list[list[str]]:
-    image_label = f"第 {image_index + 1} 张图片"
-    async with semaphore:
-        try:
-            return await asyncio.wait_for(
-                recognizer([image]),
-                timeout=_CATALOG_SINGLE_IMAGE_TIMEOUT_SECONDS,
-            )
-        except asyncio.TimeoutError as exc:
-            raise RuntimeError(
-                f"{image_label}识别超时，请减少单次上传数量，或更换更清晰的图片后重试。"
-            ) from exc
-        except httpx.HTTPError as exc:
-            raise RuntimeError(f"{image_label}网络请求失败，请稍后重试。") from exc
-        except (RuntimeError, ValueError) as exc:
-            if _is_provider_unavailable_error(exc):
-                raise
-            raise RuntimeError(f"{image_label}识别失败：{exc}") from exc
+    image_label = f"第 {group_index + 1} 张图片"
+    try:
+        return await asyncio.wait_for(
+            recognizer([image]),
+            timeout=_CATALOG_SINGLE_IMAGE_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as exc:
+        raise RuntimeError(
+            f"{image_label}识别超时，请减少单次上传数量，或更换更清晰的图片后重试。"
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"{image_label}网络请求失败，请稍后重试。") from exc
+    except (RuntimeError, ValueError) as exc:
+        if _is_provider_unavailable_error(exc):
+            raise
+        raise RuntimeError(f"{image_label}识别失败：{exc}") from exc
 
 
-async def _recognize_catalog_images_with_engine(
+async def _recognize_catalog_image_groups_with_engine(
     recognizer: Callable[[list[str]], Awaitable[list[list[str]]]],
-    images: list[str],
+    image_groups: list[list[str]],
 ) -> list[list[str]]:
-    semaphore = asyncio.Semaphore(min(_CATALOG_VISION_MAX_CONCURRENCY, len(images)))
-    results = await asyncio.gather(
-        *[
-            _recognize_catalog_single_image(
-                recognizer,
-                image,
-                image_index=index,
-                semaphore=semaphore,
+    # The client groups the left and right crops of one page in reading order.
+    # Invoke the vision model once per crop, strictly serially. Sending both
+    # columns in one request lets the model visually interleave them or skip
+    # the first continuation item at the top of the right column.
+    raw_region_paths: list[list[list[str]]] = []
+    for group_index, image_group in enumerate(image_groups):
+        for image in image_group:
+            raw_region_paths.append(
+                await _recognize_catalog_image_region(
+                    recognizer,
+                    image,
+                    group_index=group_index,
+                )
             )
-            for index, image in enumerate(images)
-        ],
-        return_exceptions=True,
-    )
 
-    unavailable_errors = [
-        result
-        for result in results
-        if isinstance(result, Exception) and _is_provider_unavailable_error(result)
-    ]
-    if unavailable_errors and len(unavailable_errors) == len(results):
-        raise unavailable_errors[0]
-
-    for result in results:
-        if isinstance(result, Exception):
-            raise result
-
-    raw_image_paths = cast(list[list[list[str]]], results)
-    merged_paths = _merge_catalog_paths(raw_image_paths)
+    merged_paths = _merge_catalog_paths(raw_region_paths)
     logger.info(
-        "Catalog photo recognition path counts: per_image=%s merged=%s",
-        [len(paths) for paths in raw_image_paths],
+        "Catalog photo recognition path counts: per_region=%s merged=%s",
+        [len(paths) for paths in raw_region_paths],
         len(merged_paths),
     )
     logger.debug(
-        "Catalog photo recognition raw_paths=%s merged_paths=%s",
-        raw_image_paths,
+        "Catalog photo recognition raw_region_paths=%s merged_paths=%s",
+        raw_region_paths,
         merged_paths,
     )
     return merged_paths
@@ -1358,15 +1393,18 @@ async def recognize_catalog_structure_from_images(
     request: CatalogPhotoRecognizeRequest,
 ) -> CatalogPhotoRecognizeResponse:
     recognizers = (
-        _recognize_catalog_with_deepseek_vl,
         _recognize_catalog_with_qwen_vl,
+        _recognize_catalog_with_deepseek_vl,
     )
     last_error: Exception | None = None
     unavailable_errors: list[Exception] = []
+    image_groups = request.image_groups or [[image] for image in request.images]
+    if any(not image_group for image_group in image_groups):
+        raise ValueError("目录识别图片分组不能为空")
 
     for recognizer in recognizers:
         try:
-            paths = await _recognize_catalog_images_with_engine(recognizer, request.images)
+            paths = await _recognize_catalog_image_groups_with_engine(recognizer, image_groups)
             return CatalogPhotoRecognizeResponse(paths=paths)
         except (RuntimeError, ValueError) as exc:
             last_error = exc

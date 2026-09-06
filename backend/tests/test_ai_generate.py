@@ -176,6 +176,27 @@ async def test_ai_generate_endpoint_rejects_mismatched_type_distribution(
 
 
 @pytest.mark.asyncio
+async def test_ai_generate_endpoint_disables_stream_buffering(
+    admin_client: AsyncClient,
+) -> None:
+    async def fake_generate(*args, **kwargs):
+        yield {"type": "done", "total": 1}
+
+    with patch(
+        "app.questions.ai_generate.generate_questions_stream",
+        new=fake_generate,
+    ):
+        response = await admin_client.post(
+            "/api/questions/ai-generate/stream",
+            json={"total_count": 1, "difficulty": 3},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["x-accel-buffering"] == "no"
+
+
+@pytest.mark.asyncio
 async def test_generate_questions_stream_never_yields_more_than_total_count(
     db_session,
     admin_token: str,
@@ -204,6 +225,45 @@ async def test_generate_questions_stream_never_yields_more_than_total_count(
     assert len(question_events) == 2
     assert [event["index"] for event in question_events] == [1, 2]
     assert done_event["total"] == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_questions_stream_emits_safe_reasoning_progress(
+    db_session,
+    admin_token: str,
+) -> None:
+    stream_lines = [
+        'data: {"choices":[{"delta":{"reasoning_content":"内部详细推演内容"}}]}',
+        _question_stream_line(1),
+        "data: [DONE]",
+    ]
+    admin = (
+        await db_session.execute(select(User).where(User.username == "admin"))
+    ).scalar_one()
+
+    with patch(
+        "app.questions.ai_generate._get_model_config",
+        return_value=("deepseek", "test-key", "https://api.example.com", "test-model"),
+    ):
+        with patch(
+            "httpx.AsyncClient",
+            side_effect=lambda *args, **kwargs: _FakeAsyncClient(
+                stream_lines, *args, **kwargs
+            ),
+        ):
+            events = [
+                event
+                async for event in generate_questions_stream(
+                    db_session,
+                    AIGenerateRequest(total_count=1, difficulty=3),
+                    user_id=admin.id,
+                )
+            ]
+
+    status_events = [event for event in events if event["type"] == "status"]
+    assert any(event.get("stage") == "reasoning" for event in status_events)
+    assert "内部详细推演内容" not in str(events)
+    assert any(event["type"] == "question" for event in events)
 
 
 @pytest.mark.asyncio
@@ -287,8 +347,11 @@ async def test_generate_questions_stream_accepts_openrouter_content_blocks(
                 )
             ]
 
-    assert [event["type"] for event in events] == ["question", "done"]
-    assert events[0]["data"]["title"] == "Claude Q1"
+    assert [
+        event["type"] for event in events if event["type"] != "status"
+    ] == ["question", "done"]
+    question_event = next(event for event in events if event["type"] == "question")
+    assert question_event["data"]["title"] == "Claude Q1"
 
 
 @pytest.mark.asyncio
@@ -348,7 +411,9 @@ async def test_generate_questions_stream_ignores_missing_usage_table(
                     )
                 ]
 
-    assert [event["type"] for event in events] == ["question", "done"]
+    assert [
+        event["type"] for event in events if event["type"] != "status"
+    ] == ["question", "done"]
 
 
 @pytest.mark.asyncio
@@ -379,7 +444,9 @@ async def test_generate_questions_stream_uses_supported_qwen_vision_model_for_ma
                 )
             ]
 
-    assert [event["type"] for event in events] == ["question", "done"]
+    assert [
+        event["type"] for event in events if event["type"] != "status"
+    ] == ["question", "done"]
     assert capture["url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
     assert capture["payload"]["model"] == settings.qwen_vl_model_name
     assert capture["payload"]["messages"][1]["content"][1] == {
@@ -411,7 +478,9 @@ async def test_generate_questions_stream_does_not_duplicate_chat_completions_end
                 )
             ]
 
-    assert [event["type"] for event in events] == ["question", "done"]
+    assert [
+        event["type"] for event in events if event["type"] != "status"
+    ] == ["question", "done"]
     assert capture["url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 
 
@@ -438,7 +507,9 @@ async def test_generate_questions_stream_maps_legacy_qwen_default_model_to_suppo
                 )
             ]
 
-    assert [event["type"] for event in events] == ["question", "done"]
+    assert [
+        event["type"] for event in events if event["type"] != "status"
+    ] == ["question", "done"]
     assert capture["payload"]["model"] == "qwen-plus"
 
 

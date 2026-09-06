@@ -14,6 +14,11 @@
 - Use Codex Security only when security review is explicitly requested. Prioritize RBAC, public exam links, uploads and document parsing, secrets, SQLAlchemy queries, Docker and Nginx configuration, and judge/LSP code-execution boundaries.
 - Do not use cloud-service plugins such as Vercel, Netlify, Neon, Supabase, Sentry, or Figma unless the repository adopts that service or the user explicitly requests it.
 
+## AI UI Design Rules
+
+- UI 设计默认收敛、克制、常规。尺寸与间距应根据界面类型、信息密度、平台习惯、使用频率和视觉层级判断，不写死统一规格，也不主动放大。辅助入口、设置、开关和工具按钮不应抢占视觉中心。常见功能必须使用大众通用、用户一眼可识别的图标隐喻，优先使用成熟图标库、系统图标或行业通用符号；不得为了差异化自创奇怪图标，自定义图标也必须保持常见轮廓、比例和语义。除非明确要求强调，否则优先通过位置、分组、轻微颜色、hover、tooltip、分隔线和状态反馈表达层级，避免夸张尺寸、重色块、大圆角、厚边框、强阴影、装饰性渐变和营销页式布局。实现后必须与同屏元素对比检查；若显得突兀、过大、过重或破坏信息密度，应主动收敛。
+- UI 文案只显示完成任务所需的最少内容和元素，避免解释性、重复或啰嗦的文案。
+
 ## PageIntroHeader Sticky 规范
 
 `PageIntroHeader` 组件启用 sticky 时**必须**用 `embedded` 模式 + `ml-[calc(50%-50vw)] w-screen`，**禁止**用 `fullBleed`。

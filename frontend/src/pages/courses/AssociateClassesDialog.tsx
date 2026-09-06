@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Check, Loader2, Users } from "lucide-react";
+import { Link } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -158,7 +159,16 @@ export function AssociateClassesDialog({
                 ) : classes.length === 0 ? (
                   <div className="flex items-center gap-2 px-2 py-3 text-sm text-muted-foreground">
                     <Users className="size-4" />
-                    暂无可选班级，请先到学生管理中创建班级。
+                    <span>
+                      暂无可选班级，请先到
+                      <Link
+                        to="/students"
+                        className="mx-1 font-semibold text-primary underline decoration-primary/50 underline-offset-4 transition-colors hover:text-primary/80 hover:decoration-primary focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                      >
+                        学生管理
+                      </Link>
+                      中创建班级。
+                    </span>
                   </div>
                 ) : (
                   <div className="flex max-h-60 flex-wrap gap-2 overflow-y-auto">

@@ -6,6 +6,17 @@ import pytest
 from httpx import AsyncClient
 
 
+@pytest.fixture(autouse=True)
+def prevent_real_catalog_qwen_requests(monkeypatch):
+    async def unavailable_qwen(_images: list[str]) -> list[list[str]]:
+        raise RuntimeError("未配置 Qwen API Key，请联系管理员。")
+
+    monkeypatch.setattr(
+        "app.learning.service._recognize_catalog_with_qwen_vl",
+        unavailable_qwen,
+    )
+
+
 @pytest.mark.asyncio
 async def test_create_and_list_majors(admin_client: AsyncClient):
     resp = await admin_client.post("/api/knowledge/majors", json={"name": "Computer Science"})
@@ -293,6 +304,66 @@ def test_parse_catalog_paths_from_recognized_text():
     ]
 
 
+def test_catalog_photo_prompt_keeps_two_column_reading_order():
+    from app.learning.service import _CATALOG_VL_PROMPT
+
+    assert "先完整读取最左栏的所有条目，再依次读取右侧各栏" in _CATALOG_VL_PROMPT
+    assert "必须从该栏最上方第一条带编号目录行开始" in _CATALOG_VL_PROMPT
+    assert "右栏顶部的放大复核裁片" in _CATALOG_VL_PROMPT
+    assert "最上方和最下方的带编号目录行" in _CATALOG_VL_PROMPT
+    assert "跳过学习目标、小结、实训" in _CATALOG_VL_PROMPT
+
+
+def test_catalog_photo_keeps_consecutive_decimal_siblings_at_same_level():
+    from app.learning.service import _merge_catalog_paths
+
+    paths = _merge_catalog_paths(
+        [
+            [
+                ["第2章 数据的读取与处理"],
+                ["第2章 数据的读取与处理", "2.2 处理数据"],
+                ["第2章 数据的读取与处理", "2.2 处理数据", "2.2.2 清洗数据"],
+            ],
+            [
+                [
+                    "第2章 数据的读取与处理",
+                    "2.2.2 清洗数据",
+                    "2.2.3 合并数据",
+                ]
+            ],
+        ]
+    )
+
+    assert ["第2章 数据的读取与处理", "2.2 处理数据", "2.2.3 合并数据"] in paths
+    assert [
+        "第2章 数据的读取与处理",
+        "2.2 处理数据",
+        "2.2.2 清洗数据",
+        "2.2.3 合并数据",
+    ] not in paths
+
+
+def test_catalog_photo_restores_parent_when_decimal_number_has_no_space():
+    from app.learning.service import _merge_catalog_paths
+
+    paths = _merge_catalog_paths(
+        [
+            [
+                ["第2章 数据的读取与处理"],
+                ["第2章 数据的读取与处理", "2.2处理数据"],
+                ["第2章 数据的读取与处理", "2.2处理数据", "2.2.2清洗数据"],
+            ],
+            [["2.2.3合并数据"]],
+        ]
+    )
+
+    assert [
+        "第2章 数据的读取与处理",
+        "2.2 处理数据",
+        "2.2.3 合并数据",
+    ] in paths
+
+
 @pytest.mark.asyncio
 async def test_catalog_photo_restores_missing_intermediate_numbered_parents(monkeypatch):
     from app.learning.schemas import CatalogPhotoRecognizeRequest
@@ -353,17 +424,24 @@ def test_catalog_line_level_supports_common_chinese_and_english_directory_format
 
 
 @pytest.mark.asyncio
-async def test_catalog_photo_uses_deepseek_vision_first(monkeypatch):
+async def test_catalog_photo_uses_qwen_vision_first(monkeypatch):
     from app.learning.schemas import CatalogPhotoRecognizeRequest
     from app.learning.service import recognize_catalog_structure_from_images
 
-    async def fake_recognize_catalog_with_deepseek_vl(_images: list[str]) -> list[list[str]]:
+    async def fake_recognize_catalog_with_qwen_vl(_images: list[str]) -> list[list[str]]:
         return [
             ["第1章 数据库系统概述"],
             ["第1章 数据库系统概述", "1.1 数据模型"],
             ["第1章 数据库系统概述", "1.2 数据独立性"],
         ]
 
+    async def fake_recognize_catalog_with_deepseek_vl(_images: list[str]) -> list[list[str]]:
+        raise AssertionError("Qwen 可用时不应调用 DeepSeek")
+
+    monkeypatch.setattr(
+        "app.learning.service._recognize_catalog_with_qwen_vl",
+        fake_recognize_catalog_with_qwen_vl,
+    )
     monkeypatch.setattr(
         "app.learning.service._recognize_catalog_with_deepseek_vl",
         fake_recognize_catalog_with_deepseek_vl,
@@ -381,14 +459,14 @@ async def test_catalog_photo_uses_deepseek_vision_first(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_catalog_photo_falls_back_to_qwen_vl_when_deepseek_unavailable(monkeypatch):
+async def test_catalog_photo_falls_back_to_deepseek_when_qwen_unavailable(monkeypatch):
     from app.learning.schemas import CatalogPhotoRecognizeRequest
     from app.learning.service import recognize_catalog_structure_from_images
 
-    async def fake_recognize_catalog_with_deepseek_vl(_images: list[str]) -> list[list[str]]:
-        raise RuntimeError("未配置 DeepSeek API Key，请联系管理员。")
-
     async def fake_recognize_catalog_with_qwen_vl(_images: list[str]) -> list[list[str]]:
+        raise RuntimeError("未配置 Qwen API Key，请联系管理员。")
+
+    async def fake_recognize_catalog_with_deepseek_vl(_images: list[str]) -> list[list[str]]:
         return [["第1章 数据库系统概述", "1.1 数据模型"]]
 
     monkeypatch.setattr(
@@ -420,15 +498,15 @@ async def test_catalog_photo_treats_text_only_deepseek_model_as_unavailable(monk
 
 
 @pytest.mark.asyncio
-async def test_catalog_photo_falls_back_to_qwen_vl_when_deepseek_times_out(monkeypatch):
+async def test_catalog_photo_falls_back_to_deepseek_when_qwen_times_out(monkeypatch):
     from app.learning.schemas import CatalogPhotoRecognizeRequest
     from app.learning.service import recognize_catalog_structure_from_images
 
-    async def fake_recognize_catalog_with_deepseek_vl(_images: list[str]) -> list[list[str]]:
+    async def fake_recognize_catalog_with_qwen_vl(_images: list[str]) -> list[list[str]]:
         await asyncio.sleep(0.05)
         return [["不应该使用这个结果"]]
 
-    async def fake_recognize_catalog_with_qwen_vl(_images: list[str]) -> list[list[str]]:
+    async def fake_recognize_catalog_with_deepseek_vl(_images: list[str]) -> list[list[str]]:
         return [["第1章 数据库系统概述", "1.1 数据模型"]]
 
     monkeypatch.setattr(
@@ -485,6 +563,158 @@ async def test_catalog_photo_recognizes_each_image_separately_and_merges_paths(m
         ["第1章 数据库系统概述", "1.1 数据模型"],
         ["第1章 数据库系统概述", "1.2 数据独立性"],
         ["第2章 关系数据库"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_catalog_photo_recognizes_columns_strictly_in_reading_order(monkeypatch):
+    from app.learning.schemas import CatalogPhotoRecognizeRequest
+    from app.learning.service import recognize_catalog_structure_from_images
+
+    left_column_finished = asyncio.Event()
+    calls: list[list[str]] = []
+
+    async def fake_recognize_catalog_with_deepseek_vl(images: list[str]) -> list[list[str]]:
+        calls.append(images)
+        if images == ["left-column"]:
+            await left_column_finished.wait()
+            return [
+                ["第2章 数据的读取与处理"],
+                ["第2章 数据的读取与处理", "2.2 处理数据"],
+                ["第2章 数据的读取与处理", "2.2 处理数据", "2.2.2 清洗数据"],
+            ]
+        if images == ["right-column-top"]:
+            return [["2.2.3 合并数据"]]
+        if images == ["right-column"]:
+            return [["第3章 Matplotlib 数据可视化基础"]]
+        return [["第4章 用 seaborn 绘制进阶图形"]]
+
+    monkeypatch.setattr(
+        "app.learning.service._recognize_catalog_with_deepseek_vl",
+        fake_recognize_catalog_with_deepseek_vl,
+    )
+
+    task = asyncio.create_task(
+        recognize_catalog_structure_from_images(
+            CatalogPhotoRecognizeRequest(
+                file_name="catalog.png",
+                images=["left-column", "right-column-top", "right-column", "next-page"],
+                image_groups=[
+                    ["left-column", "right-column-top", "right-column"],
+                    ["next-page"],
+                ],
+            )
+        )
+    )
+    await asyncio.sleep(0.01)
+    calls_before_left_column_finishes = calls.copy()
+    left_column_finished.set()
+    response = await task
+
+    assert calls_before_left_column_finishes == [["left-column"]]
+    assert calls == [["left-column"], ["right-column-top"], ["right-column"], ["next-page"]]
+    assert response.paths == [
+        ["第2章 数据的读取与处理"],
+        ["第2章 数据的读取与处理", "2.2 处理数据"],
+        ["第2章 数据的读取与处理", "2.2 处理数据", "2.2.2 清洗数据"],
+        ["第2章 数据的读取与处理", "2.2 处理数据", "2.2.3 合并数据"],
+        ["第3章 Matplotlib 数据可视化基础"],
+        ["第4章 用 seaborn 绘制进阶图形"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_catalog_photo_keeps_chapter_started_in_right_column(monkeypatch):
+    from app.learning.schemas import CatalogPhotoRecognizeRequest
+    from app.learning.service import recognize_catalog_structure_from_images
+
+    async def fake_recognize_catalog_with_deepseek_vl(images: list[str]) -> list[list[str]]:
+        match images:
+            case ["page-one-left"]:
+                return [
+                    ["第2章 数据的读取与处理"],
+                    ["第2章 数据的读取与处理", "2.2 处理数据"],
+                    ["第2章 数据的读取与处理", "2.2 处理数据", "2.2.2 清洗数据"],
+                ]
+            case ["page-one-right"]:
+                return [
+                    ["2.2.3 合并数据"],
+                    ["第3章 Matplotlib 数据可视化基础"],
+                    ["第4章 用 seaborn 绘制进阶图形", "4.1 熟悉 seaborn 绘图基础"],
+                ]
+            case ["page-two-left"]:
+                return [
+                    ["4.1.3 熟悉 seaborn 的调色板"],
+                    ["4.2 绘制关系图"],
+                ]
+        raise AssertionError(f"unexpected images: {images}")
+
+    monkeypatch.setattr(
+        "app.learning.service._recognize_catalog_with_deepseek_vl",
+        fake_recognize_catalog_with_deepseek_vl,
+    )
+
+    response = await recognize_catalog_structure_from_images(
+        CatalogPhotoRecognizeRequest(
+            file_name="catalog.png",
+            images=["page-one-left", "page-one-right", "page-two-left"],
+            image_groups=[
+                ["page-one-left", "page-one-right"],
+                ["page-two-left"],
+            ],
+        )
+    )
+
+    assert response.paths == [
+        ["第2章 数据的读取与处理"],
+        ["第2章 数据的读取与处理", "2.2 处理数据"],
+        ["第2章 数据的读取与处理", "2.2 处理数据", "2.2.2 清洗数据"],
+        ["第2章 数据的读取与处理", "2.2 处理数据", "2.2.3 合并数据"],
+        ["第3章 Matplotlib 数据可视化基础"],
+        ["第4章 用 seaborn 绘制进阶图形", "4.1 熟悉 seaborn 绘图基础"],
+        ["第4章 用 seaborn 绘制进阶图形", "4.1 熟悉 seaborn 绘图基础", "4.1.3 熟悉 seaborn 的调色板"],
+        ["第4章 用 seaborn 绘制进阶图形", "4.2 绘制关系图"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_catalog_photo_keeps_first_chapter_title_when_continuation_page_repeats_it_wrongly(monkeypatch):
+    from app.learning.schemas import CatalogPhotoRecognizeRequest
+    from app.learning.service import recognize_catalog_structure_from_images
+
+    async def fake_recognize_catalog_with_deepseek_vl(images: list[str]) -> list[list[str]]:
+        if images == ["page-one"]:
+            return [
+                ["第4章 用 seaborn 绘制进阶图形"],
+                ["第4章 用 seaborn 绘制进阶图形", "4.1 熟悉 seaborn 绘图基础"],
+                ["第4章 用 seaborn 绘制进阶图形", "4.1 熟悉 seaborn 绘图基础", "4.1.2 了解 seaborn 的绘图风格"],
+            ]
+        if images == ["page-two-left"]:
+            return [
+                ["第4章 绘制图形"],
+                ["第4章 绘制图形", "4.2 绘制关系图"],
+                ["第4章 绘制图形", "4.2 绘制关系图", "4.2.5 绘制关系网格组合图"],
+            ]
+        raise AssertionError(f"unexpected images: {images}")
+
+    monkeypatch.setattr(
+        "app.learning.service._recognize_catalog_with_deepseek_vl",
+        fake_recognize_catalog_with_deepseek_vl,
+    )
+
+    response = await recognize_catalog_structure_from_images(
+        CatalogPhotoRecognizeRequest(
+            file_name="catalog.pdf",
+            images=["page-one", "page-two-left"],
+        )
+    )
+
+    assert response.paths == [
+        ["第4章 用 seaborn 绘制进阶图形"],
+        ["第4章 用 seaborn 绘制进阶图形", "4.1 熟悉 seaborn 绘图基础"],
+        ["第4章 用 seaborn 绘制进阶图形", "4.1 熟悉 seaborn 绘图基础", "4.1.2 了解 seaborn 的绘图风格"],
+        ["第4章 用 seaborn 绘制进阶图形", "4.2 绘制关系图"],
+        ["第4章 用 seaborn 绘制进阶图形", "4.2 绘制关系图", "4.2.5 绘制关系网格组合图"],
     ]
 
 
@@ -546,6 +776,9 @@ async def test_catalog_photo_skips_appendix_and_exercise_paths_when_merging(monk
             ["附录A 常见协议端口号"],
             ["Chapter 11 Cryptography", "Exercises"],
             ["第4章 网络层", "本章小结"],
+            ["第4章 网络层", "小结"],
+            ["第4章 网络层", "实训"],
+            ["第4章 网络层", "实训 1 读取数据"],
             ["第4章 网络层", "练习题"],
             ["第4章 网络层", "4.3 IP 层转发分组的过程"],
         ]

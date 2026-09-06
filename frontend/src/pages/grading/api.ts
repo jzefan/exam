@@ -121,6 +121,77 @@ export interface GradingExportScoreResponse {
   students: GradingExportStudentScore[];
 }
 
+export interface GradingDetailExportQuestion {
+  question_id: string;
+  question_label: string;
+  question_type: string;
+  question_type_label: string;
+  question_content: string;
+  order: number;
+  max_score: number;
+  standard_answer: string;
+  analysis: string;
+  rubric_definition: Record<string, unknown>;
+  scoring_points: unknown[];
+  dimension_weights: Record<string, number>;
+  deduction_rules: unknown[];
+  fatal_error_rules: unknown[];
+}
+
+export interface GradingDetailExportAnswer {
+  question_id: string;
+  question_label: string;
+  question_type: string;
+  question_type_label: string;
+  max_score: number;
+  answer_text: string;
+  score_awarded: number | null;
+  is_correct: boolean | null;
+  grading_status: string;
+  dimension_scores: Record<string, number>;
+  dimension_comments: Record<string, string>;
+  deduction_reasons: string[];
+  strengths: string[];
+  improvement_suggestions: string[];
+  risk_flags: string[];
+  feedback_text: string;
+  teacher_comment: string;
+  score_source: string;
+  manual_score_reason: string;
+  programming_language: string;
+  custom_input: string;
+  model_label: string;
+  prompt_template_version: string;
+  role_binding_version: number | null;
+  scoring_evidence: Record<string, unknown>;
+  execution_evidence: Record<string, unknown>;
+  answer_quality_flags: string[];
+}
+
+export interface GradingDetailExportStudent {
+  student_id: string;
+  candidate_name: string;
+  candidate_code: string | null;
+  submitted_at: string | null;
+  objective_score: number | null;
+  subjective_score: number | null;
+  total_score: number | null;
+  recorded_total_score: number | null;
+  score_difference: number | null;
+  score_consistent: boolean;
+  account_flags: string[];
+  teacher_comment: string;
+  answers: GradingDetailExportAnswer[];
+}
+
+export interface GradingDetailExportResponse {
+  exam_id: string;
+  exam_label: string;
+  generated_at: string;
+  questions: GradingDetailExportQuestion[];
+  students: GradingDetailExportStudent[];
+}
+
 export interface GradingCandidateModelComment {
   stage: "primary" | "review" | "arbiter";
   model_label: string;

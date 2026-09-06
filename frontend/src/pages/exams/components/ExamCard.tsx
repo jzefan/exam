@@ -19,14 +19,17 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import type { GradingDetailExportFormat } from "@/lib/grading-detail-export";
 import { cn } from "@/lib/utils";
 
 import { ExamStatusBadge } from "./ExamStatusBadge";
@@ -69,6 +72,7 @@ export function ExamCard({
   onClose,
   onDelete,
   onExport,
+  onExportGradingDetails,
   extraBadges,
   extraActions,
   moreActions,
@@ -84,6 +88,7 @@ export function ExamCard({
   onClose: () => void;
   onDelete: () => void;
   onExport?: (format: "docx" | "pdf", answers: boolean) => void;
+  onExportGradingDetails?: (format: GradingDetailExportFormat) => Promise<void> | void;
   extraBadges?: ReactNode;
   extraActions?: ReactNode;
   moreActions?: ReactNode;
@@ -108,12 +113,14 @@ export function ExamCard({
   );
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [gradingDetailExportFormat, setGradingDetailExportFormat] =
+    useState<GradingDetailExportFormat | null>(null);
   const [actionsPinnedByCardClick, setActionsPinnedByCardClick] = useState(false);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const lastMenuOutsideTargetWasInCardRef = useRef(false);
   const keepActionsVisible =
     revealActionsOnHover &&
-    (exportMenuOpen || moreMenuOpen || actionsPinnedByCardClick);
+    (exportMenuOpen || moreMenuOpen || actionsPinnedByCardClick || Boolean(gradingDetailExportFormat));
   const getMenuOutsideTarget = (event: Event) => {
     const originalEvent = (event as CustomEvent<{ originalEvent?: Event }>).detail
       ?.originalEvent;
@@ -135,28 +142,56 @@ export function ExamCard({
     }
     lastMenuOutsideTargetWasInCardRef.current = false;
   };
+  const handleExportGradingDetails = async (format: GradingDetailExportFormat) => {
+    if (!onExportGradingDetails || gradingDetailExportFormat) return;
+    setGradingDetailExportFormat(format);
+    setExportMenuOpen(false);
+    setMoreMenuOpen(false);
+    try {
+      await onExportGradingDetails(format);
+    } finally {
+      setGradingDetailExportFormat(null);
+    }
+  };
   const exportMenuItems = onExport ? (
     <>
-      <DropdownMenuLabel className="text-xs">导出 Word</DropdownMenuLabel>
-      <DropdownMenuItem onClick={() => onExport("docx", true)}>
-        <Download size={14} className="mr-2" />
-        含答案
-      </DropdownMenuItem>
-      <DropdownMenuItem onClick={() => onExport("docx", false)}>
-        <Download size={14} className="mr-2" />
-        空白试卷
-      </DropdownMenuItem>
+      <DropdownMenuGroup>
+        <DropdownMenuLabel className="text-xs">导出 Word</DropdownMenuLabel>
+        <DropdownMenuItem onClick={() => onExport("docx", true)}>
+          <Download />
+          含答案
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => onExport("docx", false)}>
+          <Download />
+          空白试卷
+        </DropdownMenuItem>
+      </DropdownMenuGroup>
       <DropdownMenuSeparator />
-      <DropdownMenuLabel className="text-xs">导出 PDF</DropdownMenuLabel>
-      <DropdownMenuItem onClick={() => onExport("pdf", true)}>
-        <Download size={14} className="mr-2" />
-        含答案
-      </DropdownMenuItem>
-      <DropdownMenuItem onClick={() => onExport("pdf", false)}>
-        <Download size={14} className="mr-2" />
-        空白试卷
-      </DropdownMenuItem>
+      <DropdownMenuGroup>
+        <DropdownMenuLabel className="text-xs">导出 PDF</DropdownMenuLabel>
+        <DropdownMenuItem onClick={() => onExport("pdf", true)}>
+          <Download />
+          含答案
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => onExport("pdf", false)}>
+          <Download />
+          空白试卷
+        </DropdownMenuItem>
+      </DropdownMenuGroup>
     </>
+  ) : null;
+  const gradingDetailExportItems = onExportGradingDetails ? (
+    <DropdownMenuGroup>
+      <DropdownMenuLabel className="text-xs">导出批改明细</DropdownMenuLabel>
+      <DropdownMenuItem onClick={() => void handleExportGradingDetails("xlsx")}>
+        <FileCheck />
+        答题与批改明细（Excel）
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={() => void handleExportGradingDetails("html")}>
+        <FileText />
+        答题与批改明细（HTML）
+      </DropdownMenuItem>
+    </DropdownMenuGroup>
   ) : null;
   const mockMenuItem =
     onGenerateMock && exam.category === "exam" ? (
@@ -168,48 +203,73 @@ export function ExamCard({
   const moreMenu =
     canManage &&
     (moreActions ||
-      (collapseSecondaryActions && (onExport || mockMenuItem))) ? (
+      (collapseSecondaryActions && (onExport || onExportGradingDetails || mockMenuItem))) ? (
     <DropdownMenu open={moreMenuOpen} onOpenChange={setMoreMenuOpen}>
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
           size="sm"
           className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold"
-          aria-label="更多操作"
+          aria-label={gradingDetailExportFormat ? "正在分析并生成答题与批改明细" : "更多操作"}
+          disabled={Boolean(gradingDetailExportFormat)}
         >
-          <MoreHorizontal size={14} />
-          <span>更多</span>
+          {gradingDetailExportFormat ? (
+            <>
+              <Spinner data-icon="inline-start" />
+              <span>正在生成</span>
+            </>
+          ) : (
+            <>
+              <MoreHorizontal size={14} />
+              <span>更多</span>
+            </>
+          )}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
-        className="w-48"
+        className="w-48 max-h-[min(32rem,calc(100vh-2rem))] overflow-y-auto overscroll-contain"
         onPointerDownOutside={handleMenuInteractOutside}
         onFocusOutside={handleMenuInteractOutside}
         onCloseAutoFocus={handleMenuCloseAutoFocus}
       >
         {collapseSecondaryActions && onExport ? exportMenuItems : null}
-        {collapseSecondaryActions && onExport && mockMenuItem ? (
+        {collapseSecondaryActions && onExport && gradingDetailExportItems ? (
+          <DropdownMenuSeparator />
+        ) : null}
+        {collapseSecondaryActions ? gradingDetailExportItems : null}
+        {collapseSecondaryActions && (onExport || gradingDetailExportItems) && mockMenuItem ? (
           <DropdownMenuSeparator />
         ) : null}
         {collapseSecondaryActions ? mockMenuItem : null}
-        {collapseSecondaryActions && (onExport || mockMenuItem) && moreActions ? (
+        {collapseSecondaryActions && (onExport || gradingDetailExportItems || mockMenuItem) && moreActions ? (
           <DropdownMenuSeparator />
         ) : null}
         {moreActions}
       </DropdownMenuContent>
     </DropdownMenu>
   ) : null;
-  const exportMenu = canManage && onExport && !collapseSecondaryActions ? (
+  const exportMenu = canManage && (onExport || onExportGradingDetails) && !collapseSecondaryActions ? (
     <DropdownMenu open={exportMenuOpen} onOpenChange={setExportMenuOpen}>
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
           size="sm"
           className="inline-flex h-8 items-center gap-1.5 px-2 text-xs font-semibold"
+          aria-label={gradingDetailExportFormat ? "正在分析并生成答题与批改明细" : "导出"}
+          disabled={Boolean(gradingDetailExportFormat)}
         >
-          <Download size={14} />
-          <span>导出</span>
+          {gradingDetailExportFormat ? (
+            <>
+              <Spinner data-icon="inline-start" />
+              <span>正在生成</span>
+            </>
+          ) : (
+            <>
+              <Download size={14} />
+              <span>导出</span>
+            </>
+          )}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
@@ -220,6 +280,8 @@ export function ExamCard({
         onCloseAutoFocus={handleMenuCloseAutoFocus}
       >
         {exportMenuItems}
+        {exportMenuItems && gradingDetailExportItems ? <DropdownMenuSeparator /> : null}
+        {gradingDetailExportItems}
       </DropdownMenuContent>
     </DropdownMenu>
   ) : null;

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import unicodedata
 import uuid
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from functools import lru_cache
@@ -836,19 +838,20 @@ def _clone_snapshot_for_score_reuse(
     source_snapshot: GradingResultSnapshot,
     reuse_metadata: dict[str, Any],
 ) -> GradingResultSnapshot:
+    score_total, dimension_scores, risk_flags = _normalized_snapshot_scores_for_display(task, source_snapshot)
     evidence_summary = deepcopy(source_snapshot.evidence_summary)
     evidence_summary["score_reuse"] = reuse_metadata
     return GradingResultSnapshot(
         task_id=task.id,
         snapshot_type=source_snapshot.snapshot_type,
-        score_total=source_snapshot.score_total,
-        dimension_scores=deepcopy(source_snapshot.dimension_scores),
+        score_total=score_total,
+        dimension_scores=dimension_scores,
         dimension_comments=deepcopy(source_snapshot.dimension_comments),
         deduction_reasons=deepcopy(source_snapshot.deduction_reasons),
         strengths=deepcopy(source_snapshot.strengths),
         improvement_suggestions=deepcopy(source_snapshot.improvement_suggestions),
         evidence_summary=evidence_summary,
-        risk_flags=deepcopy(source_snapshot.risk_flags),
+        risk_flags=risk_flags,
         provider_config_id=source_snapshot.provider_config_id,
         model_config_id=source_snapshot.model_config_id,
         prompt_template_version=source_snapshot.prompt_template_version,
@@ -1124,7 +1127,11 @@ async def list_grading_tasks(
     for task in tasks:
         result_source = _task_result_source(task)
 
-        final_score = task.latest_final_snapshot.score_total if task.latest_final_snapshot is not None else None
+        final_score = (
+            _normalized_snapshot_scores_for_display(task, task.latest_final_snapshot)[0]
+            if task.latest_final_snapshot is not None
+            else None
+        )
         items.append(
             {
                 "id": str(task.id),
@@ -1225,6 +1232,27 @@ def _export_question_type_label(question_type: str) -> str:
     if question_type == "short_answer":
         return "主观题"
     return question_type
+
+
+def _export_detail_question_type_label(question: Question) -> str:
+    """Return the teacher-facing type label used by the detailed export."""
+    question_type = question.type.value if hasattr(question.type, "value") else str(question.type)
+    if question_type == "choice":
+        is_multi = (
+            isinstance(question.content, dict)
+            and question.content.get("multi") is True
+        ) or (
+            isinstance(question.answer, dict)
+            and isinstance(question.answer.get("correct"), list)
+        )
+        return "多选题" if is_multi else "单选题"
+    return {
+        "true_false": "判断题",
+        "fill_in": "填空题",
+        "short_answer": "论述题",
+        "essay": "论述题",
+        "code": "编程题",
+    }.get(question_type, _export_question_type_label(question_type))
 
 
 async def list_grading_export_exams(
@@ -1364,7 +1392,11 @@ async def get_grading_exam_score_export(
                 "total_score": float(exam_student_score["total_score"] or 0.0) if exam_student_score else 0.0,
             },
         )
-        score = task.latest_final_snapshot.score_total if task.latest_final_snapshot else None
+        score = (
+            _normalized_snapshot_scores_for_display(task, task.latest_final_snapshot)[0]
+            if task.latest_final_snapshot is not None
+            else None
+        )
         student["scores"][question_id] = score
         if score is not None:
             score_value = float(score)
@@ -1405,6 +1437,407 @@ async def get_grading_exam_score_export(
         "exam_date": exam_date,
         "questions": question_payload,
         "students": student_payload,
+    }
+
+
+def _export_value_text(value: Any) -> str:
+    """Turn persisted JSON answer/rubric fragments into readable spreadsheet text."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return re.sub(r"<[^>]+>", " ", value).replace("&nbsp;", " ").strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        return "\n".join(filter(None, (_export_value_text(item) for item in value)))
+    if isinstance(value, dict):
+        for key in (
+            "reference_code",
+            "reference_answer",
+            "sample_answer",
+            "text",
+            "answer",
+            "correct",
+            "summary",
+            "content",
+            "code",
+            "value",
+            "selected",
+            "points",
+        ):
+            if key in value and value[key] not in (None, "", [], {}):
+                return _export_value_text(value[key])
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return str(value)
+
+
+def _export_number_map(value: Any) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, float] = {}
+    for key, raw_score in value.items():
+        try:
+            numeric_score = float(raw_score)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(numeric_score):
+            continue
+        result[str(key)] = round(numeric_score, 2)
+    return result
+
+
+def _export_text_map(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): _export_value_text(item) for key, item in value.items()}
+
+
+def _export_text_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [text for item in value if (text := _export_value_text(item))]
+
+
+def _export_manual_score_reason(task: GradingTask | None) -> str:
+    if task is None:
+        return ""
+    events = sorted(task.audit_events, key=lambda event: event.created_at or datetime.min.replace(tzinfo=timezone.utc))
+    for event in reversed(events):
+        if event.event_type != "manual.score_override":
+            continue
+        reason = event.event_payload.get("reason") if isinstance(event.event_payload, dict) else None
+        return _export_value_text(reason)
+    return ""
+
+
+def _export_answer_body(
+    task: GradingTask | None,
+    submission_answer: StudentExamSubmissionAnswer | None,
+) -> tuple[str, str, str, list[str]]:
+    """Return answer body and metadata without mixing editor/runtime fields into code."""
+    structured = (
+        submission_answer.answer_content
+        if submission_answer is not None and isinstance(submission_answer.answer_content, dict)
+        else task.student_answer_structured
+        if task is not None and isinstance(task.student_answer_structured, dict)
+        else {}
+    )
+    language = _export_value_text(structured.get("language")) or (
+        _export_value_text(task.programming_language) if task is not None else ""
+    )
+    custom_input = _export_value_text(structured.get("custom_input"))
+    code = structured.get("code")
+    quality_flags: list[str] = []
+    if isinstance(code, str) and code.strip():
+        answer_text = code.strip()
+        if task is not None:
+            legacy_parts = [answer_text]
+            if language:
+                legacy_parts.append(language)
+            if custom_input:
+                legacy_parts.append(custom_input)
+            if task.student_answer_raw.strip() == " ".join(legacy_parts):
+                quality_flags.append("历史评分输入曾混入编程语言或运行输入；本报告已分栏还原")
+        return answer_text, language, custom_input, quality_flags
+
+    if submission_answer is not None:
+        return _export_value_text(submission_answer.answer_content), language, custom_input, quality_flags
+    return _export_value_text(task.student_answer_raw) if task is not None else "", language, custom_input, quality_flags
+
+
+def _export_model_label(task: GradingTask | None, snapshot: GradingResultSnapshot | None) -> str:
+    if snapshot is not None and snapshot.model_config is not None:
+        return snapshot.model_config.display_name or snapshot.model_config.model_name
+    if task is None:
+        return ""
+    model_snapshots = [item for item in task.snapshots if item.model_config is not None]
+    if not model_snapshots:
+        return ""
+    latest = max(model_snapshots, key=lambda item: item.created_at or datetime.min.replace(tzinfo=timezone.utc))
+    return latest.model_config.display_name or latest.model_config.model_name
+
+
+def _export_execution_evidence(task: GradingTask | None) -> dict[str, Any]:
+    if task is None:
+        return {}
+    values = {
+        "execution_env": task.execution_env,
+        "test_summary": task.test_summary,
+        "compile_result": task.compile_result,
+        "runtime_result": task.runtime_result,
+        "runtime_logs": task.runtime_logs,
+        "resource_limit_summary": task.resource_limit_summary,
+    }
+    return {key: value for key, value in values.items() if value not in (None, {}, [], "")}
+
+
+def _export_account_flags(user: User) -> list[str]:
+    values = [user.full_name, user.username, user.student_id]
+    marker = re.compile(r"(?:^|[-_\s])(test|测试)(?:$|[-_\s])", re.IGNORECASE)
+    return ["疑似测试账号"] if any(value and marker.search(value) for value in values) else []
+
+
+def _export_student_score_summary(
+    answers: list[dict[str, Any]],
+    recorded_total: float | None,
+) -> dict[str, float | bool | None]:
+    objective_scores = [
+        float(answer["score_awarded"])
+        for answer in answers
+        if answer["question_type"] not in {"short_answer", "essay", "code"}
+        and answer["score_awarded"] is not None
+    ]
+    subjective_scores = [
+        float(answer["score_awarded"])
+        for answer in answers
+        if answer["question_type"] in {"short_answer", "essay", "code"}
+        and answer["score_awarded"] is not None
+    ]
+    scored_answers = [float(answer["score_awarded"]) for answer in answers if answer["score_awarded"] is not None]
+    recalculated_total = round(sum(scored_answers), 2) if scored_answers else None
+    score_difference = (
+        round(recalculated_total - recorded_total, 2)
+        if recalculated_total is not None and recorded_total is not None
+        else None
+    )
+    return {
+        "objective_score": round(sum(objective_scores), 2) if objective_scores else None,
+        "subjective_score": round(sum(subjective_scores), 2) if subjective_scores else None,
+        "total_score": recalculated_total,
+        "recorded_total_score": recorded_total,
+        "score_difference": score_difference,
+        "score_consistent": score_difference is None or abs(score_difference) <= 0.01,
+    }
+
+
+async def get_grading_exam_detail_export(
+    db: AsyncSession,
+    exam_id: str,
+    *,
+    current_user_id: uuid.UUID | None = None,
+    is_platform_admin: bool = True,
+) -> dict[str, Any]:
+    """Build a complete per-question export for a submitted exam.
+
+    This intentionally starts from the latest saved submission answers rather
+    than the grading task table: objective questions do not produce grading
+    tasks, but still belong in an instructor's answer-detail export.
+    """
+    exam_uuid = _try_parse_uuid(exam_id)
+    if exam_uuid is None or not await _can_access_exam_id(
+        db,
+        exam_uuid,
+        current_user_id=current_user_id,
+        is_platform_admin=is_platform_admin,
+    ):
+        raise ValueError("grading export exam not found")
+
+    exam = await db.scalar(select(Exam).where(Exam.id == exam_uuid, Exam.deleted_at.is_(None)))
+    if exam is None:
+        raise ValueError("grading export exam not found")
+
+    question_rows = (
+        await db.execute(
+            select(ExamQuestion, Question)
+            .join(Question, Question.id == ExamQuestion.question_id)
+            .where(ExamQuestion.exam_id == exam_uuid)
+            .order_by(ExamQuestion.order, ExamQuestion.question_id)
+        )
+    ).all()
+    latest_students = (
+        await db.execute(
+            select(ExamStudent, User)
+            .join(User, User.id == ExamStudent.student_id)
+            .where(
+                ExamStudent.exam_id == exam_uuid,
+                ExamStudent.latest_submission_id.is_not(None),
+                User.deleted_at.is_(None),
+            )
+            .order_by(User.student_id, User.full_name, User.username)
+        )
+    ).all()
+
+    submission_ids = [student.latest_submission_id for student, _ in latest_students if student.latest_submission_id]
+    submission_answers: dict[tuple[uuid.UUID, uuid.UUID], StudentExamSubmissionAnswer] = {}
+    if submission_ids:
+        rows = (
+            await db.execute(
+                select(StudentExamSubmissionAnswer).where(
+                    StudentExamSubmissionAnswer.submission_id.in_(submission_ids)
+                )
+            )
+        ).scalars().all()
+        submission_answers = {
+            (answer.student_id, answer.question_id): answer
+            for answer in rows
+        }
+
+    tasks = await _load_workspace_tasks(
+        db,
+        current_user_id=current_user_id,
+        is_platform_admin=is_platform_admin,
+        exam_id=exam_id,
+        current_submission_only=True,
+    )
+    locators = await _hydrate_task_locators(db, tasks)
+    task_by_answer: dict[tuple[str, str], GradingTask] = {}
+    task_by_question: dict[str, GradingTask] = {}
+    for task in tasks:
+        locator = locators[task.id]
+        question_key = locator["question_id"]
+        student_key = locator["student_id"]
+        if question_key:
+            task_by_question.setdefault(question_key, task)
+        if question_key and student_key:
+            task_by_answer[(question_key, student_key)] = task
+
+    questions: list[dict[str, Any]] = []
+    question_max_scores: dict[str, float] = {}
+    for index, (exam_question, question) in enumerate(question_rows, start=1):
+        question_id = str(question.id)
+        source_task = task_by_question.get(question_id)
+        max_score = float(exam_question.score_override if exam_question.score_override is not None else question.score)
+        question_max_scores[question_id] = max_score
+        questions.append(
+            {
+                "question_id": question_id,
+                "question_label": f"第 {index} 题",
+                "question_type": question.type.value if hasattr(question.type, "value") else str(question.type),
+                "question_type_label": _export_detail_question_type_label(question),
+                "question_content": _export_value_text(question.content),
+                "order": exam_question.order,
+                "max_score": max_score,
+                "standard_answer": _export_value_text(
+                    source_task.standard_answers if source_task is not None else question.answer
+                ),
+                "analysis": _export_value_text(
+                    next(
+                        (
+                            item.get("analysis")
+                            for item in (source_task.standard_answers if source_task is not None else [])
+                            if isinstance(item, dict) and item.get("analysis")
+                        ),
+                        question.analysis,
+                    )
+                ),
+                "rubric_definition": source_task.rubric_definition if source_task is not None else {},
+                "scoring_points": source_task.scoring_points if source_task is not None else [],
+                "dimension_weights": source_task.dimension_weights if source_task is not None else {},
+                "deduction_rules": source_task.deduction_rules if source_task is not None else [],
+                "fatal_error_rules": source_task.fatal_error_rules if source_task is not None else [],
+            }
+        )
+
+    students: list[dict[str, Any]] = []
+    for exam_student, user in latest_students:
+        student_id = str(exam_student.student_id)
+        answers: list[dict[str, Any]] = []
+        for question in questions:
+            question_id = question["question_id"]
+            submission_answer = submission_answers.get((exam_student.student_id, uuid.UUID(question_id)))
+            task = task_by_answer.get((question_id, student_id))
+            snapshot = task.latest_final_snapshot if task is not None else None
+            if snapshot is not None and task is not None:
+                score_awarded, dimension_scores, normalized_risk_flags = _normalized_snapshot_scores_for_display(
+                    task,
+                    snapshot,
+                )
+            else:
+                score_awarded = (
+                    float(submission_answer.score_awarded)
+                    if submission_answer is not None and submission_answer.score_awarded is not None
+                    else None
+                )
+                dimension_scores = {}
+                normalized_risk_flags = []
+            dimension_comments = _export_text_map(snapshot.dimension_comments) if snapshot is not None else {}
+            deductions = _export_text_list(snapshot.deduction_reasons) if snapshot is not None else []
+            strengths = _export_text_list(snapshot.strengths) if snapshot is not None else []
+            suggestions = _export_text_list(snapshot.improvement_suggestions) if snapshot is not None else []
+            risks = normalized_risk_flags if snapshot is not None else []
+            answer_text, programming_language, custom_input, answer_quality_flags = _export_answer_body(
+                task,
+                submission_answer,
+            )
+            feedback_parts = []
+            if strengths:
+                feedback_parts.append(f"优点：{'；'.join(strengths)}")
+            if deductions:
+                feedback_parts.append(f"扣分说明：{'；'.join(deductions)}")
+            if suggestions:
+                feedback_parts.append(f"改进建议：{'；'.join(suggestions)}")
+            if risks:
+                feedback_parts.append(f"风险提示：{'；'.join(risks)}")
+            if submission_answer is not None and submission_answer.feedback:
+                feedback_parts.append(f"自动反馈：{_export_value_text(submission_answer.feedback)}")
+            answers.append(
+                {
+                    "question_id": question_id,
+                    "question_label": question["question_label"],
+                    "question_type": question["question_type"],
+                    "question_type_label": question["question_type_label"],
+                    "max_score": question_max_scores[question_id],
+                    "answer_text": answer_text,
+                    "score_awarded": score_awarded,
+                    "is_correct": submission_answer.is_correct if submission_answer is not None else None,
+                    "grading_status": _task_display_status(task) if task is not None else "自动判分" if submission_answer is not None else "未作答",
+                    "dimension_scores": dimension_scores,
+                    "dimension_comments": dimension_comments,
+                    "deduction_reasons": deductions,
+                    "strengths": strengths,
+                    "improvement_suggestions": suggestions,
+                    "risk_flags": risks,
+                    "feedback_text": "\n".join(feedback_parts),
+                    "teacher_comment": exam_student.teacher_comment or "",
+                    "score_source": (
+                        "人工调整"
+                        if task is not None and _task_result_source(task) == "manual"
+                        else "仲裁结果"
+                        if task is not None and _task_result_source(task) == "arbiter"
+                        else "模型综合评分"
+                        if task is not None and snapshot is not None
+                        else "自动判分"
+                        if submission_answer is not None and score_awarded is not None
+                        else ""
+                    ),
+                    "manual_score_reason": _export_manual_score_reason(task),
+                    "programming_language": programming_language,
+                    "custom_input": custom_input,
+                    "model_label": _export_model_label(task, snapshot),
+                    "prompt_template_version": (
+                        snapshot.prompt_template_version
+                        if snapshot is not None and snapshot.prompt_template_version
+                        else task.prompt_template_version
+                        if task is not None and task.prompt_template_version
+                        else ""
+                    ),
+                    "role_binding_version": task.role_binding_version if task is not None else None,
+                    "scoring_evidence": snapshot.evidence_summary if snapshot is not None else {},
+                    "execution_evidence": _export_execution_evidence(task),
+                    "answer_quality_flags": answer_quality_flags,
+                }
+            )
+        recorded_total = float(exam_student.score) if exam_student.score is not None else None
+        score_summary = _export_student_score_summary(answers, recorded_total)
+        students.append(
+            {
+                "student_id": student_id,
+                "candidate_name": user.full_name or user.username,
+                "candidate_code": user.student_id or user.phone or user.username,
+                "submitted_at": exam_student.submitted_at.isoformat() if exam_student.submitted_at else None,
+                **score_summary,
+                "account_flags": _export_account_flags(user),
+                "teacher_comment": exam_student.teacher_comment or "",
+                "answers": answers,
+            }
+        )
+
+    return {
+        "exam_id": str(exam.id),
+        "exam_label": exam.title,
+        "generated_at": _utcnow().isoformat(),
+        "questions": questions,
+        "students": students,
     }
 
 
@@ -1453,7 +1886,11 @@ async def get_grading_question_candidates(
             "candidate_code": task_locator["candidate_code"],
             "student_id": task_locator["student_id"],
             "status": _task_display_status(task),
-            "score": task.latest_final_snapshot.score_total if task.latest_final_snapshot else None,
+            "score": (
+                _normalized_snapshot_scores_for_display(task, task.latest_final_snapshot)[0]
+                if task.latest_final_snapshot is not None
+                else None
+            ),
             "arbitration_required": task.latest_arbitration_snapshot_id is not None,
             "manual_override": _task_result_source(task) == "manual",
             "viewed": _task_viewed_by(task, current_user_id),
@@ -1623,6 +2060,10 @@ async def get_grading_candidate_detail(
     for snapshot in follow_up_snapshots:
         prompt = snapshot.evidence_summary.get("prompt", "Follow-up")
         stage = snapshot.evidence_summary.get("stage", "primary")
+        normalized_follow_up_score, _, normalized_follow_up_risk_flags = _normalized_snapshot_scores_for_display(
+            task,
+            snapshot,
+        )
         process = [
             *snapshot.deduction_reasons,
             *snapshot.strengths,
@@ -1646,10 +2087,10 @@ async def get_grading_candidate_detail(
             {
                 "stage": stage,
                 "model_label": snapshot_model_labels.get(stage, "Follow-up"),
-                "score": snapshot.score_total,
+                "score": normalized_follow_up_score,
                 "summary": "；".join(snapshot.deduction_reasons) or "已完成复评",
                 "process": process,
-                "risk_flags": snapshot.risk_flags,
+                "risk_flags": normalized_follow_up_risk_flags,
             }
         )
         current_round_stage_count += 1
@@ -1662,14 +2103,18 @@ async def get_grading_candidate_detail(
             *snapshot.improvement_suggestions,
             *format_evidence_summary(snapshot.evidence_summary),
         ]
+        normalized_model_score, _, normalized_model_risk_flags = _normalized_snapshot_scores_for_display(
+            task,
+            snapshot,
+        )
         models.append(
             {
                 "stage": snapshot.snapshot_type,
                 "model_label": snapshot_model_labels.get(snapshot.snapshot_type, snapshot.snapshot_type),
-                "score": snapshot.score_total,
+                "score": normalized_model_score,
                 "summary": "；".join(snapshot.deduction_reasons) or "已完成评分",
                 "process": process,
-                "risk_flags": snapshot.risk_flags,
+                "risk_flags": normalized_model_risk_flags,
             }
         )
 
@@ -1719,6 +2164,12 @@ async def get_grading_candidate_detail(
                 "source_task_id": source_task_id,
             }
 
+    normalized_suggested_score = (
+        _normalized_snapshot_scores_for_display(task, task.latest_final_snapshot)[0]
+        if task.latest_final_snapshot is not None
+        else None
+    )
+
     return {
         "task_id": str(task.id),
         "candidate_name": locator["candidate_name"],
@@ -1727,7 +2178,7 @@ async def get_grading_candidate_detail(
         "viewed": _task_viewed_by(task, current_user_id),
         "evaluation_note": evaluation_note,
         "score_reuse": score_reuse,
-        "suggested_score": task.latest_final_snapshot.score_total if task.latest_final_snapshot else None,
+        "suggested_score": normalized_suggested_score,
         "max_score": task.max_score,
         "question_type": task.question_type,
         "student_answer_raw": task.student_answer_raw,
@@ -1739,7 +2190,7 @@ async def get_grading_candidate_detail(
         "models": models,
         "follow_ups": follow_up_rounds,
         "feedback": (
-            _build_exam_submission_feedback(task.latest_final_snapshot)
+            _build_exam_submission_feedback(task.latest_final_snapshot, task)
             if task.latest_final_snapshot is not None
             else None
         ),
@@ -1852,7 +2303,7 @@ async def run_grading_prompt_follow_up(
             locale,
         )
         try:
-            result = await provider.score(system_prompt, user_prompt)
+            result = _normalize_result_for_task(task, await provider.score(system_prompt, user_prompt))
         except Exception as e:
             raise RuntimeError(f"{model_config.display_name} 复评失败: {e}") from e
         
@@ -1972,7 +2423,10 @@ async def stream_grading_prompt_follow_up(
             async for chunk in provider.stream_text(system_prompt, user_prompt):
                 raw_text += chunk
                 yield {"event": "model_delta", "stage": stage, "content": chunk}
-            provider_result = provider.parse_response({"choices": [{"message": {"content": raw_text}}]})
+            provider_result = _normalize_result_for_task(
+                task,
+                provider.parse_response({"choices": [{"message": {"content": raw_text}}]}),
+            )
         except Exception as exc:
             yield {"event": "model_error", "stage": stage, "model_label": model_label, "message": str(exc)}
             raise
@@ -2042,17 +2496,46 @@ async def create_manual_score_override(
 
     # Inherit AI feedback details so the student still sees the scoring breakdown.
     prev = task.latest_final_snapshot
+    previous_dimensions = _export_number_map(prev.dimension_scores) if prev and prev.dimension_scores else {}
+    previous_risk_flags = _export_text_list(prev.risk_flags) if prev else []
+    normalized_score_total, normalized_dimensions, normalized_risk_flags, adjustments = (
+        _normalize_score_fields_for_task(
+            task,
+            score_total,
+            previous_dimensions,
+            previous_risk_flags,
+        )
+    )
+    dimension_total = round(sum(normalized_dimensions.values()), 2)
+    if normalized_dimensions and not math.isclose(
+        dimension_total,
+        normalized_score_total,
+        rel_tol=0.0,
+        abs_tol=0.01,
+    ):
+        normalized_risk_flags.append("人工调分后维度明细保留原模型分值，题目总分以人工调整为准")
+        normalized_risk_flags = list(dict.fromkeys(normalized_risk_flags))
+    evidence_summary = (
+        deepcopy(prev.evidence_summary)
+        if prev and isinstance(prev.evidence_summary, dict)
+        else {}
+    )
+    if adjustments:
+        evidence_summary["score_normalization"] = {
+            "applied": True,
+            "adjustments": adjustments,
+        }
     snapshot = GradingResultSnapshot(
         task_id=task.id,
         snapshot_type="manual",
-        score_total=score_total,
-        dimension_scores=prev.dimension_scores if prev and prev.dimension_scores else {},
+        score_total=normalized_score_total,
+        dimension_scores=normalized_dimensions,
         dimension_comments=prev.dimension_comments if prev and prev.dimension_comments else {},
         deduction_reasons=[reason] if reason else (prev.deduction_reasons if prev else []),
         strengths=prev.strengths if prev else [],
         improvement_suggestions=prev.improvement_suggestions if prev else [],
-        evidence_summary=prev.evidence_summary if prev else {},
-        risk_flags=prev.risk_flags if prev else [],
+        evidence_summary=evidence_summary,
+        risk_flags=normalized_risk_flags,
         role_binding_version=task.role_binding_version,
         created_by="manual",
     )
@@ -2105,14 +2588,250 @@ def _flatten_evidence_strings(value: Any) -> list[str]:
     return []
 
 
-def _build_exam_submission_feedback(snapshot: GradingResultSnapshot) -> dict[str, Any]:
-    dimension_scores = snapshot.dimension_scores or {}
+def _dimension_max_scores_for_feedback(task: GradingTask) -> dict[str, float]:
+    """Return each rubric dimension's maximum score for display feedback.
+
+    Older snapshots only persist the awarded score for each dimension. The
+    scoring rubric remains on the task, so derive the denominator from its
+    explicit ``max_score`` first and fall back to its weight when necessary.
+    """
+    max_scores: dict[str, float] = {}
+    rubric_definition = task.rubric_definition if isinstance(task.rubric_definition, dict) else {}
+    rubric_dimensions = rubric_definition.get("dimensions")
+    if not isinstance(rubric_dimensions, list):
+        rubric_dimensions = rubric_definition.get("评分维度")
+
+    if isinstance(rubric_dimensions, list):
+        for dimension in rubric_dimensions:
+            if not isinstance(dimension, dict):
+                continue
+            key = dimension.get("key") or dimension.get("指标")
+            if not isinstance(key, str) or not key:
+                continue
+
+            raw_max_score = dimension.get("max_score")
+            if raw_max_score is None:
+                raw_max_score = dimension.get("满分")
+            if (
+                isinstance(raw_max_score, (int, float))
+                and not isinstance(raw_max_score, bool)
+                and math.isfinite(float(raw_max_score))
+                and float(raw_max_score) >= 0
+            ):
+                max_scores[key] = round(float(raw_max_score), 2)
+                continue
+
+            weight = dimension.get("weight")
+            if weight is None:
+                weight = dimension.get("权重")
+            if (
+                isinstance(weight, (int, float))
+                and not isinstance(weight, bool)
+                and math.isfinite(float(weight))
+                and float(weight) >= 0
+            ):
+                max_scores[key] = round(float(task.max_score) * float(weight), 2)
+
+    if isinstance(task.dimension_weights, dict):
+        for key, weight in task.dimension_weights.items():
+            if key in max_scores or not isinstance(key, str):
+                continue
+            if (
+                isinstance(weight, (int, float))
+                and not isinstance(weight, bool)
+                and math.isfinite(float(weight))
+                and float(weight) >= 0
+            ):
+                max_scores[key] = round(float(task.max_score) * float(weight), 2)
+
+    return max_scores
+
+
+def _dimension_max_scores_for_validation(task: GradingTask) -> dict[str, float]:
+    """Return only explicitly configured rubric dimension limits.
+
+    A few legacy grading tasks contain a partial rubric where ``weight`` was
+    used as descriptive metadata rather than a complete score allocation.  We
+    therefore only enforce a per-dimension limit when the rubric explicitly
+    provides ``max_score``.  Unknown dimensions still fall back to the task's
+    total score in ``_normalize_score_fields_for_task`` so a malformed model
+    response cannot create an impossible score.
+    """
+    rubric_definition = task.rubric_definition if isinstance(task.rubric_definition, dict) else {}
+    rubric_dimensions = rubric_definition.get("dimensions")
+    if not isinstance(rubric_dimensions, list):
+        rubric_dimensions = rubric_definition.get("评分维度")
+
+    max_scores: dict[str, float] = {}
+    if not isinstance(rubric_dimensions, list):
+        return max_scores
+
+    for dimension in rubric_dimensions:
+        if not isinstance(dimension, dict):
+            continue
+        key = dimension.get("key") or dimension.get("指标")
+        if not isinstance(key, str) or not key.strip():
+            continue
+        raw_max_score = dimension.get("max_score")
+        if raw_max_score is None:
+            raw_max_score = dimension.get("满分")
+        if isinstance(raw_max_score, bool) or not isinstance(raw_max_score, (int, float)):
+            continue
+        max_score = float(raw_max_score)
+        if not math.isfinite(max_score) or max_score < 0:
+            continue
+        max_scores[key.strip()] = round(max_score, 2)
+    return max_scores
+
+
+def _dimension_label_for_task(task: GradingTask, key: str) -> str:
+    rubric_definition = task.rubric_definition if isinstance(task.rubric_definition, dict) else {}
+    rubric_dimensions = rubric_definition.get("dimensions")
+    if not isinstance(rubric_dimensions, list):
+        rubric_dimensions = rubric_definition.get("评分维度")
+    if isinstance(rubric_dimensions, list):
+        for dimension in rubric_dimensions:
+            if not isinstance(dimension, dict):
+                continue
+            dimension_key = dimension.get("key") or dimension.get("指标")
+            if str(dimension_key) != key:
+                continue
+            label = dimension.get("label") or dimension.get("名称")
+            if isinstance(label, str) and label.strip():
+                return label.strip()
+    return key
+
+
+def _normalize_score_fields_for_task(
+    task: GradingTask,
+    score_total: Any,
+    dimension_scores: Any,
+    risk_flags: Any,
+) -> tuple[float, dict[str, float], list[str], list[dict[str, Any]]]:
+    """Bound score values to the task rubric before persisting or displaying.
+
+    The model prompt is advisory only.  This function is the deterministic
+    guardrail that keeps a dimension score from exceeding its configured
+    maximum (or the question maximum when no dimension maximum is available).
+    It returns adjustment records so callers can retain an audit trail instead
+    of silently hiding that the model returned an invalid value.
+    """
+    if isinstance(score_total, bool) or not isinstance(score_total, (int, float)):
+        raise ValueError("grading score_total must be a number")
+    normalized_total = float(score_total)
+    if not math.isfinite(normalized_total):
+        raise ValueError("grading score_total must be finite")
+
+    if not isinstance(dimension_scores, dict):
+        raise ValueError("grading dimension_scores must be a dict")
+
+    question_max = float(task.max_score)
+    if not math.isfinite(question_max) or question_max < 0:
+        question_max = 0.0
+    dimension_max_scores = _dimension_max_scores_for_validation(task)
+    normalized_dimensions: dict[str, float] = {}
+    adjustments: list[dict[str, Any]] = []
+
+    def bound_value(value: Any, *, field_name: str, upper_bound: float) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"grading {field_name} must be a number")
+        numeric_value = float(value)
+        if not math.isfinite(numeric_value):
+            raise ValueError(f"grading {field_name} must be finite")
+        bounded = round(min(max(numeric_value, 0.0), upper_bound), 2)
+        if not math.isclose(numeric_value, bounded, rel_tol=0.0, abs_tol=1e-9):
+            adjustments.append(
+                {
+                    "field": field_name,
+                    "original": round(numeric_value, 2),
+                    "normalized": bounded,
+                    "max_score": round(upper_bound, 2),
+                }
+            )
+        return bounded
+
+    normalized_total = bound_value(normalized_total, field_name="总分", upper_bound=question_max)
+    for raw_key, raw_value in dimension_scores.items():
+        key = str(raw_key).strip()
+        if not key:
+            raise ValueError("grading dimension_scores keys must be non-empty strings")
+        upper_bound = dimension_max_scores.get(key, question_max)
+        normalized_dimensions[key] = bound_value(
+            raw_value,
+            field_name=f"维度:{_dimension_label_for_task(task, key)}",
+            upper_bound=upper_bound,
+        )
+
+    normalized_risk_flags = [str(flag) for flag in risk_flags] if isinstance(risk_flags, list) else []
+    if adjustments:
+        normalized_risk_flags.append("评分结果已按评分标准上限校正，请复核")
+    normalized_risk_flags = list(dict.fromkeys(normalized_risk_flags))
+    return normalized_total, normalized_dimensions, normalized_risk_flags, adjustments
+
+
+def _normalize_result_for_task(task: GradingTask, result: GradingProviderResult) -> GradingProviderResult:
+    """Normalize a provider result using the task's score limits."""
+    score_total, dimension_scores, risk_flags, adjustments = _normalize_score_fields_for_task(
+        task,
+        result.score_total,
+        result.dimension_scores,
+        result.risk_flags,
+    )
+    evidence_summary = (
+        deepcopy(result.evidence_summary)
+        if isinstance(result.evidence_summary, dict)
+        else {}
+    )
+    if adjustments:
+        evidence_summary["score_normalization"] = {
+            "applied": True,
+            "adjustments": adjustments,
+        }
+    return replace(
+        result,
+        score_total=score_total,
+        dimension_scores=dimension_scores,
+        risk_flags=risk_flags,
+        evidence_summary=evidence_summary,
+    )
+
+
+def _normalized_snapshot_scores_for_display(
+    task: GradingTask,
+    snapshot: GradingResultSnapshot,
+) -> tuple[float, dict[str, float], list[str]]:
+    """Apply the same score guardrail when reading legacy snapshots."""
+    try:
+        score_total, dimension_scores, risk_flags, _ = _normalize_score_fields_for_task(
+            task,
+            snapshot.score_total,
+            _export_number_map(snapshot.dimension_scores),
+            _export_text_list(snapshot.risk_flags),
+        )
+    except ValueError:
+        # Legacy rows with malformed JSON should not make an entire exam export
+        # fail.  Keep the already safe numeric subset and mark the row.
+        raw_score_total = float(snapshot.score_total) if isinstance(snapshot.score_total, (int, float)) else 0.0
+        score_total = raw_score_total if math.isfinite(raw_score_total) else 0.0
+        dimension_scores = _export_number_map(snapshot.dimension_scores)
+        risk_flags = _export_text_list(snapshot.risk_flags)
+        risk_flags.append("评分结果包含无法解析的分值，请复核")
+        risk_flags = list(dict.fromkeys(risk_flags))
+    return score_total, dimension_scores, risk_flags
+
+
+def _build_exam_submission_feedback(
+    snapshot: GradingResultSnapshot,
+    task: GradingTask,
+) -> dict[str, Any]:
+    _, dimension_scores, normalized_risk_flags = _normalized_snapshot_scores_for_display(task, snapshot)
     dimension_comments = snapshot.dimension_comments or {}
+    dimension_max_scores = _dimension_max_scores_for_feedback(task)
     dimensions = [
         {
             "name": str(name),
             "score": float(value),
-            "max_score": None,
+            "max_score": dimension_max_scores.get(str(name)),
             "comment": str(dimension_comments.get(name, "")),
         }
         for name, value in dimension_scores.items()
@@ -2123,7 +2842,7 @@ def _build_exam_submission_feedback(snapshot: GradingResultSnapshot) -> dict[str
         "strengths": snapshot.strengths,
         "deductions": snapshot.deduction_reasons,
         "suggestions": snapshot.improvement_suggestions,
-        "risk_flags": snapshot.risk_flags,
+        "risk_flags": normalized_risk_flags,
         "evidence_summary": snapshot.evidence_summary,
         "evidence_lines": evidence_lines,
     }
@@ -2393,9 +3112,9 @@ async def apply_grading_task_result_to_exam_submission(db: AsyncSession, task_id
         raise ValueError("grading task has no final snapshot")
 
     snapshot = task.latest_final_snapshot
-    latest_score = float(snapshot.score_total)
+    latest_score = _normalized_snapshot_scores_for_display(task, snapshot)[0]
     latest_correct = latest_score >= float(task.max_score) * 0.6
-    latest_feedback = _build_exam_submission_feedback(snapshot)
+    latest_feedback = _build_exam_submission_feedback(snapshot, task)
 
     exam_id, _question_id, student_id, submission_id = _parse_exam_submission_locator(task.source_business_id)
 
@@ -2827,11 +3546,36 @@ async def get_final_report(
         "final": final_model_label,
     }
 
+    def _snapshot_payload(snapshot: GradingResultSnapshot) -> dict[str, Any]:
+        normalized_score_total, normalized_dimension_scores, normalized_risk_flags = (
+            _normalized_snapshot_scores_for_display(task, snapshot)
+        )
+        return {
+            "id": str(snapshot.id),
+            "snapshot_type": snapshot.snapshot_type,
+            "score_total": normalized_score_total,
+            "model_label": snapshot_model_labels.get(snapshot.snapshot_type),
+            "provider_key": snapshot.provider_config.key if snapshot.provider_config else None,
+            "dimension_scores": normalized_dimension_scores,
+            "dimension_comments": snapshot.dimension_comments,
+            "deduction_reasons": snapshot.deduction_reasons,
+            "strengths": snapshot.strengths,
+            "improvement_suggestions": snapshot.improvement_suggestions,
+            "evidence_summary": snapshot.evidence_summary,
+            "risk_flags": normalized_risk_flags,
+        }
+
+    normalized_final_score = (
+        _normalized_snapshot_scores_for_display(task, final_snapshot)[0]
+        if final_snapshot is not None
+        else None
+    )
+
     return {
         "task_id": str(task.id),
         "status": task.status,
         "question_type": task.question_type,
-        "final_score": final_snapshot.score_total if final_snapshot else None,
+        "final_score": normalized_final_score,
         "result_source": result_source,
         "context": {
             "source_type": task.source_type,
@@ -2867,23 +3611,7 @@ async def get_final_report(
                 "resource_limit_summary": task.resource_limit_summary,
             },
         },
-        "snapshots": [
-            {
-                "id": str(snapshot.id),
-                "snapshot_type": snapshot.snapshot_type,
-                "score_total": snapshot.score_total,
-                "model_label": snapshot_model_labels.get(snapshot.snapshot_type),
-                "provider_key": snapshot.provider_config.key if snapshot.provider_config else None,
-                "dimension_scores": snapshot.dimension_scores,
-                "dimension_comments": snapshot.dimension_comments,
-                "deduction_reasons": snapshot.deduction_reasons,
-                "strengths": snapshot.strengths,
-                "improvement_suggestions": snapshot.improvement_suggestions,
-                "evidence_summary": snapshot.evidence_summary,
-                "risk_flags": snapshot.risk_flags,
-            }
-            for snapshot in snapshots
-        ],
+        "snapshots": [_snapshot_payload(snapshot) for snapshot in snapshots],
         "audit_events": [
             {
                 "id": str(event.id),
@@ -3094,6 +3822,7 @@ def _result_to_snapshot(
     result: GradingProviderResult,
     snapshot_type: str,
 ) -> GradingResultSnapshot:
+    result = _normalize_result_for_task(task, result)
     return GradingResultSnapshot(
         task_id=task.id,
         snapshot_type=snapshot_type,
@@ -3116,6 +3845,8 @@ def _build_final_snapshot(
     primary_result: GradingProviderResult,
     review_result: GradingProviderResult,
 ) -> GradingResultSnapshot:
+    primary_result = _normalize_result_for_task(task, primary_result)
+    review_result = _normalize_result_for_task(task, review_result)
     dimension_keys = set(primary_result.dimension_scores) | set(review_result.dimension_scores)
     averaged_dimensions = {
         key: round(
@@ -3165,6 +3896,7 @@ def _build_final_snapshot_from_result(
     task: GradingTask,
     result: GradingProviderResult,
 ) -> GradingResultSnapshot:
+    result = _normalize_result_for_task(task, result)
     return GradingResultSnapshot(
         task_id=task.id,
         snapshot_type="final",
@@ -3222,7 +3954,10 @@ async def run_grading_task(
 
     try:
         primary_system_prompt, primary_user_prompt = _build_prompt_pair(task, context, "primary grader", locale)
-        primary_result = await primary_provider.score(primary_system_prompt, primary_user_prompt)
+        primary_result = _normalize_result_for_task(
+            task,
+            await primary_provider.score(primary_system_prompt, primary_user_prompt),
+        )
         primary_snapshot = _result_to_snapshot(task, primary_result, "primary")
         db.add(primary_snapshot)
         await db.flush()
@@ -3238,7 +3973,10 @@ async def run_grading_task(
         )
 
         review_system_prompt, review_user_prompt = _build_prompt_pair(task, context, "review grader", locale)
-        review_result = await review_provider.score(review_system_prompt, review_user_prompt)
+        review_result = _normalize_result_for_task(
+            task,
+            await review_provider.score(review_system_prompt, review_user_prompt),
+        )
         review_snapshot = _result_to_snapshot(task, review_result, "review")
         db.add(review_snapshot)
         await db.flush()
@@ -3364,8 +4102,9 @@ async def run_grading_task(
                 locale,
             )
             try:
-                arbiter_result = await arbiter_provider.score(
-                    arbiter_system_prompt, arbiter_user_prompt
+                arbiter_result = _normalize_result_for_task(
+                    task,
+                    await arbiter_provider.score(arbiter_system_prompt, arbiter_user_prompt),
                 )
             except Exception as exc:
                 # 仲裁失败：不阻塞流程，回退使用复核模型分数作为最终分。
@@ -3448,7 +4187,10 @@ async def run_grading_task(
             locale,
         )
         try:
-            arbiter_result = await arbiter_provider.score(arbiter_system_prompt, arbiter_user_prompt)
+            arbiter_result = _normalize_result_for_task(
+                task,
+                await arbiter_provider.score(arbiter_system_prompt, arbiter_user_prompt),
+            )
         except Exception as exc:
             exc_message = _exception_message(exc)
             db.add(

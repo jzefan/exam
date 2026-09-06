@@ -570,12 +570,13 @@ export function KnowledgeManagementPage() {
   );
 
   const handleRecognizeCatalogPhoto = useCallback(
-    async (payload: { fileName: string; images: string[] }) => {
+    async (payload: { fileName: string; images: string[]; imageGroups: string[][] }) => {
       const response = await apiFetch<{ paths: KnowledgeImportPath[] }>(`${API}/catalog-photo/recognize`, {
         method: "POST",
         body: JSON.stringify({
           file_name: payload.fileName,
           images: payload.images,
+          image_groups: payload.imageGroups,
         }),
       });
       return response.paths;
