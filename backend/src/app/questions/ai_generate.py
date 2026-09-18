@@ -59,7 +59,7 @@ class AIModelProvider(str, enum.Enum):
 
 
 class AIGenerateRequest(BaseModel):
-    total_count: int = Field(default=10, ge=1, le=50)
+    total_count: int = Field(default=10, ge=1, le=200)
     difficulty: int = Field(default=3, ge=1, le=5)
     type_distribution: dict[str, int] = Field(default_factory=dict)
     knowledge_point_ids: list[uuid.UUID] = Field(default_factory=list)

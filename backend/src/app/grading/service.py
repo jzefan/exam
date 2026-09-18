@@ -1577,6 +1577,141 @@ def _export_account_flags(user: User) -> list[str]:
     return ["疑似测试账号"] if any(value and marker.search(value) for value in values) else []
 
 
+_GRADING_STAGE_LABELS = {
+    "primary": "初评",
+    "review": "复评",
+    "arbiter": "仲裁",
+}
+
+_GRADING_STAGE_ROLE_ATTRS = {
+    "primary": "grader_model",
+    "review": "reviewer_model",
+    "arbiter": "arbiter_model",
+}
+
+
+def _export_role_model_label(binding: RoleBinding | None, role_attr: str) -> str:
+    """Return a human-readable label for a role-bound grading model."""
+    model = getattr(binding, role_attr, None) if binding is not None else None
+    if model is None:
+        return ""
+    return model.display_name or model.model_name
+
+
+def _export_snapshot_model_label(snapshot: GradingResultSnapshot | None) -> str:
+    if snapshot is None or snapshot.model_config is None:
+        return ""
+    return snapshot.model_config.display_name or snapshot.model_config.model_name
+
+
+def _latest_stage_snapshot(task: GradingTask, stage: str) -> GradingResultSnapshot | None:
+    """Return the task's latest snapshot for a grading stage.
+
+    Snapshot ``latest_*_snapshot`` relationships are not eagerly loaded on the
+    export path, so resolve through the scalar ``latest_*_snapshot_id`` column
+    plus the already loaded ``task.snapshots`` collection. Falls back to the
+    newest matching row if the pointer column is unavailable.
+    """
+    snapshots = {str(snapshot.id): snapshot for snapshot in (task.snapshots or [])}
+    pointer = getattr(task, f"latest_{stage}_snapshot_id", None)
+    if pointer is not None and str(pointer) in snapshots:
+        return snapshots[str(pointer)]
+    matching = [snapshot for snapshot in (task.snapshots or []) if snapshot.snapshot_type == stage]
+    if not matching:
+        return None
+    return max(
+        matching,
+        key=lambda snapshot: (snapshot.created_at or datetime.min.replace(tzinfo=timezone.utc), str(snapshot.id)),
+    )
+
+
+def _export_answer_model_runs(task: GradingTask | None, binding: RoleBinding | None) -> list[dict[str, Any]]:
+    """Export each AI stage result (初评 QWen / 复评 DeepSeek / 仲裁) with its score.
+
+    Mirrors the grading center's per-candidate model cards so the detailed
+    report can show which model scored what during the primary/review flow.
+    """
+    if task is None:
+        return []
+    runs: list[dict[str, Any]] = []
+    for stage in ("primary", "review", "arbiter"):
+        snapshot = _latest_stage_snapshot(task, stage)
+        if snapshot is None:
+            continue
+        normalized_score, _, _ = _normalized_snapshot_scores_for_display(task, snapshot)
+        model_label = _export_role_model_label(binding, _GRADING_STAGE_ROLE_ATTRS[stage])
+        if not model_label:
+            model_label = _export_snapshot_model_label(snapshot)
+        runs.append(
+            {
+                "stage": stage,
+                "stage_label": _GRADING_STAGE_LABELS[stage],
+                "model_label": model_label or _GRADING_STAGE_LABELS[stage],
+                "score": normalized_score,
+            }
+        )
+    return runs
+
+
+def _export_question_grading_prompt(task: GradingTask | None, binding: RoleBinding | None) -> str:
+    """Reconstruct the model prompts used to grade one subjective question.
+
+    The report places this at question level once. Prompts embed the candidate
+    answer at scoring time, so the exported text renders the shared framework
+    (role system prompts + question-level task context) with a placeholder for
+    the per-candidate answer.
+    """
+    if task is None or task.question_type not in {"short_answer", "essay", "code"}:
+        return ""
+    try:
+        preferred_locale, language_instruction = _resolve_prompt_locale(task.language)
+    except Exception:
+        preferred_locale, language_instruction = "zh-CN", ""
+
+    def _system_prompt(role_name: str) -> str:
+        try:
+            return _build_grading_system_prompt(
+                task=task,
+                role_name=role_name,
+                language_instruction=language_instruction,
+                mode="grading",
+            )
+        except Exception:
+            return ""
+
+    primary_label = _export_role_model_label(binding, "grader_model") or "初评模型"
+    review_label = _export_role_model_label(binding, "reviewer_model") or "复评模型"
+    question_context = {
+        "question_type": task.question_type,
+        "question": task.question_content,
+        "max_score": task.max_score,
+        "knowledge_tags": task.knowledge_tags or [],
+        "student_answer": "（考生作答——以各考生答题为准，此处不展开）",
+        "standard_answers": task.standard_answers or [],
+        "rubric_definition": task.rubric_definition or {},
+        "scoring_points": task.scoring_points or [],
+        "dimension_weights": task.dimension_weights or {},
+        "deduction_rules": task.deduction_rules or [],
+        "fatal_error_rules": task.fatal_error_rules or [],
+    }
+    task_lines = [
+        "Task ID:（按考生生成的评分任务）",
+        f"Question type: {task.question_type}",
+        f"Question: {task.question_content}",
+        f"Max score: {task.max_score}",
+        f"Preferred locale: {preferred_locale}",
+        f"Knowledge tags: {json.dumps(task.knowledge_tags or [], ensure_ascii=False)}",
+        f"Context: {json.dumps(question_context, ensure_ascii=False, sort_keys=True, default=str)}",
+    ]
+    return "\n\n".join(
+        [
+            f"【{_GRADING_STAGE_LABELS['primary']} · {primary_label}】\n{_system_prompt('primary grader')}",
+            f"【{_GRADING_STAGE_LABELS['review']} · {review_label}】\n{_system_prompt('review grader')}",
+            "【任务输入（评分时发送给模型的用户提示词）】\n" + "\n".join(task_lines),
+        ]
+    )
+
+
 def _export_student_score_summary(
     answers: list[dict[str, Any]],
     recorded_total: float | None,
@@ -1691,6 +1826,13 @@ async def get_grading_exam_detail_export(
         if question_key and student_key:
             task_by_answer[(question_key, student_key)] = task
 
+    bindings_by_version: dict[int, RoleBinding | None] = {}
+    for version in sorted({task.role_binding_version for task in tasks}):
+        try:
+            bindings_by_version[version] = await _load_role_binding(db, version)
+        except ValueError:
+            bindings_by_version[version] = None
+
     questions: list[dict[str, Any]] = []
     question_max_scores: dict[str, float] = {}
     for index, (exam_question, question) in enumerate(question_rows, start=1):
@@ -1698,6 +1840,11 @@ async def get_grading_exam_detail_export(
         source_task = task_by_question.get(question_id)
         max_score = float(exam_question.score_override if exam_question.score_override is not None else question.score)
         question_max_scores[question_id] = max_score
+        source_binding = (
+            bindings_by_version.get(source_task.role_binding_version)
+            if source_task is not None
+            else None
+        )
         questions.append(
             {
                 "question_id": question_id,
@@ -1725,6 +1872,7 @@ async def get_grading_exam_detail_export(
                 "dimension_weights": source_task.dimension_weights if source_task is not None else {},
                 "deduction_rules": source_task.deduction_rules if source_task is not None else [],
                 "fatal_error_rules": source_task.fatal_error_rules if source_task is not None else [],
+                "grading_prompt": _export_question_grading_prompt(source_task, source_binding),
             }
         )
 
@@ -1812,6 +1960,10 @@ async def get_grading_exam_detail_export(
                         else ""
                     ),
                     "role_binding_version": task.role_binding_version if task is not None else None,
+                    "model_runs": _export_answer_model_runs(
+                        task,
+                        bindings_by_version.get(task.role_binding_version) if task is not None else None,
+                    ),
                     "scoring_evidence": snapshot.evidence_summary if snapshot is not None else {},
                     "execution_evidence": _export_execution_evidence(task),
                     "answer_quality_flags": answer_quality_flags,

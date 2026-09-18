@@ -47,7 +47,7 @@ describe("exam AI replacement configuration", () => {
       "qwen",
       "claude",
     ]);
-    expect(AI_MODEL_OPTIONS[0].desc).toBe("deepseek-v4-flash");
+    expect(AI_MODEL_OPTIONS[0].desc).toBe("deepseek-flash");
   });
 
   it("keeps AI replacement scoped to the original child knowledge point", () => {

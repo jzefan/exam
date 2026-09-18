@@ -548,6 +548,56 @@ function renderQuestionOverview(question: DetailQuestion): string {
   return `<div class="question-overview"><div><span class="field-label">题目</span>${renderExpandableText(question.question_content)}</div><div><span class="field-label">参考答案</span>${renderReferenceAnswer(question.standard_answer)}</div>${question.analysis ? `<div><span class="field-label">解析</span>${renderExpandableText(question.analysis)}</div>` : ""}</div>`;
 }
 
+const SUBJECTIVE_MODEL_STAGES = ["primary", "review", "arbiter"] as const;
+
+function renderGradingPrompt(question: DetailQuestion): string {
+  const text = String(question.grading_prompt ?? "").trim();
+  if (!text) return "";
+  return `<section id="${questionAnchor(question)}-prompt" class="question-detail"><h4>评分提示词（初评 / 复评共用的模型提示词）</h4>${renderExpandableText(text, "暂无评分提示词")}</section>`;
+}
+
+function renderModelRunScores(
+  payload: GradingDetailExportResponse,
+  question: DetailQuestion,
+): string {
+  if (!isSubjectiveQuestion(question)) return "";
+  const entries = answersForQuestion(payload, question);
+  const runsByAnswer = entries.map(({ student, answer }) => ({
+    student,
+    runs: (answer.model_runs ?? []).filter((run) => run && run.stage),
+  }));
+  if (!runsByAnswer.some(({ runs }) => runs.length)) return "";
+
+  const stages = SUBJECTIVE_MODEL_STAGES.filter((stage) =>
+    runsByAnswer.some(({ runs }) => runs.some((run) => run.stage === stage)),
+  );
+  if (!stages.length) return "";
+
+  const header = ["考生", "学号/账号", ...stages.flatMap((stage) => {
+    const firstRun = runsByAnswer
+      .flatMap(({ runs }) => runs)
+      .find((run) => run.stage === stage);
+    const stageLabel = firstRun?.stage_label || stage;
+    return [`${stageLabel}模型`, `${stageLabel}得分`];
+  })];
+  const rows = runsByAnswer.map(({ student, runs }) => {
+    const runByStage = new Map(runs.map((run) => [run.stage, run]));
+    return [
+      student.candidate_name,
+      student.candidate_code ?? "",
+      ...stages.flatMap((stage) => {
+        const run = runByStage.get(stage);
+        return [
+          run ? run.model_label || run.stage_label : "—",
+          run && typeof run.score === "number" ? formatNumber(run.score) : "—",
+        ];
+      }),
+    ];
+  });
+  const widths = [15, 15, ...stages.flatMap(() => [16, 10])];
+  return `<section id="${questionAnchor(question)}-model-runs" class="question-detail"><h4>模型评分（初评 / 复评）</h4>${renderHtmlDataTable(header, rows, widths)}</section>`;
+}
+
 function renderScoringStandard(question: DetailQuestion): string {
   const anchor = `${questionAnchor(question)}-rubric`;
   const blocks = [
@@ -747,7 +797,7 @@ function renderQuestion(
   question: DetailQuestion,
 ): string {
   const subjective = isSubjectiveQuestion(question);
-  return `<article id="${questionAnchor(question)}" class="question-block"><header class="question-heading"><div><span class="question-kicker">${escapeHtml(question.question_type_label)}</span><h3>${escapeHtml(question.question_label)}</h3></div><span class="score-badge">满分 ${formatNumber(question.max_score)} 分</span></header>${renderQuestionOverview(question)}${subjective ? renderScoringStandard(question) + renderDimensionAnalysis(payload, question) + renderExecutionEvidence(payload, question) + renderPersonalizedFeedback(payload, question) : ""}${renderCandidateAnswers(payload, question)}${renderQuestionSummary(payload, question)}</article>`;
+  return `<article id="${questionAnchor(question)}" class="question-block"><header class="question-heading"><div><span class="question-kicker">${escapeHtml(question.question_type_label)}</span><h3>${escapeHtml(question.question_label)}</h3></div><span class="score-badge">满分 ${formatNumber(question.max_score)} 分</span></header>${renderQuestionOverview(question)}${subjective ? renderGradingPrompt(question) + renderScoringStandard(question) + renderDimensionAnalysis(payload, question) + renderExecutionEvidence(payload, question) + renderPersonalizedFeedback(payload, question) + renderModelRunScores(payload, question) : ""}${renderCandidateAnswers(payload, question)}${renderQuestionSummary(payload, question)}</article>`;
 }
 
 function renderTypeGroup(

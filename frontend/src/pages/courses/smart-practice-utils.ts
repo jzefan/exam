@@ -14,12 +14,16 @@ export type SmartPracticeIntent = {
   difficulty: number;
   knowledgePointId: string | null;
   searchTerms: string[];
+  typeDistribution?: Partial<Record<QuestionType, number>>;
+  requireAllTypes?: boolean;
 };
 
 export type SmartPracticeChatIntent = {
   count: number;
   difficulty: number;
   knowledgePointId: string | null;
+  typeDistribution?: Partial<Record<QuestionType, number>>;
+  requireAllTypes?: boolean;
 };
 
 export type SmartPracticeQuestionContext = {
@@ -67,11 +71,67 @@ const STOP_WORDS = new Set([
   "综合",
 ]);
 
+const COUNT_UNIT_PATTERN = "(?:道|题|到题)";
+const QUESTION_TYPE_WORDS = "(?:单选|多选|选择|判断|填空|简答|论述|编程)\\s*题?";
+
+const PROMPT_TYPE_PATTERNS: Array<[RegExp, QuestionType]> = [
+  [/(?:单选|多选|选择)题?/, "choice"],
+  [/判断题?/, "true_false"],
+  [/填空题?/, "fill_in"],
+  [/简答题?/, "short_answer"],
+  [/论述题?/, "essay"],
+  [/编程题?/, "code"],
+];
+
+function parsePromptTypeDistribution(
+  prompt: string,
+): Partial<Record<QuestionType, number>> {
+  const distribution: Partial<Record<QuestionType, number>> = {};
+  for (const [typePattern, questionType] of PROMPT_TYPE_PATTERNS) {
+    const typeWord = typePattern.source;
+    const countBeforeType = new RegExp(
+      `(\\d{1,3})\\s*${COUNT_UNIT_PATTERN}\\s*${typeWord}`,
+    ).exec(prompt);
+    const countAfterType = new RegExp(
+      `${typeWord}\\s*(\\d{1,3})\\s*${COUNT_UNIT_PATTERN}`,
+    ).exec(prompt);
+    const count = Number(countBeforeType?.[1] ?? countAfterType?.[1] ?? 0);
+    if (count > 0) distribution[questionType] = count;
+  }
+  return distribution;
+}
+
+/**
+ * Extract the requested practice size, preferring the number after an action
+ * such as “选取/生成”. This avoids treating “当前 220 道题” as the target
+ * when the teacher asks for “选取 60 道题”. “到题” is accepted as a tolerant
+ * fallback for the common typo of “道题”.
+ */
+function extractRequestedCount(prompt: string): number | null {
+  const actionMatch = [
+    ...prompt.matchAll(
+      new RegExp(
+        `(?:选取|选择|生成|出|安排|设置|包含|需要|给我|做)\\s*(?:约|大约|共)?\\s*(\\d{1,3})\\s*${COUNT_UNIT_PATTERN}(?!\\s*${QUESTION_TYPE_WORDS})`,
+        "g",
+      ),
+    ),
+  ].at(-1);
+  if (actionMatch?.[1]) return Number(actionMatch[1]);
+
+  const countMatches = [
+    ...prompt.matchAll(
+      new RegExp(`(\\d{1,3})\\s*${COUNT_UNIT_PATTERN}(?!\\s*${QUESTION_TYPE_WORDS})`, "g"),
+    ),
+  ];
+  const lastMatch = countMatches.at(-1);
+  return lastMatch?.[1] ? Number(lastMatch[1]) : null;
+}
+
 function extractSearchTerms(prompt: string): string[] {
   return Array.from(
     new Set(
       prompt
-        .replace(/[0-9]+\s*(?:道|题)/g, " ")
+        .replace(/[0-9]+\s*(?:道|题|到题)/g, " ")
         .split(/[\s，。；、：:（）()“”"'《》【】[\]—-]+/)
         .map((term) => term.trim())
         .filter((term) => term.length >= 2 && !STOP_WORDS.has(term)),
@@ -84,8 +144,12 @@ export function parseSmartPracticePrompt(
   knowledgeOptions: SmartPracticeKnowledgeOption[],
   defaults: Omit<SmartPracticeIntent, "searchTerms">,
 ): SmartPracticeIntent {
-  const countMatch = prompt.match(/(\d{1,3})\s*(?:道|题)/);
-  const parsedCount = countMatch ? Number(countMatch[1]) : defaults.count;
+  const typeDistribution = parsePromptTypeDistribution(prompt);
+  const typeCount = Object.values(typeDistribution).reduce(
+    (total, count) => total + (count ?? 0),
+    0,
+  );
+  const parsedCount = extractRequestedCount(prompt) ?? (typeCount || defaults.count);
   const difficulty = /(?:综合难度|难度均衡|混合难度)/.test(prompt)
     ? ALL_DIFFICULTIES
     : (DIFFICULTY_PATTERNS.find(([pattern]) => pattern.test(prompt))?.[1] ??
@@ -104,6 +168,8 @@ export function parseSmartPracticePrompt(
     knowledgePointId:
       matchedKnowledge?.id ?? defaults.knowledgePointId,
     searchTerms: extractSearchTerms(prompt),
+    typeDistribution: typeCount > 0 ? typeDistribution : undefined,
+    requireAllTypes: /(?:各种|所有|各类)题型|题型都/.test(prompt),
   };
 }
 
@@ -116,10 +182,7 @@ export function parseSmartPracticeChatPrompt(
     /第\s*\d{1,2}\s*(?:道)?题/g,
     "",
   );
-  const absoluteCountMatches = [
-    ...promptWithoutOrdinalQuestions.matchAll(/(\d{1,2})\s*(?:道|题)/g),
-  ];
-  const lastAbsoluteCount = absoluteCountMatches.at(-1)?.[1];
+  const requestedCount = extractRequestedCount(promptWithoutOrdinalQuestions);
   const relativeDecrease = prompt.match(
     /(?:减少|少|删掉|去掉)\s*(\d{1,2})\s*(?:道|题)?/,
   );
@@ -127,7 +190,7 @@ export function parseSmartPracticeChatPrompt(
     /(?:增加|新增|多|再加|加上)\s*(\d{1,2})\s*(?:道|题)?/,
   );
 
-  let count = lastAbsoluteCount ? Number(lastAbsoluteCount) : previous.count;
+  let count = requestedCount ?? previous.count;
   if (relativeDecrease) count = previous.count - Number(relativeDecrease[1]);
   if (relativeIncrease) count = previous.count + Number(relativeIncrease[1]);
 
@@ -150,9 +213,17 @@ export function parseSmartPracticeChatPrompt(
   }
 
   return {
-    count: Math.max(1, Math.min(50, count)),
+    count: Math.max(1, Math.min(200, count)),
     difficulty,
     knowledgePointId: parsed.knowledgePointId,
+    typeDistribution:
+      Object.values(parsed.typeDistribution ?? {}).reduce(
+        (total, item) => total + (item ?? 0),
+        0,
+      ) === count
+        ? parsed.typeDistribution
+        : previous.typeDistribution,
+    requireAllTypes: parsed.requireAllTypes || previous.requireAllTypes,
   };
 }
 
@@ -299,6 +370,18 @@ export function selectSmartPracticeQuestions(
   }
 
   const picked: IQuestion[] = [];
+  if (intent.typeDistribution) {
+    for (const [type, requested] of Object.entries(intent.typeDistribution) as Array<[
+      QuestionType,
+      number | undefined
+    ]>) {
+      const bucket = buckets.get(type) ?? [];
+      const count = Math.max(0, requested ?? 0);
+      picked.push(...bucket.splice(0, count));
+    }
+    return picked.slice(0, intent.count);
+  }
+
   const orderedTypes = [...buckets.keys()].sort(
     (left, right) =>
       (buckets.get(right)?.length ?? 0) - (buckets.get(left)?.length ?? 0),

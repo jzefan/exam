@@ -108,7 +108,7 @@ def test_ai_generate_request_defaults_to_deepseek() -> None:
     request = AIGenerateRequest()
 
     assert request.model == "deepseek"
-    assert settings.deepseek_model_name == "deepseek-v4-flash"
+    assert settings.deepseek_model_name == "deepseek-flash"
 
 
 def test_exam_mock_generate_request_defaults_to_deepseek() -> None:

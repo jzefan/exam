@@ -62,7 +62,7 @@ async def test_fill_in_grading_uses_deepseek_equivalence_for_disputed_blanks(mon
     assert feedback["dimensions"][0]["comment"] == "共命中 2/3 个空。"
     assert feedback["deductions"] == ["第 2 空应为 agg"]
     assert "DeepSeek 判定第 1 空等价：group by 与 groupby 表达同一 Pandas 方法。" in feedback["strengths"]
-    assert feedback["model_evaluation"]["model"] == "deepseek-v4-flash"
+    assert feedback["model_evaluation"]["model"] == "deepseek-flash"
     assert feedback["model_evaluation"]["matches"][0]["reason"] == "group by 与 groupby 表达同一 Pandas 方法。"
 
 

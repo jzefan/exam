@@ -56,7 +56,7 @@ async def _seed_role_binding_v1(db_session: AsyncSession) -> None:
     deepseek_model = ModelConfig(
         key="deepseek-review-v1",
         display_name="DeepSeek Reviewer",
-        model_name="deepseek-v4-flash",
+        model_name="deepseek-flash",
         provider_id=deepseek_provider.id,
         temperature=0.1,
         is_active=True,
@@ -594,7 +594,7 @@ async def test_run_grading_task_endpoint_executes_three_role_flow(
     deepseek_model = ModelConfig(
         key="deepseek-review-v1",
         display_name="DeepSeek Reviewer",
-        model_name="deepseek-v4-flash",
+        model_name="deepseek-flash",
         provider_id=deepseek_provider.id,
         temperature=0.1,
         is_active=True,
@@ -715,7 +715,7 @@ async def test_get_grading_report_returns_rich_code_task_details(
     deepseek_model = ModelConfig(
         key="deepseek-review-v1",
         display_name="DeepSeek Reviewer",
-        model_name="deepseek-v4-flash",
+        model_name="deepseek-flash",
         provider_id=deepseek_provider.id,
         temperature=0.1,
         is_active=True,
@@ -1062,8 +1062,37 @@ async def test_grading_detail_export_includes_answers_rubric_dimensions_and_feed
             "role_binding_version": 1,
         },
     )
+    await _seed_role_binding_v1(db_session)
     task = await db_session.get(GradingTask, uuid.UUID(task_response.json()["id"]))
     assert task is not None
+    primary_snapshot = GradingResultSnapshot(
+        task_id=task.id,
+        snapshot_type="primary",
+        score_total=8,
+        dimension_scores={"coverage": 8},
+        dimension_comments={"coverage": "说明了核心结果，但边界条件不足。"},
+        deduction_reasons=["未明确说明服务端去重策略。"],
+        strengths=["抓住了重复请求的结果一致性。"],
+        improvement_suggestions=["补充幂等键或状态机的实现方式。"],
+        evidence_summary={},
+        risk_flags=[],
+        role_binding_version=1,
+        created_by="system",
+    )
+    review_snapshot = GradingResultSnapshot(
+        task_id=task.id,
+        snapshot_type="review",
+        score_total=8,
+        dimension_scores={"coverage": 8},
+        dimension_comments={"coverage": "与初评一致。"},
+        deduction_reasons=[],
+        strengths=["表述清晰。"],
+        improvement_suggestions=[],
+        evidence_summary={},
+        risk_flags=[],
+        role_binding_version=1,
+        created_by="system",
+    )
     snapshot = GradingResultSnapshot(
         task_id=task.id,
         snapshot_type="final",
@@ -1078,8 +1107,10 @@ async def test_grading_detail_export_includes_answers_rubric_dimensions_and_feed
         role_binding_version=1,
         created_by="system",
     )
-    db_session.add(snapshot)
+    db_session.add_all([primary_snapshot, review_snapshot, snapshot])
     await db_session.flush()
+    task.latest_primary_snapshot = primary_snapshot
+    task.latest_review_snapshot = review_snapshot
     task.latest_final_snapshot = snapshot
     task.status = "completed"
     await db_session.commit()
@@ -1091,12 +1122,21 @@ async def test_grading_detail_export_includes_answers_rubric_dimensions_and_feed
     assert payload["exam_label"] == "评分明细导出考试"
     assert payload["questions"][0]["standard_answer"] == "重复执行结果一致"
     assert payload["questions"][0]["dimension_weights"] == {"coverage": 1}
+    question_payload = payload["questions"][0]
+    assert "初评" in question_payload["grading_prompt"]
+    assert "任务输入" in question_payload["grading_prompt"]
     answer = payload["students"][0]["answers"][0]
     assert answer["answer_text"] == "重复请求不会改变最终结果。"
     assert answer["score_awarded"] == 8.0
     assert answer["dimension_scores"] == {"coverage": 8.0}
     assert answer["improvement_suggestions"] == ["补充幂等键或状态机的实现方式。"]
     assert answer["teacher_comment"] == "请继续补充边界场景。"
+    assert [run["stage"] for run in answer["model_runs"]] == ["primary", "review"]
+    assert {run["stage"]: run["model_label"] for run in answer["model_runs"]} == {
+        "primary": "Qwen Grader",
+        "review": "DeepSeek Reviewer",
+    }
+    assert answer["model_runs"][0]["score"] == 8.0
 
 
 @pytest.mark.asyncio

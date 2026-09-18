@@ -11,6 +11,7 @@ import {
   Pencil,
   Plus,
   Sparkles,
+  Users,
 } from "lucide-react";
 
 import { PageIntroHeader } from "@/components/ui/page-intro-header";
@@ -73,6 +74,8 @@ import { PaperSummarySidebar } from "./components/PaperSummarySidebar";
 import { InvitationManagement } from "./components/InvitationManagement";
 import { PositionSelector } from "./components/PositionSelector";
 import { QuestionSelector } from "./components/QuestionSelector";
+import { StudentSelector } from "./components/StudentSelector";
+import { buildExamSettingsUpdate } from "./exam-view-utils";
 import {
   buildEvenScoreAllocation,
   buildQuestionJumpGroups,
@@ -329,7 +332,7 @@ export function ExamPaperViewPage() {
     Partial<Record<string, string>>
   >({});
   const [savingTarget, setSavingTarget] = useState<
-    "basic" | "settings" | "scores" | null
+    "basic" | "settings" | "scores" | "students" | null
   >(null);
   const [hydrated, setHydrated] = useState(false);
   const [mockDialogOpen, setMockDialogOpen] = useState(false);
@@ -338,6 +341,8 @@ export function ExamPaperViewPage() {
   const [mockTitle, setMockTitle] = useState("");
   const [mockSubmitting, setMockSubmitting] = useState(false);
   const [activeQuestionId, setActiveQuestionId] = useState<string | null>(null);
+  const [studentManagementOpen, setStudentManagementOpen] = useState(false);
+  const [studentIdsDraft, setStudentIdsDraft] = useState<string[]>([]);
   const [addQuestionsOpen, setAddQuestionsOpen] = useState(false);
   const [addQuestionIds, setAddQuestionIds] = useState<string[]>([]);
   const [bankAddSaving, setBankAddSaving] = useState(false);
@@ -597,6 +602,13 @@ export function ExamPaperViewPage() {
     settings !== null &&
     initialSettings !== null &&
     JSON.stringify(settings) !== JSON.stringify(initialSettings);
+  const currentStudentIds = useMemo(
+    () => exam?.students.map((student) => student.student_id) ?? [],
+    [exam?.students],
+  );
+  const isStudentManagementDirty =
+    JSON.stringify([...studentIdsDraft].sort()) !==
+    JSON.stringify([...currentStudentIds].sort());
   const isScoresDirty = !areQuestionItemsEqual(
     questionItems,
     initialQuestionItems,
@@ -763,6 +775,43 @@ export function ExamPaperViewPage() {
   const handleOpenAddQuestions = () => {
     setAddQuestionIds([]);
     setAddQuestionsOpen(true);
+  };
+
+  const handleOpenStudentManagement = () => {
+    if (!exam) return;
+    setStudentIdsDraft(currentStudentIds);
+    setStudentManagementOpen(true);
+  };
+
+  const handleSaveStudents = () => {
+    if (!id || !isStudentManagementDirty) return;
+    setSavingTarget("students");
+    update(
+      {
+        resource: "exams",
+        id,
+        values: { student_ids: studentIdsDraft },
+      },
+      {
+        onSuccess: () => {
+          setSavingTarget(null);
+          setStudentManagementOpen(false);
+          void query.refetch();
+          toast({
+            title: "考生名单已更新",
+            description: "新增和移除的考生已保存。",
+          });
+        },
+        onError: (error) => {
+          setSavingTarget(null);
+          toast({
+            title: "保存失败",
+            description: getErrorMessage(error, "保存考生名单失败，请稍后重试。"),
+            variant: "destructive",
+          });
+        },
+      },
+    );
   };
 
   const handleAddQuestionsOpenChange = (open: boolean) => {
@@ -1201,15 +1250,7 @@ export function ExamPaperViewPage() {
       {
         resource: "exams",
         id,
-        values:
-          exam.category === "practice"
-            ? { show_result: settings.show_result, show_score: settings.show_score }
-            : {
-                max_switch_count: settings.max_switch_count,
-                show_result: settings.show_result,
-                allow_retake: settings.allow_retake,
-                show_score: settings.show_score,
-              },
+        values: buildExamSettingsUpdate(exam.category, settings),
       },
       {
         onSuccess: () => {
@@ -1348,9 +1389,56 @@ export function ExamPaperViewPage() {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleOpenStudentManagement}
+              disabled={aiAppending || manualSaving}
+            >
+              <Users className="h-4 w-4" />
+              考生管理
+            </Button>
           </div>
         }
       />
+
+      <Dialog
+        open={studentManagementOpen}
+        onOpenChange={(open) => {
+          if (savingTarget === "students" && mutation.isPending) return;
+          setStudentManagementOpen(open);
+        }}
+      >
+        <DialogContent className="max-h-[calc(100vh-2rem)] max-w-5xl overflow-x-hidden overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>考生管理</DialogTitle>
+            <DialogDescription>
+              增加或移除当前{categoryLabel}的考生，保存后立即生效。
+            </DialogDescription>
+          </DialogHeader>
+          <StudentSelector
+            selectedIds={studentIdsDraft}
+            onChange={setStudentIdsDraft}
+          />
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setStudentManagementOpen(false)}
+              disabled={savingTarget === "students" && mutation.isPending}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              onClick={handleSaveStudents}
+              disabled={!isStudentManagementDirty || (savingTarget === "students" && mutation.isPending)}
+            >
+              {savingTarget === "students" && mutation.isPending ? "保存中..." : "保存考生"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={basicInfoOpen}
@@ -1894,22 +1982,18 @@ export function ExamPaperViewPage() {
                     {Number(totalScore.toFixed(2)).toString()} 分
                   </span>
                 </div>
-                {exam.category === "exam" ? (
-                  <>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-muted-foreground">考生人数</span>
-                      <span className="font-medium text-foreground">
-                        {exam.total_students} 人
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-muted-foreground">已提交</span>
-                      <span className="font-medium text-foreground">
-                        {exam.submitted_count} 人
-                      </span>
-                    </div>
-                  </>
-                ) : null}
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">考生人数</span>
+                  <span className="font-medium text-foreground">
+                    {exam.total_students} 人
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">已提交</span>
+                  <span className="font-medium text-foreground">
+                    {exam.submitted_count} 人
+                  </span>
+                </div>
               </div>
             </section>
 

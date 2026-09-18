@@ -260,7 +260,12 @@ export function SmartPracticeChatDialog({
           difficulty: replacementQuestion?.difficulty ?? intent.difficulty,
           type_distribution: replacementQuestion
             ? replacementTypeDistribution(replacementQuestion)
-            : undefined,
+            : Object.values(intent.typeDistribution ?? {}).reduce(
+                  (total, count) => total + (count ?? 0),
+                  0,
+                ) === requestCount
+              ? intent.typeDistribution
+              : undefined,
           knowledge_point_ids: intent.knowledgePointId
             ? [intent.knowledgePointId]
             : undefined,

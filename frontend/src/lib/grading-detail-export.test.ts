@@ -39,6 +39,7 @@ const payload: GradingDetailExportResponse = {
       dimension_weights: { coverage: 1 },
       deduction_rules: [{ rule: "遗漏核心定义" }],
       fatal_error_rules: [],
+      grading_prompt: "【初评 · QWen Grader】\n你是评分专家。\n【任务输入】\nQuestion: What is idempotency?",
     },
     {
       question_id: "question-2",
@@ -99,6 +100,10 @@ const payload: GradingDetailExportResponse = {
         scoring_evidence: { summary: "覆盖核心定义" },
         execution_evidence: {},
         answer_quality_flags: [],
+        model_runs: [
+          { stage: "primary", stage_label: "初评", model_label: "QWen Grader", score: 8 },
+          { stage: "review", stage_label: "复评", model_label: "DeepSeek Reviewer", score: 7 },
+        ],
       },
       {
         question_id: "question-2",
@@ -128,6 +133,7 @@ const payload: GradingDetailExportResponse = {
         scoring_evidence: {},
         execution_evidence: {},
         answer_quality_flags: [],
+        model_runs: [],
       },
     ],
   }],
@@ -186,6 +192,20 @@ describe("buildGradingDetailExportHtml", () => {
     expect(html).toContain("It can be repeated safely.");
     expect(html).toContain('class="cell-details"');
     expect(html).toContain("查看全文");
+  });
+
+  it("renders the question grading prompt and per-candidate model runs", () => {
+    const html = buildGradingDetailExportHtml(payload);
+
+    expect(html).toContain("评分提示词");
+    expect(html).toContain("评分专家");
+    expect(html).toContain("模型评分（初评 / 复评）");
+    expect(html).toContain("QWen Grader");
+    expect(html).toContain("DeepSeek Reviewer");
+    expect(html).toContain('id="question-question-1-model-runs"');
+    // 判断题无评分提示词与模型评分表
+    expect(html).not.toContain('id="question-question-2-prompt"');
+    expect(html).not.toContain('id="question-question-2-model-runs"');
   });
 
   it("separates code metadata and makes missing execution evidence explicit", () => {

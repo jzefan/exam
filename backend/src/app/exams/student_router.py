@@ -329,7 +329,7 @@ def _build_standard_answers(question_type: str, answer: dict[str, Any], analysis
 
 _FILL_IN_BLANK_PLACEHOLDER_RE = re.compile(r"_{3,}|（\s*）|\(\s*\)|【\s*】")
 _FILL_IN_EDGE_PUNCT_RE = re.compile(r"^[\s,，、.。．;；:：]+|[\s,，、.。．;；:：]+$")
-_FILL_IN_GRADING_MODEL = "deepseek-v4-flash"
+_FILL_IN_GRADING_MODEL = "deepseek-flash"
 _FILL_IN_INVISIBLE_CHAR_RE = re.compile(r"[\u200b\u200c\u200d\ufeff]")
 _FILL_IN_EMPTY_CALL_RE = re.compile(r"^([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*)\(\)$")
 _FILL_IN_SIMPLE_SUBSCRIPT_RE = re.compile(r"_\{([a-z0-9]+)\}")

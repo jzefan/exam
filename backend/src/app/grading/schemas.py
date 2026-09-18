@@ -259,6 +259,16 @@ class GradingDetailExportQuestionRead(BaseModel):
     dimension_weights: dict = Field(default_factory=dict)
     deduction_rules: list = Field(default_factory=list)
     fatal_error_rules: list = Field(default_factory=list)
+    grading_prompt: str = ""
+
+
+class GradingDetailExportModelRunRead(BaseModel):
+    """One AI model's grading result for a candidate answer (e.g. 初评/复评/仲裁)."""
+
+    stage: str
+    stage_label: str = ""
+    model_label: str = ""
+    score: float | None = None
 
 
 class GradingDetailExportAnswerRead(BaseModel):
@@ -291,6 +301,7 @@ class GradingDetailExportAnswerRead(BaseModel):
     scoring_evidence: dict = Field(default_factory=dict)
     execution_evidence: dict = Field(default_factory=dict)
     answer_quality_flags: list[str] = Field(default_factory=list)
+    model_runs: list[GradingDetailExportModelRunRead] = Field(default_factory=list)
 
 
 class GradingDetailExportStudentRead(BaseModel):

@@ -136,6 +136,14 @@ export interface GradingDetailExportQuestion {
   dimension_weights: Record<string, number>;
   deduction_rules: unknown[];
   fatal_error_rules: unknown[];
+  grading_prompt?: string;
+}
+
+export interface GradingDetailExportModelRun {
+  stage: string;
+  stage_label: string;
+  model_label: string;
+  score: number | null;
 }
 
 export interface GradingDetailExportAnswer {
@@ -166,6 +174,7 @@ export interface GradingDetailExportAnswer {
   scoring_evidence: Record<string, unknown>;
   execution_evidence: Record<string, unknown>;
   answer_quality_flags: string[];
+  model_runs?: GradingDetailExportModelRun[];
 }
 
 export interface GradingDetailExportStudent {

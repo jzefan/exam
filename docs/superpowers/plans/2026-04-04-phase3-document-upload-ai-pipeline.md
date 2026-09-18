@@ -244,7 +244,7 @@ class LLMClient:
         """Call LLM API (DeepSeek or compatible) with timeout."""
         headers = {"Authorization": f"Bearer {self.api_key}"}
         payload = {
-            "model": "deepseek-v4-flash",
+            "model": "deepseek-flash",
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},

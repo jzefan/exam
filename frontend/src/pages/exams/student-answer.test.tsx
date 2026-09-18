@@ -62,7 +62,7 @@ function buildResultWithFillIn(studentId: string): IExamResult {
           deductions: [],
           suggestions: [],
           model_evaluation: {
-            model: "deepseek-v4-flash",
+            model: "deepseek-flash",
             matches: [
               {
                 index: 1,
@@ -207,7 +207,7 @@ describe("StudentAnswerPage", () => {
     );
 
     expect(await screen.findByText("模型评估输出")).toBeInTheDocument();
-    expect(screen.getByText("deepseek-v4-flash")).toBeInTheDocument();
+    expect(screen.getByText("deepseek-flash")).toBeInTheDocument();
     expect(screen.getByText(/第 1 空 · 可接受/)).toBeInTheDocument();
     expect(
       screen.getByText(/plt.xlabel\(\) 调用的是同名函数 xlabel/),
@@ -237,7 +237,7 @@ describe("StudentAnswerPage", () => {
         deductions: [],
         suggestions: [],
         model_evaluation: {
-          model: "deepseek-v4-flash",
+          model: "deepseek-flash",
           matches: [
             {
               index: 1,

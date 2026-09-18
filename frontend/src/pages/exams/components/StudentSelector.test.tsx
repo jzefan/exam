@@ -84,6 +84,14 @@ describe("StudentSelector", () => {
     expect(screen.queryByText("已选考生")).not.toBeInTheDocument();
   });
 
+  it("wraps a long selected-student summary instead of forcing horizontal overflow", async () => {
+    render(<StudentSelector selectedIds={["student-1", "student-2"]} onChange={vi.fn()} />);
+
+    const summary = await screen.findByText("张三、李四");
+    expect(summary).toHaveClass("min-w-0", "flex-1", "whitespace-normal", "break-words");
+    expect(summary).not.toHaveClass("truncate");
+  });
+
   it("supports selecting students by class and across classes", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

@@ -15,7 +15,7 @@ class LLMClient:
         self,
         api_key: str,
         base_url: str = "https://api.deepseek.com/v1",
-        model: str = "deepseek-v4-flash",
+        model: str = "deepseek-flash",
         timeout: float = 60.0,
     ):
         self.api_key = api_key

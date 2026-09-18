@@ -488,7 +488,7 @@ async def test_catalog_photo_treats_text_only_deepseek_model_as_unavailable(monk
     from app.learning.service import _is_provider_unavailable_error, _recognize_catalog_with_deepseek_vl
 
     monkeypatch.setattr(settings, "deepseek_api_key", "fake-key")
-    monkeypatch.setattr(settings, "deepseek_model_name", "deepseek-v4-flash")
+    monkeypatch.setattr(settings, "deepseek_model_name", "deepseek-flash")
 
     with pytest.raises(RuntimeError) as exc_info:
         await _recognize_catalog_with_deepseek_vl(["data:image/png;base64,ZmFrZQ=="])

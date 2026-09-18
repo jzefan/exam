@@ -76,6 +76,36 @@ describe("smart practice selection", () => {
     expect(intent.difficulty).toBe(ALL_DIFFICULTIES);
   });
 
+  it("优先解析选取数量，不把当前题库总量当成目标题量", () => {
+    expect(
+      parseSmartPracticePrompt(
+        "从当前220到题目中选取60到题作为练习，要求各种题型都需要，并且难度也适中",
+        knowledgeOptions,
+        { count: 10, difficulty: ALL_DIFFICULTIES, knowledgePointId: null },
+      ).count,
+    ).toBe(60);
+  });
+
+  it("按提示词中的题型数量严格选题", () => {
+    const intent = parseSmartPracticePrompt(
+      "生成5道选择题和5道简答题",
+      knowledgeOptions,
+      { count: 10, difficulty: ALL_DIFFICULTIES, knowledgePointId: null },
+    );
+    const source = [
+      ...Array.from({ length: 8 }, (_, index) => question(`choice-${index}`, "choice", 3)),
+      ...Array.from({ length: 8 }, (_, index) => question(`short-${index}`, "short_answer", 3)),
+    ];
+
+    expect(intent.count).toBe(10);
+    expect(
+      selectSmartPracticeQuestions(source, intent).reduce<Record<string, number>>(
+        (counts, item) => ({ ...counts, [item.type]: (counts[item.type] ?? 0) + 1 }),
+        {},
+      ),
+    ).toEqual({ choice: 5, short_answer: 5 });
+  });
+
   it("严格按知识点和难度筛选并尽量均衡题型", () => {
     const source = [
       question("a", "choice", 1),
@@ -124,6 +154,16 @@ describe("smart practice selection", () => {
         knowledgePointId: "kp-1",
       }).count,
     ).toBe(5);
+  });
+
+  it("多轮提示词支持 60 道题", () => {
+    expect(
+      parseSmartPracticeChatPrompt("改为选取60到题", knowledgeOptions, {
+        count: 10,
+        difficulty: 3,
+        knowledgePointId: "kp-1",
+      }).count,
+    ).toBe(60);
   });
 
   it("将历史题单和最新要求组成完整更新提示词", () => {

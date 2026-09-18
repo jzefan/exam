@@ -222,7 +222,7 @@ async def test_ai_grade_endpoint_updates_score_feedback_and_model_evaluation(
     assert body["score_awarded"] == 2
     assert body["is_correct"] is True
     model_eval = body["feedback"]["model_evaluation"]
-    assert model_eval["model"] == "deepseek-v4-flash"
+    assert model_eval["model"] == "deepseek-flash"
     assert model_eval["matches"][0]["is_correct"] is True
     assert model_eval["matches"][0]["reason"] == "等价"
     assert patched_deepseek["calls"] == 1

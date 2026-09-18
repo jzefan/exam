@@ -276,7 +276,7 @@ async def test_run_grading_task_creates_primary_review_and_final_snapshots(db_se
             risk_flags=[],
             provider_key="deepseek-direct",
             provider_name="deepseek",
-            model_name="deepseek-v4-flash",
+        model_name="deepseek-flash",
             metadata={},
         )
     )
@@ -543,7 +543,7 @@ async def test_run_grading_task_calls_arbiter_provider_for_model_output_even_wit
             risk_flags=[],
             provider_key="deepseek-direct",
             provider_name="deepseek",
-            model_name="deepseek-v4-flash",
+            model_name="deepseek-flash",
             metadata={},
         )
     )
@@ -632,7 +632,7 @@ async def test_run_grading_task_keeps_final_score_when_optional_arbiter_fails(
             risk_flags=[],
             provider_key="deepseek-direct",
             provider_name="deepseek",
-            model_name="deepseek-v4-flash",
+            model_name="deepseek-flash",
             metadata={},
         )
     )
@@ -910,7 +910,7 @@ async def test_final_snapshot_merges_dimension_comments_from_primary_and_review(
             risk_flags=[],
             provider_key="deepseek-direct",
             provider_name="deepseek",
-            model_name="deepseek-v4-flash",
+            model_name="deepseek-flash",
             metadata={},
         )
     )
@@ -1008,7 +1008,7 @@ async def test_run_grading_task_marks_arbitration_required_on_conflict(db_sessio
             risk_flags=[],
             provider_key="deepseek-direct",
             provider_name="deepseek",
-            model_name="deepseek-v4-flash",
+            model_name="deepseek-flash",
             metadata={},
         )
     )
@@ -1121,7 +1121,7 @@ async def test_run_grading_task_pins_final_to_review_when_arbiter_disabled(
             risk_flags=["needs_detail"],
             provider_key="deepseek-direct",
             provider_name="deepseek",
-            model_name="deepseek-v4-flash",
+            model_name="deepseek-flash",
             metadata={},
         )
     )
@@ -1274,7 +1274,7 @@ async def test_run_grading_task_returns_failed_status_with_detailed_audit_on_pri
             risk_flags=[],
             provider_key="deepseek-direct",
             provider_name="deepseek",
-            model_name="deepseek-v4-flash",
+            model_name="deepseek-flash",
             metadata={},
         )
     )
@@ -1356,7 +1356,7 @@ async def test_run_grading_task_falls_back_to_review_when_arbiter_fails_on_confl
             risk_flags=["needs_detail"],
             provider_key="deepseek-direct",
             provider_name="deepseek",
-            model_name="deepseek-v4-flash",
+            model_name="deepseek-flash",
             metadata={},
         )
     )
@@ -1460,7 +1460,7 @@ async def test_run_grading_task_falls_back_to_review_when_arbiter_missing_on_con
             risk_flags=[],
             provider_key="deepseek-direct",
             provider_name="deepseek",
-            model_name="deepseek-v4-flash",
+            model_name="deepseek-flash",
             metadata={},
         )
     )
@@ -1520,7 +1520,7 @@ async def test_build_provider_for_model_reads_api_key_from_environment(
     deepseek_model = ModelConfig(
         key="deepseek-review-v1",
         display_name="DeepSeek Reviewer",
-        model_name="deepseek-v4-flash",
+        model_name="deepseek-flash",
         provider_id=deepseek_provider.id,
         temperature=0.2,
         is_active=True,

@@ -20,6 +20,15 @@ from app.models import Base, TimestampMixin
 
 router = APIRouter()
 DEFAULT_PROVIDER_PRIORITY = ("deepseek", "qwen", "claude")
+_LEGACY_DEEPSEEK_MODEL_NAMES = {"deepseek-v4-flash", "deepseek-v4-flash-vision-exp"}
+_CURRENT_DEEPSEEK_MODEL_NAME = "deepseek-flash"
+
+
+def normalize_provider_model_name(provider: str, model_name: str | None) -> str | None:
+    """Map retired provider model aliases to the current supported name."""
+    if provider == "deepseek" and model_name in _LEGACY_DEEPSEEK_MODEL_NAMES:
+        return _CURRENT_DEEPSEEK_MODEL_NAME
+    return model_name
 
 
 # ── Model ──────────────────────────────────────────────────────────
@@ -173,7 +182,7 @@ def _to_provider_item(row: UserModelProviderSettings) -> ProviderSettingsItem:
         provider=row.provider,
         enabled=row.enabled,
         ai_api_key_masked=masked,
-        ai_model_name=row.ai_model_name,
+        ai_model_name=normalize_provider_model_name(row.provider, row.ai_model_name),
         ai_base_url=row.ai_base_url,
         has_custom_key=has_key,
         updated_at=row.updated_at,
@@ -218,7 +227,11 @@ async def get_user_ai_config(
             return (
                 provider,
                 api_key,
-                row.ai_model_name or system_model_name,
+                normalize_provider_model_name(
+                    provider,
+                    row.ai_model_name or system_model_name,
+                )
+                or system_model_name,
                 row.ai_base_url or system_base_url,
             )
     return None, None, None, None
@@ -252,7 +265,10 @@ async def update_settings_endpoint(
     if data.enabled is not None:
         row.enabled = data.enabled
     if data.ai_model_name is not None:
-        row.ai_model_name = data.ai_model_name or None
+        row.ai_model_name = normalize_provider_model_name(
+            data.provider,
+            data.ai_model_name or None,
+        )
     if data.ai_base_url is not None:
         row.ai_base_url = data.ai_base_url or None
     if data.clear_api_key:

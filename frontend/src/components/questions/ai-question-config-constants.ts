@@ -9,7 +9,7 @@ export const AI_DIFFICULTY_LABELS: Record<number, string> = {
 };
 
 export const AI_MODEL_OPTIONS = [
-  { value: "deepseek", label: "DeepSeek", desc: "deepseek-v4-flash" },
+  { value: "deepseek", label: "DeepSeek", desc: "deepseek-flash" },
   { value: "qwen", label: "通义千问", desc: "qwen-plus / qwen3.5-plus" },
   { value: "claude", label: "Claude", desc: "Claude Sonnet" },
 ] as const;

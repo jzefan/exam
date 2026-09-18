@@ -437,14 +437,17 @@ export function ClassStudentSelector({
   return (
     <div className="flex flex-col gap-5">
       {selectedIds.length > 0 ? (
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3">
-          <div className="flex min-w-0 items-center gap-2">
+        <div className="flex items-start justify-between gap-3 overflow-hidden rounded-xl border border-primary/20 bg-primary/5 px-4 py-3">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
             <Check className="size-4 shrink-0 text-primary" />
             <span className="shrink-0 text-sm font-semibold text-primary">
               已选 {selectedIds.length} {summaryLabel}
             </span>
-            <span className="text-xs text-muted-foreground">·</span>
-            <span className="truncate text-xs text-muted-foreground" title={selectedStudentSummary}>
+            <span className="shrink-0 text-xs text-muted-foreground">·</span>
+            <span
+              className="min-w-0 flex-1 whitespace-normal break-words text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]"
+              title={selectedStudentSummary}
+            >
               {selectedStudentSummary}
             </span>
           </div>

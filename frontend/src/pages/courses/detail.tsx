@@ -18,6 +18,7 @@ import {
   Calculator,
   Camera,
   CheckCircle2,
+  Check,
   ChevronDown,
   ChevronRight,
   ClipboardList,
@@ -72,9 +73,7 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
-  SelectGroup,
   SelectItem,
-  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -187,7 +186,6 @@ import {
 const AI_PREFILL_KEY = "ai_generate_prefill_v1";
 
 const ALL_SEMESTERS = "__all__";
-const ALL_QUESTION_KNOWLEDGE = "__all_question_knowledge__";
 const QUESTION_TYPE_FILTERS: QuestionType[] = [
   "choice",
   "true_false",
@@ -611,6 +609,145 @@ function flattenCourseKnowledgeNodes(
     })),
   );
   return [current, ...children];
+}
+
+function KnowledgeFilterTreeMenu({
+  tree,
+  options,
+  selectedId,
+  onSelect,
+  onClose,
+}: {
+  tree: CourseKnowledgeNode | null;
+  options: Array<{ id: string; name: string; depth: number; path: string }>;
+  selectedId: string | null;
+  onSelect: (nodeId: string | null) => void;
+  onClose: () => void;
+}) {
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(
+    () =>
+      new Set(
+        (tree?.children ?? [])
+          .filter((node) => node.children.length > 0)
+          .map((node) => node.id),
+      ),
+  );
+
+  useEffect(() => {
+    setExpandedIds(
+      new Set(
+        (tree?.children ?? [])
+          .filter((node) => node.children.length > 0)
+          .map((node) => node.id),
+      ),
+    );
+  }, [tree?.id]);
+
+  const availableIds = useMemo(
+    () => new Set(options.map((option) => option.id)),
+    [options],
+  );
+
+  const toggleExpanded = (nodeId: string) => {
+    setExpandedIds((current) => {
+      const next = new Set(current);
+      if (next.has(nodeId)) next.delete(nodeId);
+      else next.add(nodeId);
+      return next;
+    });
+  };
+
+  const selectNode = (nodeId: string | null) => {
+    onSelect(nodeId);
+    onClose();
+  };
+
+  const renderNode = (node: CourseKnowledgeNode, depth: number): ReactNode => {
+    if (!availableIds.has(node.id)) return null;
+    const hasChildren = node.children.some((child) => availableIds.has(child.id));
+    const expanded = expandedIds.has(node.id);
+    const selected = node.id === selectedId;
+
+    return (
+      <div key={node.id}>
+        <div
+          className={cn(
+            "flex items-center rounded-md text-sm transition-colors",
+            selected ? "bg-primary/10 text-primary" : "hover:bg-muted",
+          )}
+        style={{ paddingLeft: 8 }}
+        >
+          <button
+            type="button"
+            className={cn(
+              "inline-flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted-foreground/10",
+              !hasChildren && "invisible",
+            )}
+            aria-label={expanded ? "收起知识点" : "展开知识点"}
+            onClick={() => toggleExpanded(node.id)}
+          >
+            {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          </button>
+          <button
+            type="button"
+            className="flex min-w-0 flex-1 items-center gap-2 px-1.5 py-2 text-left"
+            title={options.find((option) => option.id === node.id)?.path}
+            onClick={() => selectNode(node.id)}
+          >
+            <BookOpen
+              size={15}
+              className={cn(
+                "shrink-0",
+                hasChildren ? "text-primary" : "text-muted-foreground",
+              )}
+            />
+            <span className="min-w-0 flex-1 truncate">{node.name}</span>
+            {selected ? <Check size={14} className="shrink-0 text-primary" /> : null}
+          </button>
+        </div>
+        {hasChildren && expanded ? (
+          <div className="ml-4 border-l border-border/60 pl-2">
+            {node.children.map((child) => renderNode(child, depth + 1))}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  return (
+    <div className="max-h-[min(60vh,420px)] overflow-y-auto">
+      <button
+        type="button"
+        className={cn(
+          "flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-muted",
+          selectedId === null && "bg-primary/10 text-primary",
+        )}
+        onClick={() => selectNode(null)}
+      >
+        <Layers3 size={15} className="shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate">全部知识点</span>
+        {selectedId === null ? <Check size={14} className="shrink-0 text-primary" /> : null}
+      </button>
+      <div className="my-1 border-t border-border" />
+      {tree?.children.length ? (
+        tree.children.map((node) => renderNode(node, 0))
+      ) : options.length > 0 ? (
+        options.map((option) => (
+          <button
+            key={option.id}
+            type="button"
+            className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-muted"
+            onClick={() => selectNode(option.id)}
+          >
+            <BookOpen size={15} className="shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate">{option.name}</span>
+          </button>
+        ))
+      ) : (
+        <p className="px-2 py-2 text-xs text-muted-foreground">暂无知识点</p>
+      )}
+    </div>
+  );
 }
 
 function collectCourseKnowledgeNodeIds(
@@ -2194,6 +2331,7 @@ function QuestionsTab({
   const [smartPracticeOpen, setSmartPracticeOpen] = useState(false);
   const [knowledgeCompleting, setKnowledgeCompleting] = useState(false);
   const [allQuestionsExpanded, setAllQuestionsExpanded] = useState(false);
+  const [knowledgeFilterOpen, setKnowledgeFilterOpen] = useState(false);
 
   const questionTypeCounts = useMemo(() => {
     const counts = new Map<QuestionType, number>();
@@ -2237,42 +2375,6 @@ function QuestionsTab({
   const selectedKnowledgeOption = knowledgeFilterOptions.find(
     (item) => item.id === knowledgeFilterNodeId,
   );
-  const knowledgeFilterGroups = useMemo(() => {
-    const rootNodes = knowledgeTree?.children ?? [];
-    if (rootNodes.length === 0) {
-      return knowledgeFilterOptions.length > 0
-        ? [{ label: null, items: knowledgeFilterOptions }]
-        : [];
-    }
-
-    const optionsById = new Map(
-      knowledgeFilterOptions.map((option) => [option.id, option]),
-    );
-    const included = new Set<string>();
-    const groups = rootNodes.flatMap((rootNode) => {
-      const items = flattenCourseKnowledgeNodes(rootNode)
-        .map((item) => optionsById.get(item.id))
-        .filter(
-          (item): item is (typeof knowledgeFilterOptions)[number] =>
-            Boolean(item),
-        );
-      for (const item of items) included.add(item.id);
-      if (items.length === 0) return [];
-
-      return [
-        {
-          label: rootNode.children.length > 0 ? rootNode.name : null,
-          items,
-        },
-      ];
-    });
-    const ungrouped = knowledgeFilterOptions.filter(
-      (option) => !included.has(option.id),
-    );
-    return ungrouped.length > 0
-      ? [...groups, { label: null, items: ungrouped }]
-      : groups;
-  }, [knowledgeFilterOptions, knowledgeTree]);
   const defaultCreateTitle = (() => {
     const d = new Date();
     const pad = (n: number) => String(n).padStart(2, "0");
@@ -2527,49 +2629,37 @@ function QuestionsTab({
             </Button>
           ) : null}
           <div className="flex-1" />
-          <Select
-            value={knowledgeFilterNodeId ?? ALL_QUESTION_KNOWLEDGE}
-            onValueChange={(value) =>
-              onKnowledgeFilterChange(
-                value === ALL_QUESTION_KNOWLEDGE ? null : value,
-              )
-            }
+          <DropdownMenu
+            open={knowledgeFilterOpen}
+            onOpenChange={setKnowledgeFilterOpen}
           >
-            <SelectTrigger
-              aria-label="知识点筛选"
-              className="h-9 w-[220px] shrink-0 px-3 text-xs"
-            >
-              <span className="shrink-0 font-medium">知识点：</span>
-              <SelectValue placeholder="全部知识点" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectItem value={ALL_QUESTION_KNOWLEDGE}>
-                  全部知识点
-                </SelectItem>
-              </SelectGroup>
-              {knowledgeFilterGroups.map((group, groupIndex) => (
-                <SelectGroup key={`${group.label ?? "points"}-${groupIndex}`}>
-                  {group.label ? <SelectLabel>{group.label}</SelectLabel> : null}
-                  {group.items.map((item) => {
-                    const isChapter = item.depth === 1 && Boolean(group.label);
-                    return (
-                      <SelectItem key={item.id} value={item.id}>
-                        {isChapter
-                          ? "本章全部"
-                          : `${"　".repeat(
-                              Math.max(
-                                0,
-                                item.depth - (group.label ? 2 : 1),
-                              ),
-                            )}${item.name}`}
-                      </SelectItem>
-                    );
-                  })}
-                </SelectGroup>
-              ))}
-            </SelectContent>
-          </Select>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                aria-label="知识点筛选"
+                className="h-9 w-[220px] shrink-0 justify-between px-3 text-xs"
+              >
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="shrink-0 font-medium">知识点：</span>
+                  <span className="truncate">
+                    {selectedKnowledgeOption?.name ?? "全部知识点"}
+                  </span>
+                </span>
+                <ChevronDown size={13} className="ml-1.5 shrink-0" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-[320px] p-1">
+              <KnowledgeFilterTreeMenu
+                tree={knowledgeTree}
+                options={knowledgeFilterOptions}
+                selectedId={knowledgeFilterNodeId}
+                onSelect={onKnowledgeFilterChange}
+                onClose={() => setKnowledgeFilterOpen(false)}
+              />
+            </DropdownMenuContent>
+          </DropdownMenu>
           {availableQuestionTypes.length > 0 ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -3613,20 +3703,27 @@ function AddKnowledgeNodeDialog({
   tree: CourseKnowledgeNode | null;
   saving: boolean;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (payload: { parentId: string; name: string }) => Promise<void>;
+  onSubmit: (payload: { parentId: string; names: string[] }) => Promise<void>;
 }) {
   const parentOptions = flattenCourseKnowledgeNodes(tree);
   const [parentId, setParentId] = useState("");
-  const [name, setName] = useState("");
+  const [nameInput, setNameInput] = useState("");
 
   useEffect(() => {
     if (open) {
       setParentId(tree?.id ?? "");
-      setName("");
+      setNameInput("");
     }
   }, [open, tree?.id]);
 
   const selectedParent = parentOptions.find((item) => item.id === parentId);
+  const names = nameInput
+    .split(/\r?\n/)
+    .map((name) => name.trim())
+    .filter(
+      (name, index, all) => name.length > 0 && all.indexOf(name) === index,
+    );
+  const canSubmit = parentId.length > 0 && names.length > 0 && !saving;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -3638,8 +3735,8 @@ function AddKnowledgeNodeDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <div className="space-y-2">
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="course-kp-parent">父节点</Label>
             <Select value={parentId} onValueChange={setParentId}>
               <SelectTrigger id="course-kp-parent">
@@ -3661,25 +3758,28 @@ function AddKnowledgeNodeDialog({
             ) : null}
           </div>
 
-          <div className="space-y-2">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="course-kp-name">子知识点名称</Label>
-            <Input
+            <Textarea
               id="course-kp-name"
-              value={name}
-              placeholder="例如：函数的单调性"
-              onChange={(event) => setName(event.target.value)}
+              value={nameInput}
+              rows={4}
+              placeholder="每行一个，例如：\n函数的单调性\n函数的奇偶性"
+              onChange={(event) => setNameInput(event.target.value)}
               onKeyDown={(event) => {
                 if (
+                  (event.metaKey || event.ctrlKey) &&
                   event.key === "Enter" &&
-                  parentId &&
-                  name.trim() &&
-                  !saving
+                  canSubmit
                 ) {
                   event.preventDefault();
-                  void onSubmit({ parentId, name: name.trim() });
+                  void onSubmit({ parentId, names });
                 }
               }}
             />
+            <p className="text-xs text-muted-foreground">
+              每行创建一个，同一父节点下为同级知识点。
+            </p>
           </div>
         </div>
 
@@ -3694,15 +3794,15 @@ function AddKnowledgeNodeDialog({
           </Button>
           <Button
             type="button"
-            disabled={!parentId || !name.trim() || saving}
-            onClick={() => void onSubmit({ parentId, name: name.trim() })}
+            disabled={!canSubmit}
+            onClick={() => void onSubmit({ parentId, names })}
           >
             {saving ? (
               <LoaderCircle size={14} className="mr-1.5 animate-spin" />
             ) : (
               <Plus size={14} className="mr-1.5" />
             )}
-            新增
+            {names.length > 1 ? `新增 ${names.length} 项` : "新增"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -3976,6 +4076,7 @@ function KnowledgeTab({
   tree,
   canWrite,
   assignmentLinksByNodeId,
+  onOpenEditor,
   onOpenImport,
   onOpenCatalogPhoto,
   onOpenAddNode,
@@ -3992,6 +4093,7 @@ function KnowledgeTab({
   tree: CourseKnowledgeNode | null;
   canWrite: boolean;
   assignmentLinksByNodeId: Record<string, TeacherCourseExam[]>;
+  onOpenEditor: () => void;
   onOpenImport: () => void;
   onOpenCatalogPhoto: () => void;
   onOpenAddNode: () => void;
@@ -4015,6 +4117,10 @@ function KnowledgeTab({
         <div className="flex-1" />
         {canWrite ? (
           <>
+            <Button variant="outline" size="sm" onClick={onOpenEditor}>
+              <Edit3 size={14} className="mr-1.5" />
+              编辑目录
+            </Button>
             <Button variant="outline" size="sm" onClick={onOpenImport}>
               <Upload size={14} className="mr-1.5" />
               导入
@@ -4064,6 +4170,280 @@ function KnowledgeTab({
             onPublishAssignment={onPublishAssignment}
             onRequestDelete={onRequestDeleteNode}
           />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function KnowledgeEditorTreeNode({
+  node,
+  depth,
+  selectedId,
+  onSelect,
+}: {
+  node: CourseKnowledgeNode;
+  depth: number;
+  selectedId: string | null;
+  onSelect: (nodeId: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const hasChildren = node.children.length > 0;
+  const selected = node.id === selectedId;
+
+  return (
+    <div>
+      <div
+        className={cn(
+          "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors",
+          selected
+            ? "bg-primary/10 text-primary"
+            : "text-foreground hover:bg-muted",
+        )}
+        style={{ paddingLeft: 10 }}
+        onClick={() => onSelect(node.id)}
+      >
+        <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
+          {hasChildren ? (
+            <button
+              type="button"
+              className="inline-flex size-4 items-center justify-center rounded hover:bg-muted-foreground/10"
+              aria-label={expanded ? "收起" : "展开"}
+              onClick={(event) => {
+                event.stopPropagation();
+                setExpanded((value) => !value);
+              }}
+            >
+              {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </button>
+          ) : null}
+        </span>
+        <BookOpen
+          size={15}
+          className={cn(
+            "shrink-0",
+            hasChildren ? "text-primary" : "text-muted-foreground",
+          )}
+        />
+        <span className={cn("min-w-0 flex-1 truncate", depth === 0 && "font-medium")}>
+          {node.name}
+        </span>
+        {hasChildren ? (
+          <span className="shrink-0 text-xs text-muted-foreground">
+            {node.children.length}
+          </span>
+        ) : null}
+      </div>
+      {hasChildren && expanded ? (
+        <div className="ml-4 border-l border-border/60 pl-2">
+          {node.children.map((child) => (
+            <KnowledgeEditorTreeNode
+              key={child.id}
+              node={child}
+              depth={depth + 1}
+              selectedId={selectedId}
+              onSelect={onSelect}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function KnowledgeTreeEditorPage({
+  tree,
+  canWrite,
+  selectedNodeId,
+  onSelectedNodeChange,
+  onBack,
+  onRename,
+  onAddChildren,
+  onRequestDelete,
+}: {
+  tree: CourseKnowledgeNode | null;
+  canWrite: boolean;
+  selectedNodeId: string | null;
+  onSelectedNodeChange: (nodeId: string) => void;
+  onBack: () => void;
+  onRename: (nodeId: string, name: string) => Promise<void>;
+  onAddChildren: (payload: { parentId: string; names: string[] }) => Promise<void>;
+  onRequestDelete: (node: CourseKnowledgeNode) => void;
+}) {
+  const selectedNode = findCourseKnowledgeNode(tree, selectedNodeId) ?? tree;
+  const [nameDraft, setNameDraft] = useState(selectedNode?.name ?? "");
+  const [childrenDraft, setChildrenDraft] = useState("");
+  const [savingName, setSavingName] = useState(false);
+  const [addingChildren, setAddingChildren] = useState(false);
+
+  useEffect(() => {
+    setNameDraft(selectedNode?.name ?? "");
+    setChildrenDraft("");
+  }, [selectedNode?.id]);
+
+  const childNames = childrenDraft
+    .split(/\r?\n/)
+    .map((name) => name.trim())
+    .filter((name, index, names) => name.length > 0 && names.indexOf(name) === index);
+
+  const handleSaveName = async () => {
+    if (!selectedNode || !canWrite) return;
+    const nextName = nameDraft.trim();
+    if (!nextName || nextName === selectedNode.name) return;
+    setSavingName(true);
+    try {
+      await onRename(selectedNode.id, nextName);
+    } finally {
+      setSavingName(false);
+    }
+  };
+
+  const handleAddChildren = async () => {
+    if (!selectedNode || !canWrite || childNames.length === 0) return;
+    setAddingChildren(true);
+    try {
+      await onAddChildren({ parentId: selectedNode.id, names: childNames });
+      setChildrenDraft("");
+    } finally {
+      setAddingChildren(false);
+    }
+  };
+
+  return (
+    <div className="flex min-h-0 flex-col gap-5">
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="button" variant="ghost" size="sm" className="-ml-2" onClick={onBack}>
+          <ArrowLeft size={15} className="mr-1.5" />
+          返回目录
+        </Button>
+        <div className="h-5 w-px bg-border" />
+        <div>
+          <h1 className="text-base font-semibold text-foreground">编辑课程目录</h1>
+          <p className="mt-0.5 text-xs text-muted-foreground">选择知识点后编辑名称或管理下级节点</p>
+        </div>
+      </div>
+
+      {!tree ? (
+        <EmptyPanel icon={<Layers3 size={22} />} title="暂无课程目录" />
+      ) : (
+        <div className="grid min-h-[560px] grid-cols-1 gap-4 lg:grid-cols-[minmax(240px,0.8fr)_minmax(0,1.6fr)]">
+          <section className="flex min-h-0 flex-col rounded-xl border border-border bg-card">
+            <div className="border-b border-border px-4 py-3">
+              <h2 className="text-sm font-semibold text-foreground">知识树</h2>
+              <p className="mt-0.5 text-xs text-muted-foreground">点击节点查看和编辑</p>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-2">
+              <KnowledgeEditorTreeNode
+                node={tree}
+                depth={0}
+                selectedId={selectedNode?.id ?? null}
+                onSelect={onSelectedNodeChange}
+              />
+            </div>
+          </section>
+
+          <section className="rounded-xl border border-border bg-card p-5">
+            {!selectedNode ? (
+              <EmptyPanel icon={<BookOpen size={22} />} title="请选择知识点" />
+            ) : (
+              <div className="flex flex-col gap-6">
+                <div>
+                  <p className="text-xs text-muted-foreground">
+                    {findCourseKnowledgeNodePath(tree, selectedNode.id).join(" / ")}
+                  </p>
+                  <div className="mt-2 flex items-center gap-2">
+                    {selectedNode.id === tree.id ? (
+                      <Layers3 size={18} className="text-primary" />
+                    ) : (
+                      <BookOpen size={18} className="text-primary" />
+                    )}
+                    <h2 className="min-w-0 truncate text-lg font-semibold text-foreground">
+                      {selectedNode.name}
+                    </h2>
+                  </div>
+                </div>
+
+                {canWrite ? (
+                  <>
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor="knowledge-editor-name">名称</Label>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          id="knowledge-editor-name"
+                          value={nameDraft}
+                          onChange={(event) => setNameDraft(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") void handleSaveName();
+                          }}
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={savingName || !nameDraft.trim() || nameDraft.trim() === selectedNode.name}
+                          onClick={() => void handleSaveName()}
+                        >
+                          {savingName ? <LoaderCircle size={14} className="mr-1.5 animate-spin" /> : null}
+                          保存
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-2 border-t border-border pt-5">
+                      <div>
+                        <Label htmlFor="knowledge-editor-children">新增子知识点</Label>
+                        <p className="mt-1 text-xs text-muted-foreground">每行一个，同级创建</p>
+                      </div>
+                      <Textarea
+                        id="knowledge-editor-children"
+                        rows={5}
+                        value={childrenDraft}
+                        onChange={(event) => setChildrenDraft(event.target.value)}
+                        placeholder="例如：函数定义\n函数图像"
+                      />
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-xs text-muted-foreground">
+                          {childNames.length > 0 ? `将新增 ${childNames.length} 项` : ""}
+                        </span>
+                        <Button
+                          type="button"
+                          disabled={addingChildren || childNames.length === 0}
+                          onClick={() => void handleAddChildren()}
+                        >
+                          {addingChildren ? (
+                            <LoaderCircle size={14} className="mr-1.5 animate-spin" />
+                          ) : (
+                            <Plus size={14} className="mr-1.5" />
+                          )}
+                          新增子知识点
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3 border-t border-border pt-5">
+                      <div>
+                        <p className="text-sm font-medium text-foreground">删除知识点</p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {selectedNode.id === tree.id ? "课程根节点不可删除" : "删除后不可恢复"}
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="text-destructive hover:text-destructive"
+                        disabled={selectedNode.id === tree.id}
+                        onClick={() => onRequestDelete(selectedNode)}
+                      >
+                        <Trash2 size={14} className="mr-1.5" />
+                        删除
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="border-t border-border pt-5 text-sm text-muted-foreground">当前课程为只读状态</p>
+                )}
+              </div>
+            )}
+          </section>
         </div>
       )}
     </div>
@@ -4255,6 +4635,10 @@ export function CourseDetailPage() {
   const [selectedKnowledgeNodeId, setSelectedKnowledgeNodeId] = useState<
     string | null
   >(null);
+  const [knowledgeEditorOpen, setKnowledgeEditorOpen] = useState(false);
+  const [knowledgeEditorNodeId, setKnowledgeEditorNodeId] = useState<string | null>(
+    null,
+  );
   const [materialFilterNodeId, setMaterialFilterNodeId] = useState<
     string | null
   >(null);
@@ -4471,6 +4855,12 @@ export function CourseDetailPage() {
   useEffect(() => {
     setSemesterHintDismissed(false);
   }, [id]);
+
+  useEffect(() => {
+    if (activeTab !== "knowledge") {
+      setKnowledgeEditorOpen(false);
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     const defaultNodeId = resolveDefaultKnowledgeUploadTargetId(tree);
@@ -4760,7 +5150,7 @@ export function CourseDetailPage() {
   );
 
   const handleAddKnowledgeNode = useCallback(
-    async ({ parentId, name }: { parentId: string; name: string }) => {
+    async ({ parentId, names }: { parentId: string; names: string[] }) => {
       if (!course?.direction_id) {
         toast({
           title: "无法新增知识点",
@@ -4771,22 +5161,24 @@ export function CourseDetailPage() {
       }
       setAddingKnowledge(true);
       try {
-        await apiRequest<{ id: string; name: string }>(
-          "/knowledge/knowledge-points",
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              direction_id: course.direction_id,
-              parent_id: parentId,
-              name,
-            }),
-          },
-        );
+        for (const name of names) {
+          await apiRequest<{ id: string; name: string }>(
+            "/knowledge/knowledge-points",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                direction_id: course.direction_id,
+                parent_id: parentId,
+                name,
+              }),
+            },
+          );
+        }
         setAddKnowledgeOpen(false);
         toast({
-          title: "已新增子知识点",
-          description: `「${name}」已添加到课程目录。`,
+          title: `已新增 ${names.length} 个子知识点`,
+          description: "已添加到课程目录。",
         });
         if (id) {
           const fresh = await getCourseKnowledgeTree(id);
@@ -5196,6 +5588,9 @@ export function CourseDetailPage() {
       });
       setSelectedKnowledgeNodeId((current) =>
         current === knowledgeNodeToDelete.id ? null : current,
+      );
+      setKnowledgeEditorNodeId((current) =>
+        current === knowledgeNodeToDelete.id ? id ?? null : current,
       );
       setKnowledgeNodeToDelete(null);
       await Promise.all([refreshKnowledgeTree(), refreshCourseSummary()]);
@@ -6777,10 +7172,22 @@ export function CourseDetailPage() {
               </Button>
             </div>
           ) : null}
-            <Tabs
-              value={activeTab}
-              onValueChange={(value) => setActiveTab(value as CourseTab)}
-            >
+            {knowledgeEditorOpen ? (
+              <KnowledgeTreeEditorPage
+                tree={tree}
+                canWrite={course.can_write}
+                selectedNodeId={knowledgeEditorNodeId}
+                onSelectedNodeChange={setKnowledgeEditorNodeId}
+                onBack={() => setKnowledgeEditorOpen(false)}
+                onRename={handleRenameKnowledgeNode}
+                onAddChildren={handleAddKnowledgeNode}
+                onRequestDelete={setKnowledgeNodeToDelete}
+              />
+            ) : (
+              <Tabs
+                value={activeTab}
+                onValueChange={(value) => setActiveTab(value as CourseTab)}
+              >
               {/* 导航已移到左侧栏，这里只保留各模块内容面板。 */}
               <TabsContent value="materials" className="mt-0">
                 {tabLoading === "materials" ? (
@@ -6982,6 +7389,10 @@ export function CourseDetailPage() {
                     tree={tree}
                     canWrite={course.can_write}
                     assignmentLinksByNodeId={assignmentLinksByNodeId}
+                    onOpenEditor={() => {
+                      setKnowledgeEditorNodeId(tree?.id ?? null);
+                      setKnowledgeEditorOpen(true);
+                    }}
                     onOpenImport={() => setImportDialogOpen(true)}
                     onOpenCatalogPhoto={() => setCatalogPhotoOpen(true)}
                     onOpenAddNode={() => setAddKnowledgeOpen(true)}
@@ -7195,7 +7606,8 @@ export function CourseDetailPage() {
                   <GradeWeightPanel courseId={id ?? ""} canWrite={course.can_write} />
                 )}
               </TabsContent>
-            </Tabs>
+              </Tabs>
+            )}
           </main>
 
         <CourseKnowledgeNodeDialog

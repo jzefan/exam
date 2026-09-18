@@ -174,8 +174,14 @@ def build_ai_generate_system_prompt(
 
     if type_distribution:
         type_names = {
+            "choice": "选择题(choice)",
             "single_choice": "单选题(choice，answer.correct 为单个字符串，content.multi=false)",
             "multi_choice": "多选题(choice，answer.correct 为数组，content.multi=true)",
+            "true_false": "判断题(true_false)",
+            "fill_in": "填空题(fill_in)",
+            "short_answer": "简答题(short_answer)",
+            "essay": "论述题(essay)",
+            "code": "编程题(code)",
         }
         parts = [f"{type_names.get(qtype, qtype)} {count}题" for qtype, count in type_distribution.items()]
         type_instruction = (

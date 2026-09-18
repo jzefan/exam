@@ -329,7 +329,7 @@ describe("ExamResultPage", () => {
               deductions: ["第 1 空应为 groupby"],
               suggestions: ["复查拼写、术语与顺序。"],
               model_evaluation: {
-                model: "deepseek-v4-flash",
+                model: "deepseek-flash",
                 matches: [
                   { is_correct: false, reason: "apply 不是 groupby。" },
                   { is_correct: true, reason: "agg() 与 agg 等价。" },
@@ -349,7 +349,7 @@ describe("ExamResultPage", () => {
 
     expect((await screen.findAllByText("1.33 / 2")).length).toBeGreaterThan(0);
     expect(screen.getByText("模型评估输出")).toBeInTheDocument();
-    expect(screen.getByText("deepseek-v4-flash")).toBeInTheDocument();
+    expect(screen.getByText("deepseek-flash")).toBeInTheDocument();
     expect(screen.getByText("agg() 与 agg 等价。")).toBeInTheDocument();
     expect(screen.getByText("transform() 与 transform 等价。")).toBeInTheDocument();
   });
