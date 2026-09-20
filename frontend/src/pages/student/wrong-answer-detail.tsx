@@ -39,6 +39,16 @@ export function WrongAnswerDetailPage() {
   const item = query.data?.data;
   const effectiveMastered = mastered || item?.mastered;
 
+  // 从试卷/练习的错题列表进来时原路返回，直接打开链接则回到错题回顾首页。
+  const historyIndex = (window.history.state as { idx?: number } | null)?.idx ?? 0;
+  const handleBack = () => {
+    if (historyIndex > 0) {
+      navigate(-1);
+      return;
+    }
+    navigate("/wrong-answers");
+  };
+
   const handleMarkMastered = async () => {
     if (!id) return;
     await api.post(`/api/wrong-answers/${id}/mastered`);
@@ -105,7 +115,7 @@ export function WrongAnswerDetailPage() {
               : tStudent("wrong_detail_mark_mastered", undefined, locale)}
           </Button>
           <button
-            onClick={() => navigate("/wrong-answers")}
+            onClick={handleBack}
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
             <ArrowLeft size={16} />

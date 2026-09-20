@@ -326,6 +326,10 @@ class QuestionImportDraft(BaseModel):
     doubt: bool = False
     doubt_reason: str | None = None
     suggested_knowledge_points: list[KnowledgePointSuggestion] = Field(default_factory=list)
+    # 题干原文标注的知识点名称（尚未匹配到题库知识点 id）。
+    recognized_knowledge_points: list[str] = Field(default_factory=list)
+    # 原文印刷的题号（用于校验识别是否漏题；题型分段内连续）。
+    question_number: int | None = None
 
 
 class QuestionImportDocumentSummary(BaseModel):
@@ -348,6 +352,9 @@ class QuestionImportDocumentRecognizeRequest(BaseModel):
     source_format: str = Field(pattern="^(pdf|docx|md|json|zip)$")
     prefer_template: bool = False
     analysis_mode: QuestionImportAnalysisMode = QuestionImportAnalysisMode.FAST
+    # 标准模板文档默认走纯规则解析（不调用大模型）；置 True 可强制走智能识别，
+    # 供页面上的「AI 重新识别」使用。
+    force_ai: bool = False
     images: list[QuestionImportImageInput] = Field(default_factory=list)
     tables: list[QuestionImportTableInput] = Field(default_factory=list)
     import_context: str | None = Field(default=None, max_length=50)
@@ -478,12 +485,14 @@ class EnhanceDraftInput(BaseModel):
     options: dict[str, str] | None = None
     answer_text: str | None = None
     analysis: str | None = None
+    # 原文标注的知识点名称，作为匹配题库知识点的提示。
+    recognized_knowledge_points: list[str] = Field(default_factory=list)
 
 
 class QuestionImportEnhanceDraftsRequest(BaseModel):
     drafts: list[EnhanceDraftInput] = Field(min_length=1, max_length=500)
     root_knowledge_point_id: uuid.UUID | None = None
-    mode: Literal["answers", "knowledge", "both"] = "both"
+    mode: Literal["answers", "analysis", "knowledge", "both"] = "both"
 
     @model_validator(mode="after")
     def require_root_for_knowledge_matching(self) -> "QuestionImportEnhanceDraftsRequest":

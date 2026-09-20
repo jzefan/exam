@@ -139,12 +139,16 @@ class WrongAnswerListItem(BaseModel):
     question_id: uuid.UUID
     question_title: str
     question_type: str
+    exam_id: uuid.UUID | None = None
     exam_title: str
+    exam_category: str = "exam"
     wrong_count: int
     last_wrong_at: datetime
     mastered_at: datetime | None = None
     tags: list[str] = Field(default_factory=list)
     mastered: bool = False
+    # 该考试/练习下已生成的错题强化练习数量。
+    remedial_practice_count: int = 0
 
 
 class WrongAnswerDetailResponse(WrongAnswerListItem):
@@ -154,6 +158,60 @@ class WrongAnswerDetailResponse(WrongAnswerListItem):
     analysis: str | None = None
     student_answer: dict[str, Any] = Field(default_factory=dict)
     feedback: dict[str, Any] = Field(default_factory=dict)
+
+
+class RemedialPracticeGroupItem(BaseModel):
+    key: str
+    knowledge_point_id: uuid.UUID | None = None
+    name: str
+    path: str | None = None
+    wrong_question_count: int
+    suggested_count: int
+
+
+class RemedialPracticeSummaryItem(BaseModel):
+    id: uuid.UUID
+    title: str
+    question_count: int
+    duration_minutes: int
+    created_at: datetime
+    started_at: datetime | None = None
+    submitted_at: datetime | None = None
+    score: float | None = None
+    total_score: float
+
+
+class RemedialPracticeAnalysisResponse(BaseModel):
+    source_exam_id: uuid.UUID | None = None
+    source_title: str
+    source_category: str = "exam"
+    wrong_question_count: int
+    default_total_count: int
+    max_total_count: int
+    groups: list[RemedialPracticeGroupItem] = Field(default_factory=list)
+    practices: list[RemedialPracticeSummaryItem] = Field(default_factory=list)
+
+
+class RemedialPracticeAllocationItem(BaseModel):
+    group_key: str = Field(min_length=1, max_length=80)
+    count: int = Field(ge=0, le=50)
+
+
+class RemedialPracticeCreateRequest(BaseModel):
+    source_exam_id: uuid.UUID | None = None
+    total_count: int = Field(default=10, ge=1, le=50)
+    allocations: list[RemedialPracticeAllocationItem] = Field(default_factory=list)
+    difficulty: int = Field(default=3, ge=1, le=5)
+    model: str = Field(default="deepseek", max_length=20)
+
+
+class RemedialPracticeCreateResponse(BaseModel):
+    exam_id: uuid.UUID
+    title: str
+    question_count: int
+    requested_count: int
+    duration_minutes: int
+    total_score: float
 
 
 class AppealCreateRequest(BaseModel):

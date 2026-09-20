@@ -267,6 +267,15 @@ class Exam(OwnerMixin, BaseModel):
     course_kp_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("knowledge_points.id", ondelete="SET NULL"), nullable=True
     )
+    # 错题强化练习专用：来源考试/练习（错题本里挂在哪一项下面）。
+    # 为空且 hidden_from_list 为真时，表示来源是「历史考试」兜底分组。
+    origin_exam_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("exams.id", ondelete="SET NULL"), nullable=True
+    )
+    # 学生个人生成的错题强化练习：不进「我的考试/练习」列表，只在错题本里可见。
+    hidden_from_list: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False)
 
     creator: Mapped["app.auth.models.User"] = relationship(  # type: ignore[name-defined]
@@ -288,4 +297,5 @@ class Exam(OwnerMixin, BaseModel):
     __table_args__ = (
         Index("ix_exams_owner_id_deleted_at", "owner_id", "deleted_at"),
         Index("ix_exams_created_by_deleted_at", "created_by", "deleted_at"),
+        Index("ix_exams_origin_exam_id", "origin_exam_id"),
     )

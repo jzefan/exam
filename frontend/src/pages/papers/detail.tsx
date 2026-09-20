@@ -1293,7 +1293,9 @@ export function PaperDetailPage() {
                         expanded={isExpanded}
                         index={index + 1}
                         expandOnClick
-                        className="transition-colors hover:border-primary/30 hover:bg-muted/20"
+                        hideAnswer
+                        markChoiceAnswer
+                        className="cursor-pointer transition-all hover:border-primary hover:shadow-md"
                         actionsPlacement="header"
                         actions={
                           <div className="flex items-center gap-1">

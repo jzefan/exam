@@ -1,8 +1,10 @@
 """CRUD service functions for Question, Tag, and KnowledgePoint."""
 
 import asyncio
+import base64
 import hashlib
 import json
+import mimetypes
 import re
 import uuid
 from pathlib import Path
@@ -962,13 +964,31 @@ def _is_ai_service_unavailable_error(exc: Exception) -> bool:
         or "DeepSeek API Key" in str(exc)
         or "DeepSeek 分析失败" in str(exc)
         or "DeepSeek 没有返回分析结果" in str(exc)
+        # Chunked recognition (试卷导入) aggregates provider failures / missing keys
+        # into these messages; they are service outages, not "document has no
+        # questions", so paper import should still fall back to rule drafts.
+        or "未配置任何 AI 识别服务的 API Key" in str(exc)
+        or "AI 题目识别失败" in str(exc)
     )
 
 
 def _ensure_image_data_url(image: str) -> str:
-    if image.strip().lower().startswith("data:"):
-        return image
-    return f"data:image/jpeg;base64,{image}"
+    """Turn an image reference into a data URL the vision API accepts.
+
+    Accepts a data URL as-is, raw base64, or a server-side upload URL
+    (``/api/uploads/files/<name>``) which is read back from disk and inlined so
+    server-generated images (e.g. rendered PDF pages) can be sent to the model.
+    """
+    value = image.strip()
+    if value.lower().startswith("data:"):
+        return value
+    if value.startswith(_UPLOAD_URL_PREFIX):
+        filename = Path(value[len(_UPLOAD_URL_PREFIX) :].split("?", 1)[0]).name
+        path = _IMG_UPLOAD_DIR / filename
+        if filename and path.is_file():
+            mime = mimetypes.guess_type(filename)[0] or "image/jpeg"
+            return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode()}"
+    return f"data:image/jpeg;base64,{value}"
 
 
 async def _request_vision_json(
@@ -1618,6 +1638,18 @@ def _is_standalone_question_type_line(line: str) -> bool:
     )
 
 
+# Markdown 水平分隔线。不含下划线——填空题干里的连续下划线是空位，不是分隔线。
+_MARKDOWN_RULE_RE = re.compile(r"^(?:\*{3,}|-{3,})$")
+
+
+def _is_markdown_rule_line(line: str) -> bool:
+    """``***`` / ``---`` 这类排版分隔线，不能当成题目内容。
+
+    表格分隔行写的是 ``| --- | --- |``（带竖线），不会被这里命中。
+    """
+    return bool(_MARKDOWN_RULE_RE.match(line.strip()))
+
+
 def _normalize_inline_tail_fields(raw_text: str) -> str:
     return re.sub(
         r"(?<!\n)\s*(\[(?:答案|参考答案|解析|分析|难度|难易度|预计时间|预期时间)\])",
@@ -1688,6 +1720,9 @@ def build_import_draft_from_segment(
             flush_collecting_field()
             type_hint_text = type_field.group(1).strip()
         elif _is_standalone_question_type_line(line):
+            flush_collecting_field()
+            continue
+        elif _is_markdown_rule_line(line):
             flush_collecting_field()
             continue
         elif collecting_field == "answer":
@@ -1772,7 +1807,11 @@ def parse_template_document(raw_text: str) -> list[QuestionImportDraft]:
             content_text = "\n".join(part for part in [content_text, *content_lines] if part).strip()
         text = "\n".join(
             [
-                fields.get("题型", ""),
+                # 必须带「题型：」标签。只给裸值（如 "判断题"）会被
+                # build_import_draft_from_segment 当成「单独一行的题型词」丢掉，
+                # 题型提示随之丢失；题干里若出现「选择」之类字样（例如
+                # "K 值的选择对聚类结果…"）就会被误判成选择题。
+                f"题型：{fields.get('题型', '')}",
                 content_text,
                 f"答案：{fields.get('答案') or fields.get('参考答案') or ''}",
                 f"解析：{fields.get('分析') or fields.get('解析') or ''}",
@@ -1788,6 +1827,86 @@ def parse_template_document(raw_text: str) -> list[QuestionImportDraft]:
     return drafts
 
 
+# 标准模板的必填字段：只有整篇文档的每一道题都带齐这些字段，才认定文档
+# 「就是标准模板」，可以直接用正则解析而不调用大模型。缺字段的文档仍走
+# 智能识别，避免规则解析静默丢题。
+_STANDARD_TEMPLATE_REQUIRED_FIELDS: tuple[str, ...] = ("题型", "题目内容")
+_STANDARD_TEMPLATE_ANSWER_FIELDS: tuple[str, ...] = ("答案", "参考答案")
+# 允许极少数题目字段破损（复制粘贴残留、手改漏填）。否则 250 道里只要有 1 道
+# 缺答案，整篇就会放弃规则解析、退回 AI 重新切题 —— 那种「一刀切」正是丢题的
+# 根源。破损题目仍会生成草稿并带 issue，在审核页里可筛可改。
+_STANDARD_TEMPLATE_MIN_BLOCK_RATIO = 0.9
+
+
+def _template_block_field_names(block_lines: list[str]) -> set[str]:
+    # 判定口径必须和 parse_template_document / build_import_draft_from_segment 一致：
+    # 它们都会用 _normalize_inline_tail_fields 把行内的 `[答案]` 拆到独立一行。
+    # 这里不做同样的归一化，`题目内容：xx [答案] A` 这类写法就会被判成「缺答案」，
+    # 一道题的瑕疵会让整篇文档放弃规则解析、退回 AI。
+    normalized = _normalize_inline_tail_fields("\n".join(block_lines))
+    names: set[str] = set()
+    for line in normalized.split("\n"):
+        field = _parse_template_field_line(line)
+        if field is not None:
+            names.add(field[0])
+    return names
+
+
+def _is_complete_template_block(field_names: set[str]) -> bool:
+    return all(
+        field in field_names for field in _STANDARD_TEMPLATE_REQUIRED_FIELDS
+    ) and any(field in field_names for field in _STANDARD_TEMPLATE_ANSWER_FIELDS)
+
+
+def is_standard_template_document(raw_text: str) -> bool:
+    """``raw_text`` 是否严格符合「题型 / 题目内容 / 答案」标准模板。
+
+    只按字段前缀做正则判定，不调用大模型。块切分以「题型」字段为界，开头没有
+    字段的说明性段落（标题、难度映射表等）会被忽略；带字段的块里至少有九成
+    同时具备必填字段和答案，才认定整篇可以纯规则解析。低于这个比例说明排版和
+    解析器预期不符，返回 ``False`` 让调用方回退到智能识别。
+    """
+    field_name_sets = [
+        names
+        for names in (
+            _template_block_field_names(block) for block in _split_template_blocks(raw_text)
+        )
+        if names
+    ]
+    if not field_name_sets:
+        return False
+    complete_blocks = sum(1 for names in field_name_sets if _is_complete_template_block(names))
+    return complete_blocks >= len(field_name_sets) * _STANDARD_TEMPLATE_MIN_BLOCK_RATIO
+
+
+def _is_complete_template_draft(draft: QuestionImportDraft) -> bool:
+    if not draft.content_text.strip() or not (draft.answer_text or "").strip():
+        return False
+    if draft.type.value == "choice" and len(draft.options or {}) < 2:
+        return False
+    return True
+
+
+def build_standard_template_drafts(
+    payload: QuestionImportDocumentRecognizeRequest,
+) -> list[QuestionImportDraft] | None:
+    """纯正则解析标准模板文档；结果不合格时返回 ``None`` 交给智能识别。
+
+    返回 ``None`` 的情况：文档不是标准模板，或者虽然字段齐全但解析出来的题目
+    大面积缺题干/答案/选项（说明字段位置和解析器预期不符）。宁可多调用一次大
+    模型，也不要让规则解析把题目悄悄丢掉。
+    """
+    if not is_standard_template_document(payload.raw_text):
+        return None
+    drafts = _build_rule_based_drafts(payload, ImportRecognitionMode.TEMPLATE.value)
+    if not drafts:
+        return None
+    complete_drafts = sum(1 for draft in drafts if _is_complete_template_draft(draft))
+    if complete_drafts < len(drafts) * _STANDARD_TEMPLATE_MIN_BLOCK_RATIO:
+        return None
+    return drafts
+
+
 def _collect_segment_images(raw_text: str, images: list[QuestionImportImageInput]) -> list[QuestionImportImageInput]:
     image_ids = re.findall(r"\[IMAGE:([^\]]+)\]", raw_text)
     if not image_ids:
@@ -1798,6 +1917,45 @@ def _collect_segment_images(raw_text: str, images: list[QuestionImportImageInput
 
 def _is_paper_import_context(payload: QuestionImportDocumentRecognizeRequest) -> bool:
     return payload.import_context == "paper"
+
+
+_IMPORT_NAMED_ENTITIES: tuple[tuple[str, str], ...] = (
+    ("&nbsp;", " "),
+    ("&ensp;", " "),
+    ("&emsp;", " "),
+    ("&quot;", '"'),
+    ("&apos;", "'"),
+    ("&lt;", "<"),
+    ("&gt;", ">"),
+    ("&amp;", "&"),
+)
+_IMPORT_NUMERIC_ENTITY_RE = re.compile(r"&#(?:[xX]([0-9a-fA-F]+)|(\d+));")
+
+
+def _decode_import_html_entities(text: str) -> str:
+    """还原从网页 / Word 导出复制来的 HTML 实体。
+
+    Markdown 题库里常见 `&#x20;`（空格的十六进制实体）残留。它有两种危害：
+    一是把垃圾字符带进题干、选项和答案——判断题答案会变成 ``错误&#x20;``，
+    判分时和标准答案对不上；二是 ``&#x20;[答案] BCD`` 这类行首带实体的字段
+    整行都识别不到（行首不是 ``[``，字段正则匹配失败），进而丢掉一整道题的
+    答案。
+    """
+    if "&" not in text:
+        return text
+
+    def replace_numeric(match: re.Match[str]) -> str:
+        hexadecimal, decimal = match.group(1), match.group(2)
+        try:
+            return chr(int(hexadecimal, 16) if hexadecimal else int(decimal))
+        except (ValueError, OverflowError):
+            return match.group(0)
+
+    decoded = _IMPORT_NUMERIC_ENTITY_RE.sub(replace_numeric, text)
+    for entity, character in _IMPORT_NAMED_ENTITIES:
+        if entity in decoded:
+            decoded = decoded.replace(entity, character)
+    return decoded
 
 
 def _table_to_import_text(table: QuestionImportTableInput) -> str:
@@ -1976,6 +2134,36 @@ async def complete_import_draft_with_ai(draft: QuestionImportDraft) -> QuestionI
     return merged
 
 
+_PAPER_IMPORT_AI_RULES = """
+试卷导入额外规则：
+- 试卷封面/表头不是题目：学校名称、学年学期、课程名、试卷 A/B 卷、答题时限、考试形式、班级、学号、姓名、得分栏、得分统计表、阅卷教师/核查人签名均不要生成题目。
+- 题型说明不是题目，例如"一、单项选择题（每小题 2 分，共 50 分）"只作为后续题型、分值和题量上下文。
+- 答题卡/答案填写表不是题目，例如只包含 1. 2. 3...25. 的编号表格不要生成空题；它只能作为题量线索。
+- 不要因为答题卡编号臆造空题。只输出实际看到完整题干的题目。
+- 填空题（fill_in）的 content_text 必须用 "_____"（至少 4 个连续下划线）替代原文中需要学生填写的内容。例如原文"大数据的4V特征是海量（Volume）、高速（Velocity）"，应输出 content_text 为"大数据的4V特征是_____（_____）、_____（_____）"或类似形式。重点：用 "_____" 替换掉答案文字本身，不要保留答案在题干中，也不要只在末尾追加空位。
+- 选择题可能把选项写在题干同一行内（如"题目内容 A. 选项1 B. 选项2 C. 选项3 D. 选项4"），需要提取到 options 字段中并把选项文本从 content_text 移除。
+- 若同一段落中出现了两道题（格式异常），尝试拆分为两条独立题目。
+- 文本中可能出现表格块，格式为：第一行 [TABLE:N] 标记，紧跟若干行 Markdown 风格的表格行（"| 单元格1 | 单元格2 | ... |"），其中可能含一行 "| --- | --- | --- |" 分隔行。表格属于其紧邻上文（同一道题题干）的一部分，必须把整张表完整保留在该题的 content_text 中（保留 Markdown 表格语法即可，去掉 [TABLE:N] 标记本身）。绝不可丢弃表格、不可把表格行单独成题、不可把表格当作多个题目；即使表格行以数字（如 "128.96.39.0"）开头也不是新题的起点。
+"""
+
+# 部分由 PDF 转换来的 DOCX 会把「答案：X 知识点：… 难度层次：… 」和下一题的
+# 「12. 题干」塞进同一个段落（没有换行符），导致题号不在行首、边界扫描漏题。
+_GLUED_QUESTION_AFTER_ANSWER_RE = re.compile(
+    r"(?P<answer>答\s*案\s*[：:][^\n]*?)[ \t]+"
+    r"(?=\d{1,3}\s*[.、．]\s*[\u4e00-\u9fffA-Za-z(（])"
+)
+
+
+def split_questions_glued_after_answers(text: str) -> str:
+    """Break before a question number that shares a line with the previous answer.
+
+    ``答案：B 知识点：… 难度层次：易 29. 语义分割…`` becomes two lines so the
+    question-boundary scanner sees ``29.`` at the start of a line. Numbers that
+    are followed by another digit (e.g. IP ``128.96.39.0``) are left untouched.
+    """
+    return _GLUED_QUESTION_AFTER_ANSWER_RE.sub(lambda match: f"{match.group('answer')}\n", text)
+
+
 def _build_document_ai_prompt(
     raw_text: str,
     images: list[QuestionImportImageInput],
@@ -1987,19 +2175,7 @@ def _build_document_ai_prompt(
         f"- {image.image_id}: {image.url} (order={image.order}, page={image.page or 'unknown'}, alt={image.alt or ''})"
         for image in images
     )
-    paper_rules = ""
-    if import_context == "paper":
-        paper_rules = """
-试卷导入额外规则：
-- 试卷封面/表头不是题目：学校名称、学年学期、课程名、试卷 A/B 卷、答题时限、考试形式、班级、学号、姓名、得分栏、得分统计表、阅卷教师/核查人签名均不要生成题目。
-- 题型说明不是题目，例如"一、单项选择题（每小题 2 分，共 50 分）"只作为后续题型、分值和题量上下文。
-- 答题卡/答案填写表不是题目，例如只包含 1. 2. 3...25. 的编号表格不要生成空题；它只能作为题量线索。
-- 不要因为答题卡编号臆造空题。只输出实际看到完整题干的题目。
-- 填空题（fill_in）的 content_text 必须用 "_____"（至少 4 个连续下划线）替代原文中需要学生填写的内容。例如原文"大数据的4V特征是海量（Volume）、高速（Velocity）"，应输出 content_text 为"大数据的4V特征是_____（_____）、_____（_____）"或类似形式。重点：用 "_____" 替换掉答案文字本身，不要保留答案在题干中，也不要只在末尾追加空位。
-- 选择题可能把选项写在题干同一行内（如"题目内容 A. 选项1 B. 选项2 C. 选项3 D. 选项4"），需要提取到 options 字段中并把选项文本从 content_text 移除。
-- 若同一段落中出现了两道题（格式异常），尝试拆分为两条独立题目。
-- 文本中可能出现表格块，格式为：第一行 [TABLE:N] 标记，紧跟若干行 Markdown 风格的表格行（"| 单元格1 | 单元格2 | ... |"），其中可能含一行 "| --- | --- | --- |" 分隔行。表格属于其紧邻上文（同一道题题干）的一部分，必须把整张表完整保留在该题的 content_text 中（保留 Markdown 表格语法即可，去掉 [TABLE:N] 标记本身）。绝不可丢弃表格、不可把表格行单独成题、不可把表格当作多个题目；即使表格行以数字（如 "128.96.39.0"）开头也不是新题的起点。
-"""
+    paper_rules = _PAPER_IMPORT_AI_RULES if import_context == "paper" else ""
     custom_rules = ""
     if recognition_prompt and recognition_prompt.strip():
         custom_rules = f"""
@@ -2015,6 +2191,96 @@ def _build_document_ai_prompt(
 {truncated}"""
 
 
+_DIFFICULTY_LABEL_LEVELS: tuple[tuple[str, int], ...] = (
+    ("很容易", 1),
+    ("非常容易", 1),
+    ("很简单", 1),
+    ("很难", 5),
+    ("非常难", 5),
+    ("较难", 4),
+    ("困难", 4),
+    ("难", 4),
+    ("较易", 2),
+    ("容易", 2),
+    ("简单", 2),
+    ("易", 2),
+    ("中等", 3),
+    ("一般", 3),
+    ("中", 3),
+)
+_MAX_RECOGNIZED_KNOWLEDGE_POINTS = 3
+
+
+def _difficulty_from_label(label: Any) -> int | None:
+    """把题目原文标注的难度层次（易/中/难…）折算成 1-5 档。
+
+    题库只有 1-5 的整数难度，三档标注按 易=2、中=3、难=4 折算，更细的标注
+    （很容易/较易/中等/较难/很难）按对应档位折算。
+    """
+    text = str(label or "").strip()
+    if not text:
+        return None
+    compact = re.sub(r"[\s:：;；,，.。、()（）\[\]【】|｜]", "", text)
+    # "难度层次/难度等级" 本身含 "难"，先去掉标签词再匹配档位。
+    compact = re.sub(r"(难度层次|难度等级|难度|级别|层次|程度)", "", compact)
+    for token, level in _DIFFICULTY_LABEL_LEVELS:
+        if token in compact:
+            return level
+    return None
+
+
+def _recognized_knowledge_points(value: Any) -> list[str]:
+    """规范化模型输出的知识点名称：去重、去空白、限制数量。"""
+    if isinstance(value, str):
+        raw_items: list[Any] = re.split(r"[、,，;；/|｜\n]", value)
+    elif isinstance(value, list):
+        raw_items = list(value)
+    else:
+        return []
+    names: list[str] = []
+    for raw in raw_items:
+        name = str(raw).strip(" \t\r\n：:;；,，、|｜")
+        if name and name not in names:
+            names.append(name)
+    return names[:_MAX_RECOGNIZED_KNOWLEDGE_POINTS]
+
+
+def _recognized_question_number(value: Any) -> int | None:
+    """原文印刷的题号；用于校验识别是否漏题（题号在同一题型内连续）。"""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    text = str(value).strip()
+    if not text:
+        return None
+    digits = re.sub(r"\D", "", text)
+    if not digits:
+        return None
+    number = int(digits)
+    return number if number > 0 else None
+
+
+def _missing_question_number_count(drafts: list[QuestionImportDraft]) -> int:
+    """统计同一批内题号断档数（题号变小视为进入下一题型分段，不算断档）。"""
+    numbers = [draft.question_number for draft in drafts if draft.question_number is not None]
+    return sum(
+        1
+        for previous, current in zip(numbers, numbers[1:])
+        for _ in range(max(0, current - previous - 1))
+    )
+
+
+def _incomplete_choice_count(drafts: list[QuestionImportDraft]) -> int:
+    """选择题选项少于 2 个基本可以断定是识别漏了选项（原卷都印了 A/B/C/D）。"""
+    return sum(1 for draft in drafts if draft.type.value == "choice" and len(draft.options or {}) < 2)
+
+
+def _vision_result_score(drafts: list[QuestionImportDraft]) -> tuple[int, int]:
+    """识别结果打分：先比题目数，再比选择题选项缺失数（越少越好）。"""
+    return len(drafts), -_incomplete_choice_count(drafts)
+
+
 def _validate_ai_document_questions(data: dict) -> list[dict]:
     questions = data.get("questions")
     if not isinstance(questions, list):
@@ -2028,10 +2294,15 @@ def _validate_ai_document_questions(data: dict) -> list[dict]:
         if raw_type not in _VALID_QUESTION_TYPES:
             raw_type = "short_answer"
         difficulty = item.get("difficulty", 3)
-        try:
-            safe_difficulty = max(1, min(5, int(difficulty)))
-        except (TypeError, ValueError):
-            safe_difficulty = 3
+        # 题目原文通常标注 "难度层次：易/中/难"，标签比模型换算的数字更可靠。
+        safe_difficulty = _difficulty_from_label(item.get("difficulty_label")) or _difficulty_from_label(
+            difficulty
+        )
+        if safe_difficulty is None:
+            try:
+                safe_difficulty = max(1, min(5, int(difficulty)))
+            except (TypeError, ValueError):
+                safe_difficulty = 3
         options = item.get("options")
         content_text = _strip_question_start_prefix(str(item.get("content_text", "")).strip())
         if raw_type == "fill_in" and content_text and not re.search(r"_{3,}|（\s*）|\(\s*\)|【\s*】", content_text):
@@ -2045,6 +2316,8 @@ def _validate_ai_document_questions(data: dict) -> list[dict]:
                 "answer_text": str(item.get("answer_text", "")).strip(),
                 "analysis": str(item.get("analysis", "")).strip(),
                 "difficulty": safe_difficulty,
+                "knowledge_points": _recognized_knowledge_points(item.get("knowledge_points")),
+                "question_number": _recognized_question_number(item.get("question_number")),
                 "raw_text": str(item.get("raw_text", "")).strip(),
                 "images": item.get("images") if isinstance(item.get("images"), list) else [],
             }
@@ -2082,6 +2355,8 @@ def _build_ai_import_draft(
         issues=issues,
         images=linked_images,
         comparison_flags=[],
+        recognized_knowledge_points=question.get("knowledge_points") or [],
+        question_number=question.get("question_number"),
         review_status=ImportReviewStatus.PENDING,
         review_required=True,
     )
@@ -2137,6 +2412,8 @@ def _build_ai_import_draft_with_images(
         issues=issues,
         images=linked_images,
         comparison_flags=[],
+        recognized_knowledge_points=question.get("knowledge_points") or [],
+        question_number=question.get("question_number"),
         review_status=ImportReviewStatus.PENDING,
         review_required=True,
     )
@@ -2298,7 +2575,7 @@ def build_import_document_summary(
 
 
 _DEEPSEEK_DOC_PROMPT_TEMPLATE = """以下文本已用 `[Q]` 标记分隔每道题目。请逐题输出一行紧凑 JSON（JSONL；不要数组包裹，不要 markdown 围栏，不要说明文字）：
-{{"t":"choice|true_false|fill_in|short_answer|essay|code","c":"...","o":{{"A":"","B":""}}|null,"a":"...","an":"...","imgs":["..."]|[]}}
+{{"t":"choice|true_false|fill_in|short_answer|essay|code","c":"...","o":{{"A":"","B":""}}|null,"a":"...","an":"...","d":1-5,"dl":"易|中|难","kps":["..."],"imgs":["..."]|[]}}
 
 字段说明：
 - t: 题型
@@ -2306,12 +2583,16 @@ _DEEPSEEK_DOC_PROMPT_TEMPLATE = """以下文本已用 `[Q]` 标记分隔每道�
 - o: 选择题选项，键为 A/B/C/D/E，值为不含字母前缀的纯文本；非选择题为 null
 - a: 答案。选择题填字母（如 "A" 或 "ABC"），其他题型填答案文本
 - an: 解析。原文出现"解析"/"分析"/"答案解析"/"参考解析"/"详解"等段落，必须完整提取到该字段；题目后跟随的 "●A:" "•B:" 等逐项点评也并入该字段。没有解析填空字符串
+- d: 难度（1-5 的整数）。按题目原文标注的难度文字折算：易=2、中=3、难=4；标注更细时（很容易=1、较易=2、中等=3、较难=4、很难=5）按细档折算；原文没有标注难度时给 3
+- dl: 题目原文标注的难度文字，**原样抄录**（如 "易"、"中"、"难"）；原文没有标注填空字符串
+- kps: 题目原文标注的知识点名称数组，**原样抄录**（如 ["人工智能信息技术基础"]）；原文没有标注时按题目内容概括 1-2 个，最多 3 个
 - imgs: 该题所配图片的文件名数组。从题干中出现的 [IMG:xxx] 标记提取 xxx 填入（如 ["a1b2c3.png"]）。题干无标记则为空数组 []
 
 规则：
 - 每个 `[Q]` 块对应一道题，独立输出一行 JSON
 - 行间不要空行、不要逗号、不要数组括号
 - 不要省略、概括或改写任何字段内容
+- 答案行里常见的 "知识点：xxx"、"难度层次：易" 属于题目元数据，分别写入 kps / dl / d，不要混进 c 或 a
 {extra_rules}
 
 文本：
@@ -2324,6 +2605,20 @@ _QUESTION_NUMBER_PREFIX_RE = re.compile(
 
 _QUESTION_NUMBER_BOUNDARY_RE = re.compile(
     r"(?m)^\s*(?:第\s*\d+\s*题\s*[:：.、]?|题\s*\d+\s*[:：.、]?|\d+\s*[.、]|[(（]\s*\d+\s*[)）])\s*",
+)
+
+# 标准模板文档的题号写在「题目内容：18. …」这一行里面，行首是字段名而不是数字，
+# 上面的题号正则一首都匹配不到。分块若仍按字符硬切，就会把题目拦腰切断，同时
+# 让「返回题数不足就拆半重试」的完整性校验（它数的是 [Q] 标记）完全失效，题目
+# 被静默丢掉。所以模板字段头也必须算作题目边界。
+_TEMPLATE_BLOCK_START_RE = re.compile(r"(?m)^\s*(?:\[题型\]|题型[:：])")
+
+# 分块专用边界 = 题号形式 ∪ 模板字段头。注意 `_normalize_question_boundaries`
+# 仍然只替换题号：模板字段头要原样留给模型，「选择题」这类题型词是模型判断题型
+# 的依据，替换掉就丢了信息。
+_DOC_QUESTION_BOUNDARY_RE = re.compile(
+    r"(?m)^\s*(?:第\s*\d+\s*题\s*[:：.、]?|题\s*\d+\s*[:：.、]?|\d+\s*[.、]|"
+    r"[(（]\s*\d+\s*[)）]|\[题型\]|题型[:：])\s*",
 )
 
 
@@ -2343,11 +2638,15 @@ def _normalize_question_boundaries(text: str) -> str:
 
 
 _COMPACT_KEY_MAP = {
+    "n": "question_number",
     "t": "type",
     "c": "content_text",
     "o": "options",
     "a": "answer_text",
     "an": "analysis",
+    "d": "difficulty",
+    "dl": "difficulty_label",
+    "kps": "knowledge_points",
     "imgs": "images",
 }
 
@@ -2379,20 +2678,36 @@ def _parse_doc_recognition_jsonl(content: str) -> list[dict]:
 
 _DOC_RECOGNITION_CHUNK_SIZE = 6000
 _DOC_RECOGNITION_CONCURRENCY = 50
+# 分块返回题数低于 [Q] 标记数时判定为漏题并拆分重试（1.0 = 少一题也要补）。
+_DOC_RECOGNITION_MIN_COMPLETENESS = 1.0
+_DOC_RECOGNITION_SPLIT_MIN_QUESTIONS = 4
+_DOC_RECOGNITION_SPLIT_MAX_DEPTH = 3
 
 
 def _split_text_at_question_boundaries(full_text: str, chunk_size: int = _DOC_RECOGNITION_CHUNK_SIZE) -> list[str]:
     """Pack the document into chunks that always end on a question boundary.
 
     Boundary detection uses the same regex that the prompt-side normalizer uses
-    (`第 N 题：`, `1.`, `(1)`, etc.). Splitting only at boundaries guarantees
-    that no question is cut in half, which was the main source of missing
-    questions in the previous page/paragraph-packed chunker.
+    (`第 N 题：`, `1.`, `(1)`, etc.) plus the standard-template field header
+    (`[题型]` / `题型：`). Splitting only at boundaries guarantees that no
+    question is cut in half, which was the main source of missing questions in
+    the previous page/paragraph-packed chunker.
     """
-    boundaries = [m.start() for m in _QUESTION_NUMBER_BOUNDARY_RE.finditer(full_text)]
+    boundaries = [m.start() for m in _DOC_QUESTION_BOUNDARY_RE.finditer(full_text)]
     if len(boundaries) < 2:
-        # No detectable structure — fall back to plain size splitting
-        return [full_text[i : i + chunk_size] for i in range(0, len(full_text), chunk_size)] or [full_text]
+        # No detectable structure — fall back to size splitting. Cuts are snapped
+        # back to the previous line break so a chunk never starts mid-line.
+        chunks: list[str] = []
+        start = 0
+        while start < len(full_text):
+            end = min(start + chunk_size, len(full_text))
+            if end < len(full_text):
+                line_break = full_text.rfind("\n", start, end)
+                if line_break > start:
+                    end = line_break
+            chunks.append(full_text[start:end])
+            start = end
+        return [chunk for chunk in chunks if chunk.strip()] or [full_text]
 
     boundaries.append(len(full_text))  # sentinel for the tail block
     chunks: list[str] = []
@@ -2410,6 +2725,59 @@ def _split_text_at_question_boundaries(full_text: str, chunk_size: int = _DOC_RE
 
 _MAX_EXTRACTED_IMAGES = 300
 _IMG_UPLOAD_DIR = Path(__file__).resolve().parents[3] / "uploads"
+_UPLOAD_URL_PREFIX = "/api/uploads/files/"
+# 扫描件/图片版 PDF 的文本层通常是空的，只能整页渲染后交给视觉模型识别。
+_PDF_VISUAL_MIN_TEXT_CHARS = 50
+_PDF_VISUAL_RENDER_RESOLUTION = 110
+_PDF_VISUAL_MAX_EDGE_PX = 2000
+# 一页约 6 题；3 页一批（约 1000 输出 token）留足余量，输出被截断时再二分。
+_PDF_VISUAL_BATCH_PAGES = 3
+_PDF_VISUAL_SPLIT_MAX_DEPTH = 3
+_PDF_VISUAL_MAX_PAGES = 60
+_PDF_VISUAL_CONCURRENCY = 3
+_IMAGE_MARKER_RE = re.compile(r"\[(?:IMG|IMAGE):[^\]]+\]")
+
+
+def _pdf_text_without_image_markers(text: str) -> str:
+    """去掉图片占位符后的 PDF 文本，用于判断是否存在可读文本层。"""
+    return _IMAGE_MARKER_RE.sub(" ", text).strip()
+
+
+def _render_pdf_pages_to_images(file_bytes: bytes) -> list[QuestionImportImageInput]:
+    """Rasterize PDF pages for visual recognition.
+
+    Scanned/photographed papers have no text layer, and their embedded images
+    are not always decodable as standalone images (JBIG2/CCITT and inline
+    images). Rendering the page itself always yields something the vision model
+    can read. Individual page failures are skipped instead of failing the file.
+    """
+    import io
+    import pdfplumber
+
+    images: list[QuestionImportImageInput] = []
+    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+        for page_number, page in enumerate(pdf.pages[:_PDF_VISUAL_MAX_PAGES], start=1):
+            try:
+                long_edge = max(page.width or 0, page.height or 0)
+                resolution = _PDF_VISUAL_RENDER_RESOLUTION
+                if long_edge > 0:
+                    resolution = min(resolution, max(72, int(_PDF_VISUAL_MAX_EDGE_PX * 72 / long_edge)))
+                rendered = page.to_image(resolution=resolution).original
+                buffer = io.BytesIO()
+                rendered.convert("RGB").save(buffer, format="JPEG", quality=80)
+            except Exception:  # noqa: BLE001 - 单页渲染失败不应中断整份文件
+                continue
+            _filename, url = _save_image_bytes(buffer.getvalue(), "jpg")
+            images.append(
+                QuestionImportImageInput(
+                    image_id=f"page-{page_number}",
+                    url=url,
+                    order=page_number,
+                    page=page_number,
+                    alt=f"第 {page_number} 页",
+                )
+            )
+    return images
 
 
 def _save_image_bytes(data: bytes, ext: str) -> tuple[str, str]:
@@ -2417,7 +2785,7 @@ def _save_image_bytes(data: bytes, ext: str) -> tuple[str, str]:
     _IMG_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     filename = f"{uuid.uuid4().hex}.{ext}"
     (_IMG_UPLOAD_DIR / filename).write_bytes(data)
-    return filename, f"/api/uploads/files/{filename}"
+    return filename, f"{_UPLOAD_URL_PREFIX}{filename}"
 
 
 def _extract_pdf_text_and_images(
@@ -2487,6 +2855,86 @@ def _extract_pdf_text_and_images(
     return "\n".join(page_texts), filename_to_url, total_images
 
 
+def _extract_docx_ordered_text(file_bytes: bytes) -> str:
+    """Extract DOCX text with paragraphs and tables interleaved in document order.
+
+    Used only as a position reference: recognition still runs on the flat
+    extraction above (which the model handles best), and the recognized drafts
+    are sorted back into this order afterwards.
+    """
+    import io
+    from docx import Document
+    from docx.table import Table as DocxTable
+    from docx.text.paragraph import Paragraph as DocxParagraph
+
+    document = Document(io.BytesIO(file_bytes))
+    lines: list[str] = []
+    for child in document.element.body.iterchildren():
+        if child.tag.endswith("}tbl"):
+            table = DocxTable(child, document)
+            for row in table.rows:
+                cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                if cells:
+                    lines.append(" | ".join(cells))
+        elif child.tag.endswith("}p"):
+            text = DocxParagraph(child, document).text.strip()
+            if text:
+                lines.append(text)
+    return split_questions_glued_after_answers("\n".join(lines))
+
+
+_ORDER_MATCH_MIN_CHARS = 6
+
+
+def _order_match_key(text: str) -> str:
+    """Normalize text for position matching (drop whitespace / common punctuation)."""
+    return re.sub(r"[\s\u3000,，.。、;；:：!！?？\"'“”‘’()（）\[\]【】《》<>/\\|·\-—_]+", "", text)
+
+
+def reorder_drafts_by_document_position(
+    drafts: list[QuestionImportDraft],
+    reference_text: str,
+) -> list[QuestionImportDraft]:
+    """Sort recognized drafts back into the document's original order.
+
+    Tables are appended after the body paragraphs during extraction, so the
+    model sees those questions at the end. Recognition order alone therefore
+    does not match the source document; match each draft's stem against a
+    document-order reference text and sort by the matched position. Drafts that
+    cannot be located keep their previous relative position (appended last).
+    """
+    if len(drafts) < 2:
+        return drafts
+    haystack = _order_match_key(reference_text)
+    if not haystack:
+        return drafts
+
+    matched: list[tuple[int, int, QuestionImportDraft]] = []
+    last_position_by_prefix: dict[str, int] = {}
+    for index, draft in enumerate(drafts):
+        candidates = [draft.content_text, draft.raw_text, draft.title]
+        position: int | None = None
+        for candidate in candidates:
+            key = _order_match_key(candidate or "")
+            if len(key) < _ORDER_MATCH_MIN_CHARS:
+                continue
+            for length in (24, 16, 12, _ORDER_MATCH_MIN_CHARS):
+                if len(key) < length:
+                    continue
+                prefix = key[:length]
+                found = haystack.find(prefix, last_position_by_prefix.get(prefix, 0))
+                if found != -1:
+                    position = found
+                    last_position_by_prefix[prefix] = found + 1
+                    break
+            if position is not None:
+                break
+        matched.append((position if position is not None else len(haystack) + index, index, draft))
+
+    matched.sort(key=lambda item: (item[0], item[1]))
+    return [draft for _, _, draft in matched]
+
+
 def _extract_docx_text_and_images(
     file_bytes: bytes,
 ) -> tuple[str, dict[str, str], int]:
@@ -2550,7 +2998,7 @@ def _extract_docx_text_and_images(
             if cells:
                 lines.append(" | ".join(cells))
 
-    return "\n".join(lines), filename_to_url, img_count
+    return split_questions_glued_after_answers("\n".join(lines)), filename_to_url, img_count
 
 
 def _inline_pdf_images(raw_text: str, image_urls: dict[str, str]) -> list[QuestionImportImageInput]:
@@ -2698,22 +3146,69 @@ async def _recognize_full_text_with_ai(
     semaphore = asyncio.Semaphore(_DOC_RECOGNITION_CONCURRENCY)
     chunk_diag: list[dict] = []
 
-    async def recognize_one(idx: int, chunk: str) -> list[QuestionImportDraft]:
+    async def recognize_one(idx: int, chunk: str, depth: int = 0) -> list[QuestionImportDraft]:
         normalized = _normalize_question_boundaries(chunk)
+        # 题号式的文档靠 [Q] 标记计数；标准模板文档没有 [Q]（字段头原样保留给
+        # 模型），改数模板字段头。两者取大，任何一种排版都能触发漏题拆半重试。
+        expected_questions = max(
+            normalized.count("[Q]"),
+            len(_TEMPLATE_BLOCK_START_RE.findall(chunk)),
+        )
         extra_rules = ""
         if recognition_prompt and recognition_prompt.strip():
             extra_rules = f"\n用户补充识别要求：\n{recognition_prompt.strip()}"
         prompt = _DEEPSEEK_DOC_PROMPT_TEMPLATE.format(text=normalized, extra_rules=extra_rules)
         async with semaphore:
-            try:
-                questions = await _request_doc_recognition_questions(prompt)
-                validated = _validate_ai_document_questions({"questions": questions})
-                drafts = [_build_ai_import_draft_with_images(q, image_urls) for q in validated]
-                chunk_diag.append({"idx": idx, "chars": len(chunk), "questions": len(drafts), "status": "ok"})
-                return drafts
-            except Exception as exc:
-                chunk_diag.append({"idx": idx, "chars": len(chunk), "questions": 0, "status": f"error:{type(exc).__name__}:{str(exc)[:100]}"})
+            last_error: Exception | None = None
+            drafts: list[QuestionImportDraft] | None = None
+            for _attempt in range(2):
+                try:
+                    questions = await _request_doc_recognition_questions(prompt)
+                    validated = _validate_ai_document_questions({"questions": questions})
+                    drafts = [_build_ai_import_draft_with_images(q, image_urls) for q in validated]
+                    break
+                except Exception as exc:
+                    last_error = exc
+            if drafts is None:
+                chunk_diag.append(
+                    {
+                        "idx": idx,
+                        "chars": len(chunk),
+                        "questions": 0,
+                        "status": f"error:{type(last_error).__name__}:{str(last_error)[:100]}",
+                    }
+                )
                 return []
+
+        # 完整度校验：模型偶尔对信息密集的分块只返回一部分题目（同一个分块
+        # 可能这次返回 72 题、下次只返回 21 题）。发现明显少返回时按题目边界
+        # 拆半重识别，宁可多花调用，也不静默丢题。
+        if (
+            depth < _DOC_RECOGNITION_SPLIT_MAX_DEPTH
+            and expected_questions >= _DOC_RECOGNITION_SPLIT_MIN_QUESTIONS
+            and len(drafts) < expected_questions * _DOC_RECOGNITION_MIN_COMPLETENESS
+        ):
+            sub_chunks = _split_text_at_question_boundaries(
+                chunk, chunk_size=max(400, len(chunk) // 2)
+            )
+            if len(sub_chunks) > 1:
+                chunk_diag.append(
+                    {
+                        "idx": idx,
+                        "chars": len(chunk),
+                        "questions": len(drafts),
+                        "status": f"split:{len(drafts)}/{expected_questions}",
+                    }
+                )
+                split_results = await asyncio.gather(
+                    *(recognize_one(idx, sub_chunk, depth + 1) for sub_chunk in sub_chunks)
+                )
+                return [draft for part in split_results for draft in part]
+
+        chunk_diag.append(
+            {"idx": idx, "chars": len(chunk), "questions": len(drafts), "status": "ok" if depth == 0 else "ok:split"}
+        )
+        return drafts
 
     chunk_results = await asyncio.gather(
         *(recognize_one(i, chunk) for i, chunk in enumerate(chunks))
@@ -2723,6 +3218,12 @@ async def _recognize_full_text_with_ai(
     ]
 
     if not all_drafts:
+        failed_chunks = [diag for diag in chunk_diag if str(diag["status"]).startswith("error")]
+        succeeded_chunks = [diag for diag in chunk_diag if str(diag["status"]).startswith("ok")]
+        if failed_chunks and not succeeded_chunks:
+            # 所有分块都调用失败（如密钥缺失/服务不可用）：必须报服务错误，
+            # 否则会被当成“文档里没有题目”，试卷导入也失去回退到规则解析的机会。
+            raise RuntimeError(f"AI 题目识别失败：{failed_chunks[0]['status']}")
         raise RuntimeError(no_drafts_error)
 
     unique_drafts, duplicates_removed = deduplicate_drafts(all_drafts)
@@ -2758,6 +3259,243 @@ async def _recognize_full_text_with_ai(
     )
 
 
+async def _recognize_paper_document_with_ai(
+    payload: QuestionImportDocumentRecognizeRequest,
+) -> list[QuestionImportDraft]:
+    """Recognize a whole text paper through the shared chunked JSONL pipeline.
+
+    Sending the entire paper in one LLM call truncates the output for large
+    papers (a 250-question paper came back with ~11 questions). Paper imports
+    therefore reuse the exact same pipeline as the question-bank import;
+    paper-specific handling stays outside the model prompt (deterministic
+    ``preprocess_paper_import_text`` trimming + rule-based fallback).
+    """
+    image_urls = {image.image_id: image.url for image in payload.images}
+    response = await _recognize_full_text_with_ai(
+        full_text=payload.raw_text,
+        image_urls=image_urls,
+        file_name=payload.file_name,
+        source_format=payload.source_format,
+        empty_text_error="文件中未提取到题目文本",
+        no_drafts_error="AI 未能从试卷中识别出任何题目，请检查文件内容",
+        recognition_prompt=payload.recognition_prompt,
+    )
+    return response.drafts
+
+
+_VISION_JSONL_PROMPT_TEMPLATE = """下面是试卷页面的图像（共 {page_count} 页）。请从上到下、从左到右识别图像中的**所有**题目，每题输出一行紧凑 JSON（JSONL；不要数组包裹，不要 markdown 围栏，不要说明文字）：
+{{"n":题号,"t":"choice|true_false|fill_in|short_answer|essay|code","c":"...","o":{{"A":"","B":""}}|null,"a":"...","an":"...","d":1-5,"dl":"易|中|难","kps":["..."],"imgs":[]}}
+
+字段说明：
+- n: 题目在图像上印刷的题号（整数，按原样抄录；没有题号给 null）。题号必须连续，不能跳号
+- t: 题型。单选/多选都是 choice；判断题 true_false；填空 fill_in；简答 short_answer；论述 essay；编程 code
+- c: 题干。完整抄录（保留括号空位），不要包含选项、答案、知识点、难度、题型标题
+- o: 选择题选项，键为 A/B/C/D/E，值为不含字母前缀的纯文本；非选择题为 null
+- a: 答案。选择题填字母（多选题如 "ABC"），判断题填 "正确"/"错误"，其他题型填答案文本；图像里没有答案就填空字符串
+- an: 解析。没有填空字符串
+- d: 难度（1-5 的整数）。按题目原文标注的难度文字折算：易=2、中=3、难=4；标注更细时（很容易=1、较易=2、中等=3、较难=4、很难=5）按细档折算；没有标注给 3
+- dl: 题目原文标注的难度文字，**原样抄录**（如 "易"、"中"、"难"）；没有标注填空字符串
+- kps: 题目原文标注的知识点名称数组，**原样抄录**（如 ["人工智能信息技术基础"]）；原文没有标注时按题目内容概括 1-2 个，最多 3 个
+- imgs: 题干依赖的图表所在页面的 image_id 数组；纯文字题给 []
+
+规则：
+- 每道题一行 JSON，行间不要空行、不要逗号、不要数组括号
+- **逐题核对图像上的题号，从第一题到最后一题不得遗漏、不得跳号**；不要合并相邻题目，不要臆造原文没有的题目
+- 题干带（ ）且图像中印有 A/B/C/D 选项的，一律按 choice 输出，并**把该题所有选项完整抄录**（不能只给 A）；只有确实没有选项的填空才用 fill_in
+- 页眉、页脚、页码、题型标题（如 "一、单选题(共100题)"）、得分栏、答题卡不是题目
+- c / a / an / kps / dl 必须忠实于原文，不要改写或翻译
+{extra_rules}
+
+本批图像 image_id：{page_ids}"""
+
+_VISION_MAX_TOKENS = 8192
+_VISION_ATTEMPTS = 2
+
+
+def _build_vision_jsonl_prompt(
+    page_images: list[QuestionImportImageInput],
+    recognition_prompt: str | None = None,
+) -> str:
+    extra_rules = ""
+    if recognition_prompt and recognition_prompt.strip():
+        extra_rules = f"\n用户补充识别要求：\n{recognition_prompt.strip()}"
+    return _VISION_JSONL_PROMPT_TEMPLATE.format(
+        page_count=len(page_images),
+        page_ids=", ".join(image.image_id for image in page_images),
+        extra_rules=extra_rules,
+    )
+
+
+async def _request_vision_jsonl(
+    *,
+    images: list[QuestionImportImageInput],
+    prompt: str,
+) -> tuple[list[dict], str]:
+    """Vision JSONL call: returns (parsed questions, finish_reason).
+
+    Qwen-VL is the dedicated vision model here and its ``max_tokens`` cap is
+    8192, so batches must stay small; ``finish_reason == "length"`` tells the
+    caller the output was truncated and must be split.
+    """
+    providers = (
+        ("Qwen", settings.qwen_api_key, settings.qwen_base_url, settings.qwen_vl_model_name),
+        ("DeepSeek", settings.deepseek_api_key, settings.deepseek_base_url, settings.deepseek_model_name),
+    )
+    last_exc: Exception | None = None
+    for provider_name, api_key, base_url, model_name in providers:
+        if not api_key:
+            continue
+        try:
+            content, finish_reason = await _request_openai_compatible_vision_text(
+                provider_name=provider_name,
+                api_key=api_key,
+                base_url=base_url,
+                model_name=model_name,
+                prompt=prompt,
+                images=images,
+                max_tokens=_VISION_MAX_TOKENS,
+            )
+            return _parse_doc_recognition_jsonl(content), finish_reason
+        except Exception as exc:  # noqa: BLE001 - 逐个 provider 回退
+            last_exc = exc
+            continue
+    if last_exc is None:
+        raise RuntimeError("未配置任何 AI 识别服务的 API Key")
+    raise RuntimeError("试卷视觉识别服务暂不可用，请联系管理员处理。") from last_exc
+
+
+async def _recognize_vision_batch(
+    page_images: list[QuestionImportImageInput],
+    *,
+    recognition_prompt: str | None = None,
+    depth: int = 0,
+) -> list[QuestionImportDraft]:
+    """Recognize one batch of rendered pages, retrying when the result is incomplete.
+
+    Two failure modes silently drop questions: the output is cut off by
+    ``max_tokens`` (``finish_reason == "length"``) and the model skips questions
+    (detected from gaps in the printed question numbers). In both cases the
+    batch is halved and re-recognized; a single page gets one plain retry.
+    """
+    image_urls = {image.image_id: image.url for image in page_images}
+    prompt = _build_vision_jsonl_prompt(page_images, recognition_prompt)
+    best: list[QuestionImportDraft] = []
+    for _attempt in range(_VISION_ATTEMPTS):
+        questions, finish_reason = await _request_vision_jsonl(images=page_images, prompt=prompt)
+        validated = _validate_ai_document_questions({"questions": questions})
+        drafts = [_build_ai_import_draft_with_images(question, image_urls) for question in validated]
+        if not best or _vision_result_score(drafts) > _vision_result_score(best):
+            best = drafts
+        incomplete = (
+            finish_reason == "length"
+            or _missing_question_number_count(drafts) > 0
+            or _incomplete_choice_count(drafts) > 0
+        )
+        if not incomplete:
+            return drafts
+        if len(page_images) > 1 and depth < _PDF_VISUAL_SPLIT_MAX_DEPTH:
+            break
+    if len(page_images) > 1 and depth < _PDF_VISUAL_SPLIT_MAX_DEPTH:
+        middle = len(page_images) // 2
+        halves = await asyncio.gather(
+            _recognize_vision_batch(page_images[:middle], recognition_prompt=recognition_prompt, depth=depth + 1),
+            _recognize_vision_batch(page_images[middle:], recognition_prompt=recognition_prompt, depth=depth + 1),
+        )
+        return [draft for half in halves for draft in half]
+    return best
+
+
+def _insert_drafts_before(
+    drafts: list[QuestionImportDraft],
+    additions: list[QuestionImportDraft],
+    anchor: QuestionImportDraft,
+) -> None:
+    """把补识别到的题目按题号插入到 anchor 之前，保持原文顺序。"""
+    ordered = sorted(additions, key=lambda draft: draft.question_number or 0)
+    position = drafts.index(anchor) if anchor in drafts else len(drafts)
+    drafts[position:position] = ordered
+
+
+async def _repair_vision_batch_boundaries(
+    batches: list[list[QuestionImportImageInput]],
+    batch_results: list[list[QuestionImportDraft]],
+    *,
+    recognition_prompt: str | None,
+    recognize_batch,
+) -> None:
+    """Repair question-number gaps that fall between two batches.
+
+    Batches are recognized independently, so a question dropped at the end of
+    one batch (or the start of the next) is invisible to per-batch checks. The
+    printed question numbers still reveal the gap; re-recognize the two pages
+    around that boundary and slot the missing questions back into place.
+    """
+    for index in range(len(batches) - 1):
+        current_numbers = [draft.question_number for draft in batch_results[index] if draft.question_number is not None]
+        following_numbers = [
+            draft.question_number for draft in batch_results[index + 1] if draft.question_number is not None
+        ]
+        if not current_numbers or not following_numbers or following_numbers[0] <= current_numbers[-1] + 1:
+            continue
+        missing_numbers = range(current_numbers[-1] + 1, following_numbers[0])
+        window: list[QuestionImportImageInput] = []
+        for page in (*batches[index][-1:], *batches[index + 1][:1]):
+            if page not in window:
+                window.append(page)
+        recovered = await recognize_batch(window)
+        additions = [
+            draft
+            for draft in recovered
+            if draft.question_number is not None and draft.question_number in missing_numbers
+        ]
+        if additions:
+            _insert_drafts_before(batch_results[index + 1], additions, batch_results[index + 1][0])
+
+
+async def _recognize_pdf_pages_with_ai(
+    page_images: list[QuestionImportImageInput],
+    *,
+    file_name: str,
+    recognition_prompt: str | None = None,
+) -> "QuestionImportDocumentRecognizeResponse":
+    """Recognize a scanned PDF from its rendered pages through the vision model.
+
+    Pages are batched so a long scan does not overflow a single vision request
+    (which would silently drop the tail questions); each batch is chunked with
+    the compact JSONL prompt and split further when the model truncates or skips
+    a question. Question-number gaps between neighbouring batches are repaired
+    by re-recognizing the two pages around the boundary.
+    """
+    batches = [
+        page_images[index : index + _PDF_VISUAL_BATCH_PAGES]
+        for index in range(0, len(page_images), _PDF_VISUAL_BATCH_PAGES)
+    ]
+    semaphore = asyncio.Semaphore(_PDF_VISUAL_CONCURRENCY)
+
+    async def recognize_batch(batch: list[QuestionImportImageInput]) -> list[QuestionImportDraft]:
+        async with semaphore:
+            return await _recognize_vision_batch(batch, recognition_prompt=recognition_prompt)
+
+    batch_results = list(await asyncio.gather(*(recognize_batch(batch) for batch in batches)))
+    await _repair_vision_batch_boundaries(
+        batches,
+        batch_results,
+        recognition_prompt=recognition_prompt,
+        recognize_batch=recognize_batch,
+    )
+    drafts = [draft for batch_drafts in batch_results for draft in batch_drafts]
+    unique_drafts, duplicates_removed = deduplicate_drafts(drafts)
+    return QuestionImportDocumentRecognizeResponse(
+        mode=ImportRecognitionMode.VISUAL,
+        summary=build_import_document_summary(
+            unique_drafts,
+            duplicates_removed,
+            visual_retry_recommended=True,
+        ),
+        drafts=unique_drafts,
+    )
+
+
 async def recognize_pdf_with_ai(
     file_bytes: bytes,
     file_name: str,
@@ -2767,6 +3505,8 @@ async def recognize_pdf_with_ai(
 
     Text contains inline `[IMG:filename]` markers that the LLM will reference
     in its JSONL output, producing per-question image lists with resolved URLs.
+    Scanned/image-only PDFs have no usable text layer; those pages are rendered
+    and recognized by the vision model instead of failing the import.
     """
     full_text, image_urls, img_count = await asyncio.to_thread(_extract_pdf_text_and_images, file_bytes)
     deterministic_drafts = _build_standard_paper_drafts_from_text(full_text, image_urls)
@@ -2781,6 +3521,14 @@ async def recognize_pdf_with_ai(
             summary=summary,
             drafts=deterministic_drafts,
         )
+    if len(_pdf_text_without_image_markers(full_text)) < _PDF_VISUAL_MIN_TEXT_CHARS:
+        page_images = await asyncio.to_thread(_render_pdf_pages_to_images, file_bytes)
+        if page_images:
+            return await _recognize_pdf_pages_with_ai(
+                page_images,
+                file_name=file_name,
+                recognition_prompt=recognition_prompt,
+            )
     result = await _recognize_full_text_with_ai(
         full_text=full_text,
         image_urls=image_urls,
@@ -2795,9 +3543,23 @@ async def recognize_pdf_with_ai(
     return result
 
 
-async def recognize_docx_with_ai(file_bytes: bytes, file_name: str) -> "QuestionImportDocumentRecognizeResponse":
-    """Extract text + images from DOCX, split at question boundaries, call AI in parallel."""
+async def recognize_docx_with_ai(
+    file_bytes: bytes,
+    file_name: str,
+    *,
+    import_context: str | None = None,
+    recognition_prompt: str | None = None,
+) -> "QuestionImportDocumentRecognizeResponse":
+    """Extract text + images from DOCX, split at question boundaries, call AI in parallel.
+
+    This is the single DOCX recognition entry point shared by the question-bank
+    import and the paper import, so both pages see identical recognition
+    behaviour. Paper imports only add deterministic pre-cleaning (cover /
+    answer-sheet trimming) and never a different model prompt.
+    """
     full_text, image_urls, img_count = await asyncio.to_thread(_extract_docx_text_and_images, file_bytes)
+    if import_context == "paper":
+        full_text = preprocess_paper_import_text(full_text, [])
     result = await _recognize_full_text_with_ai(
         full_text=full_text,
         image_urls=image_urls,
@@ -2805,9 +3567,46 @@ async def recognize_docx_with_ai(file_bytes: bytes, file_name: str) -> "Question
         source_format="docx",
         empty_text_error="DOCX 文件中未提取到文本内容",
         no_drafts_error="AI 未能从 DOCX 中识别出任何题目，请检查文件内容",
+        recognition_prompt=recognition_prompt,
     )
+
+    # 提取时表格内容排在正文之后，识别顺序因此会和原卷不一致；识别完成后按
+    # 文档顺序参考文本把草稿排回原位（不影响识别本身，避免丢题）。
+    ordered_reference = await asyncio.to_thread(_extract_docx_ordered_text, file_bytes)
+    if import_context == "paper":
+        ordered_reference = preprocess_paper_import_text(ordered_reference, [])
+    result.drafts = reorder_drafts_by_document_position(result.drafts, ordered_reference)
+
     result.summary = result.summary.model_copy(update={"visual_retry_recommended": img_count > 0})
     return result
+
+
+def _prepare_rule_based_drafts(
+    payload: QuestionImportDocumentRecognizeRequest,
+) -> tuple[QuestionImportDocumentRecognizeRequest, str, list[QuestionImportDraft]]:
+    raw_text = _decode_import_html_entities(payload.raw_text)
+    if _is_paper_import_context(payload):
+        raw_text = preprocess_paper_import_text(raw_text, payload.tables)
+    payload = payload.model_copy(update={"raw_text": raw_text})
+    mode = (
+        ImportRecognitionMode.TEMPLATE.value
+        if payload.prefer_template
+        else detect_import_template_mode(payload.raw_text)
+    )
+    return payload, mode, _build_rule_based_drafts(payload, mode)
+
+
+def recognize_document_rule_based(
+    payload: QuestionImportDocumentRecognizeRequest,
+) -> QuestionImportDocumentRecognizeResponse:
+    """Rule-only recognition (no AI calls), used as the outage fallback for papers."""
+    _, mode, drafts = _prepare_rule_based_drafts(payload)
+    unique_drafts, duplicates_removed = deduplicate_drafts(drafts)
+    return QuestionImportDocumentRecognizeResponse(
+        mode=mode,  # type: ignore[arg-type]
+        summary=build_import_document_summary(unique_drafts, duplicates_removed),
+        drafts=unique_drafts,
+    )
 
 
 def _strip_json_fences(content: str) -> str:
@@ -2860,6 +3659,49 @@ async def _request_openai_compatible_text(
     if not isinstance(content, str) or not content.strip():
         raise RuntimeError(f"{provider_name} 没有返回分析结果")
     return content
+
+
+async def _request_openai_compatible_vision_text(
+    *,
+    provider_name: str,
+    api_key: str | None,
+    base_url: str,
+    model_name: str,
+    prompt: str,
+    images: list[QuestionImportImageInput],
+    max_tokens: int,
+) -> tuple[str, str]:
+    """Vision chat-completion call returning (raw content, finish_reason)."""
+    if not api_key:
+        raise RuntimeError(f"未配置 {provider_name} API Key")
+
+    content: list[dict[str, Any]] = [{"type": "text", "text": prompt.strip()}]
+    for image in images:
+        content.append({"type": "image_url", "image_url": {"url": _ensure_image_data_url(image.url)}})
+
+    client = _get_http_client()
+    response = await client.post(
+        f"{base_url.rstrip('/')}/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": "你只输出 JSONL，每行一个紧凑 JSON 对象，不要数组包裹，不要 markdown 围栏。"},
+                {"role": "user", "content": content},
+            ],
+            "temperature": 0.1,
+            "max_tokens": max_tokens,
+        },
+        timeout=300.0,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(response.text.strip() or f"{provider_name} 视觉识别失败")
+    choice = response.json().get("choices", [{}])[0]
+    raw_content = choice.get("message", {}).get("content", "")
+    if not isinstance(raw_content, str) or not raw_content.strip():
+        raise RuntimeError(f"{provider_name} 没有返回识别结果")
+    finish_reason = choice.get("finish_reason") or ""
+    return raw_content, str(finish_reason)
 
 
 async def _request_openai_compatible_json_large(
@@ -2993,17 +3835,25 @@ async def _request_doc_recognition_questions(prompt: str) -> list[dict]:
 async def recognize_question_document(
     payload: QuestionImportDocumentRecognizeRequest,
 ) -> QuestionImportDocumentRecognizeResponse:
-    if _is_paper_import_context(payload):
-        payload = payload.model_copy(update={"raw_text": preprocess_paper_import_text(payload.raw_text, payload.tables)})
-    mode = (
-        ImportRecognitionMode.TEMPLATE.value
-        if payload.prefer_template
-        else detect_import_template_mode(payload.raw_text)
-    )
-    drafts = _build_rule_based_drafts(payload, mode)
-    if payload.analysis_mode == QuestionImportAnalysisMode.AI_FULL:
+    payload, mode, drafts = _prepare_rule_based_drafts(payload)
+
+    # 标准模板（题型/题目内容/答案/解析/难度）只要字段齐全，纯正则就能稳定还原
+    # 题干、选项、答案和解析，因此直接短路返回，不调用大模型。题目导入（fast）
+    # 与试卷导入（ai_full，见 papers.service.create_import_session_from_recognition）
+    # 共用这里，所以两个入口都能省掉这次调用；用户在页面上手动点「AI 重新识别」
+    # 时会带 force_ai，仍然走下面的智能识别。
+    template_drafts = None if payload.force_ai else build_standard_template_drafts(payload)
+    if template_drafts is not None:
+        mode = ImportRecognitionMode.TEMPLATE.value
+        completed = template_drafts
+    elif payload.analysis_mode == QuestionImportAnalysisMode.AI_FULL:
         try:
-            completed = await recognize_question_document_with_ai(payload, drafts)
+            # 纯文本试卷走分块 JSONL 管线（整卷单次调用会截断大试卷的输出）；
+            # 带页面图片的试卷仍走视觉识别分支。
+            if _is_paper_import_context(payload) and not payload.images:
+                completed = await _recognize_paper_document_with_ai(payload)
+            else:
+                completed = await recognize_question_document_with_ai(payload, drafts)
         except (RuntimeError, httpx.HTTPError) as exc:
             if _is_paper_import_context(payload) and payload.raw_text.strip() and _is_ai_service_unavailable_error(exc):
                 completed = drafts
@@ -4001,7 +4851,13 @@ async def _enhance_single_draft(
     candidates_map: dict[uuid.UUID, str],
     mode: str = "both",
 ) -> EnhancedDraft:
-    """Run combined answer check + KP matching for one draft via AI."""
+    """Run one draft's enhancement through AI, scoped by ``mode``.
+
+    - ``answers``：补全/校验答案与解析（附带存疑标记）
+    - ``analysis``：只补全/校验解析，不动答案，也不匹配知识点
+    - ``knowledge``：只匹配知识点
+    - ``both``：答案 + 解析 + 知识点
+    """
     options_str = ""
     if draft.options:
         options_str = json.dumps(draft.options, ensure_ascii=False)
@@ -4024,6 +4880,22 @@ async def _enhance_single_draft(
 
 只返回合法 JSON：
 {{"answer_text":"...", "analysis":"...", "doubt":true/false, "doubt_reason":"..."|null, "matched_kp_ids":[]}}""".strip()
+    elif mode == "analysis":
+        prompt = f"""你是教研助手。给你一道题目，请只完善解析：
+
+- 如果题目没有提供解析，请生成一段简明、可用于教学讲解的解析。
+- 如果题目已有解析，请检查是否与题目和答案一致；若解析为空、过短、明显不完整或与答案矛盾，请重写补全。
+- analysis 只返回解析内容本身，不要重复题干。
+- 不要改动答案，也不要匹配知识点。
+
+题目类型：{draft.type}
+题目内容：{draft.content_text[:2000]}
+选项：{options_str or "（无）"}
+当前答案：{draft.answer_text or "（无）"}
+当前解析：{draft.analysis or "（无）"}
+
+只返回合法 JSON：
+{{"answer_text":null, "analysis":"...", "doubt":false, "doubt_reason":null, "matched_kp_ids":[]}}""".strip()
     elif mode == "knowledge":
         prompt = f"""你是教研助手。给你一道题目和候选知识点，请只完成知识点匹配：
 
@@ -4057,6 +4929,7 @@ async def _enhance_single_draft(
 
 任务3 — 知识点匹配：
 - 从候选知识点列表中选择与题目内容最相关的 0-3 个知识点。
+- 题目如果标注了原文知识点，优先匹配名称与原文知识点一致或最接近的候选知识点。
 - 只能使用候选 id，不要编造。
 - 若没有明显相关的，返回空数组。
 
@@ -4065,6 +4938,7 @@ async def _enhance_single_draft(
 选项：{options_str or "（无）"}
 当前答案：{draft.answer_text or "（无）"}
 当前解析：{draft.analysis or "（无）"}
+原文标注知识点：{"、".join(draft.recognized_knowledge_points) or "（无）"}
 候选知识点（JSON 列表）：
 {json.dumps(candidates_json, ensure_ascii=False)}
 
@@ -4090,13 +4964,19 @@ async def _enhance_single_draft(
         analysis = None
         doubt = False
         doubt_reason = None
+    elif mode == "analysis":
+        # 只完善解析：答案与存疑标记保持原样，由前端沿用草稿已有内容。
+        answer_text = None
+        analysis = optional_text(data.get("analysis"))
+        doubt = False
+        doubt_reason = None
     else:
         answer_text = optional_text(data.get("answer_text"))
         analysis = optional_text(data.get("analysis"))
         doubt = bool(data.get("doubt", False))
         doubt_reason = optional_text(data.get("doubt_reason"))
 
-    matched_kp_ids = data.get("matched_kp_ids") if isinstance(data, dict) else None
+    matched_kp_ids = data.get("matched_kp_ids") if mode in {"knowledge", "both"} else None
     suggested: list[KnowledgePointSuggestion] = []
     if isinstance(matched_kp_ids, list):
         for raw in matched_kp_ids:
@@ -4251,7 +5131,7 @@ async def enhance_import_drafts(
     root_knowledge_point_id: uuid.UUID | None,
     mode: str = "both",
 ) -> list[EnhancedDraft]:
-    """Batch-enhance import drafts: answer completion/check + KP matching."""
+    """Batch-enhance import drafts: answer/analysis completion + KP matching."""
     candidates = (
         await _load_root_descendant_knowledge_points(db, root_knowledge_point_id)
         if root_knowledge_point_id is not None and mode in {"knowledge", "both"}

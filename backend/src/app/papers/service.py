@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pdfplumber
 from docx import Document
 from sqlalchemy import Select, and_, delete, func, or_, select
@@ -110,6 +111,26 @@ def _format_docx_table(table: object, order: int) -> str:
     return "\n".join(lines)
 
 
+def _iter_docx_body_blocks(document: object) -> list[object]:
+    """Yield paragraphs and tables in document order.
+
+    python-docx exposes ``document.paragraphs`` / ``document.tables``
+    separately, which drops the original position of tables. Papers that keep
+    some questions inside layout tables then get that content appended at the
+    very end, mixing question sections together.
+    """
+    from docx.table import Table as DocxTable
+    from docx.text.paragraph import Paragraph as DocxParagraph
+
+    blocks: list[object] = []
+    for child in document.element.body.iterchildren():
+        if child.tag.endswith("}p"):
+            blocks.append(DocxParagraph(child, document))
+        elif child.tag.endswith("}tbl"):
+            blocks.append(DocxTable(child, document))
+    return blocks
+
+
 def extract_paper_import_file_content(file_name: str, file_bytes: bytes) -> tuple[str, str]:
     if not file_bytes:
         raise ValueError("文件内容为空")
@@ -141,16 +162,22 @@ def extract_paper_import_file_content(file_name: str, file_bytes: bytes) -> tupl
     except Exception as exc:
         raise ValueError("Word 文件解析失败，请检查文件后重试。") from exc
 
+    from app.questions.service import split_questions_glued_after_answers
+    from docx.text.paragraph import Paragraph as DocxParagraph
+
     parts: list[str] = []
-    for paragraph in document.paragraphs:
-        text = paragraph.text.strip()
-        if text:
-            parts.append(text)
-    for index, table in enumerate(document.tables, start=1):
-        table_text = _format_docx_table(table, index)
+    table_index = 0
+    for block in _iter_docx_body_blocks(document):
+        if isinstance(block, DocxParagraph):
+            text = block.text.strip()
+            if text:
+                parts.append(text)
+            continue
+        table_index += 1
+        table_text = _format_docx_table(block, table_index)
         if table_text:
             parts.append(table_text)
-    text = "\n\n".join(parts).strip()
+    text = split_questions_glued_after_answers("\n\n".join(parts)).strip()
     if not text:
         raise ValueError("未能从 Word 文件中提取文字，请检查文件内容。")
     return text, "docx"
@@ -1148,6 +1175,11 @@ def question_create_from_import_draft(
     answer_text = draft.answer_text or ""
     if draft.type.value == "choice":
         answer_parts = [part.strip() for part in re.split(r"[,，;；、\n]", answer_text) if part.strip()]
+        # 「BD」这类连写的多选答案没有分隔符，需还原成选项字母列表，否则会被
+        # 当成单选题导入（content.multi=False）。
+        compact_answer = re.sub(r"[\s,，;；、/|]+", "", answer_text)
+        if re.fullmatch(r"[A-Ha-h]{2,8}", compact_answer):
+            answer_parts = list(dict.fromkeys(compact_answer.upper()))
         answer = {"correct": answer_parts if len(answer_parts) > 1 else (answer_parts[0] if answer_parts else answer_text)}
     elif draft.type.value == "true_false":
         answer = {"correct": answer_text.strip().lower() in {"正确", "对", "true", "t", "√"}}
@@ -1239,6 +1271,61 @@ async def create_import_session_from_recognition(
         file_name=request.file_name,
         source_format=request.source_format,
         root_knowledge_point_id=request.root_knowledge_point_id,
+        recognition=recognition,
+    )
+    return session, recognition
+
+
+async def create_import_session_from_docx_file(
+    db: AsyncSession,
+    *,
+    user: User,
+    file_name: str,
+    file_bytes: bytes,
+    root_knowledge_point_id: uuid.UUID | None = None,
+    recognition_prompt: str | None = None,
+) -> tuple[PaperImportSession, QuestionImportDocumentRecognizeResponse]:
+    """Recognize a DOCX paper with the shared question-bank recognizer.
+
+    The paper import used to run its own extraction + one-shot prompt, which
+    silently dropped most questions on large papers. It now shares
+    ``recognize_docx_with_ai`` with the question-bank import (identical
+    extraction, chunking and prompt); only cover/answer-sheet pre-cleaning and
+    the AI-outage fallback remain paper-specific.
+    """
+    from app.questions.service import (
+        _is_ai_service_unavailable_error,
+        recognize_docx_with_ai,
+        recognize_document_rule_based,
+    )
+
+    try:
+        recognition = await recognize_docx_with_ai(
+            file_bytes,
+            file_name,
+            import_context="paper",
+            recognition_prompt=recognition_prompt,
+        )
+    except (RuntimeError, httpx.HTTPError) as exc:
+        if not _is_ai_service_unavailable_error(exc):
+            raise
+        raw_text, source_format = extract_paper_import_file_content(file_name, file_bytes)
+        recognition = recognize_document_rule_based(
+            QuestionImportDocumentRecognizeRequest(
+                file_name=file_name,
+                raw_text=raw_text,
+                source_format=source_format,
+                analysis_mode=QuestionImportAnalysisMode.AI_FULL,
+                import_context="paper",
+                recognition_prompt=recognition_prompt,
+            )
+        )
+    session = await create_import_session_from_document_recognition(
+        db,
+        user=user,
+        file_name=file_name,
+        source_format="docx",
+        root_knowledge_point_id=root_knowledge_point_id,
         recognition=recognition,
     )
     return session, recognition

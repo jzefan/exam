@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.common.data_visibility import VisibilityScope
 
@@ -130,6 +130,62 @@ class CatalogPhotoRecognizeRequest(BaseModel):
 
 class CatalogPhotoRecognizeResponse(BaseModel):
     paths: list[list[str]]
+
+
+CatalogWebSource = Literal["publisher_site", "llm"]
+
+
+class CatalogWebRecognizeCoverRequest(BaseModel):
+    image: str = Field(min_length=1)
+    file_name: str | None = Field(default=None, max_length=255)
+
+
+class CatalogWebRecognizeCoverResponse(BaseModel):
+    """封面识别出的图书信息；识别不到的字段为空字符串。"""
+
+    title: str = ""
+    edition: str = ""
+    author: str = ""
+    publisher: str = ""
+
+
+class CatalogWebSearchRequest(BaseModel):
+    keyword: str = Field(min_length=1, max_length=200)
+    limit: int = Field(default=8, ge=1, le=20)
+
+
+class CatalogWebCandidate(BaseModel):
+    """图书检索候选。`from_attributes` 用于接收数据层传回的 dataclass，避免响应模型校验失败。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    title: str
+    url: str = ""
+    author: str = ""
+    publisher: str = ""
+    publish_date: str = ""
+    edition: str = ""
+    price: str = ""
+    source: str = "dangdang"
+
+
+class CatalogWebSearchResponse(BaseModel):
+    candidates: list[CatalogWebCandidate] = Field(default_factory=list)
+
+
+class CatalogWebFetchRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    edition: str | None = Field(default=None, max_length=50)
+    author: str | None = Field(default=None, max_length=200)
+    publisher: str | None = Field(default=None, max_length=100)
+
+
+class CatalogWebFetchResponse(BaseModel):
+    paths: list[list[str]]
+    source: CatalogWebSource
+    source_url: str = ""
+    publisher_site: str = ""
+    notes: str = ""
 
 
 class RecommendationGenerateRequest(BaseModel):

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { act, fireEvent } from "@testing-library/react";
-import { render, screen } from "@/test/test-utils";
+import { render, screen, within } from "@/test/test-utils";
 
 import { ExamTakingMobile } from "./exam-taking-mobile";
 import type { IExamTaking } from "@/types";
@@ -157,5 +157,84 @@ describe("ExamTakingMobile", () => {
     });
 
     expect(setCurrentIndex).not.toHaveBeenCalled();
+  });
+});
+
+describe("ExamTakingMobile 移动端改版布局", () => {
+  it("把交卷放在顶栏，底栏不再有交卷", () => {
+    renderShell();
+
+    const topBar = screen.getByRole("banner");
+    expect(within(topBar).getByRole("button", { name: "交卷" })).toBeInTheDocument();
+
+    const bottomBar = screen.getByRole("contentinfo");
+    expect(within(bottomBar).queryByRole("button", { name: "交卷" })).toBeNull();
+    expect(within(bottomBar).getByRole("button", { name: "题目导航" })).toBeInTheDocument();
+  });
+
+  it("题号在左、倒计时在题号行最右，且顶栏不再放倒计时", () => {
+    renderShell();
+
+    const infoRow = screen.getByTestId("mobile-exam-info-row");
+    const timer = within(infoRow).getByText("01:24:49");
+
+    expect(infoRow.textContent).toMatch(/第\s*2\s*题\s*\/\s*共\s*3\s*题/);
+    // 倒计时是这一行最右侧的最后一个元素
+    expect(infoRow.lastElementChild).toContainElement(timer);
+    expect(infoRow.lastElementChild?.lastElementChild).toBe(timer);
+    // 保存态在倒计时左边
+    expect(within(infoRow).getByText(/已(本地保存|同步)/)).toBeInTheDocument();
+
+    expect(within(screen.getByRole("banner")).queryByText("01:24:49")).toBeNull();
+  });
+
+  it("题号前显示题型短标签，题型不随题号一起被截断", () => {
+    renderShell();
+
+    const infoRow = screen.getByTestId("mobile-exam-info-row");
+    expect(infoRow.textContent).toMatch(/单选\s*·\s*第\s*2\s*题\s*\/\s*共\s*3\s*题/);
+    expect(within(infoRow).getByTestId("mobile-exam-question-type").className).toContain(
+      "shrink-0",
+    );
+  });
+
+  it("SQL 题在题号前显示 SQL", () => {
+    renderShell({
+      currentIndex: 0,
+      examData: {
+        ...examData,
+        questions: [
+          {
+            ...examData.questions[0],
+            type: "short_answer",
+            title: "请编写 SQL 查询语句",
+            content: { text: "<p>请使用 SQL 查询所有分数大于 90 的学生。</p>" },
+            options: null,
+          },
+        ],
+      },
+    });
+
+    expect(screen.getByTestId("mobile-exam-info-row").textContent).toMatch(/SQL\s*·\s*第\s*1\s*题/);
+  });
+
+  it("底栏中间显示题号并可点击打开题目导航", async () => {
+    renderShell({ currentIndex: 1 });
+
+    const chip = screen.getByRole("button", { name: "题目导航" });
+    expect(chip.textContent).toContain("2/3");
+
+    fireEvent.click(chip);
+
+    expect(await screen.findByRole("heading", { name: "题目导航" })).toBeInTheDocument();
+  });
+
+  it("顶栏交卷触发带数据的二次确认", async () => {
+    renderShell({ currentIndex: 1 });
+
+    fireEvent.click(screen.getByRole("button", { name: "交卷" }));
+
+    expect(await screen.findByRole("heading", { name: "确认交卷" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "继续答题" })).toBeInTheDocument();
   });
 });

@@ -56,6 +56,12 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  optimizeDeps: {
+    // 这些依赖只在页面交互时动态 import（试卷/题目导入等）。不预打包会在运行时
+    // 触发二次依赖优化：旧 hash 的 chunk 被清理后，动态 import 会报
+    // "Failed to fetch dynamically imported module"。
+    include: ["jszip", "mammoth", "pdfjs-dist", "xlsx"],
+  },
   build: {
     rollupOptions: {
       output: {

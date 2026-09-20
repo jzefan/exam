@@ -11,9 +11,16 @@ from app.auth.models import User
 from app.common.resource_access import can_write_owned_resource
 from app.database import get_db
 from app.learning import service
+from app.learning.catalog_web import service as catalog_web_service
 from app.learning.schemas import (
     CatalogPhotoRecognizeRequest,
     CatalogPhotoRecognizeResponse,
+    CatalogWebFetchRequest,
+    CatalogWebFetchResponse,
+    CatalogWebRecognizeCoverRequest,
+    CatalogWebRecognizeCoverResponse,
+    CatalogWebSearchRequest,
+    CatalogWebSearchResponse,
     CourseOptionResponse,
     DirectionCreate,
     DirectionResponse,
@@ -335,6 +342,78 @@ async def recognize_catalog_photo(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post(
+    "/catalog-web/recognize-cover",
+    response_model=CatalogWebRecognizeCoverResponse,
+)
+async def recognize_catalog_cover(
+    data: CatalogWebRecognizeCoverRequest,
+    user: WriteUser,
+) -> CatalogWebRecognizeCoverResponse:
+    """从书籍封面读出书名 / 版次 / 作者 / 出版社。"""
+
+    del user
+    try:
+        parsed = await catalog_web_service.recognize_book_cover(data.image)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return CatalogWebRecognizeCoverResponse(**parsed)
+
+
+@router.post(
+    "/catalog-web/search",
+    response_model=CatalogWebSearchResponse,
+)
+async def search_catalog_books(
+    data: CatalogWebSearchRequest,
+    user: WriteUser,
+) -> CatalogWebSearchResponse:
+    """按书名 / ISBN 检索候选图书，供用户确认是哪一本。"""
+
+    del user
+    try:
+        candidates = await catalog_web_service.search_book_candidates(data.keyword, limit=data.limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return CatalogWebSearchResponse(candidates=candidates)
+
+
+@router.post(
+    "/catalog-web/fetch",
+    response_model=CatalogWebFetchResponse,
+)
+async def fetch_catalog_from_web(
+    data: CatalogWebFetchRequest,
+    user: WriteUser,
+) -> CatalogWebFetchResponse:
+    """获取目录：有出版社优先走出版社官网，否则由大模型推断。"""
+
+    del user
+    try:
+        result = await catalog_web_service.fetch_catalog(
+            title=data.title,
+            edition=data.edition or "",
+            author=data.author or "",
+            publisher=data.publisher or "",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return CatalogWebFetchResponse(
+        paths=result.paths,
+        source=result.source,
+        source_url=result.source_url,
+        publisher_site=result.publisher_site,
+        notes=result.notes,
+    )
 
 
 @router.post(

@@ -1,6 +1,8 @@
 import type { QuestionType } from "@/types";
 import { getDefaultScore } from "@/lib/question-defaults";
 import type {
+  EnhanceDraftMode,
+  EnhanceScope,
   ImportConfidence,
   ImportRecognitionMode,
   ImportReviewStatus,
@@ -430,9 +432,51 @@ export function extractHtmlTables(html: string): QuestionImportTableInput[] {
     .filter((table) => table.rows.length > 0);
 }
 
+const CHOICE_ANSWER_SEPARATOR_RE = /[\s,，;；、/|]+/;
+
+/**
+ * 选择题答案中的选项字母。
+ *
+ * 同时兼容「BD」这种连写和「B、D」这种分隔写法；答案里出现成句文字时返回空数组，
+ * 避免把解析里提到的选项字母误判成答案。
+ */
+export function getChoiceAnswerLetters(answerText: string | null | undefined): string[] {
+  const text = (answerText ?? "").trim();
+  if (!text) return [];
+  const compact = text.replace(CHOICE_ANSWER_SEPARATOR_RE, "");
+  if (/^[A-Ha-h]{1,8}$/.test(compact)) {
+    return [...new Set(compact.toUpperCase().split(""))].sort();
+  }
+  const tokens = text.split(CHOICE_ANSWER_SEPARATOR_RE).filter(Boolean);
+  if (tokens.length > 1 && tokens.every((token) => /^[A-Ha-h]$/.test(token))) {
+    return [...new Set(tokens.map((token) => token.toUpperCase()))].sort();
+  }
+  return [];
+}
+
+/** 选择题草稿是否为多选题（答案包含两个及以上选项字母）。 */
+export function isMultiChoiceDraft(draft: QuestionImportDraft): boolean {
+  return draft.type === "choice" && getChoiceAnswerLetters(draft.answer_text).length > 1;
+}
+
+/** 题型筛选键：选择题进一步拆分为单选/多选。 */
+export type DraftTypeFilter = QuestionType | "single_choice" | "multi_choice";
+
+export function getDraftTypeFilter(draft: QuestionImportDraft): DraftTypeFilter {
+  if (draft.type !== "choice") return draft.type;
+  return isMultiChoiceDraft(draft) ? "multi_choice" : "single_choice";
+}
+
+export function getDraftTypeLabel(draft: QuestionImportDraft): string {
+  if (draft.type === "choice") return isMultiChoiceDraft(draft) ? "多选题" : "单选题";
+  return getQuestionTypeLabel(draft.type);
+}
+
 export function buildAnswerPayload(type: QuestionType, answerText: string | null) {
   const text = answerText ?? "";
   if (type === "choice") {
+    const letters = getChoiceAnswerLetters(text);
+    if (letters.length > 1) return { correct: letters };
     const parts = text.split(/[,，;；、\n]/).map((item) => item.trim()).filter(Boolean);
     return { correct: parts.length > 1 ? parts : (parts[0] ?? text) };
   }
@@ -730,6 +774,12 @@ const DIFFICULTY_MAP: Record<string, number> = {
 
 const TYPE_MAP: Record<string, QuestionType> = {
   "选择题": "choice",
+  "单选题": "choice",
+  "多选题": "choice",
+  "单项选择": "choice",
+  "多项选择": "choice",
+  "单选": "choice",
+  "多选": "choice",
   "判断题": "true_false",
   "填空题": "fill_in",
   "简答题": "short_answer",
@@ -1203,4 +1253,40 @@ export function parseJsonQuestions(
   }
 
   return { drafts, unresolvedImages };
+}
+
+
+/** 草稿是否缺少答案。 */
+export function draftNeedsAnswer(draft: QuestionImportDraft): boolean {
+  return !draft.answer_text?.trim();
+}
+
+/** 草稿是否缺少解析。 */
+export function draftNeedsAnalysis(draft: QuestionImportDraft): boolean {
+  return !draft.analysis?.trim();
+}
+
+/** 草稿是否缺少知识点。 */
+export function draftNeedsKnowledge(draft: QuestionImportDraft): boolean {
+  return (draft.suggested_knowledge_points?.length ?? 0) === 0;
+}
+
+/**
+ * 按完善方式与范围挑出需要处理的草稿。
+ *
+ * scope 为 "missing" 时只返回缺失答案/解析/知识点的题目，避免对已完善的题目
+ * 重复调用模型；scope 为 "all" 时返回全部草稿（保持原有行为）。
+ */
+export function selectEnhanceTargets(
+  drafts: QuestionImportDraft[],
+  mode: EnhanceDraftMode,
+  scope: EnhanceScope,
+): QuestionImportDraft[] {
+  if (scope === "all") return drafts;
+  return drafts.filter((draft) => {
+    if (mode === "answers") return draftNeedsAnswer(draft);
+    if (mode === "analysis") return draftNeedsAnalysis(draft);
+    if (mode === "knowledge") return draftNeedsKnowledge(draft);
+    return draftNeedsAnswer(draft) || draftNeedsKnowledge(draft);
+  });
 }

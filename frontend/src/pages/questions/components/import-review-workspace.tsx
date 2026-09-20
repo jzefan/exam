@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
+import { canMarkChoiceAnswerInline } from "@/components/questions/question-preview-utils";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -31,22 +32,26 @@ import {
 import { Input } from "@/components/ui/input";
 import { htmlToPlainText } from "@/components/ui/rich-text-editor";
 import { cn } from "@/lib/utils";
-import type { IQuestion, QuestionType } from "@/types";
+import type { IQuestion } from "@/types";
 import { QuestionEditFormContent, type QuestionEditSubmitValues } from "../edit";
 import type { QuestionImportDraft } from "../import-types";
 import {
   buildAnswerPayload,
   buildImportContentHtml,
   getBlockingImportIssues,
+  getDraftTypeFilter,
+  getDraftTypeLabel,
   getQuestionTypeLabel,
   generateImportQuestionTitle,
   isMissingAnswerIssue,
+  type DraftTypeFilter,
 } from "../import-utils";
 
-type WorkspaceFilter = "all" | "issues" | "missing_answer" | "doubt" | QuestionType;
+type WorkspaceFilter = "all" | "issues" | "missing_answer" | "doubt" | DraftTypeFilter;
 
-const typeFilterOptions: Array<{ value: QuestionType; label: string; dotClass: string }> = [
-  { value: "choice", label: "选择题", dotClass: "bg-blue-500" },
+const typeFilterOptions: Array<{ value: DraftTypeFilter; label: string; dotClass: string }> = [
+  { value: "single_choice", label: "单选题", dotClass: "bg-blue-500" },
+  { value: "multi_choice", label: "多选题", dotClass: "bg-indigo-500" },
   { value: "true_false", label: "判断题", dotClass: "bg-cyan-500" },
   { value: "fill_in", label: "填空题", dotClass: "bg-violet-500" },
   { value: "short_answer", label: "简答题", dotClass: "bg-emerald-500" },
@@ -54,7 +59,7 @@ const typeFilterOptions: Array<{ value: QuestionType; label: string; dotClass: s
   { value: "code", label: "编程题", dotClass: "bg-amber-500" },
 ];
 
-const typeOrder = new Map<QuestionType, number>(
+const typeOrder = new Map<DraftTypeFilter, number>(
   typeFilterOptions.map((item, index) => [item.value, index]),
 );
 
@@ -69,7 +74,9 @@ function searchableText(draft: QuestionImportDraft) {
     draft.answer_text,
     draft.analysis,
     draft.raw_text,
+    getDraftTypeLabel(draft),
     getQuestionTypeLabel(draft.type),
+    ...(draft.recognized_knowledge_points ?? []),
     ...(draft.options ? Object.values(draft.options) : []),
   ]
     .join(" ")
@@ -112,6 +119,7 @@ function draftToPreviewQuestion(draft: QuestionImportDraft): IQuestion {
     id: draft.draft_id,
     type: draft.type,
     title,
+    source: "imported",
     content: {
       text: draft.content_text,
       html: draft.content_html ?? buildImportContentHtml(draft.content_text, draft.images ?? []),
@@ -149,11 +157,13 @@ function QuestionCard({
   const blockingIssues = getBlockingImportIssues(draft);
   const missingAnswer = hasMissingAnswer(draft);
   const previewQuestion = useMemo(() => draftToPreviewQuestion(draft), [draft]);
+  // 与题目列表一致：答案标在选项上、收起时不单独占一块；答案标不上时才保留答案区。
+  const markChoiceAnswer = canMarkChoiceAnswerInline(previewQuestion);
 
   return (
     <article
       className={cn(
-        "rounded-2xl border bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md",
+        "cursor-pointer rounded-2xl border bg-white p-4 transition-all hover:border-primary hover:shadow-md",
         blockingIssues.length > 0
           ? "border-amber-200"
           : missingAnswer
@@ -167,7 +177,9 @@ function QuestionCard({
         question={previewQuestion}
         index={index}
         mode="detailed"
-        hideAnswer={missingAnswer}
+        expandOnClick
+        hideAnswer
+        markChoiceAnswer={markChoiceAnswer}
         className="border-0 bg-transparent p-0 shadow-none"
         trailing={
           <div className="flex flex-wrap items-center justify-end gap-1">
@@ -206,6 +218,22 @@ function QuestionCard({
         <div className="mt-3 rounded-xl border border-orange-100 bg-orange-50 px-3 py-2 text-xs font-medium leading-5 text-orange-800">
           <span className="font-bold">存疑：</span>
           {draft.doubt_reason}
+        </div>
+      ) : null}
+
+      {draft.recognized_knowledge_points &&
+      draft.recognized_knowledge_points.length > 0 ? (
+        <div className="mt-2 flex flex-wrap items-center gap-1">
+          <span className="text-[11px] text-slate-400">识别知识点：</span>
+          {draft.recognized_knowledge_points.map((name) => (
+            <Badge
+              key={name}
+              variant="outline"
+              className="h-5 border-slate-200 text-[11px] font-medium text-slate-500"
+            >
+              {name}
+            </Badge>
+          ))}
         </div>
       ) : null}
 
@@ -349,8 +377,8 @@ export function ImportReviewWorkspace({
       .map((draft, originalIndex) => ({ draft, originalIndex }))
       .sort((a, b) => {
         const typeDiff =
-          (typeOrder.get(a.draft.type) ?? Number.MAX_SAFE_INTEGER) -
-          (typeOrder.get(b.draft.type) ?? Number.MAX_SAFE_INTEGER);
+          (typeOrder.get(getDraftTypeFilter(a.draft)) ?? Number.MAX_SAFE_INTEGER) -
+          (typeOrder.get(getDraftTypeFilter(b.draft)) ?? Number.MAX_SAFE_INTEGER);
         return typeDiff || a.originalIndex - b.originalIndex;
       })
       .map(({ draft }) => draft);
@@ -366,13 +394,14 @@ export function ImportReviewWorkspace({
       if (filter === "issues" && getBlockingImportIssues(draft).length === 0) return false;
       if (filter === "missing_answer" && (getBlockingImportIssues(draft).length > 0 || !hasMissingAnswer(draft))) return false;
       if (filter === "doubt" && !draft.doubt) return false;
-      if (!["all", "issues", "missing_answer", "doubt"].includes(filter) && draft.type !== filter) return false;
+      if (!["all", "issues", "missing_answer", "doubt"].includes(filter) && getDraftTypeFilter(draft) !== filter) return false;
       if (!normalizedQuery) return true;
       return searchableText(draft).includes(normalizedQuery);
     });
   }, [filter, orderedDrafts, query]);
 
-  const countByType = (type: QuestionType) => drafts.filter((draft) => draft.type === type).length;
+  const countByType = (type: DraftTypeFilter) =>
+    drafts.filter((draft) => getDraftTypeFilter(draft) === type).length;
 
   return (
     <div className="flex h-full min-h-0 bg-slate-50">

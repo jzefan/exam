@@ -437,7 +437,9 @@ export interface IWrongAnswerDetail {
   question_id: string;
   question_title: string;
   question_type: string;
+  exam_id?: string | null;
   exam_title: string;
+  exam_category?: ExamCategory;
   wrong_count: number;
   last_wrong_at: string;
   tags: string[];

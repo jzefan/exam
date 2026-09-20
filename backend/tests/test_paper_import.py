@@ -133,6 +133,34 @@ def test_choice_options_split_when_multiple_options_share_one_line():
     assert all("选择题选项不完整" not in draft.issues for draft in drafts)
 
 
+def test_import_draft_exposes_multi_choice_for_glued_letter_answers():
+    from app.papers.service import question_create_from_import_draft
+
+    def make_draft(draft_id: str, answer_text: str) -> QuestionImportDraft:
+        return QuestionImportDraft.model_validate(
+            {
+                "draft_id": draft_id,
+                "raw_text": f"{draft_id}. 示例题",
+                "title": "示例题",
+                "type": "choice",
+                "content_text": "示例题",
+                "options": {"A": "甲", "B": "乙", "C": "丙", "D": "丁"},
+                "answer_text": answer_text,
+                "segment_source": "rule",
+                "type_confidence": "high",
+                "boundary_confidence": "high",
+            }
+        )
+
+    single = question_create_from_import_draft(make_draft("single", "A"))
+    multi_glued = question_create_from_import_draft(make_draft("multi-glued", "BD"))
+    multi_separated = question_create_from_import_draft(make_draft("multi-separated", "A、C"))
+
+    assert single.answer["correct"] == "A"
+    assert multi_glued.answer["correct"] == ["B", "D"]
+    assert multi_separated.answer["correct"] == ["A", "C"]
+
+
 async def _teacher(db_session):
     org = Organization(name="Import Org", type="school", is_active=True)
     role = await db_session.scalar(select(Role).where(Role.name == "teacher"))
@@ -155,9 +183,25 @@ async def _teacher(db_session):
 
 
 @pytest.mark.asyncio
-async def test_paper_import_recognize_and_confirm_creates_paper(client, db_session):
+async def test_paper_import_recognize_and_confirm_creates_paper(client, db_session, monkeypatch):
     teacher = await _teacher(db_session)
     client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+
+    async def fake_request(_prompt: str) -> list[dict]:
+        return [
+            {
+                "type": "choice",
+                "content_text": "MySQL 属于哪类数据库？",
+                "options": {"A": "关系型", "B": "缓存"},
+                "answer_text": "A",
+                "analysis": "",
+                "difficulty": 3,
+                "raw_text": "MySQL 属于哪类数据库？",
+                "images": [],
+            }
+        ]
+
+    monkeypatch.setattr("app.questions.service._request_doc_recognition_questions", fake_request)
 
     recognize_response = await client.post(
         "/api/papers/import/recognize",
@@ -201,24 +245,24 @@ async def test_paper_import_recognize_and_confirm_creates_paper(client, db_sessi
 async def test_paper_import_recognize_file_extracts_docx_tables(client, db_session, monkeypatch):
     teacher = await _teacher(db_session)
     client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    prompts: list[str] = []
 
-    async def fake_request(_prompt: str) -> dict:
-        return {
-            "questions": [
-                {
-                    "type": "choice",
-                    "content_text": "下面关于数据分析说法正确的是？",
-                    "options": {"A": "只做统计", "B": "服务决策", "C": "无需清洗", "D": "不能可视化"},
-                    "answer_text": "B",
-                    "analysis": "",
-                    "difficulty": 3,
-                    "raw_text": "下面关于数据分析说法正确的是？",
-                    "images": [],
-                }
-            ]
-        }
+    async def fake_request(prompt: str) -> list[dict]:
+        prompts.append(prompt)
+        return [
+            {
+                "type": "choice",
+                "content_text": "下面关于数据分析说法正确的是？",
+                "options": {"A": "只做统计", "B": "服务决策", "C": "无需清洗", "D": "不能可视化"},
+                "answer_text": "B",
+                "analysis": "",
+                "difficulty": 3,
+                "raw_text": "下面关于数据分析说法正确的是？",
+                "images": [],
+            }
+        ]
 
-    monkeypatch.setattr("app.questions.service._request_deepseek_json", fake_request)
+    monkeypatch.setattr("app.questions.service._request_doc_recognition_questions", fake_request)
 
     doc = Document()
     doc.add_paragraph("江苏卫生健康职业学院 2024-2025 学年试卷")
@@ -253,6 +297,7 @@ async def test_paper_import_recognize_file_extracts_docx_tables(client, db_sessi
     assert payload["session_id"]
     assert payload["summary"]["total"] == 1
     assert payload["drafts"][0]["content_text"] == "下面关于数据分析说法正确的是？"
+    assert prompts and "[Q]" in prompts[0]
 
 
 @pytest.mark.asyncio
@@ -334,3 +379,258 @@ async def test_paper_import_recognize_file_uses_pdf_chunked_recognizer(client, d
     assert session.source_format == "pdf"
     assert session.preview_payload["summary"]["total"] == 2
     assert session.preview_payload["drafts"][1]["answer_images"][0]["image_id"] == "answer-er.png"
+
+
+def test_paper_import_extracts_docx_tables_in_document_order_and_splits_glued_questions():
+    """PDF 转 DOCX 的试卷常把“答案：… 难度层次：易 12. 下一题”压在同一段。
+
+    这类粘连题号必须在新行开始，且表格内容要留在原位置，否则 200+ 题的大试卷
+    会被边界扫描漏掉大半（线上曾出现 250 题只识别出 11 题）。
+    """
+    from app.papers.service import extract_paper_import_file_content
+
+    doc = Document()
+    doc.add_paragraph("一、单选题")
+    doc.add_paragraph("1. 第一题题干？")
+    doc.add_paragraph("A. 甲\nB. 乙")
+    doc.add_paragraph("答案：A 知识点：测试 难度层次：易 2. 第二题题干？")
+    doc.add_paragraph("A. 丙\nB. 丁")
+    doc.add_paragraph("答案：B 知识点：测试 难度层次：易")
+    table = doc.add_table(rows=2, cols=2)
+    table.rows[0].cells[0].text = "题干"
+    table.rows[0].cells[1].text = "3. 第三题题干？"
+    table.rows[1].cells[0].text = "答案"
+    table.rows[1].cells[1].text = "A"
+    doc.add_paragraph("4. 第四题题干？")
+    buffer = BytesIO()
+    doc.save(buffer)
+
+    text, source_format = extract_paper_import_file_content("paper.docx", buffer.getvalue())
+
+    assert source_format == "docx"
+    # 粘连题号被拆到新行
+    assert "\n2. 第二题题干？" in text
+    # 表格内容按文档顺序出现在第二题与第四题之间
+    assert text.index("2. 第二题题干？") < text.index("3. 第三题题干？") < text.index("4. 第四题题干？")
+
+
+@pytest.mark.asyncio
+async def test_paper_import_chunks_large_documents_instead_of_one_truncated_call(monkeypatch):
+    """整卷一次性调用会把 200+ 题的输出截断；试卷导入必须分块识别。"""
+    from app.questions.schemas import QuestionImportDocumentRecognizeRequest
+    from app.questions.service import recognize_question_document
+
+    prompts: list[str] = []
+    seen = 0
+
+    async def fake_request(prompt: str) -> list[dict]:
+        nonlocal seen
+        prompts.append(prompt)
+        # 模板说明里也会出现 `[Q]` 字样，只统计「文本：」之后的文档正文
+        body = prompt.rsplit("文本：", 1)[-1]
+        question_count = body.count("[Q]")
+        questions: list[dict] = []
+        for _ in range(question_count):
+            seen += 1
+            questions.append(
+                {
+                    "type": "choice",
+                    "content_text": f"第 {seen} 题题干？",
+                    "options": {"A": "甲", "B": "乙", "C": "丙", "D": "丁"},
+                    "answer_text": "A",
+                    "analysis": "",
+                    "difficulty": 3,
+                    "raw_text": f"第 {seen} 题题干？",
+                    "images": [],
+                }
+            )
+        return questions
+
+    monkeypatch.setattr("app.questions.service._request_doc_recognition_questions", fake_request)
+
+    blocks = [
+        f"{index}. 这是第 {index} 道题目，请选择正确答案？\nA. 甲选项内容\nB. 乙选项内容\nC. 丙选项内容\nD. 丁选项内容\n答案：A\n知识点：测试\n难度层次：易"
+        for index in range(1, 121)
+    ]
+    raw_text = "一 、单选题(共120题)\n" + "\n".join(blocks)
+
+    response = await recognize_question_document(
+        QuestionImportDocumentRecognizeRequest(
+            file_name="large-paper.docx",
+            source_format="docx",
+            raw_text=raw_text,
+            analysis_mode="ai_full",
+            import_context="paper",
+        )
+    )
+
+    assert len(prompts) > 1, "大试卷必须分块调用 AI"
+    assert "[Q]" in prompts[0]
+    assert len(response.drafts) == 120
+
+
+@pytest.mark.asyncio
+async def test_paper_import_keeps_vision_path_when_page_images_are_present(monkeypatch):
+    """带页面图片的试卷（PDF 图片回退）必须继续走视觉识别，而不是文本分块。"""
+    from app.questions.schemas import QuestionImportDocumentRecognizeRequest
+    from app.questions.service import recognize_question_document
+
+    vision_calls: list[str] = []
+    text_calls: list[str] = []
+
+    async def fake_vision(**kwargs) -> dict:
+        vision_calls.append(kwargs["prompt"])
+        return {
+            "questions": [
+                {
+                    "type": "choice",
+                    "content_text": "图片中的题目？",
+                    "options": {"A": "甲", "B": "乙"},
+                    "answer_text": "A",
+                    "analysis": "",
+                    "difficulty": 3,
+                    "raw_text": "图片中的题目？",
+                    "images": [],
+                }
+            ]
+        }
+
+    async def fake_text(prompt: str) -> list[dict]:
+        text_calls.append(prompt)
+        return []
+
+    monkeypatch.setattr("app.questions.service._request_vision_json", fake_vision)
+    monkeypatch.setattr("app.questions.service._request_doc_recognition_questions", fake_text)
+
+    response = await recognize_question_document(
+        QuestionImportDocumentRecognizeRequest(
+            file_name="paper.pdf",
+            source_format="pdf",
+            raw_text="[IMAGE:page-1]",
+            analysis_mode="ai_full",
+            import_context="paper",
+            images=[
+                {
+                    "image_id": "page-1",
+                    "url": "data:image/jpeg;base64,AAAA",
+                    "order": 1,
+                    "page": 1,
+                }
+            ],
+        )
+    )
+
+    assert vision_calls, "带图片的试卷必须调用视觉识别"
+    assert not text_calls, "带图片的试卷不应走文本分块识别"
+    assert response.drafts[0].content_text == "图片中的题目？"
+
+
+@pytest.mark.asyncio
+async def test_paper_import_docx_uses_shared_question_bank_recognizer(client, db_session, monkeypatch):
+    """试卷 DOCX 导入必须复用题库导入的识别器，两个页面结果保持一致。"""
+    teacher = await _teacher(db_session)
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    calls: list[dict] = []
+
+    async def fake_recognizer(file_bytes, file_name, *, import_context=None, recognition_prompt=None):
+        calls.append(
+            {
+                "file_name": file_name,
+                "import_context": import_context,
+                "recognition_prompt": recognition_prompt,
+            }
+        )
+        return QuestionImportDocumentRecognizeResponse(
+            mode="smart",
+            summary=QuestionImportDocumentSummary(
+                total=1,
+                high_confidence=1,
+                medium_confidence=0,
+                low_confidence=0,
+                issue_count=0,
+                pending_review=1,
+                approved=0,
+                skipped=0,
+            ),
+            drafts=[
+                QuestionImportDraft(
+                    draft_id=str(uuid.uuid4()),
+                    raw_text="共享识别器题目？",
+                    title="共享识别器题目？",
+                    type="choice",
+                    content_text="共享识别器题目？",
+                    options={"A": "甲", "B": "乙"},
+                    answer_text="A",
+                    segment_source="ai_full",
+                    boundary_confidence="high",
+                    type_confidence="high",
+                )
+            ],
+        )
+
+    monkeypatch.setattr("app.questions.service.recognize_docx_with_ai", fake_recognizer)
+
+    doc = Document()
+    doc.add_paragraph("1. 共享识别器题目？")
+    buffer = BytesIO()
+    doc.save(buffer)
+
+    response = await client.post(
+        "/api/papers/import/recognize-file",
+        files={
+            "file": (
+                "paper.docx",
+                buffer.getvalue(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    assert calls == [
+        {
+            "file_name": "paper.docx",
+            "import_context": "paper",
+            "recognition_prompt": None,
+        }
+    ]
+    assert response.json()["summary"]["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_paper_import_docx_falls_back_to_rule_drafts_when_ai_is_unavailable(
+    client, db_session, monkeypatch
+):
+    """AI 不可用时保留原有回退：用规则解析生成草稿而不是直接报错。"""
+    teacher = await _teacher(db_session)
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+
+    async def broken_recognizer(*_args, **_kwargs):
+        raise RuntimeError("AI 题目识别失败：error:RuntimeError:未配置任何 AI 识别服务的 API Key")
+
+    monkeypatch.setattr("app.questions.service.recognize_docx_with_ai", broken_recognizer)
+
+    doc = Document()
+    doc.add_paragraph("一、单选题")
+    doc.add_paragraph("1. 回退题目题干？")
+    doc.add_paragraph("A. 甲")
+    doc.add_paragraph("B. 乙")
+    doc.add_paragraph("答案：A")
+    buffer = BytesIO()
+    doc.save(buffer)
+
+    response = await client.post(
+        "/api/papers/import/recognize-file",
+        files={
+            "file": (
+                "paper.docx",
+                buffer.getvalue(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session_id"]
+    assert payload["summary"]["total"] >= 1

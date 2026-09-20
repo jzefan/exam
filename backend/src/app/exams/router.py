@@ -151,7 +151,8 @@ async def _is_student_user(db: AsyncSession, user_id: uuid.UUID) -> bool:
 
 
 async def _exam_query_for_user(db: AsyncSession, user: CurrentUser):
-    query = select(Exam).where(Exam.deleted_at.is_(None))
+    # 学生个人生成的「错题强化练习」只在错题本里出现，不进考试/练习列表。
+    query = select(Exam).where(Exam.deleted_at.is_(None), Exam.hidden_from_list.is_(False))
     if await _is_student_user(db, user.id):
         return (
             query.join(ExamStudent, ExamStudent.exam_id == Exam.id)

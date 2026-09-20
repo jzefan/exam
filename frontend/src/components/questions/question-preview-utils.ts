@@ -113,14 +113,28 @@ export function getQuestionContentHtml(question: IQuestion): string | null {
   return null;
 }
 
-export function isMultiChoice(question: IQuestion): boolean {
+/**
+ * 题型判定只依赖这几个字段。
+ *
+ * 考试作答页拿到的是 `IExamQuestionForStudent`（没有 `answer`，因为作答时还没交卷），
+ * 用结构化最小集可以让同一套判定在题库页和作答页复用，不必造假字段或做类型断言。
+ */
+export type QuestionTypeSource = {
+  type: string | null | undefined;
+  content?: Record<string, unknown> | null;
+  answer?: Record<string, unknown> | null;
+};
+
+export function isMultiChoice(question: QuestionTypeSource): boolean {
   return (
     normalizeQuestionType(question.type) === "choice" &&
     (question.content?.multi === true || Array.isArray(question.answer?.correct))
   );
 }
 
-export function getQuestionDisplayType(question: IQuestion): QuestionDisplayType | null {
+export function getQuestionDisplayType(
+  question: QuestionTypeSource,
+): QuestionDisplayType | null {
   const normalizedType = normalizeQuestionType(question.type);
   if (!normalizedType) {
     return null;
@@ -134,6 +148,81 @@ export function getQuestionDisplayType(question: IQuestion): QuestionDisplayType
 export function getQuestionDisplayTypeLabel(question: IQuestion): string {
   const displayType = getQuestionDisplayType(question);
   return displayType ? questionDisplayTypeFullLabel[displayType] : "题目";
+}
+
+/**
+ * 归一化正确答案对应的选项键集合。
+ *
+ * 约定上单选题是 `"A"`、多选题是 `["A","B"]`，但历史数据与导入数据里也出现过
+ * `"ABC"`、`"A、B"` 这类合并写法。这里统一拆成单个选项键，保证「正确答案标在选项上」
+ * 的展示方式在任何存量数据下都不会丢答案。
+ */
+export function normalizeCorrectOptionKeys(
+  raw: unknown,
+  optionKeys: Set<string>,
+): Set<string> {
+  const normalized = new Set<string>();
+  const addKey = (value: unknown) => {
+    const key = String(value ?? "").trim();
+    if (!key) return;
+    normalized.add(key);
+    const upper = key.toUpperCase();
+    if (upper !== key) normalized.add(upper);
+  };
+
+  if (Array.isArray(raw)) {
+    raw.forEach(addKey);
+    return normalized;
+  }
+  if (typeof raw !== "string") {
+    if (raw != null) addKey(raw);
+    return normalized;
+  }
+
+  const text = raw.trim();
+  if (!text) return normalized;
+
+  const parts = text.split(/[\s,，、;；/|]+/).filter(Boolean);
+  if (parts.length > 1) {
+    parts.forEach(addKey);
+    return normalized;
+  }
+
+  // 合并写法（如 "ABC"）：只有当每个字符都是真实存在的选项键时才拆分，避免误拆。
+  const chars = [...text];
+  if (chars.length > 1 && chars.every((char) => optionKeys.has(char))) {
+    chars.forEach(addKey);
+    return normalized;
+  }
+
+  addKey(text);
+  return normalized;
+}
+
+/**
+ * 判断题目的正确答案能否内联标记到选项上。
+ *
+ * `markChoiceAnswer` 会隐藏独立的「参考答案」区。若答案匹配不上任何选项键
+ * （例如答案写成了「以上都对」，或与选项键大小写/形式不一致），答案就会彻底看不见。
+ * 因此调用方只在能标出至少一个选项时才启用内联标记。
+ */
+export function canMarkChoiceAnswerInline(question: IQuestion): boolean {
+  if (normalizeQuestionType(question.type) !== "choice" || !question.options) {
+    return false;
+  }
+  const optionKeys = new Set(Object.keys(question.options));
+  if (optionKeys.size === 0) {
+    return false;
+  }
+  for (const key of normalizeCorrectOptionKeys(
+    question.answer?.correct,
+    optionKeys,
+  )) {
+    if (optionKeys.has(key)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function getQuestionAnswerText(question: IQuestion): string {

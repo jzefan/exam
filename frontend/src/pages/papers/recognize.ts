@@ -28,7 +28,7 @@ export type RecognizePaperPayloadOptions = {
   allowPdfImageFallback?: boolean;
 };
 
-export const PAPER_IMPORT_MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024;
+export const PAPER_IMPORT_MAX_FILE_SIZE_BYTES = 40 * 1024 * 1024;
 const PAPER_PDF_PAGE_IMAGE_QUALITY = 0.92;
 const PAPER_PDF_PAGE_IMAGE_MAX_EDGE = 2048;
 
@@ -39,29 +39,44 @@ export async function extractPaperImportPayload(
   file: File,
 ): Promise<ImportDocumentPayload> {
   const extension = file.name.split(".").pop()?.toLowerCase();
-  if (extension !== "pdf") {
-    const payload = await extractQuestionImportPayload(file);
-    if (payload.sourceFormat === "json" || payload.sourceFormat === "zip") {
-      throw new Error(
-        "试卷导入暂不支持 JSON 或 ZIP 文件，请上传 PDF、Word(docx) 或 Markdown 文件。",
-      );
-    }
+
+  if (extension === "pdf") {
     return {
       fileName: file.name,
-      rawText: payload.rawText,
-      sourceFormat: payload.sourceFormat,
-      images: payload.images,
-      tables: payload.tables,
+      rawText: file.name,
+      sourceFormat: "pdf",
+      images: [],
+      tables: [],
       originalFile: file,
     };
   }
 
+  if (extension === "docx") {
+    // Word 原件直接交给后端 python-docx 解析（与题库导入一致）。客户端 mammoth
+    // 只在后端文件识别失败时按需加载，避免试卷导入强依赖一个仅在交互时才会
+    // 拉取的动态 chunk。
+    return {
+      fileName: file.name,
+      rawText: "",
+      sourceFormat: "docx",
+      images: [],
+      tables: [],
+      originalFile: file,
+    };
+  }
+
+  const payload = await extractQuestionImportPayload(file);
+  if (payload.sourceFormat === "json" || payload.sourceFormat === "zip") {
+    throw new Error(
+      "试卷导入暂不支持 JSON 或 ZIP 文件，请上传 PDF、Word(docx) 或 Markdown 文件。",
+    );
+  }
   return {
     fileName: file.name,
-    rawText: file.name,
-    sourceFormat: "pdf",
-    images: [],
-    tables: [],
+    rawText: payload.rawText,
+    sourceFormat: payload.sourceFormat,
+    images: payload.images,
+    tables: payload.tables,
     originalFile: file,
   };
 }
@@ -134,6 +149,23 @@ export async function recognizePaperPayload(
         { method: "POST", body: formData },
       );
     } catch (error) {
+      if (payload.sourceFormat === "docx" && payload.originalFile) {
+        // 后端 Word 识别失败时，回退到客户端解析后再走文本识别。
+        try {
+          const extracted = await extractQuestionImportPayload(payload.originalFile);
+          return recognizePaperPayloadAsJson(
+            {
+              ...payload,
+              rawText: extracted.rawText,
+              images: extracted.images,
+              tables: extracted.tables,
+            },
+            options,
+          );
+        } catch {
+          throw error;
+        }
+      }
       if (payload.sourceFormat !== "pdf" || !options.allowPdfImageFallback) {
         throw error;
       }

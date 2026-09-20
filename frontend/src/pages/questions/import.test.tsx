@@ -1,5 +1,6 @@
 import { MemoryRouter } from "react-router-dom";
-import { render, screen, fireEvent, waitFor } from "@/test/test-utils";
+import { render, screen, fireEvent, waitFor, within } from "@/test/test-utils";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { QuestionImportDraft } from "./import-types";
@@ -499,11 +500,504 @@ describe("QuestionImportPage", () => {
     expect(await screen.findByText("核对导入内容")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "导入 1 道题目" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "全部题目 1" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "选择题 1" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "单选题 1" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "多选题 1" })).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText("搜索题目内容、答案、解析或选项...")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "展开查看答案" })).not.toBeInTheDocument();
-    expect(screen.getByText("答案")).toBeInTheDocument();
-    expect(screen.getByText("A")).toBeInTheDocument();
+    // 与题目列表一致：正确答案内联标在选项上，收起态不再单独渲染「答案」区。
+    expect(screen.queryByText("答案")).not.toBeInTheDocument();
+    const option = (text: string) =>
+      screen.getByText((_, node) => node?.textContent === text);
+    expect(option("A. 选项 A").className).toContain("text-primary");
+    expect(option("B. 选项 B").className).not.toContain("text-primary");
+    // 点击卡片可展开与收缩。
+    const details = screen.getByTestId("question-preview-details");
+    expect(details).toHaveClass("grid-rows-[0fr]");
+    fireEvent.click(option("A. 选项 A"));
+    await waitFor(() =>
+      expect(screen.getByTestId("question-preview-details")).toHaveClass(
+        "grid-rows-[1fr]",
+      ),
+    );
+    fireEvent.click(option("A. 选项 A"));
+    await waitFor(() =>
+      expect(screen.getByTestId("question-preview-details")).toHaveClass(
+        "grid-rows-[0fr]",
+      ),
+    );
+  });
+
+  it("splits choice drafts into 单选题 and 多选题 in the review sidebar", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockJsonResponse({
+        mode: "smart",
+        summary: {
+          total: 2,
+          high_confidence: 2,
+          medium_confidence: 0,
+          low_confidence: 0,
+          issue_count: 0,
+          pending_review: 2,
+          approved: 0,
+          skipped: 0,
+        },
+        drafts: [
+          { ...baseDraft, draft_id: "single", content_text: "单选题题干", answer_text: "A" },
+          {
+            ...baseDraft,
+            draft_id: "multi",
+            content_text: "多选题题干",
+            answer_text: "BD",
+            options: { A: "甲", B: "乙", C: "丙", D: "丁" },
+          },
+        ],
+      }),
+    );
+
+    renderImportPage();
+
+    const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
+    fireEvent.change(screen.getByTestId("question-import-file-input"), {
+      target: { files: [file] },
+    });
+
+    expect(await screen.findByText("核对导入内容")).toBeInTheDocument();
+    const singleFilter = screen.getByRole("button", { name: "单选题 1" });
+    const multiFilter = screen.getByRole("button", { name: "多选题 1" });
+    expect(singleFilter).toBeInTheDocument();
+    expect(multiFilter).toBeInTheDocument();
+    // 侧边筛选 + 题目卡片题型标签都会显示「单选题 / 多选题」。
+    expect(screen.getAllByText("单选题").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText("多选题").length).toBeGreaterThanOrEqual(2);
+
+    fireEvent.click(multiFilter);
+    expect(await screen.findByText("多选题题干")).toBeInTheDocument();
+    expect(screen.queryByText("单选题题干")).not.toBeInTheDocument();
+
+    fireEvent.click(singleFilter);
+    expect(await screen.findByText("单选题题干")).toBeInTheDocument();
+    expect(screen.queryByText("多选题题干")).not.toBeInTheDocument();
+  });
+
+  it("rejects files larger than 40MB before recognition", async () => {
+    renderImportPage();
+
+    const file = new File(["docx-body"], "huge.docx", {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+    Object.defineProperty(file, "size", { value: 41 * 1024 * 1024 });
+
+    fireEvent.change(screen.getByTestId("question-import-file-input"), {
+      target: { files: [file] },
+    });
+
+    expect(await screen.findByText(/文件过大/)).toBeInTheDocument();
+    expect(screen.getByText(/40 MB 以内的文件/)).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("offers enhance scope and only sends missing drafts by default", async () => {
+    const recognitionResponse = mockJsonResponse({
+      mode: "smart",
+      summary: {
+        total: 2,
+        duplicates_removed: 0,
+        high_confidence: 1,
+        medium_confidence: 1,
+        low_confidence: 0,
+        issue_count: 0,
+        pending_review: 2,
+        approved: 0,
+        skipped: 0,
+      },
+      drafts: [
+        {
+          ...baseDraft,
+          draft_id: "complete",
+          answer_text: "A",
+          suggested_knowledge_points: [{ id: "kp-1", name: "知识点" }],
+        },
+        {
+          ...baseDraft,
+          draft_id: "missing",
+          answer_text: null,
+          issues: ["未识别到答案"],
+          suggested_knowledge_points: [],
+        },
+      ],
+    });
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes("enhance-drafts-stream")) {
+        return new Response(`data: ${JSON.stringify({ type: "done" })}\n\n`, { status: 200 });
+      }
+      if (String(url).includes("recognize")) return recognitionResponse;
+      return mockJsonResponse([]);
+    });
+
+    const user = userEvent.setup();
+    renderImportPage();
+
+    const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
+    fireEvent.change(screen.getByTestId("question-import-file-input"), {
+      target: { files: [file] },
+    });
+    await screen.findByText("核对导入内容");
+
+    await user.click(screen.getByRole("button", { name: /完善答案与知识点/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "完善答案" }));
+
+    expect(await screen.findByText("完善范围")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "仅补齐缺失" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "全部题目" })).toBeInTheDocument();
+    // 「完善答案」弹窗只显示答案相关的缺失统计
+    expect(screen.getByText("缺失答案 1 题")).toBeInTheDocument();
+
+    // 默认「仅补齐缺失」：只把缺答案的草稿发给模型
+    fireEvent.click(screen.getByRole("button", { name: "完善答案" }));
+
+    const enhanceCall = await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([url]) =>
+        String(url).includes("enhance-drafts-stream"),
+      );
+      expect(call).toBeTruthy();
+      return call as [string, RequestInit];
+    });
+    const missingScopeBody = JSON.parse(String(enhanceCall[1].body));
+    expect(missingScopeBody.mode).toBe("answers");
+    expect(missingScopeBody.drafts.map((d: { draft_id: string }) => d.draft_id)).toEqual([
+      "missing",
+    ]);
+  });
+
+  it("shows the knowledge points and difficulty recognized from the document", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockJsonResponse({
+        mode: "visual",
+        summary: {
+          total: 1,
+          high_confidence: 1,
+          medium_confidence: 0,
+          low_confidence: 0,
+          issue_count: 0,
+          pending_review: 1,
+          approved: 0,
+          skipped: 0,
+        },
+        drafts: [
+          {
+            ...baseDraft,
+            difficulty: 4,
+            question_number: 32,
+            recognized_knowledge_points: ["人工智能信息技术基础"],
+          },
+        ],
+      }),
+    );
+
+    renderImportPage();
+
+    const file = new File(["scan"], "paper.pdf", { type: "application/pdf" });
+    fireEvent.change(screen.getByTestId("question-import-file-input"), {
+      target: { files: [file] },
+    });
+
+    expect(await screen.findByText("核对导入内容")).toBeInTheDocument();
+    expect(screen.getByText("识别知识点：")).toBeInTheDocument();
+    expect(screen.getByText("人工智能信息技术基础")).toBeInTheDocument();
+    expect(screen.getByText("较难")).toBeInTheDocument();
+  });
+
+  it("sends recognized knowledge points to the enhance endpoint", async () => {
+    const recognitionResponse = mockJsonResponse({
+      mode: "visual",
+      summary: {
+        total: 1,
+        duplicates_removed: 0,
+        high_confidence: 0,
+        medium_confidence: 1,
+        low_confidence: 0,
+        issue_count: 1,
+        pending_review: 1,
+        approved: 0,
+        skipped: 0,
+      },
+      drafts: [
+        {
+          ...baseDraft,
+          answer_text: null,
+          issues: ["未识别到答案"],
+          recognized_knowledge_points: ["人工智能信息技术基础"],
+        },
+      ],
+    });
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes("enhance-drafts-stream")) {
+        return new Response(`data: ${JSON.stringify({ type: "done" })}\n\n`, { status: 200 });
+      }
+      if (String(url).includes("recognize")) return recognitionResponse;
+      return mockJsonResponse([]);
+    });
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: "/questions/import",
+            state: { courseKpId: "kp-software", courseName: "软件工程" },
+          },
+        ]}
+      >
+        <QuestionImportPage />
+      </MemoryRouter>,
+    );
+
+    const file = new File(["scan"], "paper.pdf", { type: "application/pdf" });
+    fireEvent.change(screen.getByTestId("question-import-file-input"), {
+      target: { files: [file] },
+    });
+    await screen.findByText("核对导入内容");
+
+    await user.click(screen.getByRole("button", { name: /完善答案与知识点/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "完善知识点" }));
+    fireEvent.click(await screen.findByRole("button", { name: "完善知识点" }));
+
+    const enhanceCall = await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([url]) =>
+        String(url).includes("enhance-drafts-stream"),
+      );
+      expect(call).toBeTruthy();
+      return call as [string, RequestInit];
+    });
+    const body = JSON.parse(String(enhanceCall[1].body));
+    expect(body.mode).toBe("knowledge");
+    expect(body.drafts[0].recognized_knowledge_points).toEqual(["人工智能信息技术基础"]);
+  });
+
+  it("offers a combined enhance item that runs answers and knowledge together", async () => {
+    const recognitionResponse = mockJsonResponse({
+      mode: "smart",
+      summary: {
+        total: 1,
+        duplicates_removed: 0,
+        high_confidence: 1,
+        medium_confidence: 0,
+        low_confidence: 0,
+        issue_count: 0,
+        pending_review: 1,
+        approved: 0,
+        skipped: 0,
+      },
+      drafts: [{ ...baseDraft, answer_text: null, suggested_knowledge_points: [] }],
+    });
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes("enhance-drafts-stream")) {
+        return new Response(`data: ${JSON.stringify({ type: "done" })}\n\n`, { status: 200 });
+      }
+      if (String(url).includes("recognize")) return recognitionResponse;
+      return mockJsonResponse([]);
+    });
+
+    // 从课程进入：父知识点已预置，可直接同时完善
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: "/questions/import",
+            state: { courseKpId: "kp-software", courseName: "软件工程" },
+          },
+        ]}
+      >
+        <QuestionImportPage />
+      </MemoryRouter>,
+    );
+
+    const user = userEvent.setup();
+    const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
+    fireEvent.change(screen.getByTestId("question-import-file-input"), {
+      target: { files: [file] },
+    });
+    await screen.findByText("核对导入内容");
+
+    await user.click(screen.getByRole("button", { name: /完善答案与知识点/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "同时完善" }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(/作为父知识点/)).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "完善答案与知识点" }));
+
+    const enhanceCall = await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([url]) =>
+        String(url).includes("enhance-drafts-stream"),
+      );
+      expect(call).toBeTruthy();
+      return call as [string, RequestInit];
+    });
+    const body = JSON.parse(String(enhanceCall[1].body));
+    expect(body.mode).toBe("both");
+    expect(body.root_knowledge_point_id).toBe("kp-software");
+  });
+
+  it("offers an analysis-only enhance item that keeps answers untouched", async () => {
+    const recognitionResponse = mockJsonResponse({
+      mode: "smart",
+      summary: {
+        total: 1,
+        duplicates_removed: 0,
+        high_confidence: 1,
+        medium_confidence: 0,
+        low_confidence: 0,
+        issue_count: 0,
+        pending_review: 1,
+        approved: 0,
+        skipped: 0,
+      },
+      drafts: [{ ...baseDraft, analysis: "" }],
+    });
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes("enhance-drafts-stream")) {
+        return new Response(`data: ${JSON.stringify({ type: "done" })}\n\n`, { status: 200 });
+      }
+      if (String(url).includes("recognize")) return recognitionResponse;
+      return mockJsonResponse([]);
+    });
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/questions/import"]}>
+        <QuestionImportPage />
+      </MemoryRouter>,
+    );
+
+    const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
+    fireEvent.change(screen.getByTestId("question-import-file-input"), {
+      target: { files: [file] },
+    });
+    await screen.findByText("核对导入内容");
+
+    await user.click(screen.getByRole("button", { name: /完善答案与知识点/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "完善题目解析" }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(/不改动已有答案/)).toBeInTheDocument();
+    // 解析模式不需要父知识点，弹窗里不应出现知识点选择器
+    expect(within(dialog).queryByText("父知识点")).not.toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "完善题目解析" }));
+
+    const enhanceCall = await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([url]) =>
+        String(url).includes("enhance-drafts-stream"),
+      );
+      expect(call).toBeTruthy();
+      return call as [string, RequestInit];
+    });
+    const body = JSON.parse(String(enhanceCall[1].body));
+    expect(body.mode).toBe("analysis");
+    expect(body.root_knowledge_point_id).toBeNull();
+  });
+
+  it("opens the knowledge enhance dialog with a parent knowledge point field", async () => {
+    const recognitionResponse = mockJsonResponse({
+      mode: "smart",
+      summary: {
+        total: 1,
+        duplicates_removed: 0,
+        high_confidence: 1,
+        medium_confidence: 0,
+        low_confidence: 0,
+        issue_count: 0,
+        pending_review: 1,
+        approved: 0,
+        skipped: 0,
+      },
+      drafts: [{ ...baseDraft, suggested_knowledge_points: [] }],
+    });
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes("recognize")) return recognitionResponse;
+      return mockJsonResponse([]);
+    });
+
+    const user = userEvent.setup();
+    renderImportPage();
+
+    const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
+    fireEvent.change(screen.getByTestId("question-import-file-input"), {
+      target: { files: [file] },
+    });
+    await screen.findByText("核对导入内容");
+
+    await user.click(screen.getByRole("button", { name: /完善答案与知识点/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "完善知识点" }));
+
+    expect(await screen.findByText("父知识点")).toBeInTheDocument();
+    expect(screen.getByText("题目将从所选父知识点下的子知识点中关联。")).toBeInTheDocument();
+    // 未选择父知识点前不能提交
+    expect(screen.getByRole("button", { name: "完善知识点" })).toBeDisabled();
+  });
+
+  it("sends every draft when the enhance scope is set to all questions", async () => {
+    const recognitionResponse = mockJsonResponse({
+      mode: "smart",
+      summary: {
+        total: 2,
+        duplicates_removed: 0,
+        high_confidence: 1,
+        medium_confidence: 1,
+        low_confidence: 0,
+        issue_count: 0,
+        pending_review: 2,
+        approved: 0,
+        skipped: 0,
+      },
+      drafts: [
+        {
+          ...baseDraft,
+          draft_id: "complete",
+          answer_text: "A",
+          suggested_knowledge_points: [{ id: "kp-1", name: "知识点" }],
+        },
+        { ...baseDraft, draft_id: "missing", answer_text: null },
+      ],
+    });
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes("enhance-drafts-stream")) {
+        return new Response(`data: ${JSON.stringify({ type: "done" })}\n\n`, { status: 200 });
+      }
+      if (String(url).includes("recognize")) return recognitionResponse;
+      return mockJsonResponse([]);
+    });
+
+    const user = userEvent.setup();
+    renderImportPage();
+
+    const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
+    fireEvent.change(screen.getByTestId("question-import-file-input"), {
+      target: { files: [file] },
+    });
+    await screen.findByText("核对导入内容");
+
+    await user.click(screen.getByRole("button", { name: /完善答案与知识点/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "完善答案" }));
+    await screen.findByText("完善范围");
+    fireEvent.click(screen.getByRole("button", { name: "全部题目" }));
+    expect(screen.getByText("将处理全部 2 题")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "完善答案" }));
+
+    const enhanceCall = await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([url]) =>
+        String(url).includes("enhance-drafts-stream"),
+      );
+      expect(call).toBeTruthy();
+      return call as [string, RequestInit];
+    });
+    const allScopeBody = JSON.parse(String(enhanceCall[1].body));
+    expect(allScopeBody.drafts.map((d: { draft_id: string }) => d.draft_id)).toEqual([
+      "complete",
+      "missing",
+    ]);
   });
 
   it("re-recognizes the imported document with AI from the review header", async () => {

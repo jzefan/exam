@@ -41,10 +41,28 @@ from app.exams.models import (
 )
 from app.exams.question_sanitizer import sanitize_question_content, sanitize_question_options
 from app.exams.time_utils import coerce_persisted_exam_datetime_to_utc
+from app.exams.wrong_answers import (
+    REMEDIAL_DEFAULT_TOTAL,
+    REMEDIAL_MAX_TOTAL,
+    collect_wrong_question_groups,
+    count_remedial_practices_by_source,
+    create_remedial_practice,
+    default_allocations,
+    list_remedial_practices,
+    load_exams_by_ids,
+    load_hidden_practice_sources,
+    load_student_wrong_answers,
+    resolve_effective_exam_id,
+)
 from app.exams.student_schemas import (
     AppealCreateRequest,
     AppealResponse,
     AttemptStatusResponse,
+    RemedialPracticeAnalysisResponse,
+    RemedialPracticeCreateRequest,
+    RemedialPracticeCreateResponse,
+    RemedialPracticeGroupItem,
+    RemedialPracticeSummaryItem,
     SaveAnswersRequest,
     StartExamRequest,
     StudentCodeRunRequest,
@@ -73,6 +91,7 @@ from app.grading.service import (
 from app.lsp_runner.client import proxy_lsp_websocket
 from app.lsp_runner.schemas import LspGatewaySession, LspLanguage, SUPPORTED_LSP_LANGUAGES
 from app.questions.models import Question, QuestionType
+from app.questions.ai_generate import AIModelProvider
 
 logger = logging.getLogger(__name__)
 
@@ -2407,43 +2426,34 @@ async def list_wrong_answers(
     tag: str | None = None,
     mastered: bool = False,
 ) -> list[WrongAnswerListItem]:
-    query = (
-        select(StudentQuestionProgress, Question, Exam)
-        .join(Question, Question.id == StudentQuestionProgress.question_id)
-        .outerjoin(Exam, Exam.id == StudentQuestionProgress.last_exam_id)
-        .where(
-            StudentQuestionProgress.student_id == user.id,
-            StudentQuestionProgress.wrong_count > 0,
-            StudentQuestionProgress.mastered.is_(mastered),
-        )
-    )
-
-    if mastered:
-        query = query.order_by(StudentQuestionProgress.mastered_at.desc())
-    else:
-        query = query.order_by(StudentQuestionProgress.last_wrong_at.desc())
-
-    result = await db.execute(query)
+    rows = await load_student_wrong_answers(db, student_id=user.id, mastered=mastered)
+    exams_by_id = await load_exams_by_ids(db, (row.effective_exam_id for row in rows))
+    practice_counts = await count_remedial_practices_by_source(db, student_id=user.id)
 
     items: list[WrongAnswerListItem] = []
-    for progress, question, exam in result.all():
+    for row in rows:
+        progress, question = row.progress, row.question
         if question_type and question.type.value != question_type:
             continue
         tag_names = [item.name for item in question.tags]
         if tag and tag not in tag_names:
             continue
+        exam = exams_by_id.get(row.effective_exam_id) if row.effective_exam_id else None
         items.append(
             WrongAnswerListItem(
                 id=progress.id,
                 question_id=question.id,
                 question_title=question.title,
                 question_type=question.type.value,
+                exam_id=exam.id if exam else None,
                 exam_title=exam.title if exam else "历史考试",
+                exam_category=exam.category if exam else "exam",
                 wrong_count=progress.wrong_count,
                 last_wrong_at=progress.last_wrong_at or progress.updated_at,
                 mastered_at=progress.mastered_at,
                 tags=tag_names,
                 mastered=progress.mastered,
+                remedial_practice_count=practice_counts.get(str(exam.id) if exam else "", 0),
             )
         )
     return items
@@ -2456,9 +2466,8 @@ async def get_wrong_answer_detail(
     user: CurrentUser,
 ) -> WrongAnswerDetailResponse:
     result = await db.execute(
-        select(StudentQuestionProgress, Question, Exam)
+        select(StudentQuestionProgress, Question)
         .join(Question, Question.id == StudentQuestionProgress.question_id)
-        .outerjoin(Exam, Exam.id == StudentQuestionProgress.last_exam_id)
         .where(
             StudentQuestionProgress.id == progress_id,
             StudentQuestionProgress.student_id == user.id,
@@ -2468,7 +2477,13 @@ async def get_wrong_answer_detail(
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Wrong answer not found")
 
-    progress, question, exam = row
+    progress, question = row
+    # 与列表保持一致：把错题强化练习里的错题回溯到来源考试/练习。
+    hidden_sources = await load_hidden_practice_sources(db, [progress.last_exam_id])
+    effective_exam_id = resolve_effective_exam_id(progress.last_exam_id, hidden_sources)
+    exams_by_id = await load_exams_by_ids(db, [effective_exam_id])
+    exam = exams_by_id.get(effective_exam_id) if effective_exam_id else None
+
     latest_answer_result = await db.execute(
         select(StudentExamAnswer).where(
             StudentExamAnswer.student_id == user.id,
@@ -2482,7 +2497,9 @@ async def get_wrong_answer_detail(
         question_id=question.id,
         question_title=question.title,
         question_type=question.type.value,
+        exam_id=exam.id if exam else None,
         exam_title=exam.title if exam else "历史考试",
+        exam_category=exam.category if exam else "exam",
         wrong_count=progress.wrong_count,
         last_wrong_at=progress.last_wrong_at or progress.updated_at,
         tags=[item.name for item in question.tags],
@@ -2516,3 +2533,250 @@ async def mark_wrong_answer_mastered(
     progress.mastered_at = _utcnow()
     await db.commit()
     return {"mastered": True}
+
+
+# ── 错题强化练习 ──
+
+# 历史错题（来源考试已删除）在 URL 里用的分组键，与前端保持一致。
+REMEDIAL_LEGACY_SOURCE_KEY = "legacy"
+
+
+def _parse_remedial_source_key(source_key: str) -> uuid.UUID | None:
+    if source_key == REMEDIAL_LEGACY_SOURCE_KEY:
+        return None
+    try:
+        return uuid.UUID(source_key)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Wrong answer source not found",
+        ) from exc
+
+
+async def _require_remedial_source(
+    db: AsyncSession,
+    *,
+    student_id: uuid.UUID,
+    source_exam_id: uuid.UUID | None,
+) -> Exam | None:
+    """确认这个考试/练习确实是该学生错题的来源，返回对应的 Exam（历史错题返回 None）。"""
+    if source_exam_id is None:
+        has_wrong = (
+            await db.execute(
+                select(StudentQuestionProgress.id)
+                .where(
+                    StudentQuestionProgress.student_id == student_id,
+                    StudentQuestionProgress.wrong_count > 0,
+                    StudentQuestionProgress.last_exam_id.is_(None),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if has_wrong is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Wrong answer source not found",
+            )
+        return None
+
+    exam = (
+        await db.execute(
+            select(Exam).where(Exam.id == source_exam_id, Exam.deleted_at.is_(None))
+        )
+    ).scalars().unique().one_or_none()
+    if exam is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Wrong answer source not found")
+
+    # 该来源下的错题可能来自原练习本身，也可能来自它派生的强化练习。
+    derived_ids = (
+        await db.execute(
+            select(Exam.id).where(
+                Exam.origin_exam_id == source_exam_id,
+                Exam.hidden_from_list.is_(True),
+                Exam.deleted_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    has_wrong = (
+        await db.execute(
+            select(StudentQuestionProgress.id)
+            .where(
+                StudentQuestionProgress.student_id == student_id,
+                StudentQuestionProgress.wrong_count > 0,
+                StudentQuestionProgress.last_exam_id.in_([source_exam_id, *derived_ids]),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if has_wrong is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Wrong answer source not found")
+    return exam
+
+
+def _remedial_practice_summary_item(
+    practice: Any,
+) -> RemedialPracticeSummaryItem:
+    return RemedialPracticeSummaryItem(
+        id=practice.id,
+        title=practice.title,
+        question_count=practice.question_count,
+        duration_minutes=practice.duration_minutes,
+        created_at=practice.created_at,
+        started_at=practice.started_at,
+        submitted_at=practice.submitted_at,
+        score=practice.score,
+        total_score=practice.total_score,
+    )
+
+
+@wrong_answers_router.get(
+    "/practice-analysis/{source_key}",
+    response_model=RemedialPracticeAnalysisResponse,
+)
+async def get_remedial_practice_analysis(
+    source_key: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+) -> RemedialPracticeAnalysisResponse:
+    """列出该考试/练习下可练习的知识点，以及已经生成过的强化练习。
+
+    知识点只统计「未掌握」的错题——已掌握的没有强化必要。没有可练习的错题时
+    返回空 groups（而不是 404），方便前端仍然展示已生成的强化练习列表。
+    """
+    source_exam_id = _parse_remedial_source_key(source_key)
+    source_exam = await _require_remedial_source(
+        db, student_id=user.id, source_exam_id=source_exam_id
+    )
+    groups = await collect_wrong_question_groups(
+        db,
+        student_id=user.id,
+        source_exam_id=source_exam_id,
+        mastered=False,
+    )
+
+    suggested = default_allocations(groups, REMEDIAL_DEFAULT_TOTAL)
+    practices = await list_remedial_practices(
+        db, student_id=user.id, source_exam_id=source_exam_id
+    )
+    return RemedialPracticeAnalysisResponse(
+        source_exam_id=source_exam_id,
+        source_title=source_exam.title if source_exam else "历史考试",
+        source_category=source_exam.category if source_exam else "exam",
+        wrong_question_count=sum(group.question_count for group in groups),
+        default_total_count=REMEDIAL_DEFAULT_TOTAL,
+        max_total_count=REMEDIAL_MAX_TOTAL,
+        groups=[
+            RemedialPracticeGroupItem(
+                key=group.key,
+                knowledge_point_id=group.knowledge_point_id,
+                name=group.name,
+                path=group.path,
+                wrong_question_count=group.question_count,
+                suggested_count=suggested.get(group.key, 0),
+            )
+            for group in groups
+        ],
+        practices=[_remedial_practice_summary_item(item) for item in practices],
+    )
+
+
+@wrong_answers_router.post(
+    "/practice",
+    response_model=RemedialPracticeCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_remedial_practice_endpoint(
+    body: RemedialPracticeCreateRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+) -> RemedialPracticeCreateResponse:
+    """按知识点生成同知识点的强化练习，并直接返回可进入的练习 id。"""
+    source_exam = await _require_remedial_source(
+        db, student_id=user.id, source_exam_id=body.source_exam_id
+    )
+    groups = await collect_wrong_question_groups(
+        db,
+        student_id=user.id,
+        source_exam_id=body.source_exam_id,
+    )
+    if not groups:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="该考试/练习下没有可练习的错题",
+        )
+
+    group_by_key = {group.key: group for group in groups}
+    if body.allocations:
+        allocations: dict[str, int] = {}
+        unknown_keys = [
+            item.group_key
+            for item in body.allocations
+            if item.group_key not in group_by_key
+        ]
+        if unknown_keys:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"知识点分组已变化，请刷新后重试（{', '.join(unknown_keys[:3])}）",
+            )
+        for item in body.allocations:
+            if item.count > 0:
+                allocations[item.group_key] = item.count
+        if not allocations:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="请至少为一个知识点指定题目数",
+            )
+    else:
+        allocations = default_allocations(groups, body.total_count)
+
+    total_count = sum(allocations.values())
+    if total_count > REMEDIAL_MAX_TOTAL:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"单次练习最多生成 {REMEDIAL_MAX_TOTAL} 道题",
+        )
+
+    try:
+        model = AIModelProvider(body.model)
+    except ValueError:
+        model = AIModelProvider.DEEPSEEK
+
+    try:
+        result = await create_remedial_practice(
+            db,
+            student=user,
+            source_exam=source_exam,
+            groups=groups,
+            allocations=allocations,
+            difficulty=body.difficulty,
+            model=model,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    await log_event(
+        db,
+        event_category=CATEGORY_EXAM,
+        event_type="remedial_practice_create",
+        user=user,
+        target_type="exam",
+        target_id=result.exam_id,
+        metadata={
+            "title": result.title,
+            "source_exam_id": str(body.source_exam_id) if body.source_exam_id else None,
+            "question_count": result.question_count,
+        },
+    )
+    await db.commit()
+
+    return RemedialPracticeCreateResponse(
+        exam_id=result.exam_id,
+        title=result.title,
+        question_count=result.question_count,
+        requested_count=result.requested_count,
+        duration_minutes=result.duration_minutes,
+        total_score=result.total_score,
+    )

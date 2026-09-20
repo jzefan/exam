@@ -21,6 +21,7 @@ import {
   getQuestionContentHtml,
   getQuestionTitle,
   isMultiChoice,
+  normalizeCorrectOptionKeys,
   normalizeQuestionType,
   questionTypeFullLabel,
 } from "./question-preview-utils";
@@ -313,13 +314,10 @@ function ChoiceOptions({
   }
 
   const entries = Object.entries(question.options as Record<string, string>);
-  const correctRaw = question.answer?.correct;
-  const correctKeys = new Set<string>(
-    Array.isArray(correctRaw)
-      ? correctRaw.map(String)
-      : typeof correctRaw === "string" && correctRaw
-        ? [correctRaw]
-        : [],
+  const optionKeys = new Set(entries.map(([key]) => key));
+  const correctKeys = normalizeCorrectOptionKeys(
+    question.answer?.correct,
+    optionKeys,
   );
   const layoutClass =
     layout === "single-row"

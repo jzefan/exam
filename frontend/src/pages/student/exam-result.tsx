@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import { LatexText, renderLatexInHtml } from "@/components/ui/latex-text";
 import { CodeBlock } from "@/components/ui/code-block";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Brain, ChevronDown, ChevronRight, CircleAlert, List, PanelLeft, RotateCcw, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +28,7 @@ import {
   renderStandardAnswer,
 } from "./utils";
 import { getStudentLocale, getStudentQuestionTypeLabel, tStudent } from "./i18n";
+import { resolveStudentReturnHref } from "./wrong-answer-shared";
 import { useIsMobile } from "@/hooks/use-viewport";
 
 const api = axios.create();
@@ -42,6 +43,18 @@ export function ExamResultPage() {
   const locale = getStudentLocale();
   const isMobile = useIsMobile();
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  // 从错题本的强化练习进来时，返回键回到错题本而不是「我的考试」。
+  const returnHref = resolveStudentReturnHref(searchParams);
+  const retakeSearch = (() => {
+    const params = new URLSearchParams(searchParams);
+    params.set("retake", "1");
+    return params.toString();
+  })();
+  const backLabel =
+    returnHref === "/my-exams"
+      ? tStudent("result_back_to_exams", undefined, locale)
+      : tStudent("wrong_answers_back", undefined, locale);
   const [result, setResult] = useState<IExamResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [appealQuestionId, setAppealQuestionId] = useState<string | null>(null);
@@ -163,7 +176,7 @@ export function ExamResultPage() {
   const incorrectCount = questions.length - correctCount;
   const handleRetake = () => {
     if (!result?.can_retake) return;
-    navigate(`/my-exams/${result.exam_id}/take?retake=1`);
+    navigate(`/my-exams/${result.exam_id}/take?${retakeSearch}`);
   };
 
   const renderRetakeButton = (className?: string) => {
@@ -220,11 +233,11 @@ export function ExamResultPage() {
         <div className="flex items-center justify-between">
           <h1 className="text-base font-bold text-foreground tracking-tight">{result.title}</h1>
           <button
-            onClick={() => navigate("/my-exams")}
+            onClick={() => navigate(returnHref)}
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
             <ArrowLeft size={16} />
-            {tStudent("result_back_to_exams", undefined, locale)}
+            {backLabel}
           </button>
         </div>
         <div className="flex flex-col gap-4 rounded-2xl border border-[#ebe3f4] bg-white/90 p-8">
@@ -848,7 +861,7 @@ export function ExamResultPage() {
     return (
       <div className="flex min-h-screen flex-col bg-muted/20">
         <header className="sticky top-0 z-10 flex h-12 items-center gap-2 border-b bg-background px-3">
-          <button onClick={() => navigate("/my-exams")} className="flex items-center gap-1 text-sm text-muted-foreground">
+          <button onClick={() => navigate(returnHref)} className="flex items-center gap-1 text-sm text-muted-foreground">
             <ArrowLeft className="h-4 w-4" />
             返回
           </button>
@@ -930,11 +943,11 @@ export function ExamResultPage() {
           {tStudent("result_submitted_at", { time: formatStudentDate(result.submitted_at) }, locale)}
         </span>
         <button
-          onClick={() => navigate("/my-exams")}
+          onClick={() => navigate(returnHref)}
           className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground sm:justify-self-end"
         >
           <ArrowLeft size={16} />
-          {tStudent("result_back_to_exams", undefined, locale)}
+          {backLabel}
         </button>
       </div>
 

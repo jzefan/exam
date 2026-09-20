@@ -189,4 +189,39 @@ describe("QuestionPreviewCard", () => {
       ),
     );
   });
+
+  it("marks correct options inline and drops the standalone answer box", () => {
+    render(
+      <QuestionPreviewCard
+        question={{ ...sampleQuestion, answer: { correct: ["A", "C"] } }}
+        markChoiceAnswer
+        hideAnswer
+      />,
+    );
+
+    const option = (text: string) =>
+      screen.getByText((_, node) => node?.textContent === text);
+
+    expect(option("A. 客户端发送 SYN").className).toContain("text-primary");
+    expect(option("C. 客户端发送 FIN").className).toContain("text-primary");
+    expect(option("B. 服务端发送 ACK").className).not.toContain("text-primary");
+    expect(screen.queryByText("答案")).not.toBeInTheDocument();
+  });
+
+  it("splits merged choice answer strings so every correct option is marked", () => {
+    render(
+      <QuestionPreviewCard
+        question={{ ...sampleQuestion, answer: { correct: "AC" } }}
+        markChoiceAnswer
+        hideAnswer
+      />,
+    );
+
+    const option = (text: string) =>
+      screen.getByText((_, node) => node?.textContent === text);
+
+    expect(option("A. 客户端发送 SYN").className).toContain("text-primary");
+    expect(option("C. 客户端发送 FIN").className).toContain("text-primary");
+    expect(option("B. 服务端发送 ACK").className).not.toContain("text-primary");
+  });
 });

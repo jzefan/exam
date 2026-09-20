@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import type { QuestionImportDraft } from "../import-types";
-import { getQuestionTypeLabel } from "../import-utils";
+import { getDraftTypeLabel } from "../import-utils";
 
 export function ImportSourceEditor({
   drafts,
@@ -91,7 +91,7 @@ export function ImportSourceEditor({
                       {index + 1}
                     </span>
                     <span className="rounded-md border border-slate-200 px-2 py-0.5 text-xs font-bold text-slate-500">
-                      {getQuestionTypeLabel(draft.type)}
+                      {getDraftTypeLabel(draft)}
                     </span>
                     {isSelected && <span className="text-xs font-bold text-primary">当前题</span>}
                   </div>

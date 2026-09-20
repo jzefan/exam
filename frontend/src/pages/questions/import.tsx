@@ -5,6 +5,7 @@ import {
   AlertCircle,
   ArrowLeft,
   CheckCircle2,
+  ChevronDown,
   Download,
   Eye,
   LoaderCircle,
@@ -23,6 +24,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 import type { IQuestionBank } from "@/types";
 import { Button } from "@/components/ui/button";
@@ -58,6 +65,7 @@ import {
 import type {
   EnhanceDraftInput,
   EnhanceDraftMode,
+  EnhanceScope,
   QuestionBulkCreateResponse,
   QuestionImportBulkCreateJobResponse,
   QuestionImportDocumentRecognizeResponse,
@@ -73,6 +81,9 @@ import {
   buildImportSummary,
   countFastImportEligibleDrafts,
   detectInlineExamFormat,
+  draftNeedsAnswer,
+  draftNeedsAnalysis,
+  draftNeedsKnowledge,
   emptyImportSummary,
   exceedsBackendImportLimits,
   extractQuestionImportPayload,
@@ -84,6 +95,7 @@ import {
   parseInlineExamQuestions,
   parseJsonQuestions,
   parseTemplateQuestions,
+  selectEnhanceTargets,
 } from "./import-utils";
 
 async function questionApiFetch<T>(
@@ -128,7 +140,7 @@ async function questionApiFetch<T>(
   return response.json() as Promise<T>;
 }
 
-const MAX_FILE_SIZE_BYTES = 30 * 1024 * 1024;
+const MAX_FILE_SIZE_BYTES = 40 * 1024 * 1024;
 
 type ImportResultSummary = {
   attempted: number;
@@ -153,8 +165,14 @@ type AiRecognizeOverlayState =
 
 function getEnhanceModeLabel(mode: EnhanceDraftMode) {
   if (mode === "answers") return "完善答案";
+  if (mode === "analysis") return "完善题目解析";
   if (mode === "knowledge") return "完善知识点";
   return "完善答案与知识点";
+}
+
+/** 只有「完善知识点」和「同时完善」需要先选父知识点。 */
+function enhanceModeNeedsKnowledgePoint(mode: EnhanceDraftMode) {
+  return mode === "knowledge" || mode === "both";
 }
 
 export function QuestionImportPage() {
@@ -228,15 +246,37 @@ export function QuestionImportPage() {
     modeLabel: string;
     summary?: {
       answersCompleted: number;
+      analysesCompleted: number;
       doubtsFlagged: number;
       kpsMatched: number;
     };
     errorMessage?: string;
   } | null>(null);
   const [enhanceDialogOpen, setEnhanceDialogOpen] = useState(false);
+  const [enhanceMode, setEnhanceMode] = useState<EnhanceDraftMode>("answers");
+  const [enhanceScope, setEnhanceScope] = useState<EnhanceScope>("missing");
   const [enhanceSelectedKPs, setEnhanceSelectedKPs] = useState<
     SelectedKnowledgePoint[]
   >([]);
+  const missingAnswerCount = drafts.filter(draftNeedsAnswer).length;
+  const missingAnalysisCount = drafts.filter(draftNeedsAnalysis).length;
+  const missingKnowledgeCount = drafts.filter(draftNeedsKnowledge).length;
+  // 弹窗里按当前完善方式显示对应的缺失统计。
+  const enhanceMissingItems: Array<{ label: string; count: number }> = [];
+  if (enhanceMode === "answers" || enhanceMode === "both") {
+    enhanceMissingItems.push({ label: "缺失答案", count: missingAnswerCount });
+  }
+  if (enhanceMode === "analysis") {
+    enhanceMissingItems.push({ label: "缺失解析", count: missingAnalysisCount });
+  }
+  if (enhanceMode === "knowledge" || enhanceMode === "both") {
+    enhanceMissingItems.push({
+      label: "缺失知识点",
+      count: missingKnowledgeCount,
+    });
+  }
+  const enhanceTargetCount = (mode: EnhanceDraftMode) =>
+    selectEnhanceTargets(drafts, mode, enhanceScope).length;
 
   useEffect(() => {
     if (!activeImportJobId) return;
@@ -325,7 +365,7 @@ export function QuestionImportPage() {
     if (!file) return;
     if (file.size > MAX_FILE_SIZE_BYTES) {
       setParseError(
-        `文件过大（${(file.size / 1024 / 1024).toFixed(1)} MB），请上传 30 MB 以内的文件。`,
+        `文件过大（${(file.size / 1024 / 1024).toFixed(1)} MB），请上传 ${Math.round(MAX_FILE_SIZE_BYTES / 1024 / 1024)} MB 以内的文件。`,
       );
       return;
     }
@@ -595,6 +635,7 @@ export function QuestionImportPage() {
   const recognizeImportDocument = async (
     payload: ImportDocumentPayload,
     analysisMode: "fast" | "ai_full",
+    forceAi = false,
   ) =>
     questionApiFetch<QuestionImportDocumentRecognizeResponse>(
       "/api/questions/import/document-recognize",
@@ -605,6 +646,8 @@ export function QuestionImportPage() {
           raw_text: payload.rawText,
           source_format: payload.sourceFormat,
           analysis_mode: analysisMode,
+          // 标准模板文档后端会直接用规则解析；force_ai 用于「AI 重新识别」。
+          force_ai: forceAi,
           images: payload.images ?? [],
           tables: payload.tables ?? [],
         }),
@@ -624,6 +667,7 @@ export function QuestionImportPage() {
       const response = await recognizeImportDocument(
         documentPayload,
         "ai_full",
+        true,
       );
       if (response.drafts.length === 0) {
         throw new Error("AI 未识别到题目，请检查导入文本后重试。");
@@ -900,26 +944,45 @@ export function QuestionImportPage() {
     await runImportWithRootKnowledgePoint(null);
   };
 
+  const openEnhanceDialog = (mode: EnhanceDraftMode) => {
+    setEnhanceMode(mode);
+    setEnhanceDialogOpen(true);
+  };
+
   const handleEnhanceDrafts = async (mode: EnhanceDraftMode) => {
-    const modeLabel = getEnhanceModeLabel(mode);
     const selectedKp = courseEnhanceKnowledgePoint ?? enhanceSelectedKPs[0] ?? null;
     const selectedKpId = selectedKp?.id ?? null;
-    if (mode !== "answers" && !selectedKpId) return;
+    if (enhanceModeNeedsKnowledgePoint(mode) && !selectedKpId) return;
+
+    const targets = selectEnhanceTargets(drafts, mode, enhanceScope);
+    if (targets.length === 0) {
+      setEnhanceDialogOpen(false);
+      toast({
+        title: "没有需要完善的题目",
+        description: "当前范围内没有待补齐的内容。",
+      });
+      return;
+    }
+
+    const scopeLabel = enhanceScope === "all" ? "全部题目" : "仅补齐缺失";
+    const modeLabel = `${getEnhanceModeLabel(mode)} · ${scopeLabel}`;
 
     setEnhanceDialogOpen(false);
     setEnhancing(true);
     setEnhanceOverlay({ status: "loading", modeLabel });
 
-    const inputs: EnhanceDraftInput[] = drafts.map((d) => ({
+    const inputs: EnhanceDraftInput[] = targets.map((d) => ({
       draft_id: d.draft_id,
       type: d.type,
       content_text: d.content_text,
       options: d.options,
       answer_text: d.answer_text,
       analysis: d.analysis,
+      recognized_knowledge_points: d.recognized_knowledge_points ?? [],
     }));
 
     let answersCompleted = 0;
+    let analysesCompleted = 0;
     let doubtsFlagged = 0;
     let kpsMatched = 0;
 
@@ -935,7 +998,9 @@ export function QuestionImportPage() {
           },
           body: JSON.stringify({
             drafts: inputs,
-            root_knowledge_point_id: mode === "answers" ? null : selectedKpId,
+            root_knowledge_point_id: enhanceModeNeedsKnowledgePoint(mode)
+              ? selectedKpId
+              : null,
             mode,
           }),
         },
@@ -980,6 +1045,7 @@ export function QuestionImportPage() {
               name: string;
             }>;
             answers_completed?: number;
+            analyses_completed?: number;
             doubts_flagged?: number;
             kps_matched?: number;
           };
@@ -992,6 +1058,7 @@ export function QuestionImportPage() {
             }
             if (event.analysis) {
               patch.analysis = event.analysis;
+              analysesCompleted++;
             }
             if (event.doubt) {
               patch.doubt = event.doubt;
@@ -1012,13 +1079,15 @@ export function QuestionImportPage() {
             setEnhanceOverlay({
               status: "loading",
               modeLabel,
-              summary: { answersCompleted, doubtsFlagged, kpsMatched },
+              summary: { answersCompleted, analysesCompleted, doubtsFlagged, kpsMatched },
             });
           }
 
           if (event.type === "done") {
             answersCompleted =
               event.answers_completed ?? answersCompleted;
+            analysesCompleted =
+              event.analyses_completed ?? analysesCompleted;
             doubtsFlagged = event.doubts_flagged ?? doubtsFlagged;
             kpsMatched = event.kps_matched ?? kpsMatched;
             if (selectedKp) {
@@ -1027,7 +1096,7 @@ export function QuestionImportPage() {
             setEnhanceOverlay({
               status: "done",
               modeLabel,
-              summary: { answersCompleted, doubtsFlagged, kpsMatched },
+              summary: { answersCompleted, analysesCompleted, doubtsFlagged, kpsMatched },
             });
             window.setTimeout(() => setEnhanceOverlay(null), 2500);
           }
@@ -1243,22 +1312,40 @@ export function QuestionImportPage() {
                   </Button>
                 ) : null}
 
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={
-                    importing || aiRecognizing || enhancing || drafts.length === 0
-                  }
-                  onClick={() => setEnhanceDialogOpen(true)}
-                  className="h-9 rounded-lg px-3 text-sm font-bold"
-                >
-                  {enhancing ? (
-                    <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Sparkles className="mr-2 h-4 w-4" />
-                  )}
-                  完善答案与知识点
-                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={
+                        importing || aiRecognizing || enhancing || drafts.length === 0
+                      }
+                      className="h-9 rounded-lg px-3 text-sm font-bold"
+                    >
+                      {enhancing ? (
+                        <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Sparkles className="mr-2 h-4 w-4" />
+                      )}
+                      完善答案与知识点
+                      <ChevronDown className="ml-2 h-4 w-4 opacity-60" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onSelect={() => openEnhanceDialog("answers")}>
+                      完善答案
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => openEnhanceDialog("analysis")}>
+                      完善题目解析
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => openEnhanceDialog("knowledge")}>
+                      完善知识点
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => openEnhanceDialog("both")}>
+                      同时完善
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
 
                 <Button
                   type="button"
@@ -1398,7 +1485,7 @@ export function QuestionImportPage() {
                         正在解析文档
                       </p>
                       <p className="text-sm leading-snug text-muted-foreground mt-1">
-                        AI 正在努力识别并拆分题目...
+                        正在按模板规则识别并拆分题目...
                       </p>
                     </div>
                   </div>
@@ -1412,7 +1499,8 @@ export function QuestionImportPage() {
                         拖拽文件到这里，或点击选择
                       </p>
                       <p className="text-sm leading-snug text-muted-foreground">
-                        支持 PDF、Word、JSON、ZIP（JSON+图片打包），单文件不超过 30MB
+                        支持 PDF、Word、Markdown、JSON、ZIP（JSON+图片打包），单文件不超过{" "}
+                        {Math.round(MAX_FILE_SIZE_BYTES / 1024 / 1024)}MB
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center justify-center gap-3">
@@ -1504,17 +1592,26 @@ export function QuestionImportPage() {
                   </p>
                   {enhanceOverlay.summary ? (
                     <div className="mt-3 flex flex-wrap justify-center gap-3 text-xs text-muted-foreground">
-                      <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 font-medium text-emerald-700">
-                        已补全 {enhanceOverlay.summary.answersCompleted} 道答案
-                      </span>
+                      {enhanceOverlay.summary.answersCompleted > 0 ? (
+                        <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 font-medium text-emerald-700">
+                          已补全 {enhanceOverlay.summary.answersCompleted} 道答案
+                        </span>
+                      ) : null}
+                      {enhanceOverlay.summary.analysesCompleted > 0 ? (
+                        <span className="rounded-full bg-sky-100 px-2.5 py-0.5 font-medium text-sky-700">
+                          已补全 {enhanceOverlay.summary.analysesCompleted} 道解析
+                        </span>
+                      ) : null}
                       {enhanceOverlay.summary.doubtsFlagged > 0 ? (
                         <span className="rounded-full bg-orange-100 px-2.5 py-0.5 font-medium text-orange-700">
                           存疑 {enhanceOverlay.summary.doubtsFlagged} 道
                         </span>
                       ) : null}
-                      <span className="rounded-full bg-blue-100 px-2.5 py-0.5 font-medium text-blue-700">
-                        关联 {enhanceOverlay.summary.kpsMatched} 道知识点
-                      </span>
+                      {enhanceOverlay.summary.kpsMatched > 0 ? (
+                        <span className="rounded-full bg-blue-100 px-2.5 py-0.5 font-medium text-blue-700">
+                          关联 {enhanceOverlay.summary.kpsMatched} 道知识点
+                        </span>
+                      ) : null}
                     </div>
                   ) : null}
                 </>
@@ -1532,6 +1629,7 @@ export function QuestionImportPage() {
                           const parts = [];
                           const s = enhanceOverlay.summary;
                           if (s.answersCompleted > 0) parts.push(`已补全 ${s.answersCompleted} 道答案`);
+                          if (s.analysesCompleted > 0) parts.push(`已补全 ${s.analysesCompleted} 道解析`);
                           if (s.doubtsFlagged > 0) parts.push(`标记 ${s.doubtsFlagged} 道存疑`);
                           if (s.kpsMatched > 0) parts.push(`关联 ${s.kpsMatched} 道知识点`);
                           return parts.length > 0 ? parts.join("，") : "所有题目已处理完毕";
@@ -1634,78 +1732,116 @@ export function QuestionImportPage() {
       >
         <AlertDialogContent className="max-w-2xl">
           <AlertDialogHeader>
-            <AlertDialogTitle>选择完善方式</AlertDialogTitle>
+            <AlertDialogTitle>{getEnhanceModeLabel(enhanceMode)}</AlertDialogTitle>
             <AlertDialogDescription>
-              可以只完善答案、只匹配知识点，或同时完成两者。
+              {enhanceMode === "knowledge"
+                ? "题目将从所选父知识点下的子知识点中关联。"
+                : enhanceMode === "both"
+                  ? "为题目补全答案，并从所选父知识点下的子知识点中关联。"
+                  : enhanceMode === "analysis"
+                    ? "为题目补全解析，不改动已有答案。"
+                    : "为题目补全答案与解析。"}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="flex flex-col gap-3 py-2">
-            {courseEnhanceKnowledgePoint ? (
-              <p className="rounded-xl border border-primary/10 bg-primary/5 px-3 py-2 text-xs font-medium text-muted-foreground">
-                当前从课程进入，将直接使用「{courseEnhanceKnowledgePoint.name}」作为主知识点范围。
-                <span className="ml-1 text-muted-foreground/70">
-                  {courseEnhanceKnowledgePoint.path}
-                </span>
+            <div className="flex flex-col gap-2">
+              <Label>完善范围</Label>
+              <div className="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={enhanceScope === "missing" ? "default" : "ghost"}
+                  data-state={enhanceScope === "missing" ? "active" : "inactive"}
+                  className={
+                    enhanceScope === "missing"
+                      ? "h-9 rounded-lg text-xs font-bold"
+                      : "h-9 rounded-lg text-xs font-bold text-slate-500 hover:bg-white/70 hover:text-slate-900"
+                  }
+                  onClick={() => setEnhanceScope("missing")}
+                >
+                  仅补齐缺失
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={enhanceScope === "all" ? "default" : "ghost"}
+                  data-state={enhanceScope === "all" ? "active" : "inactive"}
+                  className={
+                    enhanceScope === "all"
+                      ? "h-9 rounded-lg text-xs font-bold"
+                      : "h-9 rounded-lg text-xs font-bold text-slate-500 hover:bg-white/70 hover:text-slate-900"
+                  }
+                  onClick={() => setEnhanceScope("all")}
+                >
+                  全部题目
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {enhanceScope === "all"
+                  ? `将处理全部 ${drafts.length} 题`
+                  : enhanceMissingItems.every((item) => item.count === 0)
+                    ? "当前范围内没有需要补齐的内容。"
+                    : enhanceMissingItems
+                        .map((item) => `${item.label} ${item.count} 题`)
+                        .join(" · ")}
               </p>
-            ) : (
-              <KnowledgePointSelector
-                fetcher={(path, options) =>
-                  questionApiFetch(`/api${path}`, options)
-                }
-                selectedKnowledgePoints={enhanceSelectedKPs}
-                onSelectedKnowledgePointsChange={setEnhanceSelectedKPs}
-                storageKey="question-import-enhance-knowledge-recent-keywords"
-                label="主知识点（仅完善知识点时需要）"
-                triggerLabel="搜索或展开知识图谱选择主知识点"
-                popoverSide="bottom"
-                popoverContentStyle={{
-                  maxHeight: "min(340px, calc(100dvh - 360px))",
-                }}
-                selectionTarget="root"
-                selectionMode="single"
-                showUsageShortcuts={false}
-              />
-            )}
-            {!courseEnhanceKnowledgePoint && enhanceSelectedKPs[0] ? (
-              <p className="rounded-xl border border-primary/10 bg-primary/5 px-3 py-2 text-xs font-medium text-muted-foreground">
-                将从「{enhanceSelectedKPs[0].name}
-                」下的子知识点中为题目匹配。
-                <span className="ml-1 text-muted-foreground/70">
-                  {enhanceSelectedKPs[0].path}
-                </span>
-              </p>
+            </div>
+            {enhanceModeNeedsKnowledgePoint(enhanceMode) ? (
+              <>
+                {courseEnhanceKnowledgePoint ? (
+                  <p className="rounded-xl border border-primary/10 bg-primary/5 px-3 py-2 text-xs font-medium text-muted-foreground">
+                    当前从课程进入，将直接使用「{courseEnhanceKnowledgePoint.name}」作为父知识点。
+                    <span className="ml-1 text-muted-foreground/70">
+                      {courseEnhanceKnowledgePoint.path}
+                    </span>
+                  </p>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    <Label>父知识点</Label>
+                    <KnowledgePointSelector
+                      fetcher={(path, options) =>
+                        questionApiFetch(`/api${path}`, options)
+                      }
+                      selectedKnowledgePoints={enhanceSelectedKPs}
+                      onSelectedKnowledgePointsChange={setEnhanceSelectedKPs}
+                      storageKey="question-import-enhance-knowledge-recent-keywords"
+                      triggerLabel="输入或选择父知识点"
+                      popoverSide="bottom"
+                      popoverContentStyle={{
+                        maxHeight: "min(340px, calc(100dvh - 360px))",
+                      }}
+                      selectionTarget="root"
+                      selectionMode="single"
+                      showUsageShortcuts={false}
+                    />
+                  </div>
+                )}
+                {!courseEnhanceKnowledgePoint && enhanceSelectedKPs[0] ? (
+                  <p className="rounded-xl border border-primary/10 bg-primary/5 px-3 py-2 text-xs font-medium text-muted-foreground">
+                    将从「{enhanceSelectedKPs[0].name}
+                    」下的子知识点中为题目匹配。
+                    <span className="ml-1 text-muted-foreground/70">
+                      {enhanceSelectedKPs[0].path}
+                    </span>
+                  </p>
+                ) : null}
+              </>
             ) : null}
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>
             <Button
               type="button"
-              variant="outline"
-              disabled={enhancing}
-              onClick={() => void handleEnhanceDrafts("answers")}
-            >
-              完善答案
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
               disabled={
-                (!courseEnhanceKnowledgePoint && !enhanceSelectedKPs[0]?.id) ||
-                enhancing
+                enhancing ||
+                enhanceTargetCount(enhanceMode) === 0 ||
+                (enhanceModeNeedsKnowledgePoint(enhanceMode) &&
+                  !courseEnhanceKnowledgePoint &&
+                  !enhanceSelectedKPs[0]?.id)
               }
-              onClick={() => void handleEnhanceDrafts("knowledge")}
+              onClick={() => void handleEnhanceDrafts(enhanceMode)}
             >
-              完善知识点
-            </Button>
-            <Button
-              type="button"
-              disabled={
-                (!courseEnhanceKnowledgePoint && !enhanceSelectedKPs[0]?.id) ||
-                enhancing
-              }
-              onClick={() => void handleEnhanceDrafts("both")}
-            >
-              完善答案与知识点
+              {getEnhanceModeLabel(enhanceMode)}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

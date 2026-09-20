@@ -77,6 +77,28 @@ type StudentMessageKey =
   | "wrong_answers_date"
   | "wrong_answers_mastered_at"
   | "wrong_answers_id"
+  | "wrong_answers_exam_count"
+  | "wrong_answers_last_wrong"
+  | "wrong_answers_back"
+  | "wrong_answers_category_exam"
+  | "wrong_answers_category_practice"
+  | "wrong_answers_exam_fallback_title"
+  | "wrong_answers_practice_cta"
+  | "wrong_answers_practice_dialog_desc"
+  | "wrong_answers_practice_points"
+  | "wrong_answers_practice_total"
+  | "wrong_answers_practice_sum"
+  | "wrong_answers_practice_submit"
+  | "wrong_answers_practice_generating"
+  | "wrong_answers_practice_failed"
+  | "wrong_answers_practice_existing"
+  | "wrong_answers_practice_badge"
+  | "wrong_answers_practice_status_not_started"
+  | "wrong_answers_practice_status_in_progress"
+  | "wrong_answers_practice_status_submitted"
+  | "wrong_answers_practice_enter"
+  | "wrong_answers_practice_view_result"
+  | "wrong_answers_practice_score"
   | "question_type_choice"
   | "question_type_true_false"
   | "question_type_fill_in"
@@ -255,6 +277,28 @@ const STUDENT_DICTIONARY: Record<StudentLocale, Record<StudentMessageKey, string
     wrong_answers_date: "{date}",
     wrong_answers_mastered_at: "掌握于 {date}",
     wrong_answers_id: "ID: {id}",
+    wrong_answers_exam_count: "{count} 道错题",
+    wrong_answers_last_wrong: "最近错题 {date}",
+    wrong_answers_back: "返回错题回顾",
+    wrong_answers_category_exam: "考试",
+    wrong_answers_category_practice: "练习",
+    wrong_answers_exam_fallback_title: "错题记录",
+    wrong_answers_practice_cta: "继续练习",
+    wrong_answers_practice_dialog_desc: "按知识点为这场{category}的错题出同类型新题，生成后直接开练。",
+    wrong_answers_practice_points: "可练习知识点",
+    wrong_answers_practice_total: "练习题目数",
+    wrong_answers_practice_sum: "共 {count} 道",
+    wrong_answers_practice_submit: "生成并开始练习",
+    wrong_answers_practice_generating: "正在按知识点生成题目，请稍候…",
+    wrong_answers_practice_failed: "生成失败，请稍后重试",
+    wrong_answers_practice_existing: "已生成的强化练习",
+    wrong_answers_practice_badge: "{count} 个强化练习",
+    wrong_answers_practice_status_not_started: "未开始",
+    wrong_answers_practice_status_in_progress: "进行中",
+    wrong_answers_practice_status_submitted: "已完成",
+    wrong_answers_practice_enter: "进入练习",
+    wrong_answers_practice_view_result: "查看结果",
+    wrong_answers_practice_score: "{score} 分",
     question_type_choice: "选择题",
     question_type_true_false: "判断题",
     question_type_fill_in: "填空题",
@@ -432,6 +476,29 @@ const STUDENT_DICTIONARY: Record<StudentLocale, Record<StudentMessageKey, string
     wrong_answers_date: "{date}",
     wrong_answers_mastered_at: "Mastered at {date}",
     wrong_answers_id: "ID: {id}",
+    wrong_answers_exam_count: "{count} questions",
+    wrong_answers_last_wrong: "Latest {date}",
+    wrong_answers_back: "Back to wrong answers",
+    wrong_answers_category_exam: "Exam",
+    wrong_answers_category_practice: "Practice",
+    wrong_answers_exam_fallback_title: "Wrong answers",
+    wrong_answers_practice_cta: "Practice more",
+    wrong_answers_practice_dialog_desc:
+      "Generate new questions on the same knowledge points from this {category}'s wrong answers, then start right away.",
+    wrong_answers_practice_points: "Knowledge points",
+    wrong_answers_practice_total: "Question count",
+    wrong_answers_practice_sum: "{count} questions",
+    wrong_answers_practice_submit: "Generate and practice",
+    wrong_answers_practice_generating: "Generating questions by knowledge point…",
+    wrong_answers_practice_failed: "Generation failed. Please try again.",
+    wrong_answers_practice_existing: "Generated practice sessions",
+    wrong_answers_practice_badge: "{count} practice sessions",
+    wrong_answers_practice_status_not_started: "Not started",
+    wrong_answers_practice_status_in_progress: "In progress",
+    wrong_answers_practice_status_submitted: "Completed",
+    wrong_answers_practice_enter: "Start",
+    wrong_answers_practice_view_result: "View result",
+    wrong_answers_practice_score: "{score} pts",
     question_type_choice: "Choice",
     question_type_true_false: "True/False",
     question_type_fill_in: "Fill in",

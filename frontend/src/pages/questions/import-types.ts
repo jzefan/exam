@@ -45,6 +45,10 @@ export interface QuestionImportDraft {
   doubt?: boolean;
   doubt_reason?: string | null;
   suggested_knowledge_points?: Array<{ id: string; name: string }>;
+  // 题干原文标注的知识点名称（尚未匹配到题库知识点）。
+  recognized_knowledge_points?: string[];
+  // 原文印刷的题号。
+  question_number?: number | null;
 }
 
 export interface QuestionImportDocumentSummary {
@@ -104,9 +108,14 @@ export interface EnhanceDraftInput {
   options: Record<string, string> | null;
   answer_text: string | null;
   analysis: string | null;
+  // 原文标注的知识点，作为匹配题库知识点的提示。
+  recognized_knowledge_points?: string[];
 }
 
-export type EnhanceDraftMode = "answers" | "knowledge" | "both";
+export type EnhanceDraftMode = "answers" | "analysis" | "knowledge" | "both";
+
+/** 完善范围：只补齐缺失内容，或处理全部题目。 */
+export type EnhanceScope = "missing" | "all";
 
 export interface EnhancedDraft {
   draft_id: string;

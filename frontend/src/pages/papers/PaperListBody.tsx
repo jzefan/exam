@@ -1291,6 +1291,7 @@ function PaperEditDialog({
                                     className="cursor-pointer transition-all hover:border-primary hover:shadow-md"
                                     expandOnClick
                                     hideAnswer
+                                    markChoiceAnswer
                                     actions={
                                       <div className="flex items-center gap-1">
                                         <TooltipButton

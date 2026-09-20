@@ -30,6 +30,7 @@ import { SwitchCounter } from "./components/switch-counter";
 import { QuestionNav } from "./components/question-nav";
 import { QuestionRenderer } from "./components/question-renderer";
 import { getStudentLocale, tStudent, translateStudentError } from "./i18n";
+import { resolveStudentReturnHref } from "./wrong-answer-shared";
 import { formatStudentDate } from "./utils";
 import { useExamTaking } from "@/hooks/use-exam-taking";
 import { useVisibilityDetection } from "@/hooks/use-visibility-detection";
@@ -101,6 +102,15 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
   const [searchParams] = useSearchParams();
   const locale = getStudentLocale();
   const isRetake = searchParams.get("retake") === "1";
+  // 从错题本的强化练习进来时，返回键回到错题本而不是「我的考试」。
+  const returnHref = resolveStudentReturnHref(searchParams);
+  const retakeHref = (() => {
+    const params = new URLSearchParams(searchParams);
+    params.set("retake", "1");
+    return `/my-exams/${id ?? ""}/take?${params.toString()}`;
+  })();
+  const backLabel =
+    returnHref === "/my-exams" ? "返回我的考试" : tStudent("wrong_answers_back", undefined, locale);
 
   /* ---- State ---- */
   const [examData, setExamData] = useState<IExamTaking | null>(null);
@@ -270,10 +280,13 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
       }
       if (examData) {
         setSubmitStatusMessage("考试已提交，正在打开考试结果...");
-        setTimeout(() => navigate(`/my-exams/${examData.exam_id}/result`), 1200);
+        setTimeout(
+          () => navigate(`/my-exams/${examData.exam_id}/result${searchParams.toString() ? `?${searchParams.toString()}` : ""}`),
+          1200,
+        );
       } else {
         setSubmitStatusMessage("考试已提交，正在返回考试列表...");
-        setTimeout(() => navigate("/my-exams"), 1500);
+        setTimeout(() => navigate(returnHref), 1500);
       }
     } catch (error) {
       submitInFlightRef.current = false;
@@ -406,8 +419,8 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
           <p className="text-sm text-muted-foreground mb-4">
             {loadError ?? "无法加载考试数据"}
           </p>
-          <Button variant="outline" size="sm" onClick={() => navigate("/my-exams")}>
-            返回考试列表
+          <Button variant="outline" size="sm" onClick={() => navigate(returnHref)}>
+            {backLabel}
           </Button>
         </div>
       </div>
@@ -453,9 +466,9 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
             如果你认为这是异常情况，请联系老师处理。
           </p>
           <div className="mt-6 flex flex-col-reverse justify-center gap-3 sm:flex-row">
-            <Button variant="outline" onClick={() => navigate("/my-exams")}>返回我的考试</Button>
+            <Button variant="outline" onClick={() => navigate(returnHref)}>{backLabel}</Button>
             {examData.allow_retake ? (
-              <Button onClick={() => navigate(`/my-exams/${examData.exam_id}/take?retake=1`, { replace: true })}>
+              <Button onClick={() => navigate(retakeHref, { replace: true })}>
                 {retakeLabel}
               </Button>
             ) : null}
@@ -532,7 +545,7 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
           flushQuestion={flushQuestion}
           isSubmittingAction={isSubmittingAction}
           switchWarning={switchWarning}
-          onBack={() => navigate("/my-exams")}
+          onBack={() => navigate(returnHref)}
           onTimeUp={handleTimeUp}
           onSubmitConfirm={() => void handleSubmit()}
         />
@@ -581,7 +594,7 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
           >
             <ArrowLeft data-icon="inline-start" />
             <span className="sm:hidden">返回</span>
-            <span className="hidden sm:inline">返回我的考试</span>
+            <span className="hidden sm:inline">{backLabel}</span>
           </Button>
           <div className="hidden h-4 w-px shrink-0 bg-border sm:block" />
           <Button
@@ -969,7 +982,7 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>继续考试</AlertDialogCancel>
-            <AlertDialogAction onClick={() => navigate("/my-exams")}>确认离开</AlertDialogAction>
+            <AlertDialogAction onClick={() => navigate(returnHref)}>确认离开</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

@@ -40,6 +40,7 @@ from app.papers.service import (
     append_ai_questions_to_paper,
     archive_paper,
     confirm_import_session,
+    create_import_session_from_docx_file,
     create_import_session_from_pdf_file,
     create_import_session_from_recognition,
     create_paper,
@@ -240,6 +241,16 @@ async def recognize_paper_import_file(
         file_bytes = await file.read()
         if file_name.lower().endswith(".pdf"):
             session, recognition = await create_import_session_from_pdf_file(
+                db,
+                user=user,
+                file_name=file_name,
+                file_bytes=file_bytes,
+                root_knowledge_point_id=root_knowledge_point_id,
+                recognition_prompt=prompt,
+            )
+        elif file_name.lower().endswith(".docx"):
+            # DOCX 与题库导入共用同一套识别管线，避免两个页面识别结果不一致。
+            session, recognition = await create_import_session_from_docx_file(
                 db,
                 user=user,
                 file_name=file_name,

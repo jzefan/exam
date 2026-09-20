@@ -116,6 +116,7 @@ import {
 } from "./course-material-upload-target";
 import { KnowledgeImportDialog } from "@/pages/knowledge/KnowledgeImportDialog";
 import { KnowledgeCatalogPhotoDialog } from "@/pages/knowledge/KnowledgeCatalogPhotoDialog";
+import { KnowledgeCatalogWebDialog } from "@/pages/knowledge/KnowledgeCatalogWebDialog";
 import { MaterialAIGenerateDialog } from "@/pages/knowledge/MaterialAIGenerateDialog";
 import { getSeedUsage, kbIngestMaterial, kbStatus } from "@/pages/courses/question-gen-templates/api";
 import type { SeedUsageMap } from "@/pages/courses/question-gen-templates/types";
@@ -4079,6 +4080,7 @@ function KnowledgeTab({
   onOpenEditor,
   onOpenImport,
   onOpenCatalogPhoto,
+  onOpenCatalogWeb,
   onOpenAddNode,
   onOpenNode,
   onViewMaterials,
@@ -4096,6 +4098,7 @@ function KnowledgeTab({
   onOpenEditor: () => void;
   onOpenImport: () => void;
   onOpenCatalogPhoto: () => void;
+  onOpenCatalogWeb: () => void;
   onOpenAddNode: () => void;
   onOpenNode: (kpId: string) => void;
   onViewMaterials: (node: CourseKnowledgeNode) => void;
@@ -4121,14 +4124,29 @@ function KnowledgeTab({
               <Edit3 size={14} className="mr-1.5" />
               编辑目录
             </Button>
-            <Button variant="outline" size="sm" onClick={onOpenImport}>
-              <Upload size={14} className="mr-1.5" />
-              导入
-            </Button>
-            <Button variant="outline" size="sm" onClick={onOpenCatalogPhoto}>
-              <Camera size={14} className="mr-1.5" />
-              书籍目录拍照导入
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <Sparkles size={14} className="mr-1.5" />
+                  生成目录
+                  <ChevronDown size={14} className="ml-1 opacity-60" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuItem onClick={onOpenImport}>
+                  <Upload size={14} className="mr-2" />
+                  从Excel文件导入
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={onOpenCatalogPhoto}>
+                  <Camera size={14} className="mr-2" />
+                  书籍目录拍照导入
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={onOpenCatalogWeb}>
+                  <Search size={14} className="mr-2" />
+                  从书名中获取目录
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Button size="sm" onClick={onOpenAddNode}>
               <Plus size={14} className="mr-1.5" />
               新增
@@ -4319,7 +4337,6 @@ function KnowledgeTreeEditorPage({
         <div className="h-5 w-px bg-border" />
         <div>
           <h1 className="text-base font-semibold text-foreground">编辑课程目录</h1>
-          <p className="mt-0.5 text-xs text-muted-foreground">选择知识点后编辑名称或管理下级节点</p>
         </div>
       </div>
 
@@ -4618,6 +4635,7 @@ export function CourseDetailPage() {
   const [semesterHintDismissed, setSemesterHintDismissed] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [catalogPhotoOpen, setCatalogPhotoOpen] = useState(false);
+  const [catalogWebOpen, setCatalogWebOpen] = useState(false);
   const [addKnowledgeOpen, setAddKnowledgeOpen] = useState(false);
   const [addingKnowledge, setAddingKnowledge] = useState(false);
   const [addLinkOpen, setAddLinkOpen] = useState(false);
@@ -6668,6 +6686,15 @@ export function CourseDetailPage() {
         existingRootNames={[]}
       />
 
+      <KnowledgeCatalogWebDialog
+        open={catalogWebOpen}
+        onOpenChange={setCatalogWebOpen}
+        onImport={handleImportKnowledgePaths}
+        selectedTargetName={course.name}
+        lockedRootName={course.name}
+        existingRootNames={[]}
+      />
+
       <AddKnowledgeNodeDialog
         open={addKnowledgeOpen}
         tree={tree}
@@ -7395,6 +7422,7 @@ export function CourseDetailPage() {
                     }}
                     onOpenImport={() => setImportDialogOpen(true)}
                     onOpenCatalogPhoto={() => setCatalogPhotoOpen(true)}
+                    onOpenCatalogWeb={() => setCatalogWebOpen(true)}
                     onOpenAddNode={() => setAddKnowledgeOpen(true)}
                     onOpenNode={handleOpenKnowledgeNode}
                     onViewMaterials={handleViewMaterialsForKnowledgeNode}

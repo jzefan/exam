@@ -70,6 +70,10 @@ const QuestionGenTemplatesPage = lazyNamed(
 );
 const MyExams = lazyNamed(() => import("./pages/student/my-exams"), "MyExams");
 const WrongAnswers = lazyNamed(() => import("./pages/student/wrong-answers"), "WrongAnswers");
+const WrongAnswerExamPage = lazyNamed(
+  () => import("./pages/student/wrong-answer-exam"),
+  "WrongAnswerExamPage",
+);
 const WrongAnswerDetailPage = lazyNamed(
   () => import("./pages/student/wrong-answer-detail"),
   "WrongAnswerDetailPage",
@@ -264,6 +268,7 @@ function App() {
                       <Route path="/my-exams" element={<MyExams />} />
                       <Route path="/my-exams/:id/result" element={<ExamResultPage />} />
                       <Route path="/wrong-answers" element={<WrongAnswers />} />
+                      <Route path="/wrong-answers/exam/:examId" element={<WrongAnswerExamPage />} />
                       <Route path="/wrong-answers/:id" element={<WrongAnswerDetailPage />} />
                     </Route>
                   </Route>

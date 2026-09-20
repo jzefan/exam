@@ -2,6 +2,9 @@ import { useCallback, useState } from "react";
 import type { IExamTaking } from "@/types";
 import { QuestionRenderer } from "./components/question-renderer";
 import { ExamTopBar } from "./mobile/exam-top-bar";
+import { ExamInfoRow } from "./mobile/exam-info-row";
+import { getExamQuestionTypeLabel } from "./mobile/exam-question-type";
+import { ExamTimeBar } from "./mobile/exam-time-bar";
 import { ExamBottomBar } from "./mobile/exam-bottom-bar";
 import { QuestionMapDrawer } from "./mobile/question-map-drawer";
 import { SubmitConfirmSheet } from "./mobile/submit-confirm-sheet";
@@ -102,11 +105,25 @@ export function ExamTakingMobile({
 
       <ExamTopBar
         title={examData.title}
-        endTime={examData.end_time}
+        onBack={() => setLeaveConfirmOpen(true)}
+        onSubmit={() => setSubmitOpen(true)}
+        isSubmitting={isSubmittingAction}
+      />
+
+      <ExamTimeBar
         startedAt={examData.started_at}
         durationMinutes={examData.duration_minutes}
+        endTime={examData.end_time}
+      />
+
+      <ExamInfoRow
+        currentIndex={currentIndex}
+        totalQuestions={questions.length}
+        questionTypeLabel={currentQuestion ? getExamQuestionTypeLabel(currentQuestion) : ""}
         saveState={saveState}
-        onBack={() => setLeaveConfirmOpen(true)}
+        startedAt={examData.started_at}
+        durationMinutes={examData.duration_minutes}
+        endTime={examData.end_time}
         onTimeUp={onTimeUp}
       />
 
@@ -119,11 +136,6 @@ export function ExamTakingMobile({
       >
         {currentQuestion && (
           <div className="min-w-0 max-w-full px-4 py-4">
-            <div className="mb-3 flex items-center gap-2">
-              <span className="text-xs font-medium text-muted-foreground">
-                第 {currentIndex + 1} 题 / 共 {questions.length} 题
-              </span>
-            </div>
             <QuestionRenderer
               question={currentQuestion}
               answer={answers[currentQuestion.question_id] ?? {}}
@@ -139,9 +151,7 @@ export function ExamTakingMobile({
         onPrev={() => navigateToQuestion(currentIndex - 1)}
         onNext={() => navigateToQuestion(currentIndex + 1)}
         onOpenMap={() => setMapOpen(true)}
-        onSubmit={() => setSubmitOpen(true)}
         isNavigating={isNavigating}
-        isSubmitting={isSubmittingAction}
       />
 
       <QuestionMapDrawer
