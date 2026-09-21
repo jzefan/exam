@@ -9,6 +9,8 @@ from app.config import settings
 from app.models import Base
 
 # Import all models so Alembic can detect them
+from app.chaoxing.models import ExternalExam, ExternalCandidate, ExternalItem, ExternalAudit  # noqa: F401
+from app.grading.models import GradingTask  # noqa: F401
 from app.auth.models import User  # noqa: F401
 from app.notifications.models import Notification  # noqa: F401
 from app.papers.models import Paper, PaperImportSession, PaperQuestion  # noqa: F401

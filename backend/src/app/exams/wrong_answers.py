@@ -198,6 +198,33 @@ async def load_exams_by_ids(
     return {exam.id: exam for exam in rows}
 
 
+async def load_exam_question_orders(
+    db: AsyncSession,
+    pairs: Iterable[tuple[uuid.UUID | None, uuid.UUID]],
+) -> dict[tuple[uuid.UUID, uuid.UUID], int]:
+    """按 (考试 id, 题目 id) 批量取该题在试卷里的位置。
+
+    返回的是 `exam_questions.order` 原值（0 基），展示时统一 `+1`，与做题页/结果页的题号口径一致。
+    找不到配对（历史错题、题目后来被移出试卷）时不出现在返回值里。
+    """
+    wanted = {(exam_id, question_id) for exam_id, question_id in pairs if exam_id is not None}
+    if not wanted:
+        return {}
+    rows = (
+        await db.execute(
+            select(ExamQuestion.exam_id, ExamQuestion.question_id, ExamQuestion.order).where(
+                ExamQuestion.exam_id.in_({exam_id for exam_id, _ in wanted}),
+                ExamQuestion.question_id.in_({question_id for _, question_id in wanted}),
+            )
+        )
+    ).all()
+    return {
+        (row[0], row[1]): int(row[2] or 0)
+        for row in rows
+        if (row[0], row[1]) in wanted
+    }
+
+
 # ── 知识点归组 ──
 
 

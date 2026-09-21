@@ -6,7 +6,7 @@ set -euo pipefail
 # 1. Package the current project locally (excluding sensitive env files and heavy caches)
 # 2. Upload the release archive to the server with scp
 # 3. Extract to a timestamped release directory
-# 4. Build and start the inactive blue/green slot
+# 4. Build and validate inactive images (single-instance handoff for Chaoxing)
 # 5. Run migrations and health checks
 # 6. Switch nginx traffic to the new slot and stop the old slot
 
@@ -111,6 +111,9 @@ tar \
   --exclude="./frontend/.env.*" \
   --exclude="./deploy/env/backend.env" \
   --exclude="./deploy/env/database.env" \
+  --exclude="./.deploy-check" \
+  --exclude="./frontend/.build-check" \
+  --exclude="./frontend/test-results" \
   --exclude="./.claude" \
   --exclude="./.remember" \
   --exclude="./.pnpm-store" \
@@ -144,6 +147,7 @@ ENV_DIR="${SHARED_DIR}/env"
 NGINX_DIR="${SHARED_DIR}/nginx"
 UPLOADS_DIR="${SHARED_DIR}/uploads"
 CURRENT_LINK="${APP_ROOT}/current"
+PREVIOUS_RELEASE="$(readlink "${CURRENT_LINK}" 2>/dev/null || true)"
 DEPLOY_ENV_FILE="${ENV_DIR}/deploy.env"
 TIMESTAMP="$(date +"%Y%m%d%H%M%S")"
 NEW_RELEASE="${RELEASES_DIR}/${TIMESTAMP}"
@@ -294,6 +298,13 @@ if [[ "${MISSING_ENV}" -eq 1 ]]; then
   exit 1
 fi
 
+# Existing server env files are deliberately not replaced by example files.
+# Add the new default only when absent; preserve an administrator's explicit false.
+if target_includes_backend && ! grep -Eq '^[[:space:]]*(export[[:space:]]+)?EXAM_CHAOXING_ENABLED[[:space:]]*=' "${ENV_DIR}/backend.env"; then
+  printf '\n# Enable the bundled teacher connector (one API worker).\nEXAM_CHAOXING_ENABLED=true\n' >> "${ENV_DIR}/backend.env"
+  log "Enabled Chaoxing in the existing server backend.env"
+fi
+
 set -a
 # shellcheck disable=SC1090
 source "${ENV_DIR}/database.env"
@@ -311,9 +322,8 @@ ACTIVE_FRONTEND_SLOT="$(read_slot_file "${ACTIVE_FRONTEND_SLOT_FILE}" "${ACTIVE_
 
 case "${DEPLOY_TARGET}" in
   all|app)
-    TARGET_SLOT="$(opposite_slot "${ACTIVE_BACKEND_SLOT:-green}")"
-    TARGET_BACKEND_SLOT="${TARGET_SLOT}"
-    TARGET_FRONTEND_SLOT="${TARGET_SLOT}"
+    TARGET_BACKEND_SLOT="$(opposite_slot "${ACTIVE_BACKEND_SLOT:-green}")"
+    TARGET_FRONTEND_SLOT="$(opposite_slot "${ACTIVE_FRONTEND_SLOT:-green}")"
     ;;
   backend)
     if [[ -z "${ACTIVE_FRONTEND_SLOT}" ]]; then
@@ -367,6 +377,65 @@ if target_includes_lsp_runner; then
   wait_for_health lsp_runner 180
 fi
 
+# Keep the previous containers intact until the new traffic passes smoke tests.
+# This trap also handles pre-switch health failures after a singleton handoff.
+SWITCH_STARTED=0
+BACKEND_HANDOFF=0
+NGINX_BACKUP="${NEW_RELEASE}/previous-nginx.conf"
+if [[ -f "${NGINX_DIR}/default.conf" ]]; then
+  cp "${NGINX_DIR}/default.conf" "${NGINX_BACKUP}"
+fi
+rollback_failed_switch() {
+  local status=$?
+  if [[ "${status}" -eq 0 || "${SWITCH_STARTED}" -ne 1 ]]; then
+    return
+  fi
+  trap - EXIT
+  set +e
+  log "Deployment failed; restoring previous traffic"
+  if target_includes_backend; then
+    docker compose stop "backend_${TARGET_BACKEND_SLOT}"
+    if [[ "${BACKEND_HANDOFF}" -eq 1 && -n "${ACTIVE_BACKEND_SLOT}" ]]; then
+      # start keeps the old image, environment, and container. Do not use up here.
+      docker compose start "backend_${ACTIVE_BACKEND_SLOT}"
+      wait_for_health "backend_${ACTIVE_BACKEND_SLOT}" 180
+    fi
+  fi
+  if [[ -f "${NGINX_BACKUP}" ]]; then
+    cat "${NGINX_BACKUP}" > "${NGINX_DIR}/default.conf"
+    docker compose up -d --no-deps nginx
+    docker compose exec -T nginx nginx -s reload
+  fi
+  if [[ -n "${PREVIOUS_RELEASE}" && -d "${PREVIOUS_RELEASE}" ]]; then
+    ln -sfn "${PREVIOUS_RELEASE}" "${CURRENT_LINK}"
+  fi
+  exit "${status}"
+}
+trap rollback_failed_switch EXIT
+
+# A disconnected SSH session or Ctrl-C must take the same rollback path as a
+# failed command. Without these handlers a singleton handoff can leave Nginx
+# pointing at the backend that was intentionally stopped moments earlier.
+interrupted_deploy() {
+  local signal_name="$1"
+  local exit_status="$2"
+  trap - HUP INT TERM
+  log "Deployment interrupted by ${signal_name}; restoring previous traffic"
+  exit "${exit_status}"
+}
+trap 'interrupted_deploy HUP 129' HUP
+trap 'interrupted_deploy INT 130' INT
+trap 'interrupted_deploy TERM 143' TERM
+
+# Finish frontend builds before a connector handoff to minimize API downtime.
+if target_includes_frontend; then
+  log "Building target frontend image"
+  docker compose build "frontend_${TARGET_FRONTEND_SLOT}"
+  log "Starting target frontend slot"
+  docker compose up -d "frontend_${TARGET_FRONTEND_SLOT}"
+  wait_for_health "frontend_${TARGET_FRONTEND_SLOT}" 180
+fi
+
 if target_includes_backend; then
   log "Building target backend image"
   docker compose build "backend_${TARGET_BACKEND_SLOT}"
@@ -376,6 +445,18 @@ if target_includes_backend; then
     docker compose stop "backend_${TARGET_BACKEND_SLOT}" || true
     docker compose rm -f "backend_${TARGET_BACKEND_SLOT}" || true
   fi
+
+  log "Checking connector dependencies and Chromium in the target image"
+  CHAOXING_MODE="$(docker compose run --rm --no-deps -T "backend_${TARGET_BACKEND_SLOT}" python -m app.chaoxing.runtime check </dev/null)"
+  case "${CHAOXING_MODE}" in
+    enabled|disabled) ;;
+    *) echo "Unexpected connector preflight result" >&2; exit 1 ;;
+  esac
+  OLD_CHAOXING_MODE=disabled
+  if [[ -n "${ACTIVE_BACKEND_SLOT}" ]]; then
+    OLD_CHAOXING_MODE="$(docker compose exec -T "backend_${ACTIVE_BACKEND_SLOT}" python -c 'from app.config import settings; print("enabled" if getattr(settings, "chaoxing_enabled", False) else "disabled")')"
+  fi
+  log "Chaoxing target=${CHAOXING_MODE}, previous=${OLD_CHAOXING_MODE}"
 
   log "Preparing Alembic version table"
   docker compose exec -T db psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" <<'SQL'
@@ -399,24 +480,27 @@ SQL
   log "Running database migrations"
   docker compose run --rm --no-deps -T "backend_${TARGET_BACKEND_SLOT}" python -m alembic upgrade head </dev/null
 
+  SWITCH_STARTED=1
+  if [[ "${CHAOXING_MODE}" == "enabled" || "${OLD_CHAOXING_MODE}" == "enabled" ]]; then
+    BACKEND_HANDOFF=1
+    if [[ -n "${ACTIVE_BACKEND_SLOT}" ]]; then
+      log "Stopping old backend before singleton handoff; temporary API downtime and connector logins will reset"
+      docker compose stop -t 45 "backend_${ACTIVE_BACKEND_SLOT}"
+    fi
+  fi
+
   log "Starting target backend slot"
   docker compose up -d --no-deps "backend_${TARGET_BACKEND_SLOT}"
   wait_for_health "backend_${TARGET_BACKEND_SLOT}" 180
 fi
 
-if target_includes_frontend; then
-  log "Building target frontend image"
-  docker compose build "frontend_${TARGET_FRONTEND_SLOT}"
-
-  log "Starting target frontend slot"
-  docker compose up -d "frontend_${TARGET_FRONTEND_SLOT}"
-  wait_for_health "frontend_${TARGET_FRONTEND_SLOT}" 180
-fi
-
 if target_includes_backend || target_includes_frontend; then
+  SWITCH_STARTED=1
   log "Switching nginx traffic to backend=${TARGET_BACKEND_SLOT}, frontend=${TARGET_FRONTEND_SLOT}"
   render_nginx_config "${TARGET_BACKEND_SLOT}" "${TARGET_FRONTEND_SLOT}"
-  docker compose up -d nginx
+  # Nginx only needs the already-running compose network. Starting its
+  # dependencies here can pull unrelated images and strand traffic mid-switch.
+  docker compose up -d --no-deps nginx
   wait_for_health nginx 120
   docker compose exec -T nginx nginx -s reload
 
@@ -424,12 +508,6 @@ if target_includes_backend || target_includes_frontend; then
   if ! curl --fail --silent "http://127.0.0.1:${DEPLOY_PORT}/healthz" >/dev/null \
     || ! curl --fail --silent "http://127.0.0.1:${DEPLOY_PORT}/api/health" >/dev/null; then
     echo "Smoke test failed after switching traffic" >&2
-    if [[ -n "${ACTIVE_BACKEND_SLOT}" && -n "${ACTIVE_FRONTEND_SLOT}" ]]; then
-      echo "Rolling back nginx to backend=${ACTIVE_BACKEND_SLOT}, frontend=${ACTIVE_FRONTEND_SLOT}" >&2
-      render_nginx_config "${ACTIVE_BACKEND_SLOT}" "${ACTIVE_FRONTEND_SLOT}"
-      docker compose up -d nginx
-      docker compose exec -T nginx nginx -s reload
-    fi
     exit 1
   fi
 
@@ -439,6 +517,9 @@ if target_includes_backend || target_includes_frontend; then
   echo "${CURRENT_FRONTEND_SLOT}" > "${ACTIVE_FRONTEND_SLOT_FILE}"
   echo "${CURRENT_BACKEND_SLOT}" > "${ACTIVE_SLOT_FILE}"
 fi
+
+# The new live traffic is healthy; later cleanup must not roll back this release.
+SWITCH_STARTED=0
 
 if target_includes_backend; then
   if [[ -n "${ACTIVE_BACKEND_SLOT}" && "${ACTIVE_BACKEND_SLOT}" != "${CURRENT_BACKEND_SLOT}" ]]; then

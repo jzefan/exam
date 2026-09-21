@@ -616,4 +616,25 @@ export function updateCourseKnowledgePointName(nodeId: string, name: string) {
   });
 }
 
+export interface CourseKnowledgeReorderPayload {
+  /** 目标父节点 id。 */
+  parent_id: string;
+  /** 目标父节点下重排后的完整同级顺序。 */
+  ordered_ids: string[];
+}
+
+export function reorderCourseKnowledgePoint(
+  nodeId: string,
+  payload: CourseKnowledgeReorderPayload,
+) {
+  return apiRequest<{ id: string; name: string; parent_id: string }>(
+    `/knowledge/knowledge-points/${nodeId}/reorder`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
 export { exportExam, type ExamExportFormat } from "@/lib/exam-export";

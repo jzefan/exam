@@ -9,6 +9,13 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 60 * 24  # 24 hours
     cors_origins: list[str] = ["http://localhost:4000"]
     debug: bool = False
+    # Opt-in connection prototype. See docs/chaoxing-connection.md; ONE API worker.
+    chaoxing_enabled: bool = False
+    chaoxing_max_sessions: int = 3
+    chaoxing_idle_seconds: int = 1800
+    chaoxing_max_age_seconds: int = 7200
+    chaoxing_browser_executable: str = ""
+    chaoxing_lock_path: str = "/tmp/exam-chaoxing.lock"
     database_pool_size: int = 10
     database_max_overflow: int = 10
     database_pool_recycle_seconds: int = 14400

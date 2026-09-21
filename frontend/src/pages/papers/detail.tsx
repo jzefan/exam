@@ -140,6 +140,7 @@ type PaperDetailNavState = {
   courseOrigin?: boolean;
   courseKpId?: string;
   courseSemesterId?: string;
+  defaultClassIds?: string[];
   courseQuestionBankName?: string;
   knowledgePointOptions?: PaperKnowledgePointOption[];
   publishExamSuccessTo?: string;
@@ -1476,6 +1477,7 @@ export function PaperDetailPage() {
           paper={currentPaper}
           courseKpId={navState.courseKpId}
           courseSemesterId={navState.courseSemesterId}
+          defaultClassIds={navState.defaultClassIds}
           onOpenChange={(next) => {
             if (!next) setQuickPublishMode(null);
           }}

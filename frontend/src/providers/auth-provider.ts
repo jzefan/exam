@@ -2,11 +2,35 @@ import type { AuthProvider } from "@refinedev/core";
 import axios from "axios";
 import { purgeAll as purgeAllDrafts, purgeAllExcept as purgeOtherDrafts } from "../lib/exam-draft";
 import { notifyAuthChanged } from "../lib/active-user";
-import type { ITokenResponse, IUser } from "../types";
+import type { ILoginResponse, IRoleOption, ITokenResponse, IUser } from "../types";
 import { getUserRole } from "../types/rbac";
 
 const API_URL = "/api";
 export const ONBOARDING_REASON_STORAGE_KEY = "exam_onboarding_reason";
+
+/**
+ * Auth failures that are not failures: the password checked out but the account
+ * holds several roles, so the login page has to show a second step. Refine's
+ * `login()` only reports success/failure, so the pending choice travels beside it
+ * instead of inside the response.
+ */
+export const ROLE_SELECTION_REQUIRED = "role-selection-required";
+
+export type PendingRoleSelection = {
+  username: string;
+  selectionToken: string;
+  roles: IRoleOption[];
+};
+
+let pendingRoleSelection: PendingRoleSelection | null = null;
+
+export function getPendingRoleSelection(): PendingRoleSelection | null {
+  return pendingRoleSelection;
+}
+
+export function clearPendingRoleSelection(): void {
+  pendingRoleSelection = null;
+}
 
 function storeAuthSession(data: ITokenResponse) {
   localStorage.setItem("access_token", data.access_token);
@@ -18,6 +42,36 @@ function storeAuthSession(data: ITokenResponse) {
   }
   notifyAuthChanged();
   purgeOtherDrafts(data.user.id);
+}
+
+/** Where a freshly authenticated session should land. */
+export function getRedirectAfterLogin(data: ITokenResponse): string {
+  const isStudent = data.user.organizations.some(
+    (o) => o.role_name === "student" || o.role_name === "assessee",
+  );
+  if (data.user.must_change_password && isStudent) {
+    return "/student/force-change-password";
+  }
+  return "/";
+}
+
+/** Second login step: trade the role ticket for a real session. */
+export async function loginWithSelectedRole(
+  selectionToken: string,
+  roleName: string,
+): Promise<{ redirectTo: string }> {
+  try {
+    const { data } = await axios.post<ITokenResponse>(`${API_URL}/auth/login/select-role`, {
+      selection_token: selectionToken,
+      role_name: roleName,
+    });
+    storeAuthSession(data);
+    clearPendingRoleSelection();
+    return { redirectTo: getRedirectAfterLogin(data) };
+  } catch (error) {
+    clearPendingRoleSelection();
+    throw new Error(getLoginErrorMessage(error));
+  }
 }
 
 function getResponseDetail(error: unknown): string | undefined {
@@ -50,22 +104,37 @@ function getRegisterErrorMessage(error: unknown): string {
   return detail ?? "注册失败，请稍后重试";
 }
 
+export function isRoleSelectionResponse(
+  data: ILoginResponse,
+): data is Extract<ILoginResponse, { requires_role_selection: true }> {
+  return (data as { requires_role_selection?: boolean }).requires_role_selection === true;
+}
+
 export const authProvider: AuthProvider = {
   login: async ({ username, password }) => {
     try {
-      const { data } = await axios.post<ITokenResponse>(`${API_URL}/auth/login`, {
+      const { data } = await axios.post<ILoginResponse>(`${API_URL}/auth/login`, {
         username,
         password,
       });
-      storeAuthSession(data);
-      const isStudent = data.user.organizations.some(
-        (o) => o.role_name === "student" || o.role_name === "assessee",
-      );
-      if (data.user.must_change_password && isStudent) {
-        return { success: true, redirectTo: "/student/force-change-password" };
+      if (isRoleSelectionResponse(data)) {
+        pendingRoleSelection = {
+          username: String(username),
+          selectionToken: data.selection_token,
+          roles: data.roles,
+        };
+        return {
+          success: false,
+          error: {
+            name: ROLE_SELECTION_REQUIRED,
+            message: "该账号有多个角色，请选择登录身份",
+          },
+        };
       }
-      return { success: true, redirectTo: "/" };
+      storeAuthSession(data);
+      return { success: true, redirectTo: getRedirectAfterLogin(data) };
     } catch (error) {
+      clearPendingRoleSelection();
       return { success: false, error: { name: "登录失败", message: getLoginErrorMessage(error) } };
     }
   },
@@ -131,12 +200,23 @@ export const authProvider: AuthProvider = {
         persona: persona || "teacher",
       });
       accountCreated = true;
-      const { data } = await axios.post<ITokenResponse>(`${API_URL}/auth/login`, {
+      const { data } = await axios.post<ILoginResponse>(`${API_URL}/auth/login`, {
         username,
         password,
       });
+      if (isRoleSelectionResponse(data)) {
+        // A brand-new account has a single role, so this only happens when the
+        // phone already belonged to a multi-role account.
+        return {
+          success: false,
+          error: {
+            name: "需要选择身份",
+            message: "该账号有多个角色，请前往登录页选择身份后登录",
+          },
+        };
+      }
       storeAuthSession(data);
-      return { success: true, redirectTo: "/" };
+      return { success: true, redirectTo: getRedirectAfterLogin(data) };
     } catch (error) {
       if (accountCreated) {
         return {

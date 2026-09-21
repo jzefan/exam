@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
   Check,
+  ChevronDown,
   Loader2,
   RefreshCw,
   Sparkles,
@@ -19,6 +20,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -38,9 +44,11 @@ import { ClassStudentSelector } from "@/pages/exams/components/ClassStudentSelec
 import type { IQuestion } from "@/types";
 
 import { listCourseQuestions } from "./api";
+import type { CourseKnowledgeNode } from "./api";
+import { KnowledgeFilterTreeMenu } from "./knowledge-filter-tree-menu";
 import {
   ALL_DIFFICULTIES,
-  ALL_KNOWLEDGE_POINTS,
+  collectKnowledgeScopeIds,
   getQuestionPreviewText,
   parseSmartPracticePrompt,
   selectSmartPracticeQuestions,
@@ -92,8 +100,11 @@ export interface SmartPracticeDialogProps {
   courseName: string;
   courseKpId: string;
   courseSemesterId: string | null;
+  defaultClassIds?: string[];
   selectedQuestionIds: string[];
   knowledgeOptions: SmartPracticeKnowledgeOption[];
+  /** 课程知识点树：用于把知识点下拉展示成树状结构。 */
+  knowledgeTree?: CourseKnowledgeNode | null;
   initialKnowledgePointId?: string | null;
   onPublished?: (examId: string) => void | Promise<void>;
 }
@@ -105,8 +116,10 @@ export function SmartPracticeDialog({
   courseName,
   courseKpId,
   courseSemesterId,
+  defaultClassIds,
   selectedQuestionIds,
   knowledgeOptions,
+  knowledgeTree = null,
   initialKnowledgePointId = null,
   onPublished,
 }: SmartPracticeDialogProps) {
@@ -122,6 +135,7 @@ export function SmartPracticeDialog({
   const [knowledgePointId, setKnowledgePointId] = useState<string | null>(
     initialKnowledgePointId,
   );
+  const [knowledgeMenuOpen, setKnowledgeMenuOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [previewQuestions, setPreviewQuestions] = useState<IQuestion[]>([]);
   const [includedIds, setIncludedIds] = useState<Set<string>>(new Set());
@@ -152,6 +166,7 @@ export function SmartPracticeDialog({
     setCustomCount(10);
     setDifficulty(ALL_DIFFICULTIES);
     setKnowledgePointId(initialKnowledgePointId);
+    setKnowledgeMenuOpen(false);
     setPrompt("");
     setPreviewQuestions([]);
     setIncludedIds(new Set());
@@ -230,9 +245,14 @@ export function SmartPracticeDialog({
       mode === "prompt"
         ? parseSmartPracticePrompt(prompt, knowledgeOptions, baseIntent)
         : { ...baseIntent, searchTerms: [] };
+    // 选中「物理层」这类上级知识点时，取题范围同时包含它下面的所有子知识点。
+    const knowledgePointIds = collectKnowledgeScopeIds(
+      intent.knowledgePointId,
+      knowledgeOptions,
+    );
     const picked = selectSmartPracticeQuestions(
       sourceQuestions,
-      intent,
+      { ...intent, knowledgePointIds },
       nextVariation,
     );
     setPreviewQuestions(picked);
@@ -385,26 +405,33 @@ export function SmartPracticeDialog({
 
                   <div className="flex flex-col gap-1.5">
                     <Label htmlFor="smart-practice-knowledge">知识点</Label>
-                    <Select
-                      value={knowledgePointId ?? ALL_KNOWLEDGE_POINTS}
-                      onValueChange={(value) =>
-                        setKnowledgePointId(value === ALL_KNOWLEDGE_POINTS ? null : value)
-                      }
+                    <DropdownMenu
+                      open={knowledgeMenuOpen}
+                      onOpenChange={setKnowledgeMenuOpen}
                     >
-                      <SelectTrigger id="smart-practice-knowledge">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectItem value={ALL_KNOWLEDGE_POINTS}>全部知识点</SelectItem>
-                          {knowledgeOptions.map((option) => (
-                            <SelectItem key={option.id} value={option.id}>
-                              {option.name}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          id="smart-practice-knowledge"
+                          aria-label={`知识点：${selectedKnowledge?.name ?? "全部知识点"}`}
+                          className="flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm ring-offset-background focus:outline-none focus:ring-1 focus:ring-ring"
+                        >
+                          <span className="truncate">
+                            {selectedKnowledge?.name ?? "全部知识点"}
+                          </span>
+                          <ChevronDown size={16} className="shrink-0 opacity-50" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" className="w-[280px] p-1">
+                        <KnowledgeFilterTreeMenu
+                          tree={knowledgeTree}
+                          options={knowledgeOptions}
+                          selectedId={knowledgePointId}
+                          onSelect={setKnowledgePointId}
+                          onClose={() => setKnowledgeMenuOpen(false)}
+                        />
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
 
                   <div className="flex flex-col gap-1.5">
@@ -549,6 +576,7 @@ export function SmartPracticeDialog({
                 summaryLabel="名学生"
                 emptySummaryText="请选择学生"
                 defaultSupplementCollapsed
+                defaultClassIds={defaultClassIds}
               />
             </div>
             </div>

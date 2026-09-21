@@ -12,7 +12,7 @@ class GradingTaskCreate(BaseModel):
     question_content: str
     subject: str | None = None
     language: str | None = None
-    max_score: int
+    max_score: float
     knowledge_tags: list = Field(default_factory=list)
     fatal_rule_enabled: bool = True
     student_answer_raw: str
@@ -104,7 +104,7 @@ class GradingContextRead(BaseModel):
     question_content: str
     subject: str | None = None
     language: str | None = None
-    max_score: int
+    max_score: float
     knowledge_tags: list = Field(default_factory=list)
     fatal_rule_enabled: bool
     student_answer_raw: str
@@ -159,7 +159,7 @@ class GradingInboxQuestionRead(BaseModel):
     question_label: str
     question_type: str
     question_content: str
-    max_score: int
+    max_score: float
     knowledge_tags: list = Field(default_factory=list)
     pending_count: int
     completed_count: int
@@ -211,7 +211,7 @@ class GradingInboxQuestionDetailRead(BaseModel):
     question_label: str
     question_type: str
     question_content: str
-    max_score: int
+    max_score: float
     knowledge_tags: list = Field(default_factory=list)
     candidates: list[GradingInboxCandidateRead] = Field(default_factory=list)
 
@@ -372,7 +372,7 @@ class GradingInboxCandidateDetailRead(BaseModel):
     evaluation_note: str | None = None
     score_reuse: GradingScoreReuseRead | None = None
     suggested_score: float | None = None
-    max_score: int
+    max_score: float
     question_type: str
     student_answer_raw: str
     attachment_refs: list = Field(default_factory=list)

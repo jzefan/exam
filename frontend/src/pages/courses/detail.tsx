@@ -11,14 +11,15 @@ import {
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useDelete, useList } from "@refinedev/core";
 import {
+  ArrowDown,
   ArrowLeft,
+  ArrowUp,
   BarChart3,
   BookOpen,
   CalendarRange,
   Calculator,
   Camera,
   CheckCircle2,
-  Check,
   ChevronDown,
   ChevronRight,
   ClipboardList,
@@ -128,6 +129,14 @@ import {
   UnsupportedMaterialFormatError,
 } from "@/pages/knowledge/extract-material-content";
 import type { KnowledgeImportPath } from "@/pages/knowledge/import-knowledge-utils";
+import {
+  describeKnowledgeMove,
+  planKnowledgeDrop,
+  planKnowledgeMove,
+  resolveKnowledgeDropZone,
+  type KnowledgeDropZone,
+  type KnowledgeMovePlan,
+} from "./course-knowledge-tree-order";
 import { apiRequest } from "@/pages/grading/api";
 import {
   addCourseMaterialLink,
@@ -145,6 +154,7 @@ import {
   listCourseMaterials,
   listCourseQuestionsPaginated,
   listCourseSemesters,
+  reorderCourseKnowledgePoint,
   updateCourseKnowledgePointName,
   updateCourseMaterial,
   uploadCourseMaterialFile,
@@ -161,6 +171,7 @@ import { AssociateClassesDialog } from "./AssociateClassesDialog";
 import { GradeWeightPanel } from "./GradeWeightPanel";
 import { CourseGradebook } from "./CourseGradebook";
 import { CourseMasteryAnalytics } from "./CourseMasteryAnalytics";
+import { KnowledgeFilterTreeMenu } from "./knowledge-filter-tree-menu";
 import { PaperListBody } from "@/pages/papers/PaperListBody";
 import {
   ExamCard,
@@ -235,10 +246,18 @@ type CourseMaterialGeneratedQuestion = {
 };
 
 type CourseMaterialAIGenerateState = CourseMaterialExtractedContent & {
+  materialId: string;
   materialTitle: string;
   knowledgePointId: string;
   knowledgePointName: string;
   knowledgePointPath: string;
+  /**
+   * 资料仍在后台下载 + 解析：弹窗已经打开，但「开始生成」要等它就绪。
+   * 弹窗若在此期间点「开始生成」，会先等这里变成 false 再真正发起请求。
+   */
+  materialLoading: boolean;
+  /** 后台抽取失败的原因；非空时不允许生成 */
+  materialLoadError: string | null;
 };
 
 type ExamMockGenerateResponse = {
@@ -610,145 +629,6 @@ function flattenCourseKnowledgeNodes(
     })),
   );
   return [current, ...children];
-}
-
-function KnowledgeFilterTreeMenu({
-  tree,
-  options,
-  selectedId,
-  onSelect,
-  onClose,
-}: {
-  tree: CourseKnowledgeNode | null;
-  options: Array<{ id: string; name: string; depth: number; path: string }>;
-  selectedId: string | null;
-  onSelect: (nodeId: string | null) => void;
-  onClose: () => void;
-}) {
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(
-    () =>
-      new Set(
-        (tree?.children ?? [])
-          .filter((node) => node.children.length > 0)
-          .map((node) => node.id),
-      ),
-  );
-
-  useEffect(() => {
-    setExpandedIds(
-      new Set(
-        (tree?.children ?? [])
-          .filter((node) => node.children.length > 0)
-          .map((node) => node.id),
-      ),
-    );
-  }, [tree?.id]);
-
-  const availableIds = useMemo(
-    () => new Set(options.map((option) => option.id)),
-    [options],
-  );
-
-  const toggleExpanded = (nodeId: string) => {
-    setExpandedIds((current) => {
-      const next = new Set(current);
-      if (next.has(nodeId)) next.delete(nodeId);
-      else next.add(nodeId);
-      return next;
-    });
-  };
-
-  const selectNode = (nodeId: string | null) => {
-    onSelect(nodeId);
-    onClose();
-  };
-
-  const renderNode = (node: CourseKnowledgeNode, depth: number): ReactNode => {
-    if (!availableIds.has(node.id)) return null;
-    const hasChildren = node.children.some((child) => availableIds.has(child.id));
-    const expanded = expandedIds.has(node.id);
-    const selected = node.id === selectedId;
-
-    return (
-      <div key={node.id}>
-        <div
-          className={cn(
-            "flex items-center rounded-md text-sm transition-colors",
-            selected ? "bg-primary/10 text-primary" : "hover:bg-muted",
-          )}
-        style={{ paddingLeft: 8 }}
-        >
-          <button
-            type="button"
-            className={cn(
-              "inline-flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted-foreground/10",
-              !hasChildren && "invisible",
-            )}
-            aria-label={expanded ? "收起知识点" : "展开知识点"}
-            onClick={() => toggleExpanded(node.id)}
-          >
-            {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          </button>
-          <button
-            type="button"
-            className="flex min-w-0 flex-1 items-center gap-2 px-1.5 py-2 text-left"
-            title={options.find((option) => option.id === node.id)?.path}
-            onClick={() => selectNode(node.id)}
-          >
-            <BookOpen
-              size={15}
-              className={cn(
-                "shrink-0",
-                hasChildren ? "text-primary" : "text-muted-foreground",
-              )}
-            />
-            <span className="min-w-0 flex-1 truncate">{node.name}</span>
-            {selected ? <Check size={14} className="shrink-0 text-primary" /> : null}
-          </button>
-        </div>
-        {hasChildren && expanded ? (
-          <div className="ml-4 border-l border-border/60 pl-2">
-            {node.children.map((child) => renderNode(child, depth + 1))}
-          </div>
-        ) : null}
-      </div>
-    );
-  };
-
-  return (
-    <div className="max-h-[min(60vh,420px)] overflow-y-auto">
-      <button
-        type="button"
-        className={cn(
-          "flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-muted",
-          selectedId === null && "bg-primary/10 text-primary",
-        )}
-        onClick={() => selectNode(null)}
-      >
-        <Layers3 size={15} className="shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate">全部知识点</span>
-        {selectedId === null ? <Check size={14} className="shrink-0 text-primary" /> : null}
-      </button>
-      <div className="my-1 border-t border-border" />
-      {tree?.children.length ? (
-        tree.children.map((node) => renderNode(node, 0))
-      ) : options.length > 0 ? (
-        options.map((option) => (
-          <button
-            key={option.id}
-            type="button"
-            className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-muted"
-            onClick={() => selectNode(option.id)}
-          >
-            <BookOpen size={15} className="shrink-0 text-muted-foreground" />
-            <span className="min-w-0 flex-1 truncate">{option.name}</span>
-          </button>
-        ))
-      ) : (
-        <p className="px-2 py-2 text-xs text-muted-foreground">暂无知识点</p>
-      )}
-    </div>
-  );
 }
 
 function collectCourseKnowledgeNodeIds(
@@ -2538,6 +2418,9 @@ function QuestionsTab({
                     ...(courseSemesterId
                       ? { courseSemesterId }
                       : {}),
+                    ...(courseSemester?.class_ids?.length
+                      ? { defaultClassIds: courseSemester.class_ids }
+                      : {}),
                   },
                 });
               }}
@@ -2863,6 +2746,7 @@ function QuestionsTab({
         defaultTitle={defaultCreateTitle}
         courseKpId={targetCourseKpId}
         courseSemesterId={courseSemesterId}
+        defaultClassIds={courseSemester?.class_ids}
         onPublished={(_, category) => {
           void onPublishedExamOrAssignment(category);
         }}
@@ -2875,12 +2759,14 @@ function QuestionsTab({
         courseName={courseName}
         courseKpId={targetCourseKpId}
         courseSemesterId={courseSemesterId}
+        defaultClassIds={courseSemester?.class_ids}
         selectedQuestionIds={[...selected]}
         knowledgeOptions={knowledgeFilterOptions.map((option) => ({
           id: option.id,
           name: option.name,
           path: option.path,
         }))}
+        knowledgeTree={knowledgeTree}
         initialKnowledgePointId={knowledgeFilterNodeId}
         onPublished={async () => {
           await onPublishedExamOrAssignment("practice");
@@ -4196,31 +4082,112 @@ function KnowledgeTab({
 
 function KnowledgeEditorTreeNode({
   node,
+  tree,
   depth,
   selectedId,
+  canWrite,
+  busy,
+  draggingId,
   onSelect,
+  onDragStateChange,
+  onMove,
 }: {
   node: CourseKnowledgeNode;
+  tree: CourseKnowledgeNode;
   depth: number;
   selectedId: string | null;
+  canWrite: boolean;
+  busy: boolean;
+  draggingId: string | null;
   onSelect: (nodeId: string) => void;
+  onDragStateChange: (nodeId: string | null) => void;
+  onMove: (nodeId: string, plan: KnowledgeMovePlan) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
+  const [dropZone, setDropZone] = useState<KnowledgeDropZone | null>(null);
   const hasChildren = node.children.length > 0;
   const selected = node.id === selectedId;
+  // 根节点没有父节点，不能移动（bounds 为 null）。
+  const bounds = describeKnowledgeMove(tree, node.id);
+  const movable = canWrite && !busy && bounds !== null;
+  const beingDragged = draggingId === node.id;
+  const canMoveUp = movable && bounds !== null && bounds.index > 0;
+  const canMoveDown =
+    movable && bounds !== null && bounds.index < bounds.siblingCount - 1;
+
+  const moveTo = (insertIndex: number) => {
+    if (!bounds) return;
+    const plan = planKnowledgeMove(tree, node.id, bounds.parentId, insertIndex);
+    if (plan) onMove(node.id, plan);
+  };
+
+  /** 指针在行内的相对纵向位置，用来区分「插到前 / 成为子节点 / 插到后」。 */
+  const zoneFromEvent = (event: DragEvent<HTMLDivElement>): KnowledgeDropZone => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const ratio = rect.height > 0 ? (event.clientY - rect.top) / rect.height : 0.5;
+    return resolveKnowledgeDropZone(ratio);
+  };
+
+  const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (!draggableRow || !draggingId || draggingId === node.id) return;
+    const zone = zoneFromEvent(event);
+    // 落点不可用（会成环、或本来就没变化）时不接管这次拖拽，让光标保持"禁止"。
+    if (!planKnowledgeDrop(tree, draggingId, node.id, zone)) {
+      setDropZone(null);
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDropZone(zone);
+  };
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    const sourceId = draggingId;
+    setDropZone(null);
+    if (!draggableRow || !sourceId || sourceId === node.id) return;
+    const plan = planKnowledgeDrop(tree, sourceId, node.id, zoneFromEvent(event));
+    if (!plan) return;
+    event.preventDefault();
+    onMove(sourceId, plan);
+  };
+
+  const draggableRow = movable;
 
   return (
     <div>
       <div
         className={cn(
-          "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors",
+          "group relative flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors",
           selected
             ? "bg-primary/10 text-primary"
             : "text-foreground hover:bg-muted",
+          draggableRow && "cursor-grab active:cursor-grabbing",
+          beingDragged && "opacity-40",
+          dropZone === "inside" && "ring-2 ring-inset ring-primary",
         )}
         style={{ paddingLeft: 10 }}
+        draggable={draggableRow}
         onClick={() => onSelect(node.id)}
+        onDragEnd={() => {
+          setDropZone(null);
+          onDragStateChange(null);
+        }}
+        onDragLeave={() => setDropZone(null)}
+        onDragOver={handleDragOver}
+        onDragStart={(event) => {
+          if (!draggableRow) return;
+          event.dataTransfer.setData("text/plain", node.id);
+          event.dataTransfer.effectAllowed = "move";
+          onDragStateChange(node.id);
+        }}
+        onDrop={handleDrop}
       >
+        {dropZone === "before" ? (
+          <span className="pointer-events-none absolute inset-x-1 top-0 h-0.5 rounded-full bg-primary" />
+        ) : null}
+        {dropZone === "after" ? (
+          <span className="pointer-events-none absolute inset-x-1 bottom-0 h-0.5 rounded-full bg-primary" />
+        ) : null}
         <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
           {hasChildren ? (
             <button
@@ -4251,6 +4218,39 @@ function KnowledgeEditorTreeNode({
             {node.children.length}
           </span>
         ) : null}
+        {canWrite && bounds ? (
+          <span
+            className={cn(
+              "flex shrink-0 items-center gap-0.5",
+              selected ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100",
+            )}
+          >
+            <button
+              type="button"
+              aria-label="上移"
+              className="inline-flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted-foreground/10 disabled:opacity-30 disabled:hover:bg-transparent"
+              disabled={!canMoveUp}
+              onClick={(event) => {
+                event.stopPropagation();
+                moveTo(bounds.index - 1);
+              }}
+            >
+              <ArrowUp size={14} />
+            </button>
+            <button
+              type="button"
+              aria-label="下移"
+              className="inline-flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted-foreground/10 disabled:opacity-30 disabled:hover:bg-transparent"
+              disabled={!canMoveDown}
+              onClick={(event) => {
+                event.stopPropagation();
+                moveTo(bounds.index + 1);
+              }}
+            >
+              <ArrowDown size={14} />
+            </button>
+          </span>
+        ) : null}
       </div>
       {hasChildren && expanded ? (
         <div className="ml-4 border-l border-border/60 pl-2">
@@ -4258,9 +4258,15 @@ function KnowledgeEditorTreeNode({
             <KnowledgeEditorTreeNode
               key={child.id}
               node={child}
+              tree={tree}
               depth={depth + 1}
               selectedId={selectedId}
+              canWrite={canWrite}
+              busy={busy}
+              draggingId={draggingId}
               onSelect={onSelect}
+              onDragStateChange={onDragStateChange}
+              onMove={onMove}
             />
           ))}
         </div>
@@ -4272,20 +4278,24 @@ function KnowledgeEditorTreeNode({
 function KnowledgeTreeEditorPage({
   tree,
   canWrite,
+  busy,
   selectedNodeId,
   onSelectedNodeChange,
   onBack,
   onRename,
   onAddChildren,
+  onReorder,
   onRequestDelete,
 }: {
   tree: CourseKnowledgeNode | null;
   canWrite: boolean;
+  busy: boolean;
   selectedNodeId: string | null;
   onSelectedNodeChange: (nodeId: string) => void;
   onBack: () => void;
   onRename: (nodeId: string, name: string) => Promise<void>;
   onAddChildren: (payload: { parentId: string; names: string[] }) => Promise<void>;
+  onReorder: (nodeId: string, plan: KnowledgeMovePlan) => void;
   onRequestDelete: (node: CourseKnowledgeNode) => void;
 }) {
   const selectedNode = findCourseKnowledgeNode(tree, selectedNodeId) ?? tree;
@@ -4293,6 +4303,7 @@ function KnowledgeTreeEditorPage({
   const [childrenDraft, setChildrenDraft] = useState("");
   const [savingName, setSavingName] = useState(false);
   const [addingChildren, setAddingChildren] = useState(false);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
 
   useEffect(() => {
     setNameDraft(selectedNode?.name ?? "");
@@ -4347,14 +4358,22 @@ function KnowledgeTreeEditorPage({
           <section className="flex min-h-0 flex-col rounded-xl border border-border bg-card">
             <div className="border-b border-border px-4 py-3">
               <h2 className="text-sm font-semibold text-foreground">知识树</h2>
-              <p className="mt-0.5 text-xs text-muted-foreground">点击节点查看和编辑</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                点击查看和编辑，拖动可调整顺序或挂到别的目录下
+              </p>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-2">
               <KnowledgeEditorTreeNode
                 node={tree}
+                tree={tree}
                 depth={0}
                 selectedId={selectedNode?.id ?? null}
+                canWrite={canWrite}
+                busy={busy || savingName || addingChildren}
+                draggingId={draggingId}
                 onSelect={onSelectedNodeChange}
+                onDragStateChange={setDraggingId}
+                onMove={onReorder}
               />
             </div>
           </section>
@@ -4669,6 +4688,7 @@ export function CourseDetailPage() {
   const [knowledgeNodeToDelete, setKnowledgeNodeToDelete] =
     useState<CourseKnowledgeNode | null>(null);
   const [deletingKnowledgeNode, setDeletingKnowledgeNode] = useState(false);
+  const [reorderingKnowledge, setReorderingKnowledge] = useState(false);
   const [materialToDelete, setMaterialToDelete] =
     useState<TeacherCourseMaterial | null>(null);
   const [clearKpOpen, setClearKpOpen] = useState(false);
@@ -5580,6 +5600,29 @@ export function CourseDetailPage() {
     [id, refreshCourseSummary, refreshKnowledgeTree, toast],
   );
 
+  const handleReorderKnowledgeNode = useCallback(
+    async (nodeId: string, plan: KnowledgeMovePlan) => {
+      setReorderingKnowledge(true);
+      try {
+        await reorderCourseKnowledgePoint(nodeId, {
+          parent_id: plan.parent_id,
+          ordered_ids: plan.ordered_ids,
+        });
+        // 目录树重排很频繁，成功不弹提示，列表本身的变化就是反馈；失败才提示。
+        await refreshKnowledgeTree();
+      } catch (err) {
+        toast({
+          title: "调整目录失败",
+          description: err instanceof Error ? err.message : "请稍后重试",
+          variant: "destructive",
+        });
+      } finally {
+        setReorderingKnowledge(false);
+      }
+    },
+    [refreshKnowledgeTree, toast],
+  );
+
   const handleDeleteKnowledgeNode = useCallback(async () => {
     if (!knowledgeNodeToDelete) return;
     if (knowledgeNodeToDelete.id === id) {
@@ -5721,31 +5764,7 @@ export function CourseDetailPage() {
   }, [id, refreshCourseSummary, refreshKnowledgeTree, toast]);
 
   const handleGenerateFromMaterial = useCallback(
-    async (material: TeacherCourseMaterial) => {
-      let extracted = materialContentById[material.id];
-      if (
-        !extracted ||
-        (!extracted.sourceText && extracted.images.length === 0)
-      ) {
-        setExtractingMaterialId(material.id);
-        try {
-          extracted = await extractExistingMaterial(material);
-        } catch (err) {
-          toast({
-            title: "暂不能智能出题",
-            description:
-              err instanceof UnsupportedMaterialFormatError ||
-              err instanceof Error
-                ? err.message
-                : "资料内容抽取失败，请稍后重试。",
-            variant: "destructive",
-          });
-          return;
-        } finally {
-          setExtractingMaterialId(null);
-        }
-      }
-
+    (material: TeacherCourseMaterial) => {
       const pathParts = findCourseKnowledgeNodePath(tree, material.node_id);
       const fallbackNodeName = material.node_name ?? course?.name ?? "课程节点";
       const knowledgePointName =
@@ -5755,14 +5774,83 @@ export function CourseDetailPage() {
           ? pathParts.join(" / ")
           : [course?.name, fallbackNodeName].filter(Boolean).join(" / ");
 
-      setMaterialAiGenerateState({
+      const base = {
+        materialId: material.id,
         materialTitle: material.title,
         knowledgePointId: material.node_id,
         knowledgePointName,
         knowledgePointPath,
-        sourceText: extracted.sourceText,
-        images: extracted.images,
+      };
+      const materialId = material.id;
+
+      const cached = materialContentById[materialId];
+      if (cached && (cached.sourceText || cached.images.length > 0)) {
+        // 已经读过：直接开弹窗，无需等待。
+        setMaterialAiGenerateState({
+          ...base,
+          sourceText: cached.sourceText,
+          images: cached.images,
+          materialLoading: false,
+          materialLoadError: null,
+        });
+        return;
+      }
+
+      // 没读过：**先把弹窗打开**，让用户立刻看到界面；下载 + 解析挪到后台，
+      // 完成后写回同一个 state。materialId 比对可避免用户中途切换资料时串台。
+      setMaterialAiGenerateState({
+        ...base,
+        sourceText: "",
+        images: [],
+        materialLoading: true,
+        materialLoadError: null,
       });
+
+      const patchExtracted = (
+        next: Pick<
+          CourseMaterialAIGenerateState,
+          "sourceText" | "images" | "materialLoading" | "materialLoadError"
+        >,
+      ) =>
+        setMaterialAiGenerateState((current) =>
+          current && current.materialId === materialId
+            ? { ...current, ...next }
+            : current,
+        );
+
+      setExtractingMaterialId(materialId);
+      void extractExistingMaterial(material)
+        .then((extracted) =>
+          patchExtracted({
+            sourceText: extracted.sourceText,
+            images: extracted.images,
+            materialLoading: false,
+            materialLoadError: null,
+          }),
+        )
+        .catch((err: unknown) => {
+          const message =
+            err instanceof UnsupportedMaterialFormatError ||
+            err instanceof Error
+              ? err.message
+              : "资料内容抽取失败，请稍后重试。";
+          patchExtracted({
+            sourceText: "",
+            images: [],
+            materialLoading: false,
+            materialLoadError: message,
+          });
+          toast({
+            title: "暂不能智能出题",
+            description: message,
+            variant: "destructive",
+          });
+        })
+        .finally(() =>
+          setExtractingMaterialId((current) =>
+            current === materialId ? null : current,
+          ),
+        );
     },
     [course, extractExistingMaterial, materialContentById, toast, tree],
   );
@@ -6760,6 +6848,7 @@ export function CourseDetailPage() {
         courseName={course.name}
         courseKpId={assignmentFilterNode?.id ?? tree?.id ?? id ?? ""}
         courseSemesterId={semesterFilter}
+        defaultClassIds={selectedSemester?.class_ids}
         knowledgeOptions={questionKnowledgeFilterOptions.map((option) => ({
           id: option.id,
           name: option.name,
@@ -7203,11 +7292,13 @@ export function CourseDetailPage() {
               <KnowledgeTreeEditorPage
                 tree={tree}
                 canWrite={course.can_write}
+                busy={reorderingKnowledge}
                 selectedNodeId={knowledgeEditorNodeId}
                 onSelectedNodeChange={setKnowledgeEditorNodeId}
                 onBack={() => setKnowledgeEditorOpen(false)}
                 onRename={handleRenameKnowledgeNode}
                 onAddChildren={handleAddKnowledgeNode}
+                onReorder={handleReorderKnowledgeNode}
                 onRequestDelete={setKnowledgeNodeToDelete}
               />
             ) : (
@@ -7455,6 +7546,9 @@ export function CourseDetailPage() {
                     ...(semesterFilter
                       ? { courseSemesterId: semesterFilter }
                       : {}),
+                    ...(selectedSemester?.class_ids?.length
+                      ? { defaultClassIds: selectedSemester.class_ids }
+                      : {}),
                     publishExamSuccessTo: `/courses/${id}?tab=exams`,
                     publishPracticeSuccessTo: `/courses/${id}?tab=assignments`,
                   }}
@@ -7691,7 +7785,10 @@ export function CourseDetailPage() {
             materialTitle={materialAiGenerateState.materialTitle}
             materialSourceText={materialAiGenerateState.sourceText}
             materialImages={materialAiGenerateState.images}
+            materialLoading={materialAiGenerateState.materialLoading}
+            materialLoadError={materialAiGenerateState.materialLoadError}
             targetQuestionBankName={courseQuestionBankName(course.name)}
+            defaultClassIds={selectedSemester?.class_ids}
             onSaved={() => {
               if (id) {
                 void Promise.all([

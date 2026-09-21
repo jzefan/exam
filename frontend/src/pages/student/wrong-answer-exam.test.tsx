@@ -47,6 +47,7 @@ const items: IWrongAnswer[] = [
     exam_id: "exam-db",
     exam_title: "数据库期末考试",
     exam_category: "exam",
+    exam_question_order: 2,
   }),
   buildItem({
     id: "p2",
@@ -54,6 +55,7 @@ const items: IWrongAnswer[] = [
     exam_id: "exam-db",
     exam_title: "数据库期末考试",
     exam_category: "exam",
+    exam_question_order: 0,
   }),
   buildItem({
     id: "p3",
@@ -61,6 +63,7 @@ const items: IWrongAnswer[] = [
     exam_id: "practice-sql",
     exam_title: "SQL 基础练习",
     exam_category: "practice",
+    exam_question_order: 5,
   }),
   buildItem({
     id: "p4",
@@ -166,6 +169,27 @@ describe("WrongAnswerExamPage", () => {
 
     expect(screen.getByText("历史遗留错题")).toBeInTheDocument();
     expect(screen.queryByText("数据库范式题")).not.toBeInTheDocument();
+    await waitFor(() => expect(apiGetMock).toHaveBeenCalled());
+  });
+
+  it("shows where each wrong answer sat in the original exam", async () => {
+    mockList(items);
+
+    renderPage("/wrong-answers/exam/exam-db");
+
+    // exam_question_order 是 0 基，展示时 +1
+    expect(screen.getByText("第 3 题")).toBeInTheDocument();
+    expect(screen.getByText("第 1 题")).toBeInTheDocument();
+    await waitFor(() => expect(apiGetMock).toHaveBeenCalled());
+  });
+
+  it("omits the question number for wrong answers with no source exam", async () => {
+    mockList(items);
+
+    renderPage("/wrong-answers/exam/legacy");
+
+    expect(screen.getByText("历史遗留错题")).toBeInTheDocument();
+    expect(screen.queryByText(/^第 \d+ 题$/)).not.toBeInTheDocument();
     await waitFor(() => expect(apiGetMock).toHaveBeenCalled());
   });
 

@@ -412,6 +412,7 @@ export function PracticeCreate() {
     defaultBankName?: string;
     initialStep?: number;
     courseOrigin?: boolean;
+    defaultClassIds?: string[];
   };
   const { toast } = useToast();
   const { mutate: create, mutation } = useCreate();
@@ -3492,6 +3493,9 @@ export function PracticeCreate() {
                   onChange={setStudentIds}
                   summaryLabel="人"
                   emptySummaryText="还没有选择发布对象，可以优先按班级选择，导入和手动添加作为补充方式。"
+                  defaultClassIds={
+                    isEditMode ? undefined : navState.defaultClassIds
+                  }
                 />
                 <div className="mt-4 flex flex-col gap-3 rounded-2xl bg-primary/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="space-y-1">

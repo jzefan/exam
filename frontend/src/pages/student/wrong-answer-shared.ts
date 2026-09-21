@@ -15,6 +15,8 @@ export interface IWrongAnswer {
   mastered: boolean;
   tags: string[];
   remedial_practice_count?: number;
+  /** 该题在来源考试/练习里的位置（0 基）；历史错题或题目已从试卷移除时为 null。 */
+  exam_question_order?: number | null;
 }
 
 export type WrongAnswerTabKey = "to_review" | "mastered";

@@ -13,10 +13,16 @@ vi.mock("@/lib/api", () => ({
 vi.mock("@/pages/exams/components/ClassStudentSelector", () => ({
   ClassStudentSelector: ({
     onChange,
+    defaultClassIds,
   }: {
     onChange: (ids: string[]) => void;
+    defaultClassIds?: string[];
   }) => (
-    <button type="button" onClick={() => onChange(["student-1"])}>
+    <button
+      type="button"
+      data-default-class-ids={defaultClassIds?.join(",") ?? ""}
+      onClick={() => onChange(["student-1"])}
+    >
       选择测试学生
     </button>
   ),
@@ -88,6 +94,7 @@ function renderDialog() {
       courseName="计算机网络"
       courseKpId="course-kp-1"
       courseSemesterId="semester-1"
+      defaultClassIds={["class-1"]}
       knowledgeOptions={[
         {
           id: "kp-chapter-1",
@@ -216,6 +223,10 @@ describe("SmartPracticeChatDialog", () => {
     expect(
       screen.queryByRole("textbox", { name: "练习对话输入" }),
     ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "选择测试学生" })).toHaveAttribute(
+      "data-default-class-ids",
+      "class-1",
+    );
     await user.click(screen.getByRole("button", { name: "选择测试学生" }));
     await user.click(screen.getByRole("button", { name: /确定发布/ }));
 

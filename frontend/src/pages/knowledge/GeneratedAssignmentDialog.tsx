@@ -23,6 +23,7 @@ interface GeneratedAssignmentDialogProps {
   open: boolean;
   defaultTitle: string;
   questionCount: number;
+  defaultClassIds?: string[];
   onOpenChange: (open: boolean) => void;
   onSubmit: (payload: GeneratedAssignmentDialogSubmitPayload) => Promise<void>;
 }
@@ -31,6 +32,7 @@ export function GeneratedAssignmentDialog({
   open,
   defaultTitle,
   questionCount,
+  defaultClassIds,
   onOpenChange,
   onSubmit,
 }: GeneratedAssignmentDialogProps) {
@@ -89,6 +91,7 @@ export function GeneratedAssignmentDialog({
             summaryLabel="名学生"
             emptySummaryText="请选择至少一名学生发布练习。"
             defaultSupplementCollapsed
+            defaultClassIds={defaultClassIds}
           />
         </div>
 

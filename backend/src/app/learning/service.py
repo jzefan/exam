@@ -471,6 +471,10 @@ async def get_direction_tree(
 
 async def create_knowledge_point(db: AsyncSession, data: KnowledgePointCreate, user_id: uuid.UUID) -> KnowledgePoint:
     kp = KnowledgePoint(**data.model_dump(), owner_id=user_id, visibility=VisibilityScope.PRIVATE)
+    # 新知识点排到同级末尾：取现有同级最大 sort_order + 1。
+    # 缺了这步会拿到默认值 0，在同级已被重排过的目录里会插到最前面。
+    siblings = await list_child_knowledge_points(db, kp.parent_id)
+    kp.sort_order = max((sibling.sort_order for sibling in siblings), default=-1) + 1
     db.add(kp)
     await db.commit()
     await db.refresh(kp)
@@ -540,6 +544,47 @@ async def reparent_knowledge_point(
     await db.commit()
     await db.refresh(kp)
     return kp
+
+
+async def list_child_knowledge_points(
+    db: AsyncSession, parent_id: uuid.UUID | None
+) -> list[KnowledgePoint]:
+    """按目录展示顺序（sort_order, created_at）返回某个父节点的直接子知识点。"""
+
+    condition = (
+        KnowledgePoint.parent_id.is_(None)
+        if parent_id is None
+        else KnowledgePoint.parent_id == parent_id
+    )
+    result = await db.execute(
+        select(KnowledgePoint)
+        .where(condition, KnowledgePoint.deleted_at.is_(None))
+        .order_by(KnowledgePoint.sort_order, KnowledgePoint.created_at)
+    )
+    return list(result.scalars().all())
+
+
+async def apply_sibling_order(
+    db: AsyncSession,
+    parent_id: uuid.UUID | None,
+    ordered_ids: list[uuid.UUID],
+) -> list[KnowledgePoint]:
+    """把 `ordered_ids` 按数组下标写进 sort_order，完成同级重排。
+
+    未出现在 `ordered_ids` 里的同级节点（例如前端拿着旧树时别人刚新建的）不会丢排序位：
+    它们保持原有相对顺序，统一排到列表之后。
+    """
+
+    children = await list_child_knowledge_points(db, parent_id)
+    position = {node_id: index for index, node_id in enumerate(ordered_ids)}
+    ordered = sorted(
+        enumerate(children),
+        key=lambda pair: (position.get(pair[1].id, len(ordered_ids)), pair[0]),
+    )
+    for new_index, (_, child) in enumerate(ordered):
+        child.sort_order = new_index
+    await db.commit()
+    return [child for _, child in ordered]
 
 
 async def soft_delete_knowledge_point(db: AsyncSession, kp: KnowledgePoint) -> None:

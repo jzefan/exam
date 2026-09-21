@@ -190,6 +190,21 @@ async def create_knowledge_point(db: AsyncSession, data: KnowledgePointCreate, u
         owner_id=user_id,
         visibility=VisibilityScope.PRIVATE,
     )
+    # 与 learning.service.create_knowledge_point 保持一致：新节点排到同级末尾。
+    # 目录批量导入走的就是这里，缺了这步会插到已被手动排序过的同级最前面。
+    sibling_condition = (
+        KnowledgePoint.parent_id.is_(None)
+        if kp.parent_id is None
+        else KnowledgePoint.parent_id == kp.parent_id
+    )
+    max_sort_order = (
+        await db.execute(
+            select(func.max(KnowledgePoint.sort_order)).where(
+                sibling_condition, KnowledgePoint.deleted_at.is_(None)
+            )
+        )
+    ).scalar()
+    kp.sort_order = (max_sort_order + 1) if max_sort_order is not None else 0
     db.add(kp)
     await db.flush()
     await db.refresh(kp)

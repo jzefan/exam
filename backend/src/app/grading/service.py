@@ -279,6 +279,7 @@ async def _filter_tasks_by_exam_access(
     current_user_id: uuid.UUID | None,
     is_platform_admin: bool,
 ) -> list[GradingTask]:
+    tasks = [task for task in tasks if task.source_type != "chaoxing_submission"]
     if is_platform_admin:
         return tasks
     if current_user_id is None:
@@ -390,6 +391,8 @@ async def _ensure_task_access(
     current_user_id: uuid.UUID | None,
     is_platform_admin: bool,
 ) -> None:
+    if task.source_type == "chaoxing_submission":
+        raise ValueError("use the owned chaoxing grading workflow")
     exam_id = _payload_exam_id(task.source_type, task.source_business_id)
     if not await _can_access_exam_id(
         db,
@@ -761,6 +764,9 @@ async def create_grading_task(
     is_platform_admin: bool = True,
 ) -> GradingTask:
     """Persist a grading task and its creation audit entry."""
+
+    if payload.get("source_type") == "chaoxing_submission":
+        raise ValueError("use the owned chaoxing import workflow")
 
     exam_id = _payload_exam_id(payload.get("source_type", ""), payload.get("source_business_id"))
     if not await _can_access_exam_id(

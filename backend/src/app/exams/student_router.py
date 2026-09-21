@@ -49,6 +49,7 @@ from app.exams.wrong_answers import (
     create_remedial_practice,
     default_allocations,
     list_remedial_practices,
+    load_exam_question_orders,
     load_exams_by_ids,
     load_hidden_practice_sources,
     load_student_wrong_answers,
@@ -2428,6 +2429,10 @@ async def list_wrong_answers(
 ) -> list[WrongAnswerListItem]:
     rows = await load_student_wrong_answers(db, student_id=user.id, mastered=mastered)
     exams_by_id = await load_exams_by_ids(db, (row.effective_exam_id for row in rows))
+    question_orders = await load_exam_question_orders(
+        db,
+        ((row.effective_exam_id, row.question.id) for row in rows),
+    )
     practice_counts = await count_remedial_practices_by_source(db, student_id=user.id)
 
     items: list[WrongAnswerListItem] = []
@@ -2454,6 +2459,9 @@ async def list_wrong_answers(
                 tags=tag_names,
                 mastered=progress.mastered,
                 remedial_practice_count=practice_counts.get(str(exam.id) if exam else "", 0),
+                exam_question_order=(
+                    question_orders.get((exam.id, question.id)) if exam else None
+                ),
             )
         )
     return items
@@ -2483,6 +2491,7 @@ async def get_wrong_answer_detail(
     effective_exam_id = resolve_effective_exam_id(progress.last_exam_id, hidden_sources)
     exams_by_id = await load_exams_by_ids(db, [effective_exam_id])
     exam = exams_by_id.get(effective_exam_id) if effective_exam_id else None
+    question_orders = await load_exam_question_orders(db, [(effective_exam_id, question.id)])
 
     latest_answer_result = await db.execute(
         select(StudentExamAnswer).where(
@@ -2510,6 +2519,9 @@ async def get_wrong_answer_detail(
         analysis=question.analysis,
         student_answer=latest_answer.answer_content if latest_answer else {},
         feedback=latest_answer.feedback if latest_answer else {},
+        exam_question_order=(
+            question_orders.get((exam.id, question.id)) if exam else None
+        ),
     )
 
 

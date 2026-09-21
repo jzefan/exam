@@ -33,6 +33,10 @@ dev = [
     "ruff>=0.8.0",
     "black>=24.10.0",
 ]
+chaoxing = [
+    "beautifulsoup4>=4.13,<5",
+    "playwright>=1.58,<2",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

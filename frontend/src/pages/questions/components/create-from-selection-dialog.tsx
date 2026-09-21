@@ -39,6 +39,8 @@ export interface CreateFromSelectionDialogProps {
   courseKpId?: string | null;
   /** 从课程某个学期发起时，创建后直接归档到该学期。 */
   courseSemesterId?: string | null;
+  /** 当前学期已关联的班级；打开时默认选中这些班级下的学生。 */
+  defaultClassIds?: string[];
   /** 默认类型，默认为练习（老师日常场景更常见）。 */
   defaultCategory?: CreateFromSelectionCategory;
   /** 名称的默认值，通常由宿主生成，例如 "2026-05-11 练习"。 */
@@ -95,6 +97,7 @@ export function CreateFromSelectionDialog({
   onPublished,
   courseKpId,
   courseSemesterId,
+  defaultClassIds,
   defaultCategory = "practice",
   defaultTitle = "",
 }: CreateFromSelectionDialogProps) {
@@ -254,6 +257,7 @@ export function CreateFromSelectionDialog({
               isExam ? "请选择至少一名考生即可创建考试。" : "请选择至少一名学生即可发布练习。"
             }
             defaultSupplementCollapsed
+            defaultClassIds={defaultClassIds}
           />
 
           {selected.length === 0 ? (

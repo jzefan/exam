@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 
@@ -73,37 +74,37 @@ describe("StudentSelector", () => {
     expect(grid?.className).toContain("xl:grid-cols-3");
   });
 
-  it("merges the selected summary and selected student chips into a single top section", async () => {
+  it("summarizes selected recipients by class instead of listing each student", async () => {
     render(<StudentSelector selectedIds={["student-1", "student-2"]} onChange={vi.fn()} />);
 
     expect(
       await screen.findByText((_, element) => element?.textContent === "已选 2 名考生"),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /清空选择/i })).toBeInTheDocument();
-    expect(screen.getByText("张三、李四")).toBeInTheDocument();
+    expect(await screen.findByText("一班、二班")).toBeInTheDocument();
+    expect(screen.queryByText("张三、李四")).not.toBeInTheDocument();
     expect(screen.queryByText("已选考生")).not.toBeInTheDocument();
   });
 
-  it("wraps a long selected-student summary instead of forcing horizontal overflow", async () => {
+  it("keeps the class summary compact", async () => {
     render(<StudentSelector selectedIds={["student-1", "student-2"]} onChange={vi.fn()} />);
 
-    const summary = await screen.findByText("张三、李四");
-    expect(summary).toHaveClass("min-w-0", "flex-1", "whitespace-normal", "break-words");
-    expect(summary).not.toHaveClass("truncate");
+    const summary = await screen.findByText("一班、二班");
+    expect(summary).toHaveClass("min-w-0", "flex-1", "truncate");
   });
 
-  it("supports selecting students by class and across classes", async () => {
+  it("uses the class list only to filter students without changing the selection", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    const view = render(<StudentSelector selectedIds={[]} onChange={onChange} />);
+    render(<StudentSelector selectedIds={[]} onChange={onChange} />);
 
     await user.click(await screen.findByRole("button", { name: /一班/ }));
-    expect(onChange).toHaveBeenLastCalledWith(["student-1"]);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "张三" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "李四" })).not.toBeInTheDocument();
 
-    onChange.mockClear();
-    view.rerender(<StudentSelector selectedIds={["student-1"]} onChange={onChange} />);
-    await user.click(await screen.findByRole("button", { name: /二班/ }));
-    expect(onChange).toHaveBeenLastCalledWith(["student-1", "student-2"]);
+    await user.click(screen.getByRole("button", { name: "张三" }));
+    expect(onChange).toHaveBeenLastCalledWith(["student-1"]);
   });
 
   it("supports selecting students from the current visible list", async () => {
@@ -114,6 +115,73 @@ describe("StudentSelector", () => {
     await user.click(await screen.findByRole("button", { name: /张三/i }));
 
     expect(onChange).toHaveBeenLastCalledWith(["student-1"]);
+  });
+
+  it("defaults to students in the current semester classes and keeps manual adjustments", async () => {
+    const user = userEvent.setup();
+
+    function ControlledSelector() {
+      const [selectedIds, setSelectedIds] = useState<string[]>([]);
+      return (
+        <ClassStudentSelector
+          selectedIds={selectedIds}
+          onChange={setSelectedIds}
+          defaultClassIds={["class-1"]}
+        />
+      );
+    }
+
+    render(<ControlledSelector />);
+
+    expect(
+      await screen.findByText((_, element) => element?.textContent === "已选 1 名考生"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("一班")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "张三" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /调整学生/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /调整学生/i }));
+    expect(await screen.findByTestId("student-picker")).toBeInTheDocument();
+    await screen.findByRole("button", { name: "张三" });
+    await user.click(screen.getByRole("button", { name: "张三" }));
+    expect(screen.getByText(/还没有选择对象/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "李四" }));
+    expect(
+      screen.getByText((_, element) => element?.textContent === "已选 1 名考生"),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("李四")).not.toHaveLength(0);
+  });
+
+  it("applies current-semester classes when they arrive after the student list", async () => {
+    const user = userEvent.setup();
+
+    function LateSemesterSelector() {
+      const [selectedIds, setSelectedIds] = useState<string[]>([]);
+      const [defaultClassIds, setDefaultClassIds] = useState<string[] | undefined>();
+      return (
+        <>
+          <button type="button" onClick={() => setDefaultClassIds(["class-1"])}>
+            应用当前学期
+          </button>
+          <ClassStudentSelector
+            selectedIds={selectedIds}
+            onChange={setSelectedIds}
+            defaultClassIds={defaultClassIds}
+          />
+        </>
+      );
+    }
+
+    render(<LateSemesterSelector />);
+    await screen.findByRole("button", { name: "张三" });
+    await user.click(screen.getByRole("button", { name: "应用当前学期" }));
+
+    expect(
+      await screen.findByText((_, element) => element?.textContent === "已选 1 名考生"),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("student-picker")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /调整学生/i })).toBeInTheDocument();
   });
 
   it("shows manual add fields for name, phone, optional student id, and class", async () => {

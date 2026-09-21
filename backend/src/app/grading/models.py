@@ -104,7 +104,7 @@ class GradingTask(BaseModel):
     question_content: Mapped[str] = mapped_column(Text, nullable=False)
     subject: Mapped[str | None] = mapped_column(String(100), nullable=True)
     language: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    max_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_score: Mapped[float] = mapped_column(Float, nullable=False)
     knowledge_tags: Mapped[list] = mapped_column(json_field, default=list, nullable=False)
     fatal_rule_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     student_answer_raw: Mapped[str] = mapped_column(Text, nullable=False)

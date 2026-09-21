@@ -68,14 +68,20 @@ services:
         DEBIAN_APT_MIRROR: ${DEBIAN_APT_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/debian}
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
         UV_INDEX_URL: ${UV_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+        CHROMIUM_FOR_TESTING_DOWNLOAD_HOST: ${CHROMIUM_FOR_TESTING_DOWNLOAD_HOST:-https://cdn.npmmirror.com/binaries/chrome-for-testing}
     restart: unless-stopped
+    init: true
+    shm_size: "512mb"
     env_file:
       - ${APP_ROOT}/shared/env/backend.env
     environment:
       EXAM_JUDGE_RUNNER_URL: http://judge_runner:8010
       EXAM_LSP_RUNNER_URL: http://lsp_runner:8020
+      EXAM_CHAOXING_LOCK_PATH: /run/chaoxing/connector.lock
+      EXAM_CHAOXING_BROWSER_EXECUTABLE: /usr/local/bin/chaoxing-chromium
     volumes:
       - ${APP_ROOT}/shared/uploads:/app/uploads
+      - exam_chaoxing_lock:/run/chaoxing
     depends_on:
       db:
         condition: service_healthy
@@ -133,3 +139,4 @@ services:
 
 volumes:
   exam_postgres_data:
+  exam_chaoxing_lock:

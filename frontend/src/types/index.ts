@@ -33,6 +33,14 @@ export interface IUser {
 export interface ILoginRequest {
   username: string;
   password: string;
+  role_name?: string;
+}
+
+/** One selectable login identity, deduplicated by role name. */
+export interface IRoleOption {
+  name: string;
+  display_name: string;
+  org_names: string[];
 }
 
 export interface IRegisterRequest {
@@ -50,6 +58,15 @@ export interface ITokenResponse {
   user: IUser;
   onboarding_reason?: "first_login" | "returning_after_week" | null;
 }
+
+/** First login step for an account holding several roles: no token yet. */
+export interface IRoleSelectionResponse {
+  requires_role_selection: true;
+  selection_token: string;
+  roles: IRoleOption[];
+}
+
+export type ILoginResponse = ITokenResponse | IRoleSelectionResponse;
 
 export type QuestionType = "choice" | "true_false" | "fill_in" | "short_answer" | "essay" | "code";
 export type ChoiceDisplayType = "single_choice" | "multi_choice";
@@ -444,6 +461,8 @@ export interface IWrongAnswerDetail {
   last_wrong_at: string;
   tags: string[];
   mastered: boolean;
+  /** 该题在来源考试/练习里的位置（0 基）；历史错题或题目已从试卷移除时为 null。 */
+  exam_question_order?: number | null;
   question_content: Record<string, unknown>;
   question_options?: Record<string, unknown> | null;
   standard_answer: Record<string, unknown>;

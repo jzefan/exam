@@ -149,6 +149,8 @@ class WrongAnswerListItem(BaseModel):
     mastered: bool = False
     # 该考试/练习下已生成的错题强化练习数量。
     remedial_practice_count: int = 0
+    # 这道题在来源考试/练习里的位置（`exam_questions.order`，0 基）；历史错题或题目已从试卷移除时为 None。
+    exam_question_order: int | None = None
 
 
 class WrongAnswerDetailResponse(WrongAnswerListItem):

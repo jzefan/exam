@@ -1,6 +1,5 @@
 import type { IQuestion, QuestionType } from "@/types";
 
-export const ALL_KNOWLEDGE_POINTS = "__all_knowledge_points__";
 export const ALL_DIFFICULTIES = 0;
 
 export type SmartPracticeKnowledgeOption = {
@@ -12,7 +11,13 @@ export type SmartPracticeKnowledgeOption = {
 export type SmartPracticeIntent = {
   count: number;
   difficulty: number;
+  /** 教师在「知识点」下拉里选中的那个节点。 */
   knowledgePointId: string | null;
+  /**
+   * 知识点取题范围：选中节点 + 其全部子知识点。
+   * 缺省时退化为「只取 knowledgePointId 一个节点」。
+   */
+  knowledgePointIds?: string[];
   searchTerms: string[];
   typeDistribution?: Partial<Record<QuestionType, number>>;
   requireAllTypes?: boolean;
@@ -322,6 +327,35 @@ function questionTypeGroup(question: IQuestion): QuestionType {
 }
 
 /**
+ * 选中一个知识点时，取题范围是该节点本身加它的所有子知识点。
+ *
+ * 选项的 `path` 是「根 / 子 / 孙」拼接出来的完整路径（见 detail.tsx 的
+ * `flattenCourseKnowledgeNodes`），所以「是不是后代」可以直接用路径前缀判断，
+ * 不必再额外传入课程知识树。与后端题目列表筛选（`_course_subtree_cte` 递归子树）
+ * 保持同一口径。
+ */
+export function collectKnowledgeScopeIds(
+  knowledgePointId: string | null,
+  options: SmartPracticeKnowledgeOption[],
+): string[] {
+  if (!knowledgePointId) return [];
+  const selected = options.find((option) => option.id === knowledgePointId);
+  if (!selected) return [knowledgePointId];
+
+  const descendantPrefix = `${selected.path} / `;
+  return [
+    selected.id,
+    ...options
+      .filter(
+        (option) =>
+          option.id !== selected.id &&
+          option.path.startsWith(descendantPrefix),
+      )
+      .map((option) => option.id),
+  ];
+}
+
+/**
  * Select a repeatable, type-balanced practice set. Explicit knowledge and
  * difficulty constraints are strict; free-form terms only influence ranking.
  */
@@ -330,12 +364,16 @@ export function selectSmartPracticeQuestions(
   intent: SmartPracticeIntent,
   variation = 0,
 ): IQuestion[] {
+  const scopeIds =
+    intent.knowledgePointIds && intent.knowledgePointIds.length > 0
+      ? new Set(intent.knowledgePointIds)
+      : intent.knowledgePointId
+        ? new Set([intent.knowledgePointId])
+        : null;
   const eligible = source.filter((question) => {
     const matchesKnowledge =
-      !intent.knowledgePointId ||
-      question.knowledge_points.some(
-        (point) => point.id === intent.knowledgePointId,
-      );
+      !scopeIds ||
+      question.knowledge_points.some((point) => scopeIds.has(point.id));
     const matchesDifficulty =
       intent.difficulty === ALL_DIFFICULTIES ||
       question.difficulty === intent.difficulty;

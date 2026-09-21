@@ -10,7 +10,7 @@ from sqlalchemy import select
 from app.auth.schemas import UserCreate
 from app.auth.security import create_access_token
 from app.auth.service import create_user
-from app.exams.models import Exam, ExamStudent, StudentQuestionProgress
+from app.exams.models import Exam, ExamQuestion, ExamStudent, StudentQuestionProgress
 from app.exams.wrong_answers import allocate_by_weight
 from app.learning.models import Direction, KnowledgePoint, Major
 from app.questions.models import Question, QuestionType
@@ -94,6 +94,8 @@ async def _make_source_exam(db_session, *, suffix: str, with_knowledge_point: bo
         await db_session.flush()
 
     now = datetime.now(timezone.utc)
+    # 题号故意打乱，确保接口读的是 exam_questions.order，而不是错题列表里的先后位置。
+    exam_orders = [2, 0, 1]
     for index in range(3):
         question = Question(
             type=QuestionType.CHOICE,
@@ -112,6 +114,9 @@ async def _make_source_exam(db_session, *, suffix: str, with_knowledge_point: bo
             question.knowledge_points = [knowledge_point]
         db_session.add(question)
         await db_session.flush()
+        db_session.add(
+            ExamQuestion(exam_id=exam.id, question_id=question.id, order=exam_orders[index])
+        )
         db_session.add(
             StudentQuestionProgress(
                 student_id=student.id,
@@ -204,6 +209,64 @@ async def test_practice_analysis_supports_legacy_source_key(client: AsyncClient,
     response = await client.get("/api/wrong-answers/practice-analysis/legacy")
     # 该学生没有历史错题 → 404；只是确认路由可达而不是 422/500
     assert response.status_code == 404
+
+
+# ── 错题在原考试中的题号 ──
+
+
+@pytest.mark.asyncio
+async def test_wrong_answers_expose_question_order_in_source_exam(
+    client: AsyncClient, db_session
+) -> None:
+    exam, student, _other, _kp = await _make_source_exam(db_session, suffix="order")
+
+    # 历史错题：没有来源考试，题号应为 None
+    legacy_question = Question(
+        type=QuestionType.FILL_IN,
+        title="历史错题",
+        content={"text": "填空"},
+        options=None,
+        answer={"text": "答案"},
+        difficulty=2,
+        score=5,
+        usage_count=0,
+        created_by=student.id,
+        owner_id=student.id,
+    )
+    db_session.add(legacy_question)
+    await db_session.flush()
+    db_session.add(
+        StudentQuestionProgress(
+            student_id=student.id,
+            question_id=legacy_question.id,
+            last_exam_id=None,
+            wrong_count=1,
+            last_wrong_at=datetime.now(timezone.utc),
+            mastered=False,
+        )
+    )
+    await db_session.commit()
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(student.id, '')}"})
+    response = await client.get("/api/wrong-answers")
+    assert response.status_code == 200
+    items = {item["question_title"]: item for item in response.json()}
+
+    # 与夹具里写入的 exam_questions.order 一致（0 基），不是列表里的位置
+    assert items["错题 0"]["exam_question_order"] == 2
+    assert items["错题 1"]["exam_question_order"] == 0
+    assert items["错题 2"]["exam_question_order"] == 1
+    assert items["历史错题"]["exam_question_order"] is None
+    assert all(item["exam_id"] == str(exam.id) for item in items.values() if item["exam_question_order"] is not None)
+
+    # 详情接口同样回带题号
+    detail = await client.get(f"/api/wrong-answers/{items['错题 0']['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["exam_question_order"] == 2
+
+    legacy_detail = await client.get(f"/api/wrong-answers/{items['历史错题']['id']}")
+    assert legacy_detail.status_code == 200
+    assert legacy_detail.json()["exam_question_order"] is None
 
 
 # ── 生成接口 ──

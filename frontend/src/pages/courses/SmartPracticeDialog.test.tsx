@@ -6,6 +6,7 @@ import { render, screen, waitFor } from "@/test/test-utils";
 import type { IQuestion } from "@/types";
 
 import { listCourseQuestions } from "./api";
+import type { CourseKnowledgeNode } from "./api";
 import { SmartPracticeDialog } from "./SmartPracticeDialog";
 
 vi.mock("@/lib/api", () => ({
@@ -17,8 +18,18 @@ vi.mock("./api", () => ({
 }));
 
 vi.mock("@/pages/exams/components/ClassStudentSelector", () => ({
-  ClassStudentSelector: ({ onChange }: { onChange: (ids: string[]) => void }) => (
-    <button type="button" onClick={() => onChange(["student-1"])}>
+  ClassStudentSelector: ({
+    onChange,
+    defaultClassIds,
+  }: {
+    onChange: (ids: string[]) => void;
+    defaultClassIds?: string[];
+  }) => (
+    <button
+      type="button"
+      data-default-class-ids={defaultClassIds?.join(",") ?? ""}
+      onClick={() => onChange(["student-1"])}
+    >
       选择测试学生
     </button>
   ),
@@ -27,7 +38,11 @@ vi.mock("@/pages/exams/components/ClassStudentSelector", () => ({
 const mockListCourseQuestions = vi.mocked(listCourseQuestions);
 const mockPost = vi.mocked(apiClient.post);
 
-function makeQuestion(id: string, difficulty = 1): IQuestion {
+function makeQuestion(
+  id: string,
+  difficulty = 1,
+  knowledgePoint?: { id: string; name: string },
+): IQuestion {
   return {
     id,
     type: "choice",
@@ -42,7 +57,17 @@ function makeQuestion(id: string, difficulty = 1): IQuestion {
     question_bank_id: "bank-1",
     question_bank_name: "课程题库",
     tags: [],
-    knowledge_points: [],
+    knowledge_points: knowledgePoint
+      ? [
+          {
+            id: knowledgePoint.id,
+            name: knowledgePoint.name,
+            parent_id: null,
+            description: null,
+            created_at: "2026-01-01T00:00:00Z",
+          },
+        ]
+      : [],
     created_by: "teacher-1",
     created_by_name: "教师",
     created_at: "2026-01-01T00:00:00Z",
@@ -50,7 +75,22 @@ function makeQuestion(id: string, difficulty = 1): IQuestion {
   };
 }
 
-function renderDialog(selectedQuestionIds: string[] = []) {
+type RenderDialogOptions = {
+  knowledgeOptions?: Array<{ id: string; name: string; path: string }>;
+  knowledgeTree?: CourseKnowledgeNode | null;
+  initialKnowledgePointId?: string | null;
+  defaultClassIds?: string[];
+};
+
+function renderDialog(
+  selectedQuestionIds: string[] = [],
+  {
+    knowledgeOptions = [],
+    knowledgeTree = null,
+    initialKnowledgePointId = null,
+    defaultClassIds = ["class-1"],
+  }: RenderDialogOptions = {},
+) {
   return render(
     <SmartPracticeDialog
       open
@@ -59,8 +99,11 @@ function renderDialog(selectedQuestionIds: string[] = []) {
       courseName="数据结构"
       courseKpId="course-kp-1"
       courseSemesterId="semester-1"
+      defaultClassIds={defaultClassIds}
       selectedQuestionIds={selectedQuestionIds}
-      knowledgeOptions={[]}
+      knowledgeOptions={knowledgeOptions}
+      knowledgeTree={knowledgeTree}
+      initialKnowledgePointId={initialKnowledgePointId}
     />,
   );
 }
@@ -110,6 +153,82 @@ describe("SmartPracticeDialog", () => {
     expect(screen.getByTestId("smart-practice-mode-content")).toBe(modeContent);
   });
 
+  it("知识点选择按树状展开并可选中子知识点", async () => {
+    const user = userEvent.setup();
+    const knowledgeTree: CourseKnowledgeNode = {
+      id: "course-kp-1",
+      name: "计算机网络",
+      question_count: 0,
+      material_count: 0,
+      children: [
+        {
+          id: "kp-physical",
+          name: "物理层",
+          question_count: 0,
+          material_count: 0,
+          children: [
+            {
+              id: "kp-media",
+              name: "传输介质",
+              question_count: 0,
+              material_count: 0,
+              children: [],
+            },
+          ],
+        },
+      ],
+    };
+    renderDialog([], {
+      knowledgeOptions: [
+        { id: "kp-physical", name: "物理层", path: "计算机网络 / 物理层" },
+        {
+          id: "kp-media",
+          name: "传输介质",
+          path: "计算机网络 / 物理层 / 传输介质",
+        },
+      ],
+      knowledgeTree,
+    });
+
+    await screen.findByText("课程全部 3 题");
+    // 触发按钮默认是「全部知识点」，点开后展示课程知识点树（一级默认展开）。
+    await user.click(screen.getByRole("button", { name: "知识点：全部知识点" }));
+    expect(screen.getByText("物理层")).toBeInTheDocument();
+    await user.click(screen.getByText("传输介质"));
+
+    expect(
+      screen.getByRole("button", { name: "知识点：传输介质" }),
+    ).toBeInTheDocument();
+  });
+
+  it("选中上级知识点时，预览把子知识点的题目一并纳入", async () => {
+    const user = userEvent.setup();
+    mockListCourseQuestions.mockResolvedValue([
+      makeQuestion("q-parent", 1, { id: "kp-physical", name: "物理层" }),
+      makeQuestion("q-child", 1, { id: "kp-media", name: "传输介质" }),
+      makeQuestion("q-other", 1, { id: "kp-network", name: "网络层" }),
+    ]);
+    renderDialog([], {
+      knowledgeOptions: [
+        { id: "kp-physical", name: "物理层", path: "计算机网络 / 物理层" },
+        {
+          id: "kp-media",
+          name: "传输介质",
+          path: "计算机网络 / 物理层 / 传输介质",
+        },
+        { id: "kp-network", name: "网络层", path: "计算机网络 / 网络层" },
+      ],
+      initialKnowledgePointId: "kp-physical",
+    });
+
+    await screen.findByText("课程全部 3 题");
+    await user.click(screen.getByRole("button", { name: "生成预览" }));
+
+    expect(await screen.findByText(/题目 q-parent/)).toBeInTheDocument();
+    expect(screen.getByText(/题目 q-child/)).toBeInTheDocument();
+    expect(screen.queryByText(/题目 q-other/)).not.toBeInTheDocument();
+  });
+
   it("预览确认后发布 7 天有效的练习", async () => {
     const user = userEvent.setup();
     mockPost.mockResolvedValue({ data: { id: "practice-1" } });
@@ -117,6 +236,10 @@ describe("SmartPracticeDialog", () => {
 
     await screen.findByText("课程全部 3 题");
     await user.click(screen.getByRole("button", { name: "生成预览" }));
+    expect(screen.getByRole("button", { name: "选择测试学生" })).toHaveAttribute(
+      "data-default-class-ids",
+      "class-1",
+    );
     await user.click(screen.getByRole("button", { name: "选择测试学生" }));
     await user.click(screen.getByRole("button", { name: /确认发布/ }));
 

@@ -64,6 +64,7 @@ type PaperDetailNavState = {
   courseOrigin?: boolean;
   courseKpId?: string;
   courseSemesterId?: string;
+  defaultClassIds?: string[];
   publishExamSuccessTo?: string;
   publishPracticeSuccessTo?: string;
 };

@@ -1,6 +1,8 @@
 from typing import Annotated
+import logging
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser, user_has_role
@@ -23,6 +25,11 @@ from app.rbac.service import (
 )
 
 router = APIRouter(tags=["students"])
+logger = logging.getLogger(__name__)
+
+ADD_STUDENT_CONFLICT_MESSAGE = (
+    "该手机号或学号已被其他账号占用，请改用学号添加，或先在学生列表中搜索该账号"
+)
 
 async def get_teacher_org_id(user: CurrentUser, db: Annotated[AsyncSession, Depends(get_db)]) -> uuid.UUID:
     primary = await get_user_primary_org(db, user.id)
@@ -106,15 +113,34 @@ async def add_student(
     try:
         if await is_student_admin(db, user):
             student = await create_student(db, org_id, body, owner_teacher_id=None)
+            attached = False
         else:
-            student, linked, created = await create_or_link_student(db, org_id, body, user.id)
-            if not created and not linked:
+            result = await create_or_link_student(db, org_id, body, user.id)
+            if not result.created and not result.linked:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该学生已在当前教师名下")
-        return StudentRead.model_validate(student)
+            student, attached = result.student, result.role_added
+        response = StudentRead.model_validate(student)
+        response.attached_to_existing_account = attached
+        return response
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except IntegrityError as exc:
+        # Raw UniqueViolation text belongs in the log, not in a user-facing toast.
+        await db.rollback()
+        logger.warning("Add student conflict for %s: %s", body.phone or body.student_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=ADD_STUDENT_CONFLICT_MESSAGE,
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        await db.rollback()
+        logger.exception("Add student failed for %s", body.phone or body.student_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="添加学生失败，请稍后重试",
+        ) from exc
 
 @router.post("/batch", response_model=BatchImportResponse, status_code=status.HTTP_201_CREATED)
 async def batch_add_students(
@@ -129,21 +155,38 @@ async def batch_add_students(
     student_admin = await is_student_admin(db, user)
     
     for item in body:
+        # One savepoint per row: a conflicting row must not take the rows that
+        # already succeeded down with it when the final commit runs.
+        skip_message = None
         try:
-            if student_admin:
-                await create_student(db, org_id, item, owner_teacher_id=None)
-            else:
-                _student, linked, created = await create_or_link_student(db, org_id, item, user.id)
-                if not created and not linked:
-                    failed_count += 1
-                    errors.append(f"{item.full_name}: 该学生已在当前教师名下")
-                    continue
-            success_count += 1
-        except Exception as e:
+            async with db.begin_nested():
+                if student_admin:
+                    await create_student(db, org_id, item, owner_teacher_id=None)
+                else:
+                    result = await create_or_link_student(db, org_id, item, user.id)
+                    if not result.created and not result.linked:
+                        skip_message = "该学生已在当前教师名下"
+        except IntegrityError as exc:
+            logger.warning("Import conflict for %s: %s", item.phone or item.student_id, exc)
             failed_count += 1
-            errors.append(f"{item.full_name}: {str(e)}")
+            errors.append(f"{item.full_name}: {ADD_STUDENT_CONFLICT_MESSAGE}")
             continue
-            
+        except ValueError as exc:
+            failed_count += 1
+            errors.append(f"{item.full_name}: {exc}")
+            continue
+        except Exception:
+            logger.exception("Import failed for %s", item.phone or item.student_id)
+            failed_count += 1
+            errors.append(f"{item.full_name}: 该行导入失败，请检查填写内容后重试")
+            continue
+
+        if skip_message:
+            failed_count += 1
+            errors.append(f"{item.full_name}: {skip_message}")
+            continue
+        success_count += 1
+
     await db.commit()
     return BatchImportResponse(
         success_count=success_count,

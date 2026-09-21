@@ -169,16 +169,18 @@ async def test_create_or_link_student_reuses_existing_student_by_phone(db_sessio
         owner_teacher_id=teacher_a.id,
     )
 
-    student, linked, created = await create_or_link_student(
+    result = await create_or_link_student(
         db_session,
         org.id,
         StudentCreate(full_name="Shared Student", phone="13930000004", student_id="AS004"),
         teacher_b.id,
     )
 
-    assert student.id == existing_student.id
-    assert created is False
-    assert linked is True
+    assert result.student.id == existing_student.id
+    assert result.created is False
+    assert result.linked is True
+    # The phone already belonged to a student account: no extra role was needed.
+    assert result.role_added is False
 
     teacher_links = (
         await db_session.execute(

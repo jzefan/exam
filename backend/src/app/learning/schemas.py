@@ -77,6 +77,17 @@ class KnowledgePointUpdate(BaseModel):
     difficulty: str | None = Field(None, pattern="^(入门|初级|中级|高级|困难)$")
 
 
+class KnowledgePointReorder(BaseModel):
+    """把知识点移到 `parent_id` 下，并按 `ordered_ids` 重排同级顺序。
+
+    `parent_id` 为 None 表示移到根层级。一次调用同时覆盖
+    「同级上下移动」与「拖到别的目录下成为子目录」两种操作。
+    """
+
+    parent_id: uuid.UUID | None = None
+    ordered_ids: list[uuid.UUID] = Field(min_length=1)
+
+
 class KnowledgePointDetail(BaseModel):
     """Single node as returned in the flat tree list."""
 

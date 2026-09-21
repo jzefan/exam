@@ -105,6 +105,7 @@ export interface SmartPracticeChatDialogProps {
   courseName: string;
   courseKpId: string;
   courseSemesterId: string | null;
+  defaultClassIds?: string[];
   knowledgeOptions: SmartPracticeKnowledgeOption[];
   initialKnowledgePointId?: string | null;
   onPublished?: (examId: string) => void | Promise<void>;
@@ -116,6 +117,7 @@ export function SmartPracticeChatDialog({
   courseName,
   courseKpId,
   courseSemesterId,
+  defaultClassIds,
   knowledgeOptions,
   initialKnowledgePointId = null,
   onPublished,
@@ -671,6 +673,7 @@ export function SmartPracticeChatDialog({
                 summaryLabel="名学生"
                 emptySummaryText="请选择学生"
                 defaultSupplementCollapsed
+                defaultClassIds={defaultClassIds}
               />
             </div>
           </ScrollArea>

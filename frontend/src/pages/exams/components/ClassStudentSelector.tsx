@@ -31,6 +31,8 @@ interface StudentRecord extends IUser {
   student_id?: string | null;
   class_id?: string | null;
   class_name?: string | null;
+  /** Set when the phone already had an account and the student role was attached to it. */
+  attached_to_existing_account?: boolean;
 }
 
 interface ImportResult {
@@ -60,6 +62,9 @@ export function ClassStudentSelector({
 }) {
   const [supplementMode, setSupplementMode] = useState<SupplementMode>("import");
   const [isSupplementCollapsed, setIsSupplementCollapsed] = useState(defaultSupplementCollapsed);
+  const [isStudentPickerOpen, setIsStudentPickerOpen] = useState(
+    () => !defaultClassIds || defaultClassIds.length === 0,
+  );
   const [search, setSearch] = useState("");
   const [selectedClassFilter, setSelectedClassFilter] = useState<string>("__all__");
   const [users, setUsers] = useState<StudentRecord[]>([]);
@@ -118,27 +123,11 @@ export function ClassStudentSelector({
     let isMounted = true;
     setIsLoading(true);
 
-    void loadStudentData(isMounted)
-      .then(({ studentData }) => {
+    void loadStudentData(false)
+      .then(({ studentData, classData }) => {
         if (!isMounted) return;
-        // 默认带入指定班级的学生：仅一次，且只在用户尚未选择任何考生时生效，
-        // 避免覆盖用户的手动调整。
-        if (
-          didAutoSelectClassesRef.current ||
-          !defaultClassIds ||
-          defaultClassIds.length === 0 ||
-          selectedIds.length > 0
-        ) {
-          return;
-        }
-        didAutoSelectClassesRef.current = true;
-        const classIdSet = new Set(defaultClassIds);
-        const autoIds = studentData
-          .filter((user) => user.class_id && classIdSet.has(user.class_id))
-          .map((user) => user.id);
-        if (autoIds.length > 0) {
-          onChange(autoIds);
-        }
+        setUsers(studentData);
+        setClasses(classData);
       })
       .catch((err) => {
         console.error("ClassStudentSelector fetch error:", err);
@@ -152,6 +141,33 @@ export function ClassStudentSelector({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (didAutoSelectClassesRef.current) return;
+
+    // 已有选择说明上层带入了名单，或用户已开始手动调整；之后即使默认班级
+    // 才异步到达，也不能覆盖这份选择。
+    if (selectedIds.length > 0) {
+      didAutoSelectClassesRef.current = true;
+      return;
+    }
+    if (!defaultClassIds || defaultClassIds.length === 0 || users.length === 0) {
+      return;
+    }
+
+    const classIdSet = new Set(defaultClassIds);
+    const autoIds = users
+      .filter((user) => user.class_id && classIdSet.has(user.class_id))
+      .map((user) => user.id);
+    if (autoIds.length === 0) {
+      setIsStudentPickerOpen(true);
+      return;
+    }
+
+    didAutoSelectClassesRef.current = true;
+    onChange(autoIds);
+    setIsStudentPickerOpen(false);
+  }, [defaultClassIds, onChange, selectedIds.length, users]);
 
   const normalizedSearch = search.trim().toLowerCase();
   const classFilteredUsers =
@@ -171,12 +187,26 @@ export function ClassStudentSelector({
         return username.includes(normalizedSearch) || fullName.includes(normalizedSearch);
       })
     : classFilteredUsers;
-  const selectedStudentSummary = selectedIds
-    .map((id) => {
-      const user = users.find((item) => item.id === id);
-      return user?.full_name ?? user?.username ?? id.slice(0, 8);
+  const selectedClassSummaries = classes
+    .map((item) => {
+      const studentIds = users
+        .filter((user) => user.class_id === item.id)
+        .map((user) => user.id);
+      const selectedCount = studentIds.filter((studentId) => selectedSet.has(studentId)).length;
+      return { name: item.name, studentIds, selectedCount };
     })
-    .join("、");
+    .filter(({ selectedCount }) => selectedCount > 0);
+  const selectedClassNames = selectedClassSummaries.map(({ name }) => name);
+  const classMemberIds = new Set(selectedClassSummaries.flatMap(({ studentIds }) => studentIds));
+  const manuallyAdjustedCount =
+    selectedIds.filter((id) => !classMemberIds.has(id)).length +
+    selectedClassSummaries.reduce(
+      (count, { studentIds, selectedCount }) => count + studentIds.length - selectedCount,
+      0,
+    );
+  const selectedClassSummary = selectedClassNames.length > 0
+    ? `${selectedClassNames.join("、")}${manuallyAdjustedCount > 0 ? ` · 另有 ${manuallyAdjustedCount} 人已调整` : ""}`
+    : `已手动选择 ${selectedIds.length} 人`;
   const unassignedCount = users.filter((user) => !user.class_id).length;
   const classGroups = [
     {
@@ -253,26 +283,8 @@ export function ClassStudentSelector({
     }
   };
 
-  const toggleClassStudents = (classId: string | "__unassigned__") => {
-    const classStudentIds = users
-      .filter((user) => (classId === "__unassigned__" ? !user.class_id : user.class_id === classId))
-      .map((user) => user.id);
-    if (classStudentIds.length === 0) return;
-
-    const alreadySelected = classStudentIds.every((id) => selectedSet.has(id));
-    if (alreadySelected) {
-      onChange(selectedIds.filter((id) => !classStudentIds.includes(id)));
-      return;
-    }
-
-    onChange([...new Set([...selectedIds, ...classStudentIds])]);
-  };
-
   const handleClassFilterSelect = (classId: string) => {
     setSelectedClassFilter(classId);
-    if (classId !== "__all__") {
-      toggleClassStudents(classId === "__unassigned__" ? "__unassigned__" : classId);
-    }
   };
 
   const handleFileImport = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -404,7 +416,12 @@ export function ClassStudentSelector({
 
       setUsers((prev) => [...prev, createdStudent]);
       onChange([...selectedIds, createdStudent.id]);
-      setManualMessage(`已新建并添加学生：${createdStudent.full_name || fullName}。`, "success");
+      setManualMessage(
+        createdStudent.attached_to_existing_account
+          ? `该手机号已有账号，已为它添加学生身份并加入列表：${createdStudent.full_name || fullName}。`
+          : `已新建并添加学生：${createdStudent.full_name || fullName}。`,
+        "success",
+      );
       resetManualForm();
     } catch (error) {
       setManualMessage(
@@ -445,15 +462,36 @@ export function ClassStudentSelector({
             </span>
             <span className="shrink-0 text-xs text-muted-foreground">·</span>
             <span
-              className="min-w-0 flex-1 whitespace-normal break-words text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]"
-              title={selectedStudentSummary}
+              className="min-w-0 flex-1 truncate text-xs leading-5 text-muted-foreground"
+              title={selectedClassSummary}
             >
-              {selectedStudentSummary}
+              {selectedClassSummary}
             </span>
           </div>
-          <Button type="button" variant="ghost" size="sm" className="shrink-0" onClick={() => onChange([])}>
-            清空选择
-          </Button>
+          <div className="flex shrink-0 items-center gap-1">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setIsStudentPickerOpen((value) => !value)}
+            >
+              <Users data-icon="inline-start" />
+              {isStudentPickerOpen ? "收起学生列表" : "调整学生"}
+            </Button>
+            {isStudentPickerOpen && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  onChange([]);
+                  setIsStudentPickerOpen(true);
+                }}
+              >
+                清空选择
+              </Button>
+            )}
+          </div>
         </div>
       ) : (
         <div className="rounded-xl bg-muted/30 px-4 py-3 text-xs text-muted-foreground">
@@ -461,7 +499,9 @@ export function ClassStudentSelector({
         </div>
       )}
 
-      <div className="flex flex-col gap-3">
+      {isStudentPickerOpen && (
+        <>
+      <div data-testid="student-picker" className="flex flex-col gap-3">
         <div className="flex flex-col gap-1">
           <p className="text-sm font-semibold text-foreground">按班级选择</p>
           <p className="text-xs text-muted-foreground">优先从班级中批量选择学生，其它方式作为补充。</p>
@@ -784,6 +824,8 @@ export function ClassStudentSelector({
           </Tabs>
         )}
       </div>
+        </>
+      )}
     </div>
   );
 }

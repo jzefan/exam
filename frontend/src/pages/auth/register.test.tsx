@@ -78,4 +78,43 @@ describe("RegisterPage", () => {
     expect(screen.getByPlaceholderText("请设置登录用户名")).toBeInTheDocument();
     expect(screen.queryByText("使用手机号作为用户名，后续登录和找回账号会更方便。")).not.toBeInTheDocument();
   });
+
+  it("does not advertise the sign-up page to students", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <RegisterPage />
+      </MemoryRouter>,
+    );
+
+    // Students get an account from their teacher; the header must not invite "师生".
+    expect(screen.queryByText(/师生/)).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /我是学生/ })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: /我是学生/ }));
+    expect(screen.getByText("学生无需注册")).toBeInTheDocument();
+  });
+
+  it("guides students to their teacher instead of registering them", async () => {
+    const user = userEvent.setup();
+    registerMock.mockClear();
+
+    render(
+      <MemoryRouter>
+        <RegisterPage />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("radio", { name: /我是学生/ }));
+
+    expect(screen.getByText("学生无需注册")).toBeInTheDocument();
+    expect(screen.queryByLabelText("用户名")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "注册" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "去登录" })).toBeInTheDocument();
+
+    // Switching back to a staff persona restores the form.
+    await user.click(screen.getByRole("radio", { name: /教学考试/ }));
+    expect(screen.getByLabelText("用户名")).toBeInTheDocument();
+    expect(registerMock).not.toHaveBeenCalled();
+  });
 });

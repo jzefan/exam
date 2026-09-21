@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -211,6 +212,135 @@ def get_student_account_identifier(data: StudentCreate) -> str:
     return account
 
 
+async def find_active_user_by_account(db: AsyncSession, data: StudentCreate) -> User | None:
+    """Look up a live account by phone/student id, ignoring which role it holds.
+
+    One person is one account here, and an account can carry several roles. So a
+    phone that already belongs to a teacher must not turn "add this person as my
+    student" into a unique-index error — the caller attaches the student role to
+    the existing account instead.
+    """
+    account = get_student_account_identifier(data)
+    conditions = [User.username == account]
+    if data.phone:
+        conditions.append(User.phone == data.phone)
+    if data.student_id:
+        conditions.append(User.student_id == data.student_id)
+
+    result = await db.execute(
+        select(User)
+        .where(or_(*conditions), User.deleted_at.is_(None))
+        .order_by(User.created_at)
+    )
+    candidates = list(result.scalars().unique().all())
+    if not candidates:
+        return None
+    # The login account (username/phone) is the strongest match: a student id may
+    # coincidentally hit a different person's record.
+    for candidate in candidates:
+        if candidate.username == account or (data.phone and candidate.phone == data.phone):
+            return candidate
+    return candidates[0]
+
+
+async def ensure_student_membership(
+    db: AsyncSession,
+    user: User,
+    org_id: uuid.UUID,
+) -> bool:
+    """Give an existing account a student identity inside ``org_id``.
+
+    Returns True when the membership was created, False when the account already
+    studies in that organization. This is where "one phone, several roles" lives:
+    ``user_organizations`` is keyed on (user, org, role), so extra roles are added
+    there while the login account stays single.
+    """
+    role = (
+        await db.execute(
+            select(Role).where(Role.name == "student", Role.org_id.is_(None))
+        )
+    ).scalar_one_or_none()
+    if role is None:
+        raise ValueError("Student role not found in system")
+
+    existing = (
+        await db.execute(
+            select(UserOrganization).where(
+                UserOrganization.user_id == user.id,
+                UserOrganization.org_id == org_id,
+                UserOrganization.role_id == role.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return False
+
+    membership_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(UserOrganization)
+            .where(UserOrganization.user_id == user.id)
+        )
+    ).scalar_one()
+
+    link = await add_role_to_user(
+        db, user.id, org_id, role.id, is_primary=membership_count == 0
+    )
+    if membership_count == 0:
+        # First membership ever: it also becomes the account's primary org.
+        link.is_primary = True
+        await db.flush()
+    return True
+
+
+def apply_student_fields(user: User, data: StudentCreate, teacher_id: uuid.UUID) -> None:
+    """Copy the submitted roster fields onto the account (shared by create/link)."""
+    user.full_name = data.full_name
+    if data.phone:
+        user.phone = data.phone
+    if data.student_id:
+        user.student_id = data.student_id
+    if data.class_id is not None:
+        user.class_id = data.class_id
+    if user.owner_teacher_id is None:
+        user.owner_teacher_id = teacher_id
+
+
+class StudentUpsertResult(NamedTuple):
+    student: User
+    # True when the teacher-student link was created by this call.
+    linked: bool
+    # True when a brand-new account row was created.
+    created: bool
+    # True when an existing account gained the student role.
+    role_added: bool
+
+
+async def create_or_link_student(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    data: StudentCreate,
+    teacher_id: uuid.UUID,
+) -> StudentUpsertResult:
+    existing_student = await find_existing_student_by_account(db, data)
+    if existing_student is None:
+        account_user = await find_active_user_by_account(db, data)
+        if account_user is not None:
+            role_added = await ensure_student_membership(db, account_user, org_id)
+            linked = await ensure_teacher_student_link(db, teacher_id, account_user.id)
+            apply_student_fields(account_user, data, teacher_id)
+            await db.flush()
+            return StudentUpsertResult(account_user, linked, False, role_added)
+
+        student = await create_student(db, org_id, data, owner_teacher_id=teacher_id)
+        return StudentUpsertResult(student, True, True, False)
+
+    linked = await ensure_teacher_student_link(db, teacher_id, existing_student.id)
+    apply_student_fields(existing_student, data, teacher_id)
+    await db.flush()
+    return StudentUpsertResult(existing_student, linked, False, False)
+
+
 async def find_existing_student_by_account(db: AsyncSession, data: StudentCreate) -> User | None:
     account = get_student_account_identifier(data)
     conditions = [User.username == account]
@@ -231,31 +361,6 @@ async def find_existing_student_by_account(db: AsyncSession, data: StudentCreate
         .distinct()
     )
     return result.scalar_one_or_none()
-
-
-async def create_or_link_student(
-    db: AsyncSession,
-    org_id: uuid.UUID,
-    data: StudentCreate,
-    teacher_id: uuid.UUID,
-) -> tuple[User, bool, bool]:
-    existing_student = await find_existing_student_by_account(db, data)
-    if existing_student is None:
-        student = await create_student(db, org_id, data, owner_teacher_id=teacher_id)
-        return student, True, True
-
-    linked = await ensure_teacher_student_link(db, teacher_id, existing_student.id)
-    existing_student.full_name = data.full_name
-    if data.phone:
-        existing_student.phone = data.phone
-    if data.student_id:
-        existing_student.student_id = data.student_id
-    if data.class_id is not None:
-        existing_student.class_id = data.class_id
-    if existing_student.owner_teacher_id is None:
-        existing_student.owner_teacher_id = teacher_id
-    await db.flush()
-    return existing_student, linked, False
 
 
 async def list_student_teacher_ids(db: AsyncSession, student_id: uuid.UUID) -> list[uuid.UUID]:

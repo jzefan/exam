@@ -7,16 +7,22 @@ vi.mock("@/pages/exams/components/ClassStudentSelector", () => ({
   ClassStudentSelector: ({
     onChange,
     defaultSupplementCollapsed,
+    defaultClassIds,
   }: {
     selectedIds: string[];
     onChange: (ids: string[]) => void;
     summaryLabel?: string;
     emptySummaryText?: string;
     defaultSupplementCollapsed?: boolean;
+    defaultClassIds?: string[];
   }) => (
     <div>
       {defaultSupplementCollapsed && <p>补充方式默认收起</p>}
-      <button type="button" onClick={() => onChange(["student-1"])}>
+      <button
+        type="button"
+        data-default-class-ids={defaultClassIds?.join(",") ?? ""}
+        onClick={() => onChange(["student-1"])}
+      >
         选择学生
       </button>
       <button type="button" onClick={() => onChange([])}>
@@ -35,6 +41,7 @@ describe("GeneratedAssignmentDialog", () => {
         open
         defaultTitle="数字特征练习"
         questionCount={3}
+        defaultClassIds={["class-1", "class-2"]}
         onOpenChange={vi.fn()}
         onSubmit={vi.fn()}
       />,
@@ -44,6 +51,10 @@ describe("GeneratedAssignmentDialog", () => {
     expect(screen.getByText("将发布 3 道题")).toBeInTheDocument();
     expect(screen.getByRole("dialog")).toHaveClass("sm:max-w-5xl");
     expect(screen.getByText("补充方式默认收起")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "选择学生" })).toHaveAttribute(
+      "data-default-class-ids",
+      "class-1,class-2",
+    );
   });
 
   it("calls onOpenChange(false) when cancel is clicked", async () => {

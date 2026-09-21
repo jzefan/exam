@@ -3,7 +3,7 @@
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -53,6 +53,8 @@ class KnowledgePoint(OwnerMixin, VisibilityMixin, BaseModel):
     parent_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("knowledge_points.id", ondelete="CASCADE"), nullable=True
     )
+    # 同级排序位；目录树按 (sort_order, created_at) 展示，同值回退到创建时间。
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     direction_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("direction.id", ondelete="SET NULL"), nullable=True

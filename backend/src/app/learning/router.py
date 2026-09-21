@@ -26,6 +26,7 @@ from app.learning.schemas import (
     DirectionResponse,
     FlowData,
     KnowledgePointCreate,
+    KnowledgePointReorder,
     KnowledgePointUpdate,
     MajorCreate,
     MajorResponse,
@@ -296,6 +297,62 @@ async def update_kp(kp_id: uuid.UUID, data: KnowledgePointUpdate, db: DB, user: 
         kp = await service.reparent_knowledge_point(db, kp, parent)
     kp = await service.update_knowledge_point(db, kp, data)
     return {"id": str(kp.id), "name": kp.name, "owner_id": str(kp.owner_id), "visibility": kp.visibility.value}
+
+
+@router.post("/knowledge-points/{kp_id}/reorder", response_model=dict)
+async def reorder_kp(
+    kp_id: uuid.UUID,
+    data: KnowledgePointReorder,
+    db: DB,
+    user: WriteUser,
+) -> dict[str, str]:
+    """把知识点移到目标父节点下，并按 `ordered_ids` 重排同级顺序。
+
+    同时覆盖两种操作：「同级上移 / 下移」与「拖到别的目录下成为子目录」。
+    """
+
+    is_admin = await _is_knowledge_admin(db, user)
+    kp = await _get_visible_kp_or_404(db, kp_id, user, is_admin)
+    _ensure_can_write_kp(kp, user, is_admin)
+
+    if kp_id not in set(data.ordered_ids):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="排序列表中必须包含被移动的知识点",
+        )
+
+    parent = None
+    if data.parent_id is not None:
+        if data.parent_id == kp.id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="不能移动到自身下")
+        parent = await _get_visible_kp_or_404(db, data.parent_id, user, is_admin)
+        if await service.is_descendant_knowledge_point(db, ancestor_id=kp.id, node_id=parent.id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="不能移动到自己的下级知识点下",
+            )
+
+    # 先校验再落库：避免排序列表有问题时已经改掉了 parent_id。
+    target_parent_id = parent.id if parent else None
+    siblings = await service.list_child_knowledge_points(db, target_parent_id)
+    allowed = {sibling.id for sibling in siblings} | {kp.id}
+    if any(node_id not in allowed for node_id in data.ordered_ids):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="排序列表中存在不属于该父节点的知识点",
+        )
+
+    if kp.parent_id != target_parent_id:
+        kp = await service.reparent_knowledge_point(db, kp, parent)
+    await service.apply_sibling_order(db, target_parent_id, data.ordered_ids)
+
+    return {
+        "id": str(kp.id),
+        "name": kp.name,
+        "parent_id": str(kp.parent_id) if kp.parent_id is not None else "",
+        "owner_id": str(kp.owner_id),
+        "visibility": kp.visibility.value,
+    }
 
 
 @router.delete("/knowledge-points/{kp_id}", status_code=204)

@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { AlertCircle, Calendar, CheckCircle2, ChevronRight } from "lucide-react";
+import { AlertCircle, Calendar, CheckCircle2, ChevronRight, ListOrdered } from "lucide-react";
 import { renderLatexInHtml } from "@/components/ui/latex-text";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -54,6 +54,15 @@ export function WrongAnswerCard({ item }: { item: IWrongAnswer }) {
             />
 
             <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+              {item.exam_question_order != null ? (
+                <div className="flex items-center gap-2 text-[10px] font-bold tracking-widest text-muted-foreground/40">
+                  <ListOrdered size={12} className="shrink-0 opacity-40" />
+                  <span>
+                    {tStudent("result_question_number", { number: item.exam_question_order + 1 }, locale)}
+                  </span>
+                </div>
+              ) : null}
+
               <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/40">
                 <Calendar size={12} className="shrink-0 opacity-40" />
                 <span>

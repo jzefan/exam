@@ -1,6 +1,6 @@
 import { useLogin } from "@refinedev/core";
 import { useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,13 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  ROLE_SELECTION_REQUIRED,
+  clearPendingRoleSelection,
+  getPendingRoleSelection,
+  loginWithSelectedRole,
+  type PendingRoleSelection,
+} from "@/providers/auth-provider";
 import { AuthHeader, AuthShell } from "./auth-shell";
 import { SlideToLogin } from "./slide-to-login";
 
@@ -30,10 +37,14 @@ type LoginCredentials = {
 
 export function LoginPage() {
   const { mutate: login, isPending } = useLogin<LoginCredentials>();
+  const navigate = useNavigate();
   const formRef = useRef<HTMLFormElement | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [form, setForm] = useState({ username: "", password: "" });
   const [slideError, setSlideError] = useState("");
+  const [roleSelection, setRoleSelection] = useState<PendingRoleSelection | null>(null);
+  const [roleSubmitting, setRoleSubmitting] = useState(false);
+  const [roleError, setRoleError] = useState("");
   const [forgotOpen, setForgotOpen] = useState(false);
   const [forgotAccount, setForgotAccount] = useState("");
   const [forgotLoading, setForgotLoading] = useState(false);
@@ -58,9 +69,20 @@ export function LoginPage() {
       { username: form.username, password: form.password },
       {
         onSuccess: (result) => {
-          if (!result.success) {
-            setSlideError(result.error?.message || "登录失败，请检查账号和密码后重试");
+          if (result.success) {
+            return;
           }
+          // The password was right, but the account holds several roles: switch
+          // to the identity picker instead of reporting a failure.
+          if (result.error?.name === ROLE_SELECTION_REQUIRED) {
+            const pending = getPendingRoleSelection();
+            if (pending) {
+              setRoleSelection(pending);
+              setRoleError("");
+              return;
+            }
+          }
+          setSlideError(result.error?.message || "登录失败，请检查账号和密码后重试");
         },
         onError: (error) => {
           setSlideError(error.message || "登录服务暂时不可用，请稍后重试");
@@ -68,6 +90,27 @@ export function LoginPage() {
       },
     );
     return true;
+  };
+
+  const handleRoleSelect = async (roleName: string) => {
+    if (!roleSelection || roleSubmitting) {
+      return;
+    }
+    setRoleSubmitting(true);
+    setRoleError("");
+    try {
+      const { redirectTo } = await loginWithSelectedRole(roleSelection.selectionToken, roleName);
+      navigate(redirectTo, { replace: true });
+    } catch (error) {
+      setRoleError(error instanceof Error ? error.message : "登录失败，请重新选择身份");
+      setRoleSubmitting(false);
+    }
+  };
+
+  const backToCredentials = () => {
+    clearPendingRoleSelection();
+    setRoleSelection(null);
+    setRoleError("");
   };
 
   const updateField = (field: string, value: string) => {
@@ -112,78 +155,114 @@ export function LoginPage() {
   return (
     <AuthShell>
       <AuthHeader
-        title="欢迎回来"
-        subtitle="适用于高校考试与职业认证场景"
+        title={roleSelection ? "选择登录身份" : "欢迎回来"}
+        subtitle={
+          roleSelection
+            ? "该账号有多个角色，选择本次登录要使用的身份"
+            : "适用于高校考试与职业认证场景"
+        }
       />
 
-      <form ref={formRef} onSubmit={handleSubmit} className="auth-fields">
-        <div className="auth-field">
-          <Label htmlFor="login-username">用户名</Label>
-          <Input
-            id="login-username"
-            type="text"
-            placeholder="请输入用户名"
-            autoComplete="username"
-            value={form.username}
-            onChange={(e) => updateField("username", e.target.value)}
-            required
-            autoFocus
-          />
-        </div>
-
-        <div className="auth-field">
-          <div className="auth-field-label-row">
-            <Label htmlFor="login-password">密码</Label>
-            <button
-              type="button"
-              className="auth-inline-action"
-              onClick={() => {
-                setForgotAccount(form.username);
-                setForgotResult(null);
-                setForgotSentAccount("");
-                setForgotError("");
-                setForgotOpen(true);
-              }}
-            >
-              忘记密码？
-            </button>
+      {roleSelection ? (
+        <div className="auth-fields">
+          <div className="auth-role-list">
+            {roleSelection.roles.map((role) => (
+              <button
+                key={role.name}
+                type="button"
+                className="auth-role-card"
+                disabled={roleSubmitting}
+                onClick={() => void handleRoleSelect(role.name)}
+              >
+                <span className="auth-role-name">{role.display_name || role.name}</span>
+                {role.org_names.length > 0 && (
+                  <span className="auth-role-meta">{role.org_names.join("、")}</span>
+                )}
+              </button>
+            ))}
           </div>
-          <div className="auth-input-wrap">
+          {roleError && <p className="auth-error-text">{roleError}</p>}
+          <button
+            type="button"
+            className="auth-inline-action self-start"
+            onClick={backToCredentials}
+            disabled={roleSubmitting}
+          >
+            返回，换个账号
+          </button>
+        </div>
+      ) : (
+        <form ref={formRef} onSubmit={handleSubmit} className="auth-fields">
+          <div className="auth-field">
+            <Label htmlFor="login-username">用户名</Label>
             <Input
-              id="login-password"
-              type={showPassword ? "text" : "password"}
-              className="auth-input-with-suffix"
-              placeholder="请输入密码"
-              autoComplete="current-password"
-              value={form.password}
-              onChange={(e) => updateField("password", e.target.value)}
+              id="login-username"
+              type="text"
+              placeholder="请输入用户名"
+              autoComplete="username"
+              value={form.username}
+              onChange={(e) => updateField("username", e.target.value)}
               required
+              autoFocus
             />
-            <button
-              type="button"
-              onClick={() => setShowPassword(!showPassword)}
-              className="auth-input-suffix"
-              aria-label={showPassword ? "隐藏密码" : "显示密码"}
-            >
-              {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
-            </button>
           </div>
-        </div>
 
-        <SlideToLogin
-          loading={isPending}
-          onComplete={handleSlideComplete}
-          resetKey={`${form.username}:${form.password}`}
-        />
-        {slideError && <p className="auth-error-text">{slideError}</p>}
-      </form>
+          <div className="auth-field">
+            <div className="auth-field-label-row">
+              <Label htmlFor="login-password">密码</Label>
+              <button
+                type="button"
+                className="auth-inline-action"
+                onClick={() => {
+                  setForgotAccount(form.username);
+                  setForgotResult(null);
+                  setForgotSentAccount("");
+                  setForgotError("");
+                  setForgotOpen(true);
+                }}
+              >
+                忘记密码？
+              </button>
+            </div>
+            <div className="auth-input-wrap">
+              <Input
+                id="login-password"
+                type={showPassword ? "text" : "password"}
+                className="auth-input-with-suffix"
+                placeholder="请输入密码"
+                autoComplete="current-password"
+                value={form.password}
+                onChange={(e) => updateField("password", e.target.value)}
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="auth-input-suffix"
+                aria-label={showPassword ? "隐藏密码" : "显示密码"}
+              >
+                {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+              </button>
+            </div>
+          </div>
 
-      <p className="auth-switch">
-        没有账号？{" "}
-        <Link to="/register">
-          立即注册
-        </Link>
-      </p>
+          <SlideToLogin
+            loading={isPending}
+            onComplete={handleSlideComplete}
+            resetKey={`${form.username}:${form.password}`}
+          />
+          {slideError && <p className="auth-error-text">{slideError}</p>}
+        </form>
+      )}
+
+      {!roleSelection && (
+        <p className="auth-switch">
+          没有账号？{" "}
+          <Link to="/register">
+            立即注册
+          </Link>
+        </p>
+      )}
 
       <Dialog open={forgotOpen} onOpenChange={setForgotOpen}>
         <DialogContent className="sm:max-w-md">

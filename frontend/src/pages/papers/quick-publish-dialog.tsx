@@ -28,6 +28,7 @@ interface PaperQuickPublishDialogProps {
   mode: PaperQuickPublishMode;
   courseKpId?: string;
   courseSemesterId?: string;
+  defaultClassIds?: string[];
   onPublished?: (examId: string) => void;
 }
 
@@ -46,6 +47,7 @@ export function PaperQuickPublishDialog({
   mode,
   courseKpId,
   courseSemesterId,
+  defaultClassIds,
   onPublished,
 }: PaperQuickPublishDialogProps) {
   const { toast } = useToast();
@@ -163,6 +165,7 @@ export function PaperQuickPublishDialog({
               isExam ? "请选择至少一名考生即可创建考试。" : "请选择至少一名学生即可发布练习。"
             }
             defaultSupplementCollapsed
+            defaultClassIds={defaultClassIds}
           />
         </div>
 

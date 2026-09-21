@@ -39,6 +39,84 @@ vi.mock("@/components/ui/code-block", () => ({
 }));
 
 describe("WrongAnswerDetailPage", () => {
+  it("shows the question number it had in the source exam", async () => {
+    useOneMock.mockReturnValue({
+      query: {
+        isLoading: false,
+        data: {
+          data: {
+            id: "wa-order",
+            question_id: "q-order",
+            question_title: "softmax 函数的主要用途是（）",
+            question_type: "choice",
+            exam_id: "exam-1",
+            exam_title: "首届生成式人工智能技术应用赛",
+            exam_question_order: 4,
+            wrong_count: 1,
+            last_wrong_at: "2026-09-01T10:00:00.000Z",
+            tags: [],
+            mastered: false,
+            question_content: { text: "softmax 函数的主要用途是（）" },
+            standard_answer: { correct: "A" },
+            analysis: null,
+            student_answer: {},
+            feedback: { strengths: [], deductions: [], suggestions: [] },
+          },
+        },
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/wrong-answers/wa-order"]}>
+        <Routes>
+          <Route path="/wrong-answers/:id" element={<WrongAnswerDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    // exam_question_order 是 0 基，展示时 +1
+    expect(await screen.findByText("第 5 题")).toBeInTheDocument();
+  });
+
+  it("omits the question number when the wrong answer has no source exam", async () => {
+    useOneMock.mockReturnValue({
+      query: {
+        isLoading: false,
+        data: {
+          data: {
+            id: "wa-legacy",
+            question_id: "q-legacy",
+            question_title: "历史错题",
+            question_type: "choice",
+            exam_id: null,
+            exam_title: "历史考试",
+            exam_question_order: null,
+            wrong_count: 2,
+            last_wrong_at: "2026-09-01T10:00:00.000Z",
+            tags: [],
+            mastered: false,
+            question_content: { text: "历史错题" },
+            standard_answer: { correct: "A" },
+            analysis: null,
+            student_answer: {},
+            feedback: { strengths: [], deductions: [], suggestions: [] },
+          },
+        },
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/wrong-answers/wa-legacy"]}>
+        <Routes>
+          <Route path="/wrong-answers/:id" element={<WrongAnswerDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("历史考试")).toBeInTheDocument();
+    expect(screen.queryByText(/^第 \d+ 题$/)).not.toBeInTheDocument();
+  });
+
   it("renders sql answers as code blocks", async () => {
     useOneMock.mockReturnValue({
       query: {

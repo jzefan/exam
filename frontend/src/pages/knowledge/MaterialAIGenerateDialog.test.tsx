@@ -303,4 +303,83 @@ describe("MaterialAIGenerateDialog", () => {
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
     expect(screen.getByRole("dialog", { name: "生成练习" })).toBeInTheDocument();
   });
+
+  it("waits for the material to finish loading before generating", async () => {
+    const user = userEvent.setup();
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("/api/questions/ai-generate/stream")) {
+        return buildGenerateStreamResponse();
+      }
+      return {
+        ok: false,
+        json: async () => ({ detail: "unexpected request" }),
+      } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const buildTree = (materialLoading: boolean) => (
+      <MemoryRouter>
+        <MaterialAIGenerateDialog
+          open
+          onOpenChange={vi.fn()}
+          knowledgePointId="kp-1"
+          knowledgePointName="二叉树"
+          knowledgePointPath="计算机科学 / 数据结构 / 二叉树"
+          materialTitle="二叉树讲义"
+          materialSourceText={materialLoading ? "" : "资料正文"}
+          materialImages={[]}
+          materialLoading={materialLoading}
+          onSaved={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    const { rerender } = render(buildTree(true));
+
+    // 资料仍在后台读取：弹窗已经打开，资料卡片给出进度提示
+    expect(screen.getByText("正在读取资料…")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "开始生成" }));
+
+    // 资料没就绪：先挂起，不发请求，按钮转为等待态
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: "等待资料就绪" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("资料读取中，完成后会自动开始生成"),
+    ).toBeInTheDocument();
+
+    // 资料读完后自动接上生成
+    rerender(buildTree(false));
+
+    await screen.findByText("生成题目 1");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/questions/ai-generate/stream",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("blocks generation and explains when the material failed to load", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderDialog({
+      materialLoadError: "仅支持 PDF / Word(.docx) / PowerPoint(.pptx) 文件用于智能出题。",
+    });
+
+    expect(screen.getByText("资料读取失败")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "开始生成" }));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "资料读取失败",
+        variant: "destructive",
+      }),
+    );
+  });
 });

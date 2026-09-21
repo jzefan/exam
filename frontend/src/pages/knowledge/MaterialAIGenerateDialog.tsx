@@ -157,7 +157,16 @@ export interface MaterialAIGenerateDialogProps {
   materialTitle: string;
   materialSourceText: string;
   materialImages: string[];
+  /**
+   * 资料仍在后台下载 + 解析。为 true 时点「开始生成」会先等资料就绪再发请求，
+   * 期间按钮保持 loading。默认 false（调用方已备好资料）。
+   */
+  materialLoading?: boolean;
+  /** 资料抽取失败的原因；非空时不允许生成 */
+  materialLoadError?: string | null;
   targetQuestionBankName?: string;
+  /** 当前学期已关联的班级；发布生成练习时默认选中这些班级下的学生。 */
+  defaultClassIds?: string[];
   /** 触发刷新相关题目列表 */
   onSaved?: () => void;
 }
@@ -250,7 +259,10 @@ export function MaterialAIGenerateDialog({
   materialTitle,
   materialSourceText,
   materialImages,
+  materialLoading = false,
+  materialLoadError = null,
   targetQuestionBankName = DEFAULT_TARGET_QUESTION_BANK_NAME,
+  defaultClassIds,
   onSaved,
 }: MaterialAIGenerateDialogProps) {
   const navigate = useNavigate();
@@ -275,6 +287,11 @@ export function MaterialAIGenerateDialog({
     title: string;
     questionCount: number;
   } | null>(null);
+  /**
+   * 用户在资料还没读完时就点了「开始生成」：先记下意图并显示 loading，
+   * 等后台抽取完成后再自动接上生成。
+   */
+  const [waitingForMaterial, setWaitingForMaterial] = useState(false);
 
   const totalCount = Object.values(typeAlloc).reduce((a, b) => a + b, 0);
 
@@ -286,6 +303,7 @@ export function MaterialAIGenerateDialog({
       setQuestions([]);
       setCreatedAssignment(null);
     } else {
+      setWaitingForMaterial(false);
       abortRef.current?.abort();
       abortRef.current = null;
     }
@@ -464,6 +482,47 @@ export function MaterialAIGenerateDialog({
   const stopGeneration = useCallback(() => {
     abortRef.current?.abort();
   }, []);
+
+  /**
+   * 弹窗打开时资料可能还在后台下载解析。此时不阻断用户操作：
+   * 点「开始生成」先把意图挂起并显示 loading，资料就绪后自动接上生成。
+   */
+  const handleStartClick = useCallback(() => {
+    if (materialLoading) {
+      setWaitingForMaterial(true);
+      return;
+    }
+    if (materialLoadError) {
+      toast({
+        title: "资料读取失败",
+        description: materialLoadError,
+        variant: "destructive",
+      });
+      return;
+    }
+    void startGeneration();
+  }, [materialLoading, materialLoadError, startGeneration, toast]);
+
+  useEffect(() => {
+    if (!waitingForMaterial || materialLoading) return;
+    setWaitingForMaterial(false);
+    if (materialLoadError) {
+      toast({
+        title: "资料读取失败",
+        description: materialLoadError,
+        variant: "destructive",
+      });
+      return;
+    }
+    // 资料已就绪，接上刚才挂起的生成。
+    void startGeneration();
+  }, [
+    waitingForMaterial,
+    materialLoading,
+    materialLoadError,
+    startGeneration,
+    toast,
+  ]);
 
   const toggleSelect = (index: number) => {
     setQuestions((prev) =>
@@ -730,11 +789,19 @@ export function MaterialAIGenerateDialog({
             {!isGenerating ? (
               <Button
                 className="h-9 gap-1.5"
-                onClick={startGeneration}
+                onClick={handleStartClick}
                 disabled={totalCount === 0}
               >
-                <Sparkles size={15} />
-                {questions.length > 0 ? "重新生成" : "开始生成"}
+                {waitingForMaterial ? (
+                  <Loader2 size={15} className="animate-spin" />
+                ) : (
+                  <Sparkles size={15} />
+                )}
+                {waitingForMaterial
+                  ? "等待资料就绪"
+                  : questions.length > 0
+                    ? "重新生成"
+                    : "开始生成"}
               </Button>
             ) : (
               <Button
@@ -797,10 +864,21 @@ export function MaterialAIGenerateDialog({
                   {materialTitle}
                 </div>
                 <div className="text-[11px] text-muted-foreground">
-                  学习资料
-                  {materialImages.length > 0
-                    ? ` · ${materialImages.length} 张图片`
-                    : ""}
+                  {materialLoading ? (
+                    <span className="inline-flex items-center gap-1">
+                      <Loader2 size={11} className="animate-spin" />
+                      正在读取资料…
+                    </span>
+                  ) : materialLoadError ? (
+                    <span className="text-destructive">资料读取失败</span>
+                  ) : (
+                    <>
+                      学习资料
+                      {materialImages.length > 0
+                        ? ` · ${materialImages.length} 张图片`
+                        : ""}
+                    </>
+                  )}
                 </div>
               </div>
             </div>
@@ -842,14 +920,26 @@ export function MaterialAIGenerateDialog({
           {questions.length === 0 && !isGenerating ? (
             <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-muted/20 text-muted-foreground">
               <div className="flex size-14 items-center justify-center rounded-full bg-primary/10 text-primary">
-                <Sparkles size={28} strokeWidth={1.6} />
+                {waitingForMaterial ? (
+                  <Loader2
+                    size={28}
+                    strokeWidth={1.6}
+                    className="animate-spin"
+                  />
+                ) : (
+                  <Sparkles size={28} strokeWidth={1.6} />
+                )}
               </div>
               <div className="text-center">
                 <p className="text-sm font-medium text-foreground">
-                  配置题型数量后点击「开始生成」
+                  {waitingForMaterial
+                    ? "资料读取中，完成后会自动开始生成"
+                    : "配置题型数量后点击「开始生成」"}
                 </p>
                 <p className="mt-1 text-xs">
-                  生成的题目会先作为草稿展示，可勾选后保存或发布练习。
+                  {waitingForMaterial
+                    ? "首次读取需要下载并解析资料，读完即开始。"
+                    : "生成的题目会先作为草稿展示，可勾选后保存或发布练习。"}
                 </p>
               </div>
             </div>
@@ -1042,7 +1132,9 @@ export function MaterialAIGenerateDialog({
             >
               {isSaving && <Loader2 size={14} className="animate-spin" />}
               {!isSaving && <Save size={14} className="mr-1.5" />}
-              保存 {selectedCount > 0 ? selectedCount : ""} 题到「
+              {selectedCount > 0
+                ? `保存 ${selectedCount} 题到「`
+                : "保存到「"}
               {targetQuestionBankName}」
             </Button>
           </div>
@@ -1053,6 +1145,7 @@ export function MaterialAIGenerateDialog({
         open={showGeneratedAssignmentDialog}
         defaultTitle={generatedAssignmentDefaultTitle}
         questionCount={selectedCount}
+        defaultClassIds={defaultClassIds}
         onOpenChange={setShowGeneratedAssignmentDialog}
         onSubmit={handleGeneratedAssignmentSubmit}
       />

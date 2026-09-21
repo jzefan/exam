@@ -68,13 +68,33 @@ class UserResponse(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+    # Optional: when an account holds several roles the client sends the one the
+    # user picked on the second step; a single-role account may omit it.
+    role_name: str | None = None
+
+
+class RoleOption(BaseModel):
+    """One selectable login identity, deduplicated by role name."""
+
+    name: str
+    display_name: str
+    org_names: list[str] = []
+
+
+class SelectRoleRequest(BaseModel):
+    selection_token: str
+    role_name: str
 
 
 class TokenResponse(BaseModel):
-    access_token: str
+    # Both are None while a role still has to be picked.
+    access_token: str | None = None
     token_type: str = "bearer"
-    user: UserResponse
+    user: UserResponse | None = None
     onboarding_reason: Literal["first_login", "returning_after_week"] | None = None
+    requires_role_selection: bool = False
+    selection_token: str | None = None
+    roles: list[RoleOption] = []
 
 
 class ForgotPasswordRequest(BaseModel):

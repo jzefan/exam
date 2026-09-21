@@ -12,12 +12,32 @@ vi.mock("@/lib/api", () => ({
   },
 }));
 
+vi.mock("@/pages/exams/components/ClassStudentSelector", () => ({
+  ClassStudentSelector: ({
+    onChange,
+    defaultClassIds,
+  }: {
+    onChange: (ids: string[]) => void;
+    defaultClassIds?: string[];
+  }) => (
+    <button
+      type="button"
+      data-testid="student-selector"
+      data-default-class-ids={defaultClassIds?.join(",") ?? ""}
+      onClick={() => onChange(["student-1"])}
+    >
+      选择测试学生
+    </button>
+  ),
+}));
+
 const mockPost = apiClient.post as ReturnType<typeof vi.fn>;
 
 function setup(props: {
   selected?: { id: string; type: string; score: number }[];
   defaultTitle?: string;
   defaultCategory?: "exam" | "practice";
+  defaultClassIds?: string[];
 }) {
   const onOpenChange = vi.fn();
   const onPublished = vi.fn();
@@ -30,6 +50,7 @@ function setup(props: {
       selected={props.selected ?? [{ id: "1", type: "choice", score: 5 }]}
       defaultTitle={props.defaultTitle ?? "2026-05-11 练习"}
       defaultCategory={props.defaultCategory}
+      defaultClassIds={props.defaultClassIds}
     />,
   );
   return { ...utils, onOpenChange, onPublished, user };
@@ -78,20 +99,31 @@ describe("CreateFromSelectionDialog", () => {
     expect(screen.getByRole("button", { name: /发布练习/ })).toBeDisabled();
   });
 
+  it("把当前学期关联班级交给学生选择器作为默认范围", () => {
+    setup({ defaultClassIds: ["class-1", "class-2"] });
+
+    expect(screen.getByTestId("student-selector")).toHaveAttribute(
+      "data-default-class-ids",
+      "class-1,class-2",
+    );
+  });
+
   it("提交成功后调用 onPublished 回调", async () => {
     mockPost.mockResolvedValueOnce({ data: { id: "exam-123" } });
-    setup({
+    const { user, onPublished } = setup({
       selected: [{ id: "1", type: "choice", score: 5 }],
       defaultCategory: "exam",
     });
 
-    // Need to select at least one student before the button is enabled.
-    // The ClassStudentSelector provides its own UI — clicking the submit
-    // button requires a student selection. Since we can't easily mock the
-    // selector internals, this test verifies the button exists and is disabled
-    // until a student is chosen. The API call is tested indirectly via the
-    // component integration.
     const submitBtn = screen.getByRole("button", { name: /创建考试/ });
     expect(submitBtn).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "选择测试学生" }));
+    await user.click(submitBtn);
+
+    expect(mockPost).toHaveBeenCalledWith(
+      "/api/exams",
+      expect.objectContaining({ student_ids: ["student-1"] }),
+    );
+    expect(onPublished).toHaveBeenCalledWith("exam-123", "exam");
   });
 });

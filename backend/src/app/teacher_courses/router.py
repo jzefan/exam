@@ -1480,7 +1480,7 @@ async def get_teacher_course_knowledge_tree(course_id: uuid.UUID, db: DB, user: 
         await db.execute(
             select(KnowledgePoint)
             .where(KnowledgePoint.id.in_(subtree_ids))
-            .order_by(KnowledgePoint.created_at)
+            .order_by(KnowledgePoint.sort_order, KnowledgePoint.created_at)
         )
     ).scalars().all()
 
@@ -2076,7 +2076,7 @@ async def _build_course_mastery_summary(
             await db.execute(
                 select(KnowledgePoint)
                 .where(KnowledgePoint.id.in_(subtree_ids))
-                .order_by(KnowledgePoint.created_at)
+                .order_by(KnowledgePoint.sort_order, KnowledgePoint.created_at)
             )
         )
         .scalars()

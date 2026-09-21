@@ -83,12 +83,12 @@ export function AuthHeader({
   subtitle,
 }: {
   title: string;
-  subtitle: string;
+  subtitle?: string;
 }) {
   return (
     <div className="auth-header">
       <h1>{title}</h1>
-      <p>{subtitle}</p>
+      {subtitle && <p>{subtitle}</p>}
     </div>
   );
 }

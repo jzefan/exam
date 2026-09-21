@@ -9,7 +9,7 @@
 - 数据库：PostgreSQL
 - 代码运行：judge-runner 独立容器
 - 发布方式：本地 `scripts/deploy.sh` 打包 -> `scp` 上传 -> 服务器自动构建并切换
-- 重启方式：蓝绿切换，先启动空闲槽位，再切流，最后关闭旧槽位
+- 重启方式：通常蓝绿切换；启用学习通时采用单实例交接，先停旧后端再启新后端，避免两个评分队列同时消费。
 
 ## 关键文件
 
@@ -311,3 +311,26 @@ PNPM_REGISTRY=https://registry.npmmirror.com
 3. 在模板中增加 80 -> 443 跳转
 
 4. 将 `EXAM_CORS_ORIGINS` 更新为真实域名地址
+
+
+## 学习通随部署自动启用
+
+首次补齐本功能使用：
+
+```bash
+./scripts/deploy.sh --target backend
+# 如需同时发布本地前端改动：
+./scripts/deploy.sh --target app
+```
+
+仅部署 `frontend` 不会安装后端浏览器或更改开关。后端发布时自动执行：
+
+1. 服务器 `shared/env/backend.env` 没有学习通开关时追加 `EXAM_CHAOXING_ENABLED=true`，不覆盖其他配置或密钥。已有显式 `false` 时保留，需管理员自行改为 `true`。
+2. 后端镜像使用锁定依赖安装 Playwright、BeautifulSoup、Chromium 及 Linux 库。浏览器安装在 `/ms-playwright`，不依赖开发机缓存。
+3. 在新镜像启动一个临时容器验证 Chromium 能运行，检查失败则不会停止在线后端，也不会运行本次迁移。
+4. 启用学习通时自动使用一个 API worker。蓝绿槽位共用浏览器进程锁，并在旧后端停止后再启动新后端；不同时运行两个连接器或评分消费者。
+5. 新后端启动或切流检查失败时，尝试恢复保留的旧容器及 Nginx 配置；数据库迁移不会自动回退。
+
+学习通启用后的后端发布会短暂中断 API、清除学习通临时登录，建议安排在无正在进行考试/评分的时段。保存的答卷和评分结果不受临时登录丢失影响；重启打断且未确定完成的模型调用可能需要人工重试。纯前端发布不会重启学习通后端。
+
+若 Chromium 下载受限，在服务器 `shared/env/deploy.env` 设置 `CHROMIUM_FOR_TESTING_DOWNLOAD_HOST`；当前默认值为 `https://cdn.npmmirror.com/binaries/chrome-for-testing`，目录结构必须为 `/<版本>/<平台>/<文件>`，例如 `153.0.8010.12/linux64/chrome-linux64.zip`。构建直接下载该归档，不让 Playwright 添加 `builds/cft/` 前缀；镜像失败时自动重试官方 CDN。不要把本地 macOS 的 `EXAM_CHAOXING_BROWSER_EXECUTABLE` 路径填入服务器配置。

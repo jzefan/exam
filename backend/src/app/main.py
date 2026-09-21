@@ -1,8 +1,11 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app.auth.router import router as auth_router
 from app.auth.oidc_router import oidc_router
@@ -37,6 +40,10 @@ from app.knowledge_extract.router import router as knowledge_extract_router
 from app.course_kb.router import router as course_kb_router
 from app.activity_logs.middleware import ActivityContextMiddleware
 from app.activity_logs.router import router as activity_logs_router
+from app.chaoxing.browser import manager as chaoxing_manager
+from app.chaoxing.router import router as chaoxing_router
+from app.chaoxing.grading_router import router as chaoxing_grading_router
+from app.chaoxing.worker import run as run_chaoxing_grading
 
 
 @asynccontextmanager
@@ -90,7 +97,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # latency on a cold pool (the dominant cause of multi-second request stalls).
     await warm_pool()
 
-    yield
+    await chaoxing_manager.start()
+    chaoxing_worker = asyncio.create_task(run_chaoxing_grading()) if settings.chaoxing_enabled else None
+    try:
+        yield
+    finally:
+        if chaoxing_worker:
+            chaoxing_worker.cancel()
+            await asyncio.gather(chaoxing_worker, return_exceptions=True)
+        await chaoxing_manager.shutdown()
 
 
 app = FastAPI(title="AI Exam Grading System", version="0.1.0", lifespan=lifespan)
@@ -131,6 +146,8 @@ app.include_router(role_router, prefix="/api/roles", tags=["roles"])
 app.include_router(permission_router, prefix="/api/permissions", tags=["permissions"])
 app.include_router(students_router, prefix="/api/rbac/students", tags=["students"])
 app.include_router(grading_router, prefix="/api/grading", tags=["grading"])
+app.include_router(chaoxing_router, prefix="/api/chaoxing", tags=["chaoxing"])
+app.include_router(chaoxing_grading_router, prefix="/api/chaoxing", tags=["chaoxing-grading"])
 app.include_router(analytics_router, prefix="/api/analytics", tags=["analytics"])
 app.include_router(job_model_router, prefix="/api/job-models/models", tags=["job-models"])
 app.include_router(job_template_router, prefix="/api/job-models/templates", tags=["job-model-templates"])
@@ -152,3 +169,31 @@ app.include_router(activity_logs_router, prefix="/api/operations/activity-logs",
 @app.get("/api/health")
 async def health_check() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.exception_handler(IntegrityError)
+async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSONResponse:
+    """Turn database constraint violations into a readable message.
+
+    Without this, any endpoint that forgets to catch the error hands the client
+    the raw SQLAlchemy/psycopg text — including the failing SQL and its
+    parameters. The detail stays in the server log; the client gets a sentence.
+    """
+    logger = logging.getLogger(__name__)
+    logger.warning(
+        "IntegrityError on %s %s: %s", request.method, request.url.path, exc
+    )
+    return JSONResponse(
+        status_code=409,
+        content={"detail": "该操作与已有数据冲突（手机号/账号等信息可能已被占用），请检查后重试"},
+    )
+
+
+@app.exception_handler(SQLAlchemyError)
+async def sqlalchemy_error_handler(request: Request, exc: SQLAlchemyError) -> JSONResponse:
+    logger = logging.getLogger(__name__)
+    logger.exception("Database error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "系统繁忙，请稍后重试"},
+    )

@@ -10,10 +10,10 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import PasswordResetToken, User
-from app.auth.schemas import UserCreate, UserOrgInfo, UserResponse, UserUpdate
+from app.auth.schemas import RoleOption, UserCreate, UserOrgInfo, UserResponse, UserUpdate
 from app.auth.security import hash_password, verify_password
 from app.config import settings
-from app.rbac.models import TeacherStudent, UserOrganization
+from app.rbac.models import Organization, Role, TeacherStudent, UserOrganization
 
 OPTIONAL_EMAIL_DOMAIN = "optional.local"
 
@@ -167,21 +167,59 @@ async def authenticate_user_with_reason(
     username: str,
     password: str,
 ) -> tuple[User | None, LoginFailureReason | None]:
-    # Try login by username OR phone
+    # Try login by username OR phone. An account is one row per person, so this
+    # normally yields a single candidate; the list form only guards against
+    # legacy duplicate rows left behind by older uniqueness rules.
     result = await db.execute(
-        select(User).where(
+        select(User)
+        .where(
             or_(User.username == username, User.phone == username),
-            User.deleted_at.is_(None)
+            User.deleted_at.is_(None),
         )
+        .order_by(User.created_at)
     )
-    user = result.scalar_one_or_none()
-    if user is None:
+    candidates = list(result.scalars().unique().all())
+    if not candidates:
         return None, LoginFailureReason.USER_NOT_FOUND
-    if user.user_type == "external_guest":
-        return user, None
-    if not verify_password(password, user.password_hash):
-        return None, LoginFailureReason.WRONG_PASSWORD
-    return user, None
+
+    # Guests are resolved without a password: the invitation link is their
+    # credential, and the router rejects them from the password login anyway.
+    for candidate in candidates:
+        if candidate.user_type == "external_guest":
+            return candidate, None
+
+    for candidate in candidates:
+        if verify_password(password, candidate.password_hash):
+            return candidate, None
+    return None, LoginFailureReason.WRONG_PASSWORD
+
+
+async def list_login_role_options(db: AsyncSession, user_id: uuid.UUID) -> list[RoleOption]:
+    """Roles this account can log in as, deduplicated by role name.
+
+    One entry per role name: holding the same role in several organizations is
+    still one choice, and the org names ride along as a hint.
+    """
+    result = await db.execute(
+        select(Role.name, Role.display_name, Organization.name)
+        .join(UserOrganization, UserOrganization.role_id == Role.id)
+        .join(Organization, Organization.id == UserOrganization.org_id)
+        .where(UserOrganization.user_id == user_id, Role.deleted_at.is_(None))
+        .order_by(Role.name, Organization.name)
+    )
+
+    options: dict[str, RoleOption] = {}
+    for role_name, display_name, org_name in result.all():
+        option = options.get(role_name)
+        if option is None:
+            options[role_name] = RoleOption(
+                name=role_name,
+                display_name=display_name or role_name,
+                org_names=[org_name],
+            )
+        elif org_name not in option.org_names:
+            option.org_names.append(org_name)
+    return list(options.values())
 
 
 async def get_user_by_id(db: AsyncSession, user_id: uuid.UUID) -> User | None:
@@ -230,8 +268,15 @@ async def build_user_response(
     user: User,
     *,
     include_relationship_metadata: bool = True,
+    preferred_role: str | None = None,
 ) -> UserResponse:
-    """Build a UserResponse with organization and role info."""
+    """Build a UserResponse with organization and role info.
+
+    ``preferred_role`` makes the *session* adopt one of the user's roles without
+    touching the stored primary flags: the login response is what the client uses
+    to pick a home route and permissions, so reporting the role the user just
+    chose is enough to land them in the matching workspace.
+    """
     result = await db.execute(
         select(UserOrganization).where(UserOrganization.user_id == user.id)
     )
@@ -253,6 +298,14 @@ async def build_user_response(
         org_infos.append(info)
         if m.is_primary:
             primary_org = info
+
+    if preferred_role:
+        chosen = next((info for info in org_infos if info.role_name == preferred_role), None)
+        if chosen is not None and chosen is not primary_org:
+            if primary_org is not None:
+                primary_org.is_primary = False
+            chosen.is_primary = True
+            primary_org = chosen
 
     primary_role_name = primary_org.role_name if primary_org else ""
     if primary_role_name == "platform_admin":

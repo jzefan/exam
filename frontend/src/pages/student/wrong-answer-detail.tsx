@@ -130,6 +130,11 @@ export function WrongAnswerDetailPage() {
             {getStudentQuestionTypeLabel(item.question_type, locale)}
           </span>
           <span className="text-[12px] text-muted-foreground">{item.exam_title}</span>
+          {item.exam_question_order != null ? (
+            <span className="text-[12px] text-muted-foreground">
+              {tStudent("result_question_number", { number: item.exam_question_order + 1 }, locale)}
+            </span>
+          ) : null}
           <span className="text-[12px] text-muted-foreground">{tStudent("wrong_detail_recent_wrong", { time: formatStudentDate(item.last_wrong_at) }, locale)}</span>
         </div>
         <h1

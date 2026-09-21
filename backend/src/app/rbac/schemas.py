@@ -135,6 +135,9 @@ class StudentRead(BaseModel):
     class_name: str | None = None
     username: str
     is_active: bool
+    # True when the submitted phone/student id already belonged to an account and
+    # this call attached the student role to it instead of creating a new account.
+    attached_to_existing_account: bool = False
 
     class Config:
         from_attributes = True

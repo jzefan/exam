@@ -1335,6 +1335,9 @@ export function GradingCenterPage() {
             </div>
           </div>
           <div className="flex justify-self-end items-center gap-2">
+            {!scopedExamId && <Button variant="outline" size="sm" onClick={() => navigate("/grading/chaoxing")}>
+              学习通
+            </Button>}
             {backTo ? (
               <Button variant="outline" size="sm" onClick={() => navigate(backTo)}>
                 <ArrowLeft className="h-4 w-4" />

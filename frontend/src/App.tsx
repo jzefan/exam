@@ -112,6 +112,8 @@ const JobModelFastCreate = lazyNamed(() => import("./pages/job-models/fast-creat
 const JobModelUploadAI = lazyNamed(() => import("./pages/job-models/upload-ai"), "JobModelUploadAI");
 const ModelConfigPage = lazyNamed(() => import("./pages/settings/model-config"), "ModelConfigPage");
 const GradingCenterPage = lazyNamed(() => import("./pages/grading"), "GradingCenterPage");
+const ChaoxingResultsPage = lazyNamed(() => import("./pages/chaoxing/results"), "ChaoxingResultsPage");
+const ChaoxingPage = lazyNamed(() => import("./pages/chaoxing"), "ChaoxingPage");
 const OperationsRegradingPage = lazyNamed(() => import("./pages/operations/regrading"), "OperationsRegradingPage");
 const OperationsActivityLogsPage = lazyNamed(
   () => import("./pages/operations/activity-logs"),
@@ -323,6 +325,8 @@ function App() {
                     <Route path="/tags" element={<TagList />} />
                     <Route path="/knowledge" element={<KnowledgeManagementPage />} />
                     <Route path="/grading" element={<GradingCenterPage />} />
+                    <Route path="/grading/chaoxing" element={<ChaoxingPage />} />
+                    <Route path="/grading/chaoxing/results" element={<ChaoxingResultsPage />} />
                     <Route element={<RoleGuard allow={["platform_admin"]} />}>
                       <Route path="/operations" element={<Navigate to="/operations/regrading" replace />} />
                       <Route path="/operations/regrading" element={<OperationsRegradingPage />} />

@@ -5,6 +5,7 @@ import type { IQuestion, QuestionType } from "@/types";
 import {
   ALL_DIFFICULTIES,
   buildSmartPracticeConversationPrompt,
+  collectKnowledgeScopeIds,
   parseSmartPracticeChatPrompt,
   parseSmartPracticePrompt,
   selectSmartPracticeQuestions,
@@ -164,6 +165,75 @@ describe("smart practice selection", () => {
         knowledgePointId: "kp-1",
       }).count,
     ).toBe(60);
+  });
+
+  const chapterOptions = [
+    { id: "kp-physical", name: "物理层", path: "计算机网络 / 物理层" },
+    {
+      id: "kp-media",
+      name: "传输介质",
+      path: "计算机网络 / 物理层 / 传输介质",
+    },
+    {
+      id: "kp-multiplex",
+      name: "信道复用",
+      path: "计算机网络 / 物理层 / 信道复用",
+    },
+    { id: "kp-network", name: "网络层", path: "计算机网络 / 网络层" },
+  ];
+
+  it("知识点取题范围包含选中节点自身及其所有子知识点", () => {
+    expect(collectKnowledgeScopeIds("kp-physical", chapterOptions)).toEqual([
+      "kp-physical",
+      "kp-media",
+      "kp-multiplex",
+    ]);
+    expect(collectKnowledgeScopeIds("kp-media", chapterOptions)).toEqual([
+      "kp-media",
+    ]);
+    expect(collectKnowledgeScopeIds(null, chapterOptions)).toEqual([]);
+    // 选项里没有这个节点时，退化为只匹配它自己，避免意外放开范围。
+    expect(collectKnowledgeScopeIds("kp-unknown", chapterOptions)).toEqual([
+      "kp-unknown",
+    ]);
+  });
+
+  it("选中上级知识点时把子知识点的题目一起选题，但不误收兄弟节点", () => {
+    const source = [
+      question("a", "choice", 1, "kp-physical"),
+      question("b", "choice", 1, "kp-media"),
+      question("c", "choice", 1, "kp-multiplex"),
+      question("d", "choice", 1, "kp-network"),
+    ];
+    const picked = selectSmartPracticeQuestions(source, {
+      count: 10,
+      difficulty: 1,
+      knowledgePointId: "kp-physical",
+      knowledgePointIds: collectKnowledgeScopeIds(
+        "kp-physical",
+        chapterOptions,
+      ),
+      searchTerms: [],
+    });
+
+    expect(new Set(picked.map((item) => item.id))).toEqual(
+      new Set(["a", "b", "c"]),
+    );
+  });
+
+  it("未传范围 ids 时仍按单个知识点精确筛选", () => {
+    const source = [
+      question("a", "choice", 1, "kp-physical"),
+      question("b", "choice", 1, "kp-media"),
+    ];
+    const picked = selectSmartPracticeQuestions(source, {
+      count: 10,
+      difficulty: 1,
+      knowledgePointId: "kp-physical",
+      searchTerms: [],
+    });
+
+    expect(picked.map((item) => item.id)).toEqual(["a"]);
   });
 
   it("将历史题单和最新要求组成完整更新提示词", () => {

@@ -5,8 +5,18 @@ import { render, screen, waitFor } from "@/test/test-utils";
 import type { IPaperDetail } from "@/types";
 
 vi.mock("@/pages/exams/components/ClassStudentSelector", () => ({
-  ClassStudentSelector: ({ onChange }: { onChange: (ids: string[]) => void }) => (
-    <button type="button" onClick={() => onChange(["student-1"])}>
+  ClassStudentSelector: ({
+    onChange,
+    defaultClassIds,
+  }: {
+    onChange: (ids: string[]) => void;
+    defaultClassIds?: string[];
+  }) => (
+    <button
+      type="button"
+      data-default-class-ids={defaultClassIds?.join(",") ?? ""}
+      onClick={() => onChange(["student-1"])}
+    >
       选择学生
     </button>
   ),
@@ -55,11 +65,16 @@ describe("PaperQuickPublishDialog", () => {
           paper={paper}
           courseKpId="course-1"
           courseSemesterId="semester-1"
+          defaultClassIds={["class-1"]}
           onOpenChange={vi.fn()}
         />,
       );
 
       await user.click(screen.getByRole("button", { name: "选择学生" }));
+      expect(screen.getByRole("button", { name: "选择学生" })).toHaveAttribute(
+        "data-default-class-ids",
+        "class-1",
+      );
       await user.click(screen.getByRole("button", { name: submitLabel }));
 
       await waitFor(() => expect(paperApiRequest).toHaveBeenCalled());

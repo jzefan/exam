@@ -1,7 +1,7 @@
 import { useRegister } from "@refinedev/core";
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Check, Eye, EyeOff, Monitor, Users } from "lucide-react";
+import { Check, Eye, EyeOff, GraduationCap, Monitor, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -49,7 +49,16 @@ export function RegisterPage() {
       desc: "管理考生、部门、测评与阅卷",
       icon: Monitor,
     },
+    {
+      // Not a registerable persona: it only swaps the form for the guidance a
+      // student actually needs, so nobody is left guessing at the teacher cards.
+      value: "student",
+      title: "我是学生",
+      desc: "账号由任课老师创建，无需注册",
+      icon: GraduationCap,
+    },
   ];
+  const isStudentPersona = form.persona === "student";
 
   const validatePassword = (value: string) => {
     if (!value) {
@@ -73,6 +82,9 @@ export function RegisterPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isStudentPersona) {
+      return;
+    }
     setError("");
     const nextPasswordError = validatePassword(form.password);
     const nextConfirmPasswordError = validateConfirmPassword(form.confirmPassword);
@@ -124,10 +136,7 @@ export function RegisterPage() {
 
   return (
     <AuthShell cardClassName="auth-card-register">
-      <AuthHeader
-        title="创建账号"
-        subtitle="适用于高校师生、企业培训与职业认证"
-      />
+      <AuthHeader title="创建账号" />
 
       {error && (
         <div className="auth-error-box">
@@ -172,114 +181,125 @@ export function RegisterPage() {
           </div>
         </div>
 
-        <div className="auth-field auth-field-span-2">
-          <Label htmlFor="register-username">用户名</Label>
-          <Input
-            id="register-username"
-            type="text"
-            placeholder="请设置登录用户名"
-            autoComplete="username"
-            value={form.username}
-            onChange={(e) => updateField("username", e.target.value)}
-            required
-            autoFocus
-          />
-        </div>
-
-        <div className="auth-field auth-field-span-2">
-          <Label htmlFor="register-email">邮箱</Label>
-          <Input
-            id="register-email"
-            type="email"
-            placeholder="请输入邮箱，用于后续找回密码"
-            autoComplete="email"
-            value={form.email}
-            onChange={(e) => updateField("email", e.target.value)}
-          />
-        </div>
-
-        <div className="auth-field">
-          <Label htmlFor="register-password">密码</Label>
-          <div className="auth-input-wrap">
-            <Input
-              id="register-password"
-              type={showPassword ? "text" : "password"}
-              className="auth-input-with-suffix"
-              placeholder="请输入密码（至少6位）"
-              autoComplete="new-password"
-              value={form.password}
-              onBlur={(e) => setPasswordError(validatePassword(e.target.value))}
-              onChange={(e) => {
-                updateField("password", e.target.value);
-                if (passwordError) {
-                  setPasswordError(validatePassword(e.target.value));
-                }
-              }}
-              required
-            />
-            <button
-              type="button"
-              onClick={() => setShowPassword(!showPassword)}
-              className="auth-input-suffix"
-              aria-label={showPassword ? "隐藏密码" : "显示密码"}
-            >
-              {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
-            </button>
+        {isStudentPersona ? (
+          <div className="auth-student-notice auth-field-span-2" role="note">
+            <p className="auth-student-notice-title">学生无需注册</p>
+            <p>
+              你的账号由任课老师创建：请老师把手机号（或学号）加入班级，之后用该手机号登录，初始密码就是手机号，首次登录会要求修改密码。
+            </p>
           </div>
-          <div className="auth-strength" aria-hidden={!form.password}>
-            {[1, 2, 3].map((level) => (
-              <span
-                key={level}
-                className={cn(
-                  passwordStrength >= level && passwordStrength === 1 && "auth-strength-weak",
-                  passwordStrength >= level && passwordStrength === 2 && "auth-strength-medium",
-                  passwordStrength >= level && passwordStrength === 3 && "auth-strength-strong",
-                )}
+        ) : (
+          <>
+            <div className="auth-field auth-field-span-2">
+              <Label htmlFor="register-username">用户名</Label>
+              <Input
+                id="register-username"
+                type="text"
+                placeholder="请设置登录用户名"
+                autoComplete="username"
+                value={form.username}
+                onChange={(e) => updateField("username", e.target.value)}
+                required
+                autoFocus
               />
-            ))}
-          </div>
-          {form.password && (
-            <p className="auth-strength-hint">强度：{strengthLabel}</p>
-          )}
-          {passwordError && <p className="auth-error-text">{passwordError}</p>}
-        </div>
+            </div>
 
-        <div className="auth-field">
-          <Label htmlFor="register-confirm-password">确认密码</Label>
-          <div className="auth-input-wrap">
-            <Input
-              id="register-confirm-password"
-              type={showConfirmPassword ? "text" : "password"}
-              className="auth-input-with-suffix"
-              placeholder="再次输入密码"
-              autoComplete="new-password"
-              value={form.confirmPassword}
-              onChange={(e) => updateField("confirmPassword", e.target.value)}
-              onBlur={(e) => setConfirmPasswordError(validateConfirmPassword(e.target.value))}
-              required
-            />
-            <button
-              type="button"
-              onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-              className="auth-input-suffix"
-              aria-label={showConfirmPassword ? "隐藏确认密码" : "显示确认密码"}
-            >
-              {showConfirmPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
-            </button>
-          </div>
-          {confirmPasswordError && <p className="auth-error-text">{confirmPasswordError}</p>}
-        </div>
+            <div className="auth-field auth-field-span-2">
+              <Label htmlFor="register-email">邮箱</Label>
+              <Input
+                id="register-email"
+                type="email"
+                placeholder="请输入邮箱，用于后续找回密码"
+                autoComplete="email"
+                value={form.email}
+                onChange={(e) => updateField("email", e.target.value)}
+              />
+            </div>
 
-        <Button type="submit" className="auth-submit auth-register-submit auth-field-span-2" disabled={isPending}>
-          {isPending ? (
-            <span className="flex items-center gap-2">
-              <span className="auth-submit-spinner" />
-              注册中...
-            </span>
-          ) : (
-            "注册"
-          )}
-        </Button>
+            <div className="auth-field">
+              <Label htmlFor="register-password">密码</Label>
+              <div className="auth-input-wrap">
+                <Input
+                  id="register-password"
+                  type={showPassword ? "text" : "password"}
+                  className="auth-input-with-suffix"
+                  placeholder="请输入密码（至少6位）"
+                  autoComplete="new-password"
+                  value={form.password}
+                  onBlur={(e) => setPasswordError(validatePassword(e.target.value))}
+                  onChange={(e) => {
+                    updateField("password", e.target.value);
+                    if (passwordError) {
+                      setPasswordError(validatePassword(e.target.value));
+                    }
+                  }}
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="auth-input-suffix"
+                  aria-label={showPassword ? "隐藏密码" : "显示密码"}
+                >
+                  {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+                </button>
+              </div>
+              <div className="auth-strength" aria-hidden={!form.password}>
+                {[1, 2, 3].map((level) => (
+                  <span
+                    key={level}
+                    className={cn(
+                      passwordStrength >= level && passwordStrength === 1 && "auth-strength-weak",
+                      passwordStrength >= level && passwordStrength === 2 && "auth-strength-medium",
+                      passwordStrength >= level && passwordStrength === 3 && "auth-strength-strong",
+                    )}
+                  />
+                ))}
+              </div>
+              {form.password && (
+                <p className="auth-strength-hint">强度：{strengthLabel}</p>
+              )}
+              {passwordError && <p className="auth-error-text">{passwordError}</p>}
+            </div>
+
+            <div className="auth-field">
+              <Label htmlFor="register-confirm-password">确认密码</Label>
+              <div className="auth-input-wrap">
+                <Input
+                  id="register-confirm-password"
+                  type={showConfirmPassword ? "text" : "password"}
+                  className="auth-input-with-suffix"
+                  placeholder="再次输入密码"
+                  autoComplete="new-password"
+                  value={form.confirmPassword}
+                  onChange={(e) => updateField("confirmPassword", e.target.value)}
+                  onBlur={(e) => setConfirmPasswordError(validateConfirmPassword(e.target.value))}
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  className="auth-input-suffix"
+                  aria-label={showConfirmPassword ? "隐藏确认密码" : "显示确认密码"}
+                >
+                  {showConfirmPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+                </button>
+              </div>
+              {confirmPasswordError && <p className="auth-error-text">{confirmPasswordError}</p>}
+            </div>
+
+            <Button type="submit" className="auth-submit auth-register-submit auth-field-span-2" disabled={isPending}>
+              {isPending ? (
+                <span className="flex items-center gap-2">
+                  <span className="auth-submit-spinner" />
+                  注册中...
+                </span>
+              ) : (
+                "注册"
+              )}
+            </Button>
+          </>
+        )}
       </form>
 
       <p className="auth-switch">
