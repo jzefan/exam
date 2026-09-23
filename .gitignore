@@ -22,3 +22,6 @@ backend/test_job_models_service.db
 deploy/env/*.env
 *.tar.gz
 .deploy-check/
+
+# vitest 临时配置文件，跑测试时生成
+frontend/vitest.config.ts.timestamp-*.mjs
