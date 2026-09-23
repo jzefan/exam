@@ -34,4 +34,15 @@ describe("学习通题目 → 题库统一展示", () => {
     expect(getQuestionAnswerText(preview)).toBe("重复执行语句");
     expect(preview.score).toBe(5);
   });
+
+  it("选择题从源站题干还原选项并在题目卡中分开展示", () => {
+    const preview = buildQuestionPreview({
+      ...base,
+      question_type: "单选题",
+      content: "Python 中哪一个是合法变量名？\nA. 1name\nB. user_name\nC. class\nD. user-name",
+      reference_answer: "B",
+    });
+    expect(preview.content.text).toBe("Python 中哪一个是合法变量名？");
+    expect(preview.options).toEqual({ A: "1name", B: "user_name", C: "class", D: "user-name" });
+  });
 });

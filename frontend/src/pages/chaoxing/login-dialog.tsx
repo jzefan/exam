@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { PointerEvent } from "react";
-import { Loader2, MousePointer2 } from "lucide-react";
+import { MousePointer2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PixelGrid, PixelLoader } from "@/components/ui/pixel-loader";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ConnectionError, connectionFetch, connectionRequest } from "./api";
@@ -16,6 +17,8 @@ export function LoginDialog({ session, open, onOpenChange, onVerified, onExpired
   const [error, setError] = useState("");
   const [verifying, setVerifying] = useState(false);
   const [inputFocused, setInputFocused] = useState(false);
+  const [credentialStatus, setCredentialStatus] = useState("");
+  const [credentialsSaved, setCredentialsSaved] = useState(false);
   const [pointer, setPointer] = useState<Point | null>(null);
   const keyboard = useRef<HTMLTextAreaElement>(null);
   const composing = useRef(false);
@@ -55,13 +58,36 @@ export function LoginDialog({ session, open, onOpenChange, onVerified, onExpired
       }
       if (!stopped) timer = setTimeout(poll, 900);
     };
-    void poll();
+    const prepare = async () => {
+      try {
+        const saved = await connectionRequest<{
+          saved: boolean; filled: boolean; persistence_enabled: boolean; unreadable?: boolean;
+        }>(`${base}/autofill`, { method: "POST" });
+        if (stopped) return;
+        setCredentialsSaved(saved.saved);
+        setCredentialStatus(saved.unreadable
+          ? "已保存的账号无法解密，请重新输入以更新"
+          : saved.filled
+            ? "已自动填写保存的账号，请核对后登录"
+            : saved.saved
+              ? "已记住账号；当前登录页已有内容，未覆盖"
+              : saved.persistence_enabled
+                ? "首次登录后会加密保存账号，下次自动填写"
+                : "");
+      } catch (cause) {
+        if (!stopped) handleError(cause);
+      }
+      if (!stopped) void poll();
+    };
+    void prepare();
     return () => {
       stopped = true; active.current = false; abort.abort(); clearTimeout(timer);
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       setFrame("");
       setInputFocused(false);
       setPointer(null);
+      setCredentialStatus("");
+      setCredentialsSaved(false);
     };
     // The session is stable while the dialog is open; callbacks are read through a ref.
   }, [base, open]);
@@ -69,7 +95,13 @@ export function LoginDialog({ session, open, onOpenChange, onVerified, onExpired
   const send = (action: object) => {
     queue.current = queue.current.then(async () => {
       if (!active.current) return;
-      await connectionRequest(`${base}/actions`, { method: "POST", body: JSON.stringify(action) });
+      const result = await connectionRequest<{ credentials_saved?: boolean; credentials_pending?: boolean }>(`${base}/actions`, { method: "POST", body: JSON.stringify(action) });
+      if (result?.credentials_saved) {
+        setCredentialsSaved(true);
+        setCredentialStatus("账号已加密保存，下次会自动填写");
+      } else if (result?.credentials_pending) {
+        setCredentialStatus("输入停止后会自动加密保存账号");
+      }
     }).catch(handleError);
   };
   const point = (event: PointerEvent<HTMLDivElement>): Point => {
@@ -88,14 +120,22 @@ export function LoginDialog({ session, open, onOpenChange, onVerified, onExpired
     } catch (cause) { handleError(cause); }
     finally { setVerifying(false); }
   };
+  const forgetCredentials = async () => {
+    try {
+      await connectionRequest<void>("/credentials", { method: "DELETE" });
+      setCredentialsSaved(false);
+      setCredentialStatus("已清除记住的账号");
+    } catch (cause) { handleError(cause); }
+  };
 
   return <Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent className="max-h-[95dvh] max-w-[1128px] overflow-y-auto p-4 sm:w-[95vw]">
-      <DialogHeader>
+    <DialogContent className="flex h-[min(95dvh,900px)] max-h-[95dvh] max-w-[1128px] flex-col gap-0 overflow-hidden p-0 sm:w-[95vw]">
+      <DialogHeader className="shrink-0 px-4 pb-3 pt-4">
         <DialogTitle>连接学习通</DialogTitle>
-        <DialogDescription>在下方学习通页面登录。输入和登录状态由本系统服务器临时处理，断开后清除。</DialogDescription>
+        <DialogDescription>在下方学习通页面登录。账号密码会加密记住并在下次自动填写；登录状态仍会在断开后清除。</DialogDescription>
       </DialogHeader>
-      {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
+      {error && <Alert className="mx-4 mb-3 shrink-0" variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-3">
       <div className="overflow-auto rounded-md border border-border bg-muted/30">
         <div
           role="group" aria-label="学习通远程登录页面"
@@ -122,7 +162,7 @@ export function LoginDialog({ session, open, onOpenChange, onVerified, onExpired
           onWheel={(event) => { if (frame && !verifying) send({ kind: "scroll", delta: Math.round(Math.max(-1500, Math.min(1500, event.deltaY))) }); }}
         >
           {frame ? <img className="block size-full" src={frame} alt="学习通官方登录页面的实时画面" draggable={false} />
-            : <div className="flex h-full min-h-60 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />正在加载登录页面</div>}
+            : <div className="flex h-full min-h-60 items-center justify-center"><PixelLoader label="正在加载登录页面" /></div>}
           {pointer && <MousePointer2
             aria-hidden="true"
             className="pointer-events-none absolute z-10 size-5 -translate-x-0.5 -translate-y-0.5 fill-background text-primary drop-shadow-[0_1px_2px_rgba(0,0,0,0.35)]"
@@ -154,14 +194,13 @@ export function LoginDialog({ session, open, onOpenChange, onVerified, onExpired
           />
         </div>
       </div>
-      <div className="flex items-center gap-2 text-xs text-muted-foreground" role="status" aria-live="polite">
-        <span className={`size-2 rounded-full ${inputFocused ? "bg-primary" : "bg-muted-foreground/40"}`} aria-hidden="true" />
-        {inputFocused ? "键盘输入已激活，可直接输入学习通账号或密码" : "点击学习通输入框后即可直接输入"}
+      {credentialStatus && <div className="text-xs text-muted-foreground" role="status">{credentialStatus}</div>}
       </div>
-      <DialogFooter>
+      <DialogFooter className="shrink-0 border-t border-border px-4 py-3">
+        {credentialsSaved && <Button className="mr-auto" variant="ghost" onClick={() => void forgetCredentials()}>清除记住的账号</Button>}
         <Button variant="outline" onClick={() => onOpenChange(false)}>暂时关闭</Button>
         <Button onClick={() => void verify()} disabled={verifying || !frame}>
-          {verifying && <Loader2 className="animate-spin" />}已完成登录，验证连接
+          {verifying && <PixelGrid />}已完成登录，验证连接
         </Button>
       </DialogFooter>
     </DialogContent>

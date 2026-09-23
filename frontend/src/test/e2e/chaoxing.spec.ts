@@ -1,5 +1,48 @@
 import { expect, test } from "@playwright/test";
 
+test("考生列表批量提交全部已交答卷的主观题评分（模拟源站）", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("access_token", "test-only-token");
+    localStorage.setItem("user", JSON.stringify({ id: "teacher", username: "teacher", persona: "teacher", primary_org: { role_name: "teacher" }, organizations: [{ role_name: "teacher" }] }));
+  });
+  const reviewed: string[] = [];
+  const imports: Record<string, unknown>[] = [];
+  const graded: string[] = [];
+  await page.route("**/api/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    let json: unknown = {};
+    if (path.endsWith("/capabilities")) json = { enabled: true, reason: "" };
+    else if (path.endsWith("/session")) json = { id: "session", connected: true, width: 1080, height: 720, remaining_seconds: 7200 };
+    else if (path.endsWith("/courses")) json = { items: [{ id: "course", title: "程序设计", readable: true }], semesters: [], notice: "" };
+    else if (path.endsWith("/exams")) json = { items: [{ id: "exam", title: "期中考试", submitted_count: 2, readable: true }], notice: "" };
+    else if (path.endsWith("/candidates")) json = { items: [
+      { id: "a", name: "张三", student_no: "001", status: "submitted", readable: true },
+      { id: "b", name: "李四", student_no: "002", status: "submitted", readable: true },
+      { id: "c", name: "王五", student_no: "003", status: "unsubmitted", readable: false },
+    ], expected_submitted: 2, notice: "当前为读取验证，尚未确认分页完整性；请与学习通核对人数和题目。" };
+    else if (path.endsWith("/review")) {
+      reviewed.push(path);
+      json = { review_hash: "a".repeat(64), declared_max_score: 5, questions: [
+        { source_id: "q1", question_type: "简答题", content: "解释循环", student_answer: "重复执行", reference_answer: "反复执行", max_score: 5, source_score: null, objective: false, requires_manual_review: false },
+      ] };
+    } else if (path.endsWith("/import")) { imports.push(route.request().postDataJSON()); json = { id: path.includes("/a/") ? "saved-a" : "saved-b" }; }
+    else if (path.endsWith("/grade")) { graded.push(path); json = { queued: 1 }; }
+    else if (path.includes("unread-count")) json = { count: 0 };
+    else if (path.includes("notification")) json = [];
+    await route.fulfill({ json });
+  });
+  await page.goto("/grading/chaoxing");
+  await page.getByRole("button", { name: "读取考试" }).click();
+  await page.getByRole("button", { name: "读取考生" }).click();
+  await expect(page.getByText("当前为读取验证，尚未确认分页完整性；请与学习通核对人数和题目。")).toHaveCount(0);
+  await page.getByRole("textbox", { name: "搜索考生" }).fill("张三");
+  await page.getByRole("button", { name: "AI 评分" }).click();
+  await expect(page.getByText(/批量处理结束：2\/2 份/)).toBeVisible();
+  expect(reviewed).toHaveLength(2);
+  expect(imports).toEqual(Array.from({ length: 2 }, () => ({ review_hash: "a".repeat(64), completeness_confirmed: false })));
+  expect(graded).toEqual(["/api/chaoxing/grading/candidates/saved-a/grade", "/api/chaoxing/grading/candidates/saved-b/grade"]);
+});
+
 test("免安装连接交互、逐级读取与断开（模拟源站）", async ({ page }) => {
   let connected = false;
   let exists = false;
@@ -39,6 +82,12 @@ test("免安装连接交互、逐级读取与断开（模拟源站）", async ({
   const errors: string[] = [];
   page.on("pageerror", error => { errors.push(error.message); console.error(error.message); });
   await page.goto("/grading/chaoxing");
+  const headerBounds = await page.locator("header").filter({ has: page.getByRole("heading", { name: "学习通", exact: true }) }).evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    return { left: rect.left, right: rect.right, viewport: innerWidth };
+  });
+  expect(headerBounds.left).toBeCloseTo(0, 0);
+  expect(headerBounds.right).toBeCloseTo(headerBounds.viewport, 0);
   await page.getByRole("button", { name: "连接学习通", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
@@ -46,7 +95,7 @@ test("免安装连接交互、逐级读取与断开（模拟源站）", async ({
   const surface = page.getByRole("group", { name: "学习通远程登录页面" });
   await surface.click({ position: { x: 100, y: 100 } });
   await page.getByLabel("学习通远程键盘输入").pressSequentially("demo");
-  await expect(page.getByText("键盘输入已激活，可直接输入学习通账号或密码")).toBeVisible();
+  await expect(page.getByText("键盘输入已激活，可直接输入学习通账号或密码")).toHaveCount(0);
   await expect.poll(() => actions.length).toBeGreaterThan(1);
   expect(actions[0].kind).toBe("pointer");
   await expect.poll(() => actions.filter(a => a.kind === "text").map(a => a.text).join("")).toBe("demo");
@@ -110,19 +159,19 @@ test("保存答卷、AI评分、教师确认及导出（模拟模型）", async 
   await page.getByRole("button", { name: "读取考试" }).click();
   await page.getByRole("button", { name: "读取考生" }).click();
   await page.getByRole("button", { name: "查看答卷" }).click();
-  await expect(page.getByRole("button", { name: "保存答卷并阅卷" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "AI 评分", exact: true })).toBeDisabled();
   await page.getByRole("checkbox").check();
-  await page.getByRole("button", { name: "保存答卷并阅卷" }).click();
-  await expect(page).toHaveURL(/results\?candidate=c1/);
   await page.getByRole("button", { name: "AI 评分", exact: true }).click();
+  await expect(page).toHaveURL(/results\?candidate=c1/);
+  await expect(page.getByRole("heading", { name: "学习通阅卷记录" })).toBeVisible();
   await expect(page.getByRole("button", { name: "AI 评分", exact: true })).toBeDisabled();
   await expect(page.getByText("待教师确认", { exact: true })).toBeVisible();
   expect(gradeCalls).toBe(1);
-  await expect(page.getByText("最终成绩 待确认", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("最终成绩").getByText("待确认", { exact: true })).toBeVisible();
   await page.getByLabel("第 1 题确认分数").fill("2.4");
   await page.getByLabel("第 1 题评语").fill("复核通过");
   await page.getByRole("button", { name: "确认分数", exact: true }).click();
-  await expect(page.getByText("最终成绩 2.4", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("最终成绩").getByText("2.4", { exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: test.info().outputPath("chaoxing-grading.png"), fullPage: true });
   await page.getByRole("link", { name: "返回", exact: true }).click();
@@ -133,9 +182,7 @@ test("保存答卷、AI评分、教师确认及导出（模拟模型）", async 
   expect(errors).toEqual([]);
 });
 
-test("长名单可滚动，查看答卷后答卷进入视口", async ({ page, isMobile }) => {
-  // 两个已修回归：/grading/chaoxing 曾被当成整屏页（main overflow-hidden），
-  // 名单超一屏就再也滚不动；答卷渲染在整张名单下方，点「查看答卷」看不到任何变化。
+test("长名单进入独立考生阅卷视图，只展示主观题", async ({ page, isMobile }) => {
   const user = { id: "teacher", full_name: "测试教师", username: "teacher", persona: "teacher", primary_org: { role_name: "teacher" }, organizations: [{ role_name: "teacher" }] };
   await page.addInitScript(user => { localStorage.setItem("access_token", "test-only-token"); localStorage.setItem("user", JSON.stringify(user)); }, user);
   const candidates = Array.from({ length: 30 }, (_, index) => ({
@@ -146,10 +193,10 @@ test("长名单可滚动，查看答卷后答卷进入视口", async ({ page, is
     readable: true,
   }));
   const review = {
-    questions: [1, 2].map(position => ({
-      source_id: `q${position}`, question_type: "简答题", content: `第 ${position} 题`, student_answer: "for n in range(3):\n    print(n)",
-      reference_answer: "", max_score: 20, source_score: null, objective: false, requires_manual_review: false,
-    })),
+    questions: [
+      { source_id: "q1", question_type: "单选题", content: "合法变量名是？\nA. 1name\nB. user_name\nC. class\nD. user-name", student_answer: "B", reference_answer: "B", max_score: 2, source_score: 2, objective: true, requires_manual_review: false },
+      { source_id: "q2", question_type: "简答题", content: "第 2 题", student_answer: "for n in range(3):\n    print(n)", reference_answer: "", max_score: 20, source_score: null, objective: false, requires_manual_review: false },
+    ],
     review_hash: "a".repeat(64), declared_max_score: 100, notice: "",
   };
   const errors: string[] = [];
@@ -172,20 +219,81 @@ test("长名单可滚动，查看答卷后答卷进入视口", async ({ page, is
   await page.getByRole("button", { name: "读取考试" }).click();
   await page.getByRole("button", { name: "读取考生" }).click();
   await expect(page.getByText(candidates[29].student_no, { exact: true })).toBeAttached();
-  const main = page.locator("main");
-  expect(await main.evaluate(element => getComputedStyle(element).overflowY)).toBe("auto");
-  if (!isMobile) {
-    // 真实滚轮：滚不动说明内容被裁掉了。触摸模拟下 wheel 不生效，只在桌面指针下断言。
-    await page.mouse.move(540, 500);
-    await page.mouse.wheel(0, 1600);
-    await expect.poll(() => main.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
-    await expect(page.locator("table tbody tr").last()).toBeInViewport();
-  }
-  // 点第一行的「查看答卷」：答卷在名单下方，必须自己进入视口，否则用户以为没反应。
-  await main.evaluate(element => { element.scrollTop = 0; });
+  await expect(page.getByRole("region", { name: "考生列表" }).locator("tbody tr")).toHaveCount(30);
   await page.getByRole("button", { name: "查看答卷" }).first().click();
-  await expect(page.getByText("已读取 2 题", { exact: false })).toBeInViewport();
-  await expect(page.locator("pre").first()).toHaveText("for n in range(3):\n    print(n)");
+  await expect(page.getByRole("complementary", { name: "按考生阅卷导航" })).toBeVisible();
+  await expect(page.getByText("主观题答题卡")).toBeVisible();
+  if (isMobile) await expect(page.getByText("主观题答题卡")).toBeInViewport();
+  await page.getByRole("button", { name: "下一个" }).click();
+  await expect(page.getByRole("complementary", { name: "按考生阅卷导航" }).getByText("考生2")).toBeVisible();
+  await page.getByRole("button", { name: "上一个" }).click();
+  await expect(page.getByRole("complementary", { name: "按考生阅卷导航" }).getByText("考生1", { exact: true })).toBeVisible();
+  await expect(page.getByText("B. user_name")).toHaveCount(0);
+  await expect(page.getByText(/客观题 1 题沿用学习通得分/)).toBeVisible();
+  await expect(page.locator("pre").last()).toHaveText("for n in range(3):\n    print(n)");
   await page.screenshot({ path: test.info().outputPath("chaoxing-long-roster.png") });
+  expect(errors).toEqual([]);
+});
+
+test("长等待的提示钉在屏幕中央，不随滚动跑掉也不吃滚动", async ({ page }) => {
+  const user = { id: "teacher", full_name: "测试教师", username: "teacher", persona: "teacher", primary_org: { role_name: "teacher" }, organizations: [{ role_name: "teacher" }] };
+  await page.addInitScript(user => { localStorage.setItem("access_token", "test-only-token"); localStorage.setItem("user", JSON.stringify(user)); }, user);
+  const candidates = Array.from({ length: 30 }, (_, index) => ({
+    id: `candidate-${index + 1}`, name: `考生${index + 1}`, student_no: `3256240${String(100 + index)}`, status: "submitted", readable: true,
+  }));
+  const review = {
+    questions: [{ source_id: "q1", question_type: "简答题", content: "解释循环", student_answer: "重复执行", reference_answer: "", max_score: 20, source_score: null, objective: false, requires_manual_review: false }],
+    review_hash: "a".repeat(64), declared_max_score: 100, notice: "",
+  };
+  // 把 /review 挂住，好让「读取中」的浮层停在屏幕上量几何。
+  let release: () => void = () => {};
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.route("**/api/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    const listing = (items: object[]) => ({ items, complete: false, notice: "尚未确认分页完整性，请与学习通核对。" });
+    if (path.endsWith("/review")) { await held; return route.fulfill({ json: review }); }
+    let json: unknown = {};
+    if (path.endsWith("/capabilities")) json = { enabled: true, reason: "" };
+    else if (path === "/api/chaoxing/session") json = { id: "session", connected: true, width: 1080, height: 720, remaining_seconds: 7200 };
+    else if (path.endsWith("/courses")) json = { ...listing([{ id: "course", title: "Python 程序设计", readable: true }]), semesters: [] };
+    else if (path.endsWith("/exams")) json = listing([{ id: "exam", title: "期中考试", submitted_count: 30, readable: true }]);
+    else if (path.endsWith("/candidates")) json = listing(candidates);
+    else if (path.includes("unread-count")) json = { count: 0 };
+    else if (path.includes("notification")) json = [];
+    await route.fulfill({ json });
+  });
+  await page.goto("/grading/chaoxing");
+  await page.getByRole("button", { name: "读取考试" }).click();
+  await page.getByRole("button", { name: "读取考生" }).click();
+  await expect(page.getByText(candidates[29].student_no, { exact: true })).toBeAttached();
+  await page.getByRole("button", { name: "查看答卷" }).first().click();
+
+  const status = page.getByRole("status").filter({ hasText: "正在读取答卷" });
+  await expect(status).toBeVisible();
+  const shell = status.locator("xpath=../..");
+  // 位置与文档流无关、也不吃交互。
+  expect(await shell.evaluate(element => getComputedStyle(element).position)).toBe("fixed");
+  expect(await shell.evaluate(element => getComputedStyle(element).pointerEvents)).toBe("none");
+  const box = await shell.evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    return { width: rect.width, height: rect.height, viewWidth: document.documentElement.clientWidth, viewHeight: document.documentElement.clientHeight };
+  });
+  expect(box.width).toBeCloseTo(box.viewWidth, 0);
+  expect(box.height).toBeCloseTo(box.viewHeight, 0);
+  // 提示本身居中：网格 + 文案 + 秒表的几何中心落在视口中心（容差 2px 容子像素舍入）。
+  const inner = (await status.boundingBox())!;
+  expect(Math.abs(inner.x + inner.width / 2 - box.viewWidth / 2)).toBeLessThan(2);
+  expect(Math.abs(inner.y + inner.height / 2 - box.viewHeight / 2)).toBeLessThan(2);
+  // 页面能滚就滚一段：fixed 元素应停在原处。
+  const scrolled = await page.evaluate(() => { window.scrollTo(0, document.documentElement.scrollHeight); return window.scrollY; });
+  if (scrolled > 0) {
+    const after = (await status.boundingBox())!;
+    expect(Math.abs(after.y - inner.y)).toBeLessThan(1);
+  }
+  await page.screenshot({ path: test.info().outputPath("chaoxing-centered-loader.png") });
+  release();
+  await expect(page.getByText("正在读取答卷")).not.toBeVisible();
   expect(errors).toEqual([]);
 });

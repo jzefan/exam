@@ -1,5 +1,3 @@
-from typing import Literal
-
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -9,7 +7,7 @@ class StrictPayload(BaseModel):
 
 class ImportPaper(StrictPayload):
     review_hash: str = Field(min_length=64, max_length=64)
-    completeness_confirmed: Literal[True]
+    completeness_confirmed: bool
 
 
 class ConfirmScore(StrictPayload):

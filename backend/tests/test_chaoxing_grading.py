@@ -120,6 +120,32 @@ async def test_durable_grading_dedup_confirmation_and_export(db_session, configu
         assert audit.actor_id == OWNER and audit.details["score"] == 2.4
 
 
+async def test_batch_import_stays_unconfirmed_until_teacher_checks_same_paper(db_session, configured):
+    candidate = await service.import_paper(
+        db_session, OWNER, "account", COURSE, EXAM, CANDIDATE, copy.deepcopy(REVIEW),
+        completeness_confirmed=False,
+    )
+    assert candidate.completeness_confirmed is False
+    assert (await service.detail(db_session, candidate.id, OWNER))["completeness_confirmed"] is False
+    assert (await service.enqueue(db_session, candidate.id, OWNER))["queued"] == 1
+    items = await service.current_items(db_session, candidate)
+    await service.confirm(
+        db_session, candidate.id, items[0].id, OWNER,
+        ConfirmScore(version=items[0].version, score=2.4),
+    )
+    assert (await service.detail(db_session, candidate.id, OWNER))["totals"]["final_score"] is None
+
+    checked = await service.import_paper(
+        db_session, OWNER, "account", COURSE, EXAM, CANDIDATE, copy.deepcopy(REVIEW),
+        completeness_confirmed=True,
+    )
+    assert checked.id == candidate.id and checked.revision == 1
+    assert checked.completeness_confirmed is True
+    assert (await service.detail(db_session, candidate.id, OWNER))["totals"]["final_score"] == 4.4
+    assert (await service.enqueue(db_session, candidate.id, OWNER))["queued"] == 0
+    assert await db_session.scalar(select(func.count()).select_from(ExternalItem)) == 2
+
+
 async def test_revision_and_teacher_confirmation_survive_late_ai(db_session, configured):
     factory, fake = configured
     candidate = await save(db_session)
@@ -391,3 +417,13 @@ async def test_import_requires_latest_server_snapshot(db_session, monkeypatch):
     )
     assert saved["revision"] == 1
     assert await db_session.scalar(select(func.count()).select_from(ExternalItem)) == 2
+    bulk = session.remember("candidate", [{**CANDIDATE, "source_id": "bulk-relation"}], ex["id"])[0]
+    session.record(bulk["id"], "candidate")["_review"] = copy.deepcopy(REVIEW)
+    imported = await routes.save_paper(
+        session.id,
+        bulk["id"],
+        ImportPaper(review_hash=service.fingerprint(REVIEW), completeness_confirmed=False),
+        SimpleNamespace(id=OWNER),
+        db_session,
+    )
+    assert (await service.owned_candidate(db_session, imported["id"], OWNER)).completeness_confirmed is False

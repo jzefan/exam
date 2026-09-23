@@ -59,6 +59,26 @@ def test_teacher_course_exam_and_split_roster():
     assert rows[1]["status"] == "unsubmitted" and rows[1]["source_score"] is None
 
 
+def test_course_assignments_are_listed_as_a_distinct_read_only_type():
+    html = '''<li onclick="goTask(this)" data="/mooc-ans/mooc2/work/task?courseId=12&amp;classId=45&amp;cpi=34&amp;workId=789&amp;answerId=0&amp;enc=task-token">
+      <h3 class="workTit">单元练习</h3><p>8人已交 2人未交</p>
+      <a href="/mooc-ans/work/selectWorkQuestionYiPiYue?workId=789&amp;courseId=12">批阅</a>
+    </li>'''
+    items = parsers.assignments(html, "https://mooc1.chaoxing.com/mooc2/work/list")
+    assert len(items) == 1
+    assert items[0]["source_id"] == "work:789"
+    assert items[0]["title"] == "单元练习"
+    assert items[0]["item_type"] == "作业"
+    assert items[0]["submitted_count"] == 8 and items[0]["unsubmitted_count"] == 2
+    assert items[0]["_url"] == (
+        "https://mooc1.chaoxing.com/mooc-ans/work/selectWorkQuestionYiPiYue?workId=789&courseId=12"
+    )
+    assert parsers.assignments(
+        '<li onclick="goTask(this)" data="https://example.com/mooc-ans/mooc2/work/task?workId=789"></li>',
+        "https://mooc1.chaoxing.com/mooc2/work/list",
+    ) == []
+
+
 def test_semester_picker_lists_each_semester_once():
     # The live course page ships two `select[name="xq"]` elements, so a naive
     # read listed all 17 semesters twice and the picker repeated every option.
@@ -82,6 +102,38 @@ def test_review_preserves_code_and_unknown_scores():
     assert q1["reference_answer"] == "循环" and q1["max_score"] == 10
     assert q2["objective"] and q2["student_answer"] == "B"
     assert q3["requires_manual_review"] and q3["max_score"] is None and q3["source_score"] is None
+
+
+def test_choice_options_adjacent_to_stem_are_kept_in_review_content():
+    html = """<div class="borderBox objective" data1="q-choice" data2="2">
+      <div class="topicArea">
+        <h3 class="mark_name">1. <span class="colorShallow">(单选题, 2.0分)</span>
+          <p>Python 中哪一个是合法变量名？</p></h3>
+        <ul class="mark_option"><li>A. 1name</li><li>B. user_name</li>
+          <li>C. class</li><li>D. user-name</li></ul>
+        <div class="topicStudentAnswer">考生答案：<span class="colorDeep">B</span></div>
+        <div class="topicRightAnswer">正确答案：<span class="colorGreen">B</span></div>
+        <input class="questionScore" value="2">
+      </div>
+    </div>"""
+    question = parsers.review(html)["questions"][0]
+    assert question["content"] == (
+        "1. (单选题, 2.0分) Python 中哪一个是合法变量名？\n"
+        "A. 1name\nB. user_name\nC. class\nD. user-name"
+    )
+    assert question["student_answer"] == "B"
+
+
+def test_choice_options_allow_separate_letter_labels_but_exclude_answer_area():
+    html = """<div class="borderBox objective" data1="q-choice" data2="2">
+      <h3 class="mark_name"><span class="colorShallow">(单选题, 2分)</span>选出合法变量名</h3>
+      <ul><li><em>A</em> 1name</li><li><em>B</em> user_name</li></ul>
+      <div class="mark_answer topicStudentAnswer"><span class="colorDeep">A. 错误答案</span></div>
+      <input class="questionScore" value="0">
+    </div>"""
+    content = parsers.review(html)["questions"][0]["content"]
+    assert content.endswith("A. 1name\nB. user_name")
+    assert "错误答案" not in content
 
 
 # The live paper this mirrors has 30 objective questions with no score field at
@@ -330,6 +382,14 @@ def test_read_url_allowlist(url):
     assert not parsers.read_url(url)
 
 
+def test_work_reader_routes_are_allowlisted_without_widening_other_paths():
+    assert parsers.read_url("https://mooc1.chaoxing.com/mooc2/work/list?courseId=12")
+    assert parsers.read_url(
+        "https://mooc1.chaoxing.com/mooc-ans/work/selectWorkQuestionYiPiYue?workId=12"
+    )
+    assert not parsers.read_url("https://mooc1.chaoxing.com/mooc-ans/work/submit?workId=12")
+
+
 def test_resource_allowlist_and_action_limits():
     assert allowed_resource("https://passport2.chaoxing.com/login")
     assert not allowed_resource("https://chaoxing.com.evil.com/")
@@ -513,6 +573,42 @@ async def test_full_read_chain_does_not_create_students_or_write_scores(monkeypa
     assert "clazzid=-1" in samples.call_args_list[0].args[1]
     assert {r.methods and next(iter(r.methods)) for r in router.routes} <= {"GET", "POST", "DELETE"}
     assert not any("score" in r.path or "submit" in r.path for r in router.routes)
+
+
+async def test_course_read_merges_exams_and_course_assignments(monkeypatch):
+    from app.chaoxing import router as routes
+
+    user = SimpleNamespace(id=uuid.uuid4())
+    session = make_session(str(user.id))
+    session.connected = True
+    monkeypatch.setattr(manager, "sessions", {session.id: session})
+    course = session.remember("course", parsers.courses(COURSE))[0]
+    teacher_page = '''<input id="enc" value="page-token"><input id="workEnc" value="work-token">'''
+    monkeypatch.setattr(
+        routes,
+        "read_page",
+        AsyncMock(return_value=(
+            "https://mooc2-ans.chaoxing.com/mooc2-ans/mycourse/tch?courseid=12&cpi=34&clazzid=45&enc=private",
+            teacher_page,
+        )),
+    )
+    assignment_page = '''<li onclick="goTask(this)" data="/mooc-ans/mooc2/work/task?courseId=12&amp;classId=45&amp;cpi=34&amp;workId=789&amp;answerId=0&amp;enc=task-token">
+      <h3 class="workTit">单元练习</h3><p>8人已交 2人未交</p>
+      <a href="/mooc-ans/work/selectWorkQuestionYiPiYue?workId=789&amp;courseId=12">批阅</a></li>'''
+    samples = AsyncMock(side_effect=[
+        [("https://mooc2-ans.chaoxing.com/mooc2-ans/exam/test", EXAM)],
+        [("https://mooc1.chaoxing.com/mooc2/work/list", assignment_page)],
+    ])
+    monkeypatch.setattr(routes, "read_samples", samples)
+
+    result = await routes.list_exams(session.id, course["id"], user)
+    assert [(item["title"], item["item_type"], item["submitted_count"]) for item in result["items"]] == [
+        ("期中考试", "考试", 9),
+        ("单元练习", "作业", 8),
+    ]
+    assert result["items"][1]["readable"]
+    assert "work-token" not in str(result)
+    assert "task-token" not in str(result)
 
 
 async def test_process_guard_and_session_capacity(monkeypatch, tmp_path):

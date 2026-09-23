@@ -8,10 +8,17 @@ export interface Connection {
 export interface RecordItem {
   id: string;
   title?: string;
+  item_type?: "考试" | "作业";
   name?: string;
   student_no?: string;
   status?: "submitted" | "unsubmitted" | "unknown";
   submitted_count?: number | null;
+  course_code?: string;
+  teacher_name?: string;
+  teacher_team?: string;
+  school_name?: string;
+  semester_title?: string;
+  course_tags?: string;
   source_score?: number | null;
   readable: boolean;
 }
@@ -19,6 +26,7 @@ export interface Semester { id: string; title: string; selected: boolean }
 export interface Listing {
   items: RecordItem[];
   notice: string;
+  assignment_notice?: string;
   complete: boolean;
   semesters?: Semester[];
   semester_id?: string;
@@ -75,6 +83,6 @@ export interface SavedItem {
 }
 export interface SavedPaper {
   id: string; exam_id: string; name: string; student_no: string; exam_title: string; course_title: string;
-  revision: number; current_revision: number; source_score: number | null; totals: Totals | null; items: SavedItem[];
+  revision: number; current_revision: number; completeness_confirmed: boolean; source_score: number | null; totals: Totals | null; items: SavedItem[];
   audit: { action: string; actor_id: string; created_at: string; details: Record<string, unknown> }[];
 }

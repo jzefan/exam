@@ -64,6 +64,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Ensure new tables exist (e.g. user_settings)
     from app.auth.user_settings import UserSettings  # noqa: F401
+    from app.chaoxing.credentials import ChaoxingCredential  # noqa: F401
     from app.exams.invitation_models import ExamInvitation, ExamPublicLink  # noqa: F401
     from app.papers.models import Paper, PaperImportSession, PaperQuestion  # noqa: F401
     from app.teacher_courses.models import CourseSemester, ExamSemesterAssignment  # noqa: F401

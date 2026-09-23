@@ -14,7 +14,7 @@ beforeEach(() => {
   request.mockReset();
   paper = {
     id: "c1", exam_id: "e1", name: "张三", student_no: "0001", exam_title: "期中", course_title: "计算机基础",
-    revision: 1, current_revision: 1, source_score: 0, audit: [],
+    revision: 1, current_revision: 1, completeness_confirmed: true, source_score: 0, audit: [],
     totals: { question_count: 1, resolved_count: 0, objective_score: 0, ai_subjective_score: 2.25, ai_graded_count: 1, confirmed_subtotal: 0, final_score: null, max_score: 2.5, declared_max_score: 2.5, score_mismatch: false },
     items: [{ id: "q1", position: 1, question_type: "简答题", content: "循环的用途", student_answer: "重复执行", reference_answer: "重复执行语句", max_score: 2.5, objective: false, source_score: 0, ai_score: 2.25, confirmed_score: null, status: "review", version: 3, comment: "", error: "", requires_manual_review: false, feedback: { dimension_comments: { correctness: "基本正确" }, deduction_reasons: [], strengths: [], improvement_suggestions: [], risk_flags: [] } }],
   };
@@ -25,11 +25,17 @@ beforeEach(() => {
 });
 
 describe("学习通结果复核", () => {
+  it("批量导入答卷在核对完整性前提示且不显示最终成绩", async () => {
+    paper.completeness_confirmed = false;
+    renderPage();
+    expect(await screen.findByText(/批量导入的答卷尚未逐份核对题目和分值/)).toBeInTheDocument();
+    expect(screen.getByLabelText("最终成绩")).toHaveTextContent("待确认");
+  });
   it("不依赖源站会话显示结果，小数确认分保存后才形成最终成绩", async () => {
     renderPage();
     const input = await screen.findByLabelText("第 1 题确认分数");
     expect(input).toHaveValue(2.25);
-    expect(screen.getByText("最终成绩 待确认")).toBeInTheDocument();
+    expect(screen.getByLabelText("最终成绩")).toHaveTextContent("待确认");
     fireEvent.change(input, { target: { value: "2.4" } });
     request.mockImplementation(async (path, init) => {
       if (path.endsWith("/confirm")) {
@@ -40,7 +46,7 @@ describe("学习通结果复核", () => {
       return structuredClone(paper);
     });
     fireEvent.click(screen.getByRole("button", { name: "确认分数" }));
-    expect(await screen.findByText("最终成绩 2.4")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("最终成绩")).toHaveTextContent("2.4"));
     expect(request.mock.calls.every(([path]) => !path.includes("/sessions"))).toBe(true);
   });
   it("拦截超出满分的输入，并显示并发状态冲突", async () => {
@@ -52,7 +58,7 @@ describe("学习通结果复核", () => {
     request.mockRejectedValueOnce(new ConnectionError(409, "分数状态已更新，请刷新后再确认"));
     fireEvent.click(screen.getByRole("button", { name: "确认分数" }));
     expect(await screen.findByText("分数状态已更新，请刷新后再确认")).toBeInTheDocument();
-    expect(screen.getByText("最终成绩 待确认")).toBeInTheDocument();
+    expect(screen.getByLabelText("最终成绩")).toHaveTextContent("待确认");
   });
   it("题目按题库口径展示，客观题沿用学习通得分不送 AI", async () => {
     paper.items[0].question_type = "名词解释题";
@@ -61,10 +67,11 @@ describe("学习通结果复核", () => {
     renderPage();
     // 源站的「名词解释题」在题库口径下就是「简答题」，展示随题库统一。
     expect(await screen.findByText("简答题")).toBeInTheDocument();
-    expect(screen.getAllByText("满分 2.5")).toHaveLength(2);
-    // 客观题的学习通得分直接可用，且不会被排队给模型。
-    expect(screen.getByText("沿用学习通客观分")).toBeInTheDocument();
-    expect(screen.getByText("AI 只评主观题（简答、论述、编程），客观题沿用学习通得分；点开题目可看参考答案。")).toBeInTheDocument();
+    expect(screen.getAllByText("满分 2.5")).toHaveLength(1);
+    // 客观题汇总源站分，不出现在待评分题目卡中。
+    expect(screen.getByText(/客观题 1 题沿用学习通得分/)).toBeInTheDocument();
+    expect(screen.queryByText("单选题")).not.toBeInTheDocument();
+    expect(screen.getByText(/AI 只评主观题（简答、论述、编程），客观题沿用学习通得分/)).toBeInTheDocument();
   });
   it("历史版本不允许评分或确认", async () => {
     paper.current_revision = 2; paper.totals = null;
@@ -77,6 +84,22 @@ describe("学习通结果复核", () => {
     renderPage("/grading/chaoxing/results");
     expect(await screen.findByText("已保存 1 份 / 学习通已提交 10 份")).toBeInTheDocument();
     expect(screen.getByText("待确认")).toBeInTheDocument();
+  });
+  it("已保存答卷按考生切换到同场考试的下一位", async () => {
+    const nextPaper = { ...paper, id: "c2", name: "李四", student_no: "0002" };
+    request.mockImplementation(async path => {
+      if (path === "/grading/exams") return [{ id: "e1", title: "期中", course_title: "计算机基础", expected_submitted: 2, candidates: [
+        { id: "c1", name: "张三", student_no: "0001", totals: paper.totals },
+        { id: "c2", name: "李四", student_no: "0002", totals: paper.totals },
+      ] }];
+      return structuredClone(path.endsWith("/c2") ? nextPaper : paper);
+    });
+    renderPage();
+    await screen.findByText("张三");
+    await waitFor(() => expect(screen.getByRole("button", { name: "下一个" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "下一个" }));
+    expect(await screen.findByText("李四")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "上一个" })).toBeEnabled();
   });
   it("评分排队时阻止重复提交并轮询到结果", async () => {
     paper.items[0].status = "pending"; paper.items[0].ai_score = null;

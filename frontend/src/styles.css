@@ -1423,3 +1423,49 @@ pre.rounded-md {
   scale: 1;
   filter: blur(0px);
 }
+
+/* 等待状态 — 像素网格 loader（components/ui/pixel-loader.tsx）
+   每格的点亮延迟由组件按波前算出、写成行内 animation；这里只放关键帧与文案流光。 */
+
+@keyframes pixel-on {
+  0%, 100% { opacity: 0.12; }
+  50% { opacity: 1; }
+}
+
+@keyframes pixel-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: 0 0; }
+}
+
+/* currentColor：普通文字里随文字灰、主色按钮里随按钮文字变白。 */
+.pixel-loader-cell {
+  background-color: currentColor;
+}
+
+.pixel-loader-label {
+  background-image: linear-gradient(
+    90deg,
+    hsl(var(--muted-foreground)) 35%,
+    hsl(var(--foreground)) 50%,
+    hsl(var(--muted-foreground)) 65%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: pixel-shimmer 1.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* 网格停在暗态（!important 盖住组件写的行内 animation），秒表继续走。 */
+  .pixel-loader-cell {
+    animation: none !important;
+    opacity: 0.15 !important;
+  }
+
+  .pixel-loader-label {
+    animation: none;
+    background-image: none;
+    color: hsl(var(--muted-foreground));
+  }
+}

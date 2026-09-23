@@ -80,7 +80,9 @@ def audit(db, candidate, owner, action, *, item=None, **details):
     )
 
 
-async def import_paper(db: AsyncSession, owner, account_key, course, exam, source, review):
+async def import_paper(
+    db: AsyncSession, owner, account_key, course, exam, source, review, *, completeness_confirmed=True,
+):
     if not account_key or not source.get("student_no") or not source.get("name"):
         raise HTTPException(409, "请重新验证连接，并确认考生姓名和学号已完整读取")
     # Imports from one source session are serialized by BrowserManager.hold; the
@@ -115,6 +117,10 @@ async def import_paper(db: AsyncSession, owner, account_key, course, exam, sourc
     )
     digest = fingerprint(review)
     if candidate and candidate.content_hash == digest:
+        if completeness_confirmed and not candidate.completeness_confirmed:
+            candidate.completeness_confirmed = True
+            audit(db, candidate, owner, "paper.completeness_confirmed")
+            await db.flush()
         return candidate
     if candidate is None:
         candidate = ExternalCandidate(
@@ -136,7 +142,7 @@ async def import_paper(db: AsyncSession, owner, account_key, course, exam, sourc
     candidate.source_score = source.get("source_score")
     candidate.content_hash = digest
     candidate.declared_max_score = review.get("declared_max_score")
-    candidate.completeness_confirmed = True
+    candidate.completeness_confirmed = completeness_confirmed
     for position, q in enumerate(review["questions"], 1):
         maximum = q["max_score"]
         if not isinstance(maximum, (int, float)) or not math.isfinite(maximum) or maximum < 0:
@@ -386,6 +392,7 @@ async def detail(db, candidate_id, owner, revision=None):
         "course_title": exam.course_title,
         "revision": selected_revision,
         "current_revision": candidate.revision,
+        "completeness_confirmed": candidate.completeness_confirmed,
         "source_score": candidate.source_score,
         "totals": totals(candidate, items) if selected_revision == candidate.revision else None,
         "items": rows,

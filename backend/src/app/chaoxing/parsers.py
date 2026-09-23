@@ -15,7 +15,13 @@ COURSES_URL = "https://fycourse.fanya.chaoxing.com/fyportal/courselist/course"
 READ_PATHS = {
     "fycourse.fanya.chaoxing.com": re.compile(r"^/fyportal/courselist/(course|coursegroupdata|entercoursenewfy)/?$"),
     "mooc2-ans.chaoxing.com": re.compile(
-        r"^/(?:mooc2-ans/)?(?:mycourse/tch|exam/test(?:/(?:marklist|mark|review|markpaper))?)/?$"
+        r"^/(?:mooc2-ans/)?(?:mycourse/tch|mooc2-ans-vue/fanyav3/tch|mooc2-ans-ue/fanya3/tch|exam/test(?:/(?:marklist|mark|review|markpaper))?)/?$"
+    ),
+    # Course assignments use a separate, older host and route family from the
+    # course exam list. Keep this allowlist narrow: the connector only follows
+    # assignment list/detail and read-only teacher review pages.
+    "mooc1.chaoxing.com": re.compile(
+        r"^/(?:visit/stucoursemiddle|mooc2/work/list|mooc-ans/mooc2/work/(?:task|view|dowork)|mooc-ans/work/selectWorkQuestion(?:YiPiYue)?)/?$"
     ),
 }
 
@@ -59,6 +65,30 @@ def number(value) -> float | None:
         return result if 0 <= result < 1_000_000 else None
     except (TypeError, ValueError):
         return None
+
+
+CHOICE_OPTION = re.compile(r"^([A-H])(?:\s*[.．、:：)]|\s+)\s*(.+)$")
+ANSWER_AREAS = {
+    "topicStudentAnswer", "studentAnswer", "SubjectStuAnswer", "stuAnswer", "answerCon", "mark_answer",
+    "topicRightAnswer", "rightAnswer", "correctAnswer", "standardAnswer", "answerAnalysis", "AnalysisCon", "mark_score",
+}
+
+
+def choice_options(container: Tag) -> list[str]:
+    """Read visible option rows without copying student answers or grading notes."""
+    options: dict[str, str] = {}
+    for node in container.select("li, p, label, div, span"):
+        if any(set(tag.get("class", [])) & ANSWER_AREAS for tag in (node, *node.parents) if isinstance(tag, Tag)):
+            continue
+        match = CHOICE_OPTION.fullmatch(text(node))
+        if not match:
+            continue
+        # A wrapper can start with A while containing every option. Prefer its
+        # deepest matching children so each answer choice stays on one line.
+        if any(CHOICE_OPTION.fullmatch(text(child)) for child in node.select("li, p, label, div, span")):
+            continue
+        options.setdefault(match[1], f"{match[1]}. {match[2]}")
+    return list(options.values()) if len(options) >= 2 else []
 
 
 def actions(node: Tag, base: str, suffix: str) -> list[str]:
@@ -111,7 +141,28 @@ def courses(html: str) -> list[dict]:
         title = re.sub(r"\s*教务课\s*$", "", text(a.select_one("h1,h2,h3,h4,.title,.name") or a))
         if course_id and cpi and title:
             key = f"{course_id}:{query(url, 'clazzid')}:{cpi}"
-            found[key] = dict(source_id=key, title=title, _url=url)
+            details = {}
+            labels = "课程编号|教师姓名|教师团队|院校|学期|课程标签"
+            containers = (a, *[parent for parent in a.parents if isinstance(parent, Tag)][:8])
+            for container in containers:
+                raw = text(container)
+                if not re.search(rf"(?:{labels})\s*[:：]", raw):
+                    continue
+                for field, key_name in (
+                    ("课程编号", "course_code"),
+                    ("教师姓名", "teacher_name"),
+                    ("教师团队", "teacher_team"),
+                    ("院校", "school_name"),
+                    ("学期", "semester_title"),
+                    ("课程标签", "course_tags"),
+                ):
+                    match = re.search(rf"{field}\s*[:：]\s*(.*?)(?=\s*(?:{labels})\s*[:：]|$)", raw)
+                    if match:
+                        value = match[1].strip(" |｜·•,，")
+                        if value:
+                            details[key_name] = value
+                break
+            found[key] = dict(source_id=key, title=title, _url=url, **details)
     return list(found.values())
 
 
@@ -134,6 +185,48 @@ def exams(html: str, base: str) -> list[dict]:
             match = re.search(rf"(\d+)\s*人?\s*(?:{term})|(?:{term})\s*[:：]?\s*(\d+)", text(row))
             counts[name] = int(match[1] or match[2]) if match else None
         found[source_id] = dict(source_id=source_id, title=text(label) or f"考试 {source_id}", _url=url, **counts)
+    return list(found.values())
+
+
+def assignments(html: str, base: str) -> list[dict]:
+    """Parse course work rows and retain only provider-supplied read URLs.
+
+    Chaoxing has multiple generations of its work page. The stable list shape
+    is a goTask element whose data attribute carries workId/answerId. Some
+    teacher pages additionally expose a direct review URL in the row; preserve
+    it only when it is one of our explicit read-only paths.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    found = {}
+    for node in soup.select('li[onclick*="goTask"][data], a[onclick*="goTask"][data]'):
+        raw_url = str(node.get("data") or "")
+        url = read_url(raw_url, base)
+        if not url:
+            continue
+        work_id = query(url, "workId", "workid", "id")
+        if not work_id:
+            continue
+        row = node.find_parent(["li", "tr"]) or node
+        title_node = row.select_one(".workTit,.overHidden2,h1,h2,h3,h4,.title,.name")
+        label = text(title_node) or text(row)
+        title = label.split(";")[0].strip() or f"作业 {work_id}"
+        counts = {}
+        for name, term in (("submitted_count", "已提交|已交"), ("unsubmitted_count", "未提交|未交")):
+            match = re.search(rf"(\d+)\s*人?\s*(?:{term})|(?:{term})\s*[:：]?\s*(\d+)", text(row))
+            counts[name] = int(match[1] or match[2]) if match else None
+        # Only teacher-side pages can provide a roster/review entry point. A
+        # student task URL is still useful metadata, but is not a candidate URL.
+        review_urls = actions(row, base, r"/mooc-ans/work/selectWorkQuestion(?:YiPiYue)?$")
+        review_url = review_urls[0] if review_urls else ""
+        source_id = f"work:{work_id}"
+        found[source_id] = dict(
+            source_id=source_id,
+            title=title,
+            _url=review_url,
+            item_type="作业",
+            submitted_count=counts["submitted_count"],
+            unsubmitted_count=counts["unsubmitted_count"],
+        )
     return list(found.values())
 
 
@@ -166,7 +259,7 @@ def candidates(html: str, base: str) -> list[dict]:
                     return str(value).strip()
             return ""
 
-        urls = actions(row, base, r"/exam/test/markpaper$")
+        urls = actions(row, base, r"/exam/test/markpaper$|/mooc-ans/work/selectWorkQuestion(?:YiPiYue)?$")
         url = urls[0] if urls else ""
         # Every identity field comes from a data cell, never from a header cell.
         name = field('td[data-field="createUserName"], td.studentName, td.stuName, td[data-name]')
@@ -270,9 +363,12 @@ def review(html: str) -> dict:
                 for link in answer_container.select("a[href]")
             )
         )
-        question_content = answer_text(
-            container.select_one(".hiddenTitle,.questionStem,.Zy_TItle,.qtContent,.stem,.mark_name")
-        )
+        stem = answer_text(container.select_one(".hiddenTitle,.questionStem,.Zy_TItle,.qtContent,.stem,.mark_name"))
+        question_content = stem
+        if re.search(r"选择|单选|多选", question_type):
+            options = choice_options(container)
+            if options:
+                question_content = "\n".join([" ".join(stem.split()), *(option for option in options if option not in stem)])
         student_answer = answer_text(student)
         # The label decides whether a question is objective, because CSS classes are
         # the provider's rendering detail; the class is only the fallback for labels

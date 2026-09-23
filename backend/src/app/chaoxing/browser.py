@@ -1,7 +1,8 @@
 """In-memory browser sessions. Run the enabled connector in ONE API process.
 
-No storage_state, tracing, HAR, video, cookie export, or credential persistence.
-Only fixed read routes are exposed. Login input is human-controlled, never an LLM.
+No browser storage_state, tracing, HAR, video, or cookie export. Saved login
+credentials are separately encrypted at rest. Only fixed read routes are
+exposed. Login input is human-controlled, never an LLM.
 """
 
 import asyncio
@@ -38,6 +39,8 @@ LIST_PAGE_SIZE = 500
 # The tables above appear after the page's own script runs.
 ROWS_READY = "() => !!document.querySelector('tr[data-index] td')"
 ROWS_READY_TIMEOUT_MS = 8000
+READ_CACHE_TTL_SECONDS = 300
+READ_CACHE_MAX_ENTRIES = 32
 
 
 def allowed_resource(url: str) -> bool:
@@ -67,6 +70,9 @@ class Session:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     records: dict[str, dict] = field(default_factory=dict)
     semesters: list[dict] = field(default_factory=list)
+    credential_fingerprint: str = ""
+    credential_save_task: asyncio.Task | None = None
+    reading_cache: dict[str, tuple[float, dict]] = field(default_factory=dict)
 
     def status(self):
         return {
@@ -104,6 +110,28 @@ class Session:
         if not record or record["kind"] != kind:
             raise HTTPException(404, "此记录不属于当前连接，请重新读取列表")
         return record
+
+    def cached_read(self, key: str) -> dict | None:
+        cached = self.reading_cache.get(key)
+        if cached is None:
+            return None
+        expires_at, value = cached
+        if time.monotonic() >= expires_at:
+            self.reading_cache.pop(key, None)
+            return None
+        return value
+
+    def cache_read(self, key: str, value: dict) -> dict:
+        if key not in self.reading_cache and len(self.reading_cache) >= READ_CACHE_MAX_ENTRIES:
+            oldest = min(self.reading_cache, key=lambda cache_key: self.reading_cache[cache_key][0])
+            self.reading_cache.pop(oldest, None)
+        self.reading_cache[key] = (time.monotonic() + READ_CACHE_TTL_SECONDS, value)
+        return value
+
+    def invalidate_read_cache(self, *prefixes: str) -> None:
+        for key in list(self.reading_cache):
+            if any(key.startswith(prefix) for prefix in prefixes):
+                self.reading_cache.pop(key, None)
 
 
 class BrowserManager:
@@ -153,9 +181,13 @@ class BrowserManager:
 
     async def close(self, session: Session):
         session.closed = True
+        if session.credential_save_task:
+            session.credential_save_task.cancel()
+            session.credential_save_task = None
         self.sessions.pop(session.id, None)
         session.records.clear()
         session.semesters.clear()
+        session.reading_cache.clear()
         with contextlib.suppress(Exception):
             await session.context.close()
 
@@ -358,12 +390,14 @@ async def read_page(session: Session, url: str) -> tuple[str, str]:
         if urlsplit(page.url).hostname == "passport2.chaoxing.com":
             session.connected = False
             session.records.clear()
+            session.reading_cache.clear()
             raise HTTPException(410, "学习通登录已失效，请重新连接")
         final = page.url
         content = await page.content()
         if "请重新登录" in content:
             session.connected = False
             session.records.clear()
+            session.reading_cache.clear()
             raise HTTPException(410, "学习通登录已失效，请重新连接")
         if "layui-table-body" in content:
             # Best effort. The provider renders these tables from its own XHR, so
@@ -385,7 +419,7 @@ async def read_page(session: Session, url: str) -> tuple[str, str]:
 # A roster or answer page legitimately differs from its entry page in class and
 # session parameters (clazzid, cpi, courseid, enc, t, page=). Only the entity
 # identity decides whether a nested page belongs to the same exam or answer.
-ENTITY_PARAMS = ("id", "testId", "paperId", "testUserRelationId")
+ENTITY_PARAMS = ("id", "testId", "paperId", "testUserRelationId", "workId", "workid", "taskId")
 
 
 async def read_samples(session: Session, initial: str, limit=5):
@@ -404,12 +438,22 @@ async def read_samples(session: Session, initial: str, limit=5):
         seen.add(url)
         final, html = await read_page(session, url)
         pages.append((final, html))
-        for link in actions(
-            BeautifulSoup(html, "html.parser"), final, r"/exam/test(?:/(?:marklist|mark|review|markpaper))?/?$"
-        ):
+        initial_path = urlsplit(initial).path
+        if "/exam/test" in initial_path:
+            link_pattern = r"/exam/test(?:/(?:marklist|mark|review|markpaper))?/?$"
+        elif initial_path.rstrip("/") == "/mooc2/work/list":
+            link_pattern = r"/mooc2/work/list/?$"
+        else:
+            # Work review pages can link directly to another student's answer
+            # using the same route. Without a provider pagination marker and
+            # stable candidate identity, following those links would merge
+            # different students' answers into one paper.
+            link_pattern = r"(?!)"
+        for link in actions(BeautifulSoup(html, "html.parser"), final, link_pattern):
             if urlsplit(link).path != urlsplit(initial).path:
                 continue
-            if any(query(link, key) != query(initial, key) for key in ENTITY_PARAMS):
+            identity_params = [key for key in ENTITY_PARAMS if query(initial, key)]
+            if any(query(link, key) != query(initial, key) for key in identity_params):
                 continue
             if link not in seen and link not in queue:
                 queue.append(link)

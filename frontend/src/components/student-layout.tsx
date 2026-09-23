@@ -37,10 +37,17 @@ export function StudentLayout() {
     primary_org?: { role_name: string } | null;
   }>();
   const { notifications, markAsRead } = useStudentNotifications();
-  const [activeNotification, setActiveNotification] = useState<typeof notifications[number] | null>(null);
+  const [activeNotification, setActiveNotification] = useState<
+    (typeof notifications)[number] | null
+  >(null);
   const name = identity?.name ?? "考生";
   const account = identity?.username ?? name;
-  const initials = name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
+  const initials = name
+    .split(" ")
+    .map((n) => n[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
 
   // Show first unread notification as a dialog
   const activeDialog = activeNotification ?? notifications[0] ?? null;
@@ -57,9 +64,14 @@ export function StudentLayout() {
       <header className="z-30 shrink-0 border-b border-border/50 bg-background/85 backdrop-blur-md">
         <div className="flex h-16 items-center justify-between gap-6 px-4 md:px-6">
           <div className="flex min-w-0 items-center gap-6">
-            <Link to="/student" className="flex shrink-0 items-center gap-2.5 transition-opacity hover:opacity-80">
+            <Link
+              to="/student"
+              className="flex shrink-0 items-center gap-2.5 transition-opacity hover:opacity-80"
+            >
               <BrandLogoMark className="h-8 w-8 rounded-lg" />
-              <span className="text-sm font-bold tracking-tight">智评线考试</span>
+              <span className="text-sm font-bold tracking-tight">
+                智评线考试
+              </span>
             </Link>
 
             <nav className="hidden items-center gap-1.5 md:flex">
@@ -92,7 +104,9 @@ export function StudentLayout() {
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button className="flex items-center gap-3 rounded-full border border-border/40 py-1 pl-3 pr-1 transition-all hover:bg-muted/50 active:scale-95">
-                  <span className="text-[11px] font-black text-foreground/70 uppercase tracking-wider">{name}</span>
+                  <span className="text-[11px] font-black text-foreground/70 uppercase tracking-wider">
+                    {name}
+                  </span>
                   <Avatar className="h-8 w-8 shadow-sm ring-1 ring-border/20">
                     <AvatarFallback className="bg-primary/5 text-[10px] font-black text-primary">
                       {initials}
@@ -100,12 +114,20 @@ export function StudentLayout() {
                   </Avatar>
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-52 rounded-2xl border-border/40 p-1.5 shadow-2xl">
+              <DropdownMenuContent
+                align="end"
+                className="w-52 rounded-2xl border-border/40 p-1.5 shadow-2xl"
+              >
                 <div className="mb-1 border-b border-border/40 px-2 py-2">
                   <p className="text-xs font-black text-foreground">{name}</p>
-                  <p className="truncate text-[10px] font-medium text-muted-foreground">账号：{account}</p>
+                  <p className="truncate text-[10px] font-medium text-muted-foreground">
+                    账号：{account}
+                  </p>
                 </div>
-                <DropdownMenuItem onClick={() => logout()} className="rounded-xl font-semibold text-destructive focus:bg-destructive/10 focus:text-destructive">
+                <DropdownMenuItem
+                  onClick={() => logout()}
+                  className="rounded-xl font-semibold text-destructive focus:bg-destructive/10 focus:text-destructive"
+                >
                   <LogOut size={14} className="mr-2" />
                   退出系统
                 </DropdownMenuItem>
@@ -121,9 +143,12 @@ export function StudentLayout() {
         </div>
       </main>
 
-      <Dialog open={!!activeDialog} onOpenChange={(open) => {
-        if (!open) void handleCloseNotification();
-      }}>
+      <Dialog
+        open={!!activeDialog}
+        onOpenChange={(open) => {
+          if (!open) void handleCloseNotification();
+        }}
+      >
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>{activeDialog?.title ?? "站内提醒"}</DialogTitle>
@@ -134,12 +159,17 @@ export function StudentLayout() {
           <DialogFooter>
             {activeDialog?.related_exam_id ? (
               <Button asChild variant="outline">
-                <Link to={`/my-exams/${activeDialog.related_exam_id}/result`} onClick={() => void handleCloseNotification()}>
+                <Link
+                  to={`/my-exams/${activeDialog.related_exam_id}/result`}
+                  onClick={() => void handleCloseNotification()}
+                >
                   查看结果
                 </Link>
               </Button>
             ) : null}
-            <Button onClick={() => void handleCloseNotification()}>我知道了</Button>
+            <Button onClick={() => void handleCloseNotification()}>
+              我知道了
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
