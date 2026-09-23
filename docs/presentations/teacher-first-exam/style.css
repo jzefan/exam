@@ -1,0 +1,775 @@
+@import url("https://tw93.fun/css/jinkai.css");
+
+/* ==========================================================================
+   智评线教师端演示文稿样式 (Kami Design System for Slidev)
+   提炼自 tw93/Kami 纸墨美学与 tw93.fun/2026-08-16/mole-mac.html 字体体系:
+   - 字体：仓耳今楷 TsangerJinKai02 (搭配楷体与系统备选)
+   - 暖纸温润底色 (Parchment: #f5f4ed / Ivory: #faf9f5)
+   - 极度克制的深邃墨蓝 (Ink Blue: #1B365D <= 5%)
+   - 宁静卡片与微边框 (Quiet cards, fine borders, no heavy shadows)
+   ========================================================================== */
+
+:root {
+  /* Kami Palette */
+  --kami-parchment: #f5f4ed;
+  --kami-ivory: #faf9f5;
+  --kami-warm-sand: #e8e6dc;
+  --kami-border: #e8e6dc;
+  --kami-border-soft: #e5e3d8;
+  
+  /* Ink & Text */
+  --kami-near-black: #141413;
+  --kami-dark-warm: #3d3d3a;
+  --kami-olive: #504e49;
+  --kami-stone: #6b6a64;
+  
+  /* Accents */
+  --kami-ink-blue: #1B365D;
+  --kami-ink-light: #2D5A8A;
+  --kami-tint-quiet: #EEF2F7;
+  --kami-tag-bg: #E4ECF5;
+  --kami-tag-text: #1B365D;
+  --kami-warn-bg: #fbf5e6;
+  --kami-warn-border: #d4a34b;
+  --kami-warn-text: #704d0f;
+
+  /* Typography Stacks (来源: https://tw93.fun/2026-08-16/mole-mac.html) */
+  --font-jinkai: "TsangerJinKai02", "STKaiti", "KaiTi", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --font-serif: var(--font-jinkai);
+  --font-sans: var(--font-jinkai);
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+/* Base Slide Canvas */
+.slidev-layout {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: var(--kami-parchment);
+  color: var(--kami-near-black);
+  font-family: var(--font-sans);
+  padding: 44px 64px 38px;
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Subtle editorial footer line */
+.slidev-layout::after {
+  content: "";
+  position: absolute;
+  left: 64px;
+  right: 64px;
+  bottom: 24px;
+  height: 1px;
+  background: linear-gradient(90deg, var(--kami-ink-blue) 0 48px, var(--kami-border) 48px 100%);
+  opacity: 0.65;
+}
+
+/* Slide Number & Footer Metadata */
+.slide-no {
+  position: absolute;
+  right: 64px;
+  bottom: 8px;
+  color: var(--kami-stone);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+}
+
+.slide-category {
+  position: absolute;
+  left: 64px;
+  bottom: 8px;
+  color: var(--kami-stone);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+/* Eyebrow & Section Badge */
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--kami-ink-blue);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.eyebrow::before {
+  content: "";
+  display: inline-block;
+  width: 14px;
+  height: 1.5px;
+  background: var(--kami-ink-blue);
+}
+
+/* Kami Headlines: Serif, weight 500, disciplined letter-spacing */
+.slidev-layout h1 {
+  font-family: var(--font-serif);
+  font-size: 32px;
+  font-weight: 500;
+  color: var(--kami-near-black);
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+  margin: 4px 0 24px;
+  max-width: 980px;
+}
+
+.slidev-layout h2 {
+  font-family: var(--font-serif);
+  font-size: 24px;
+  font-weight: 500;
+  color: var(--kami-dark-warm);
+  line-height: 1.35;
+  margin: 0 0 16px;
+}
+
+.slidev-layout p {
+  margin: 0;
+  color: var(--kami-dark-warm);
+}
+
+.slidev-layout strong {
+  color: var(--kami-ink-blue);
+  font-weight: 600;
+}
+
+/* Lead text under headings */
+.lead-text {
+  font-size: 16px;
+  color: var(--kami-olive);
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
+
+/* --------------------------------------------------------------------------
+   Cover Slide Styling
+   -------------------------------------------------------------------------- */
+.cover-slide {
+  padding-top: 76px;
+}
+
+.cover-badge {
+  display: inline-block;
+  padding: 4px 12px;
+  background: var(--kami-tag-bg);
+  color: var(--kami-ink-blue);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  border-radius: 3px;
+  margin-bottom: 18px;
+}
+
+.cover-slide h1 {
+  font-size: 42px;
+  line-height: 1.24;
+  margin-bottom: 18px;
+}
+
+.cover-subtitle {
+  font-size: 20px;
+  color: var(--kami-dark-warm);
+  max-width: 760px;
+  line-height: 1.55;
+  font-family: var(--font-serif);
+  margin-bottom: 40px;
+}
+
+.cover-tags {
+  display: flex;
+  gap: 10px;
+  margin-top: 36px;
+}
+
+.cover-tags span {
+  padding: 6px 14px;
+  border: 1px solid var(--kami-border);
+  background: var(--kami-ivory);
+  color: var(--kami-dark-warm);
+  font-size: 13px;
+  border-radius: 4px;
+}
+
+/* --------------------------------------------------------------------------
+   Kami Cards & Containers
+   -------------------------------------------------------------------------- */
+.kami-card {
+  background: var(--kami-ivory);
+  border: 1px solid var(--kami-border);
+  border-radius: 6px;
+  padding: 16px 20px;
+  box-shadow: 0 1px 3px rgba(20, 20, 19, 0.02);
+}
+
+.kami-card.featured {
+  border-color: var(--kami-ink-blue);
+  background: #fbfbf9;
+}
+
+.kami-card b {
+  display: block;
+  font-family: var(--font-serif);
+  font-size: 17px;
+  font-weight: 500;
+  color: var(--kami-near-black);
+  margin-bottom: 6px;
+}
+
+.kami-card p {
+  font-size: 13.5px;
+  color: var(--kami-olive);
+  line-height: 1.55;
+}
+
+/* Grid Layouts */
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+
+/* --------------------------------------------------------------------------
+   Split Layouts: Content Left + Media Right
+   -------------------------------------------------------------------------- */
+.split {
+  display: grid;
+  grid-template-columns: 1fr 1.38fr;
+  gap: 28px;
+  align-items: center;
+}
+
+.split-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.split-copy .lead-text {
+  margin-bottom: 0;
+}
+
+.split-copy .highlight-box {
+  background: var(--kami-ivory);
+  border-left: 3px solid var(--kami-ink-blue);
+  padding: 12px 16px;
+  border-radius: 0 4px 4px 0;
+}
+
+.split-copy .highlight-box b {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--kami-ink-blue);
+  margin-bottom: 4px;
+}
+
+.split-copy .highlight-box p {
+  font-size: 13px;
+  color: var(--kami-dark-warm);
+}
+
+.bullet-list {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.bullet-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.bullet-num {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--kami-tag-bg);
+  color: var(--kami-ink-blue);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  border-radius: 50%;
+  margin-top: 1px;
+}
+
+.bullet-text b {
+  color: var(--kami-near-black);
+  font-size: 14.5px;
+  display: block;
+  margin-bottom: 2px;
+}
+
+.bullet-text span {
+  color: var(--kami-olive);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+/* Feature pages retain the paper-and-ink palette with larger teaching examples. */
+.feature-split,
+.paper-feature,
+.prompt-example {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 36px;
+  align-items: start;
+}
+
+.feature-lead {
+  font-size: 20px;
+  line-height: 1.5;
+  margin-bottom: 22px !important;
+}
+
+.feature-steps {
+  margin: 0;
+  padding-left: 24px;
+  font-size: 18px;
+}
+
+.feature-steps li {
+  margin-bottom: 18px;
+  padding-left: 4px;
+}
+
+.feature-steps b,
+.feature-steps span {
+  display: block;
+}
+
+.feature-steps span {
+  margin-top: 4px;
+  font-size: 17px;
+  line-height: 1.5;
+  color: var(--kami-olive);
+}
+
+.example-sheet {
+  border-left: 2px solid var(--kami-ink-blue);
+  padding: 6px 0 6px 26px;
+  font-size: 18px;
+  line-height: 1.65;
+}
+
+.example-label {
+  font-size: 13px;
+  color: var(--kami-stone);
+  margin-bottom: 14px;
+}
+
+.example-sheet hr {
+  border: 0;
+  border-top: 1px solid var(--kami-border);
+  margin: 22px 0;
+}
+
+.example-question {
+  font-size: 22px;
+  line-height: 1.65;
+  margin-top: 8px !important;
+}
+
+.example-caption,
+.feature-footnote {
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--kami-stone) !important;
+  margin-top: 20px !important;
+}
+
+.paper-feature {
+  grid-template-columns: 1.1fr 0.9fr;
+}
+
+.paper-preview {
+  margin: 0;
+  text-align: center;
+}
+
+.paper-preview img {
+  display: block;
+  height: 382px;
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
+  margin: 0 auto;
+  border: 1px solid var(--kami-border);
+}
+
+.paper-preview figcaption {
+  margin-top: 8px;
+  color: var(--kami-stone);
+  font-size: 12px;
+}
+
+.prompt-example {
+  grid-template-columns: 1.2fr 0.9fr;
+  gap: 32px;
+}
+
+.prompt-question {
+  font-size: 18px;
+  line-height: 1.5;
+  margin-bottom: 16px !important;
+}
+
+.prompt-copy blockquote {
+  margin: 0;
+  padding: 0 0 0 18px;
+  border-left: 2px solid var(--kami-ink-blue);
+  font-size: 17px;
+  line-height: 1.55;
+  background: transparent;
+  border-radius: 0;
+}
+
+.prompt-copy blockquote p + p {
+  margin-top: 10px;
+}
+
+.example-answer {
+  font-size: 20px;
+  line-height: 1.6;
+}
+
+.example-score {
+  font-size: 54px;
+  line-height: 1.1;
+  margin: 18px 0;
+  color: var(--kami-ink-blue);
+}
+
+.example-score span {
+  font-size: 20px;
+}
+
+.score-example-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.score-example-table td,
+.score-example-table th {
+  border-bottom: 1px solid var(--kami-border);
+  padding: 9px 5px;
+  text-align: left;
+}
+
+.score-example-table th,
+.score-example-table td:nth-child(2) {
+  white-space: nowrap;
+}
+
+.actual-prompt-grid {
+  display: grid;
+  grid-template-columns: 1.08fr 0.92fr;
+  gap: 18px;
+  align-items: start;
+}
+
+.prompt-panel {
+  min-width: 0;
+}
+
+.prompt-code {
+  margin: 0;
+  padding: 14px 16px;
+  border-left: 2px solid var(--kami-ink-blue);
+  background: var(--kami-ivory);
+  color: var(--kami-dark-warm);
+  font: 12.5px/1.48 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.prompt-source-note {
+  margin-top: 15px;
+  color: var(--kami-stone);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+/* --------------------------------------------------------------------------
+   Window Frame (Refined Browser Shell for Screenshots)
+   -------------------------------------------------------------------------- */
+.window-frame {
+  position: relative;
+  background: #fff;
+  border: 1px solid var(--kami-border);
+  border-radius: 7px;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(20, 20, 19, 0.05);
+  display: flex;
+  flex-direction: column;
+}
+
+.window-header {
+  height: 26px;
+  background: #f0eee6;
+  border-bottom: 1px solid var(--kami-border);
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  gap: 5px;
+}
+
+.window-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d4d0c2;
+}
+
+.window-title {
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--kami-stone);
+  font-family: var(--font-mono);
+}
+
+.window-content {
+  background: #fff;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.window-content img {
+  width: 100%;
+  height: auto;
+  display: block;
+  object-fit: contain;
+  background: #fff;
+}
+
+/* Ensure screenshots are always displayed 100% in full without cropping */
+.crop-top img,
+.crop-center img,
+.crop-right-panel img {
+  object-fit: contain;
+  object-position: center;
+}
+
+/* --------------------------------------------------------------------------
+   Before / After Contrast Grid
+   -------------------------------------------------------------------------- */
+.contrast-container {
+  display: grid;
+  grid-template-columns: 1fr 48px 1fr;
+  align-items: center;
+  margin-top: 16px;
+  gap: 12px;
+}
+
+.contrast-card {
+  min-height: 350px;
+  padding: 24px 28px;
+  border-radius: 6px;
+  background: var(--kami-ivory);
+}
+
+.contrast-card.before {
+  border: 1px solid var(--kami-border);
+}
+
+.contrast-card.after {
+  border: 1.5px solid var(--kami-ink-blue);
+  background: #fff;
+  box-shadow: 0 4px 24px rgba(27, 54, 93, 0.06);
+}
+
+.contrast-label {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 20px;
+  padding: 3px 8px;
+  border-radius: 3px;
+}
+
+.contrast-card.before .contrast-label {
+  background: #eeebe1;
+  color: var(--kami-stone);
+}
+
+.contrast-card.after .contrast-label {
+  background: var(--kami-tag-bg);
+  color: var(--kami-ink-blue);
+}
+
+.contrast-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.contrast-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.contrast-item b {
+  font-size: 15px;
+  color: var(--kami-near-black);
+}
+
+.contrast-item span {
+  font-size: 13px;
+  color: var(--kami-olive);
+}
+
+.contrast-arrow {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  color: var(--kami-ink-blue);
+  font-size: 24px;
+  font-weight: 300;
+}
+
+/* --------------------------------------------------------------------------
+   Pill Tags & Callouts
+   -------------------------------------------------------------------------- */
+.tag-solid {
+  display: inline-block;
+  padding: 3px 9px;
+  background: var(--kami-tag-bg);
+  color: var(--kami-tag-text);
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 3px;
+}
+
+.note-box {
+  margin-top: 14px;
+  padding: 10px 14px;
+  background: var(--kami-warn-bg);
+  border-left: 3px solid var(--kami-warn-border);
+  color: var(--kami-warn-text);
+  font-size: 12.5px;
+  border-radius: 0 4px 4px 0;
+  line-height: 1.45;
+}
+
+.note-box b {
+  font-weight: 600;
+  color: #523707;
+}
+
+/* --------------------------------------------------------------------------
+   Trial Steps (4-stage flow)
+   -------------------------------------------------------------------------- */
+.trial-flow {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-top: 24px;
+}
+
+.trial-step {
+  background: var(--kami-ivory);
+  border: 1px solid var(--kami-border);
+  border-radius: 6px;
+  padding: 20px 18px;
+  min-height: 230px;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.trial-num {
+  font-family: var(--font-serif);
+  font-size: 28px;
+  font-weight: 500;
+  color: var(--kami-ink-blue);
+  margin-bottom: 12px;
+  opacity: 0.9;
+}
+
+.trial-step b {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--kami-near-black);
+  margin-bottom: 8px;
+}
+
+.trial-step span {
+  font-size: 13px;
+  color: var(--kami-olive);
+  line-height: 1.5;
+}
+
+.trial-banner {
+  margin-top: 28px;
+  padding: 14px 20px;
+  background: var(--kami-ivory);
+  border: 1px solid var(--kami-border);
+  border-radius: 5px;
+  text-align: center;
+  font-size: 14.5px;
+  color: var(--kami-dark-warm);
+}
+
+.trial-banner strong {
+  color: var(--kami-ink-blue);
+}
+
+/* --------------------------------------------------------------------------
+   SVG Inline Diagrams Styling
+   -------------------------------------------------------------------------- */
+.diagram-box {
+  width: 100%;
+  background: var(--kami-ivory);
+  border: 1px solid var(--kami-border);
+  border-radius: 6px;
+  padding: 16px 20px;
+  box-shadow: 0 1px 4px rgba(20, 20, 19, 0.02);
+}
+
+.diagram-box svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.diagram-box svg text {
+  font-family: var(--font-jinkai) !important;
+}
+
+/* Print Rules */
+@media print {
+  .slidev-layout {
+    background-color: #fff;
+  }
+}
