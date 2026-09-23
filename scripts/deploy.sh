@@ -446,6 +446,27 @@ if target_includes_backend; then
     docker compose rm -f "backend_${TARGET_BACKEND_SLOT}" || true
   fi
 
+  # The slot file is the source of truth for the live proxy, but a previous
+  # interrupted handoff may have left that container stopped. Restore the
+  # recorded live backend before querying its configuration or migrating.
+  if [[ -n "${ACTIVE_BACKEND_SLOT}" && "${ACTIVE_BACKEND_SLOT}" != "${TARGET_BACKEND_SLOT}" ]]; then
+    ACTIVE_BACKEND_SERVICE="backend_${ACTIVE_BACKEND_SLOT}"
+    ACTIVE_BACKEND_ID="$(docker compose ps -aq "${ACTIVE_BACKEND_SERVICE}" | head -n 1)"
+    ACTIVE_BACKEND_STATE=""
+    if [[ -n "${ACTIVE_BACKEND_ID}" ]]; then
+      ACTIVE_BACKEND_STATE="$(docker inspect --format '{{.State.Status}}' "${ACTIVE_BACKEND_ID}" 2>/dev/null || true)"
+    fi
+    if [[ "${ACTIVE_BACKEND_STATE}" != "running" ]]; then
+      log "Restoring recorded active backend ${ACTIVE_BACKEND_SERVICE} before deployment"
+      if [[ -n "${ACTIVE_BACKEND_ID}" ]]; then
+        docker compose start "${ACTIVE_BACKEND_SERVICE}" || docker compose up -d --no-deps "${ACTIVE_BACKEND_SERVICE}"
+      else
+        docker compose up -d --no-deps "${ACTIVE_BACKEND_SERVICE}"
+      fi
+    fi
+    wait_for_health "${ACTIVE_BACKEND_SERVICE}" 180
+  fi
+
   log "Checking connector dependencies and Chromium in the target image"
   CHAOXING_MODE="$(docker compose run --rm --no-deps -T "backend_${TARGET_BACKEND_SLOT}" python -m app.chaoxing.runtime check </dev/null)"
   case "${CHAOXING_MODE}" in

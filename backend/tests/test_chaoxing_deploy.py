@@ -70,7 +70,7 @@ with open(os.environ['EVENTS'], 'a') as f:
 if 'ps' in a:
     print('container-id')
 elif 'inspect' in a:
-    print('healthy')
+    print('running' if 'State.Status' in a else 'healthy')
 elif 'run' in a and 'app.chaoxing.runtime' in a:
     if os.environ.get('FAIL_AT') == 'preflight': sys.exit(1)
     backend = Path(os.environ['APP_ROOT']) / 'shared/env/backend.env'
@@ -99,7 +99,7 @@ elif 'up' in a and 'backend_green' in a and os.environ.get('FAIL_AT') == 'interr
     remote = tmp_path / "remote.sh"
     remote.write_text(script)
 
-    def run(*, target="backend", fail="", old="disabled"):
+    def run(*, target="backend", fail="", old="disabled", active_state="running"):
         env = {
             **os.environ,
             "PATH": f"{binary}:{os.environ['PATH']}",
@@ -112,6 +112,7 @@ elif 'up' in a and 'backend_green' in a and os.environ.get('FAIL_AT') == 'interr
             "EVENTS": str(events),
             "FAIL_AT": fail,
             "OLD_MODE": old,
+            "ACTIVE_STATE": active_state,
         }
         result = subprocess.run(["bash", str(remote)], env=env, capture_output=True, text=True, timeout=10)
         calls = [json.loads(line) for line in events.read_text().splitlines()]
@@ -122,6 +123,10 @@ elif 'up' in a and 'backend_green' in a and os.environ.get('FAIL_AT') == 'interr
 
 def index(calls, *words):
     return next(i for i, c in enumerate(calls) if all(w in c for w in words))
+
+
+def last_index(calls, *words):
+    return next(i for i in range(len(calls) - 1, -1, -1) if all(w in calls[i] for w in words))
 
 
 def test_upgrade_adds_default_and_stops_old_before_starting_new(deployment):
@@ -147,12 +152,22 @@ def test_nginx_switch_does_not_start_or_pull_its_dependencies(deployment):
     assert index(calls, "up", "--no-deps", "nginx")
 
 
+def test_stale_active_backend_is_started_before_connector_mode_check(deployment):
+    run, _, _, _, _ = deployment
+    result, calls = run(old="enabled", active_state="exited")
+
+    assert result.returncode == 0, result.stderr
+    restore = index(calls, "start", "backend_blue")
+    mode_check = index(calls, "run", "app.chaoxing.runtime", "check")
+    assert restore < mode_check
+
+
 def test_interrupted_handoff_restores_the_previous_backend_and_proxy(deployment):
     run, _, nginx, app, previous = deployment
     result, calls = run(fail="interrupt", old="enabled")
 
     assert result.returncode != 0
-    assert index(calls, "up", "backend_green") < index(calls, "start", "backend_blue")
+    assert index(calls, "up", "backend_green") < last_index(calls, "start", "backend_blue")
     assert (nginx / "default.conf").read_text() == "previous nginx configuration\n"
     assert (app / "current").resolve() == previous
 
@@ -179,7 +194,7 @@ def test_failure_restores_previous_container_and_proxy(deployment, fail):
     run, _, nginx, app, previous = deployment
     result, calls = run(fail=fail, old="enabled")
     assert result.returncode != 0
-    assert index(calls, "up", "backend_green") < index(calls, "start", "backend_blue")
+    assert index(calls, "up", "backend_green") < last_index(calls, "start", "backend_blue")
     assert (nginx / "default.conf").read_text() == "previous nginx configuration\n"
     assert (nginx / "active_backend_slot").read_text().strip() == "blue"
     assert (app / "current").resolve() == previous
