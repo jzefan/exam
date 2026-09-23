@@ -12,7 +12,7 @@ from app.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from .schemas import ImportPaper
 from . import service
-from .browser import COURSES_URL, HEIGHT, WIDTH, manager, read_page, read_samples
+from .browser import COURSES_URL, HEIGHT, WIDTH, dump_pages, manager, read_page, read_samples
 
 
 def no_cache(response: Response):
@@ -218,6 +218,13 @@ async def list_candidates(session_id: str, exam_id: str, user: Teacher):
         pages = await read_samples(session, exam["_url"])
         items = {item["source_id"]: item for base, html in pages for item in parsers.candidates(html, base)}
         if not items:
+            # An exam with no submitted answer has an empty roster: that is a
+            # fact about the exam, not a reader failure.
+            if exam.get("submitted_count") == 0:
+                raise HTTPException(409, "该考试暂无已提交的答卷，没有可读取的考生")
+            # Keep a local copy of what the provider actually returned so the
+            # reader can be adapted; see dump_pages() for the opt-in gate.
+            dump_pages(f"candidates-{exam_id[:8]}", pages)
             raise HTTPException(502, "未识别到考生记录，可能为动态分页或账号没有答卷权限")
         return {
             "items": session.remember("candidate", list(items.values()), exam_id),

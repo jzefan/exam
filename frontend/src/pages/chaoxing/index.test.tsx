@@ -21,7 +21,7 @@ beforeEach(() => {
     if (path.endsWith("/courses")) return { items: [course], semesters: [], notice: "尚未确认分页完整性", complete: false };
     if (path.endsWith("/exams")) return { items: [exam], notice: "尚未确认分页完整性", complete: false };
     if (path.endsWith("/candidates")) return { items: [candidate], notice: "尚未确认分页完整性", complete: false };
-    if (path.endsWith("/review")) return { review_hash: "a".repeat(64), declared_max_score: 10, questions: [{ source_id: "q1", content: "输出数字", student_answer: "for n in range(3):\n    print(n)", reference_answer: "", max_score: 10, source_score: null, objective: false, requires_manual_review: true }], notice: "" };
+    if (path.endsWith("/review")) return { review_hash: "a".repeat(64), declared_max_score: 10, questions: [{ source_id: "q1", question_type: "名词解释题", content: "输出数字", student_answer: "for n in range(3):\n    print(n)", reference_answer: "", max_score: 10, source_score: null, objective: false, requires_manual_review: true }], notice: "" };
     return undefined;
   });
 });
@@ -36,11 +36,27 @@ describe("学习通连接验证", () => {
     fireEvent.click(screen.getByRole("button", { name: "查看答卷" }));
     const answer = await screen.findByText(/for n in range/);
     expect(answer.textContent).toBe("for n in range(3):\n    print(n)");
+    // 题目按题库统一口径展示：源站题型串 名词解释题 显示为题库的 简答题。
+    expect(screen.getByText("简答题")).toBeInTheDocument();
+    expect(screen.getByText("满分 10")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "保存答卷并阅卷" })).toBeDisabled();
     fireEvent.click(screen.getByRole("checkbox"));
     expect(screen.getByRole("button", { name: "保存答卷并阅卷" })).toBeEnabled();
     expect(screen.getByText("含附件或识别信息不全，需要教师在学习通核对。")).toBeInTheDocument();
     expect(request.mock.calls.every(([path]) => !path.includes("submitmark"))).toBe(true);
+  });
+
+  it("读取答卷后把答卷带到视口", async () => {
+    // 答卷渲染在整张名单下面，不主动带过去就等于「点了没反应」。
+    const scrollIntoView = vi.mocked(Element.prototype.scrollIntoView);
+    scrollIntoView.mockClear();
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "读取考试" }));
+    fireEvent.click(await screen.findByRole("button", { name: "读取考生" }));
+    await screen.findByText("20260001");
+    fireEvent.click(screen.getByRole("button", { name: "查看答卷" }));
+    await screen.findByText(/for n in range/);
+    expect(scrollIntoView).toHaveBeenCalled();
   });
 
   it("源站会话失效时移除已有学生信息并要求重连", async () => {

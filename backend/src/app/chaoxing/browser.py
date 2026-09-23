@@ -13,6 +13,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlsplit
 
@@ -23,6 +24,20 @@ from app.config import settings
 WIDTH, HEIGHT = 1080, 720
 COURSES_URL = "https://fycourse.fanya.chaoxing.com/fyportal/courselist/course"
 LOGIN_URL = "https://passport2.chaoxing.com/login?" + urlencode({"newversion": "true", "refer": COURSES_URL})
+# Opt-in provider-page dump for adapting the reader to changed pages. Nothing is
+# written unless this directory already exists; see docs/chaoxing-connection.md.
+PAGE_DUMP_DIR = Path(os.environ.get("EXAM_CHAOXING_DUMP_DIR") or "/tmp/exam-chaoxing-pages")
+
+# The provider fills some tables with its own XHR POST, so the served HTML holds
+# an empty <tbody> and the reader saw a roster page with no students. Only these
+# exact read-only query paths may use POST; every other reader request stays
+# GET/HEAD. They are paged lists, so one page would silently truncate the roster:
+# the body is rewritten to ask for a single page big enough for a class.
+READ_POST_PATHS = frozenset({"/mooc2-ans/exam/test/markresult-new"})
+LIST_PAGE_SIZE = 500
+# The tables above appear after the page's own script runs.
+ROWS_READY = "() => !!document.querySelector('tr[data-index] td')"
+ROWS_READY_TIMEOUT_MS = 8000
 
 
 def allowed_resource(url: str) -> bool:
@@ -268,6 +283,49 @@ def re_mutation(path: str) -> bool:
     return bool(re.search(r"submitmark|savemark|delete|publish|submitpaper|updateScore", path, re.I))
 
 
+def read_request_allowed(method: str, url: str) -> bool:
+    """May the read channel send this request?
+
+    Reads are GET/HEAD everywhere. A few provider list endpoints are queried
+    with POST by the provider's own page scripts and stay read-only, so they are
+    named individually instead of widening the rule to every XHR.
+    """
+    if method in ("GET", "HEAD"):
+        return True
+    return method == "POST" and urlsplit(url).path in READ_POST_PATHS and not re_mutation(urlsplit(url).path)
+
+
+def enlarged_list_body(body: str | None) -> str | None:
+    """Ask an allowlisted list endpoint for one page large enough for a class."""
+    if not body:
+        return None
+    from urllib.parse import parse_qsl, urlencode as encode
+
+    pairs = [(k, v) for k, v in parse_qsl(body, keep_blank_values=True) if k != "size"]
+    pairs.append(("size", str(LIST_PAGE_SIZE)))
+    return encode(pairs)
+
+
+def dump_pages(label: str, pages: list[tuple[str, str]]) -> list[str]:
+    """Write provider pages the fixed read routes cannot recognize.
+
+    Disabled unless PAGE_DUMP_DIR exists. Only pages fetched through the read
+    allowlist are passed here; login screens are never read this way. The dump
+    contains provider URLs and page markup, so treat it as a local debugging
+    artifact and delete it after adapting the parser.
+    """
+    if not PAGE_DUMP_DIR.is_dir():
+        return []
+    written = []
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    for index, (url, html) in enumerate(pages):
+        target = PAGE_DUMP_DIR / f"{stamp}-{label}-{index}.html"
+        with contextlib.suppress(OSError):
+            target.write_text(f"<!-- {url} -->\n{html}", encoding="utf-8")
+            written.append(str(target))
+    return written
+
+
 async def read_page(session: Session, url: str) -> tuple[str, str]:
     from .parsers import read_url
 
@@ -275,12 +333,21 @@ async def read_page(session: Session, url: str) -> tuple[str, str]:
         raise HTTPException(422, "不支持的学习通读取地址")
     page = await session.context.new_page()
     try:
-        # Stronger than the login guard: all reader traffic is GET/HEAD only.
+        # Stronger than the login guard: reader traffic is GET/HEAD, plus the
+        # individually named read-only list endpoints the provider queries with
+        # POST. Everything else, including any other XHR, is aborted.
         async def guard(route):
-            if route.request.method not in ("GET", "HEAD"):
+            request = route.request
+            if not allowed_resource(request.url) or not read_request_allowed(request.method, request.url):
                 await route.abort()
-            else:
+            elif request.method in ("GET", "HEAD"):
                 await route.fallback()
+            else:
+                body = enlarged_list_body(request.post_data)
+                if body is None:
+                    await route.continue_()
+                else:
+                    await route.continue_(post_data=body)
 
         await page.route("**/*", guard)
         response = await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
@@ -292,16 +359,33 @@ async def read_page(session: Session, url: str) -> tuple[str, str]:
             session.connected = False
             session.records.clear()
             raise HTTPException(410, "学习通登录已失效，请重新连接")
-        if not read_url(page.url):
-            raise HTTPException(502, "学习通跳转到了不支持的页面")
-        response = await page.content()
-        if "请重新登录" in response:
+        final = page.url
+        content = await page.content()
+        if "请重新登录" in content:
             session.connected = False
             session.records.clear()
             raise HTTPException(410, "学习通登录已失效，请重新连接")
-        return page.url, response
+        if "layui-table-body" in content:
+            # Best effort. The provider renders these tables from its own XHR, so
+            # the markup above arrives before the rows do. A table that is still
+            # empty when this elapses stays empty; the caller reports that.
+            with contextlib.suppress(Exception):
+                await page.wait_for_function(ROWS_READY, timeout=ROWS_READY_TIMEOUT_MS)
+            content = await page.content()
+        if not read_url(final):
+            dump_pages("landing", [(final, content)])
+            # Report the site without its query: signatures stay server-side.
+            where = urlsplit(final)
+            raise HTTPException(502, f"学习通跳转到了不支持的页面：{where.netloc or '未知站点'}{where.path or '/'}")
+        return final, content
     finally:
         await page.close()
+
+
+# A roster or answer page legitimately differs from its entry page in class and
+# session parameters (clazzid, cpi, courseid, enc, t, page=). Only the entity
+# identity decides whether a nested page belongs to the same exam or answer.
+ENTITY_PARAMS = ("id", "testId", "paperId", "testUserRelationId")
 
 
 async def read_samples(session: Session, initial: str, limit=5):
@@ -325,10 +409,7 @@ async def read_samples(session: Session, initial: str, limit=5):
         ):
             if urlsplit(link).path != urlsplit(initial).path:
                 continue
-            if any(
-                query(link, key) != query(initial, key)
-                for key in ("id", "testId", "paperId", "courseid", "cpi", "clazzid", "testUserRelationId")
-            ):
+            if any(query(link, key) != query(initial, key) for key in ENTITY_PARAMS):
                 continue
             if link not in seen and link not in queue:
                 queue.append(link)

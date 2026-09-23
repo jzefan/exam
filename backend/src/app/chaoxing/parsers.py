@@ -9,6 +9,8 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 
 from bs4 import BeautifulSoup, Tag
 
+from .question_types import is_objective
+
 COURSES_URL = "https://fycourse.fanya.chaoxing.com/fyportal/courselist/course"
 READ_PATHS = {
     "fycourse.fanya.chaoxing.com": re.compile(r"^/fyportal/courselist/(course|coursegroupdata|entercoursenewfy)/?$"),
@@ -72,17 +74,27 @@ def actions(node: Tag, base: str, suffix: str) -> list[str]:
 
 
 def semesters(html: str) -> list[dict]:
-    options = BeautifulSoup(html, "html.parser").select('select[name="xq"] option')
-    result = [
-        dict(
-            id=str(o.get("value", "")),
-            semester_num=str(o.get("semesternum", "")),
-            title=text(o),
-            selected=o.has_attr("selected"),
+    # The course page ships more than one `select[name="xq"]` (a filter bar plus
+    # a template), so every semester would be listed twice in the picker. Keep
+    # the first occurrence, which is the visible selector, and merge the flag.
+    result: list[dict] = []
+    seen: dict[str, dict] = {}
+    for option in BeautifulSoup(html, "html.parser").select('select[name="xq"] option'):
+        value = str(option.get("value", ""))
+        if not value:
+            continue
+        existing = seen.get(value)
+        if existing:
+            existing["selected"] = existing["selected"] or option.has_attr("selected")
+            continue
+        entry = dict(
+            id=value,
+            semester_num=str(option.get("semesternum", "")),
+            title=text(option),
+            selected=option.has_attr("selected"),
         )
-        for o in options
-        if o.get("value")
-    ]
+        seen[value] = entry
+        result.append(entry)
     if result and not any(item["selected"] for item in result):
         next((item for item in result if item["id"] != "0"), result[0])["selected"] = True
     return result
@@ -129,6 +141,10 @@ def candidates(html: str, base: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     groups: dict[str, list[Tag]] = {}
     for index, row in enumerate(soup.select("tr, li.dataRow, .mark_item")):
+        # A layout row carries only <th> cells. Treating one as a data row once
+        # produced a fake student named "姓名" whose number was the header text.
+        if row.find_parent("thead") is not None or row.find("td") is None:
+            continue
         # Fixed LayUI columns duplicate rows with the same data-index.
         key = str(row.get("data-index", f"row-{index}"))
         groups.setdefault(key, []).append(row)
@@ -152,8 +168,9 @@ def candidates(html: str, base: str) -> list[dict]:
 
         urls = actions(row, base, r"/exam/test/markpaper$")
         url = urls[0] if urls else ""
-        name = field('[data-field="createUserName"], .studentName, .stuName, [data-name]')
-        student_no = field('[data-field="loginName"], [data-student-no], .studentNo, .stuNo')
+        # Every identity field comes from a data cell, never from a header cell.
+        name = field('td[data-field="createUserName"], td.studentName, td.stuName, td[data-name]')
+        student_no = field('td[data-field="loginName"], td[data-student-no], td.studentNo, td.stuNo')
         if not student_no:
             # Only the plain cell immediately after an explicitly named name cell.
             # Never mistake an unrelated relation ID / score for a student number.
@@ -165,7 +182,10 @@ def candidates(html: str, base: str) -> list[dict]:
                 and re.fullmatch(r"[A-Za-z0-9_-]{5,30}", text(next_cell))
             ):
                 student_no = text(next_cell)
-        source_id = query(url, "id", "testUserRelationId", "studentId") or field('[data-field="id"]')
+        # The row's own cell id belongs to this candidate. A list URL may repeat
+        # one relation id for every row, which would collapse the roster into a
+        # single entry, so it is only the fallback.
+        source_id = field('td[data-field="id"]') or query(url, "id", "testUserRelationId", "studentId")
         if not source_id:
             source_id = str(rows[0].get("data-student-id") or rows[0].get("data-uid") or student_no)
         if not name or not source_id:
@@ -202,14 +222,31 @@ def review(html: str) -> dict:
         if not qid:
             continue  # Never invent an identity for a grading question.
         type_node = container.select_one('input[id^="typeName_"]')
-        type_text = (
+        type_label = (
             str(type_node.get("value", ""))
             if type_node
             else text(container.select_one(".colorShallow,.questionType,.mark_type"))
         )
+        # The live page prints the type together with its full score, e.g.
+        # "(单选题, 2.0分)". Keep the bare type for display and routing, and read
+        # the score out of that label: objective questions carry no score field
+        # at all, and without the full score neither the paper total nor the
+        # objective marks can be resolved.
+        match = re.search(r"([\u4e00-\u9fa5]{1,8}题)", type_label)
+        if match is None:
+            # Not every provider type ends in 题: "(名词解释, 20.0分)" is a single
+            # label, and the score must not travel inside the displayed type.
+            match = re.search(r"[（(]\s*([\u4e00-\u9fa5]{2,8})\s*[,，]", type_label)
+        question_type = match[1] if match else type_label
         full_score = container.select_one('input[id^="fullScore"]')
+        label_score = re.search(r"(\d+(?:\.\d+)?)\s*分", type_label)
+        placeholder = re.search(r"0\s*[-~—]\s*(\d+(?:\.\d+)?)", str(score.get("placeholder") or ""))
         max_score = number(
-            score.get("data-max-score") or container.get("data2") or (full_score.get("value") if full_score else None)
+            score.get("data-max-score")
+            or container.get("data2")
+            or (full_score.get("value") if full_score else None)
+            or (label_score[1] if label_score else None)
+            or (placeholder[1] if placeholder else None)
         )
         student = container.select_one(".SubjectStuAnswer,.topicStudentAnswer .colorDeep,.studentAnswer,.answerCon")
         reference = container.select_one(
@@ -222,19 +259,40 @@ def review(html: str) -> dict:
                 (p for p in container.select("p") if re.match("参考答案|标准答案|正确答案", text(p))), None
             )
         answer_container = container.select_one(".topicStudentAnswer,.studentAnswer,.answerCon") or student
-        attachment = bool(answer_container and answer_container.select_one("img, a, audio, video, object, iframe"))
+        # A human is needed when the answer itself lives in a file we cannot read.
+        # Counting every <a>/<img> in the answer area flagged all 42 questions of
+        # a live paper as "needs a human", which kept the subjective ones — the
+        # only ones AI grading can help with — out of the queue entirely.
+        attachment = bool(answer_container) and (
+            answer_container.select_one("img[src]") is not None
+            or any(
+                re.search(r"download|attachment|file", str(link.get("href", "")), re.I)
+                for link in answer_container.select("a[href]")
+            )
+        )
+        question_content = answer_text(
+            container.select_one(".hiddenTitle,.questionStem,.Zy_TItle,.qtContent,.stem,.mark_name")
+        )
+        student_answer = answer_text(student)
+        # The label decides whether a question is objective, because CSS classes are
+        # the provider's rendering detail; the class is only the fallback for labels
+        # this reader does not recognize. Keeping the split identical to the rest of
+        # the project is what keeps the platform's own marks out of the AI queue.
+        objective_by_label = is_objective(question_type)
         found[str(qid)] = dict(
             source_id=str(qid),
-            question_type=type_text,
-            content=answer_text(
-                container.select_one(".hiddenTitle,.questionStem,.Zy_TItle,.qtContent,.stem,.mark_name")
-            ),
-            student_answer=answer_text(student),
+            question_type=question_type,
+            content=question_content,
+            student_answer=student_answer,
             reference_answer=answer_text(reference),
             max_score=max_score,
             source_score=number(score.get("value")),
-            objective="objective" in container.get("class", []) or bool(re.search("单选|多选|判断", type_text)),
-            requires_manual_review=attachment or max_score is None or student is None,
+            objective=(
+                "objective" in container.get("class", [])
+                if objective_by_label is None
+                else objective_by_label
+            ),
+            requires_manual_review=max_score is None or student is None or (attachment and not student_answer),
         )
     full = soup.select_one("#examFullScore")
     return dict(questions=list(found.values()), declared_max_score=number(full.get("value")) if full else None)

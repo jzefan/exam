@@ -54,6 +54,18 @@ describe("学习通结果复核", () => {
     expect(await screen.findByText("分数状态已更新，请刷新后再确认")).toBeInTheDocument();
     expect(screen.getByText("最终成绩 待确认")).toBeInTheDocument();
   });
+  it("题目按题库口径展示，客观题沿用学习通得分不送 AI", async () => {
+    paper.items[0].question_type = "名词解释题";
+    paper.items.push({ ...paper.items[0], id: "q2", position: 2, question_type: "单选题", objective: true, status: "source", source_score: 2.5, confirmed_score: null, ai_score: null });
+    paper.totals!.question_count = 2;
+    renderPage();
+    // 源站的「名词解释题」在题库口径下就是「简答题」，展示随题库统一。
+    expect(await screen.findByText("简答题")).toBeInTheDocument();
+    expect(screen.getAllByText("满分 2.5")).toHaveLength(2);
+    // 客观题的学习通得分直接可用，且不会被排队给模型。
+    expect(screen.getByText("沿用学习通客观分")).toBeInTheDocument();
+    expect(screen.getByText("AI 只评主观题（简答、论述、编程），客观题沿用学习通得分；点开题目可看参考答案。")).toBeInTheDocument();
+  });
   it("历史版本不允许评分或确认", async () => {
     paper.current_revision = 2; paper.totals = null;
     renderPage("/grading/chaoxing/results?candidate=c1&revision=1");

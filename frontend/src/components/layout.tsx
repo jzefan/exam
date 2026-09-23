@@ -175,7 +175,9 @@ export function Layout() {
   const isEnterprise = canAccessJobModels(role) && role !== "platform_admin";
   const isAdmin = role === "platform_admin";
   const isKnowledgePage = location.pathname.startsWith("/knowledge");
-  const isGradingPage = location.pathname.startsWith("/grading");
+  // 阅卷中心：整屏三栏工作台，自己管理滚动。学习通读取页 /grading/chaoxing(/results)
+  // 是普通文档流页面（没有内部滚动容器），跟在这里会被 overflow-hidden 裁掉。
+  const isGradingPage = location.pathname === "/grading";
   const isQuestionImportPage = location.pathname === "/questions/import";
   const isPaperImportPage = location.pathname === "/papers/import";
   const isCoursesPage = location.pathname.startsWith("/courses");

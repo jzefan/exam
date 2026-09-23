@@ -372,12 +372,14 @@ export function QuestionPreviewCard({
   hideScoreAndDifficulty = false,
   hideHeader = false,
   hideMeta = false,
+  hideSourceBadge = false,
   markChoiceAnswer = false,
   highlightKeyword,
   expandOnHover = false,
   expandOnClick = false,
   hoverDetailDelay = 180,
   knowledgeRecognitionStatus,
+  children,
   onClick,
   onMouseEnter,
   onMouseLeave,
@@ -397,12 +399,16 @@ export function QuestionPreviewCard({
   hideScoreAndDifficulty?: boolean;
   hideHeader?: boolean;
   hideMeta?: boolean;
+  /** 题目来源是外部系统时，来源徽章（手动添加/AI 生成/导入）没有意义。 */
+  hideSourceBadge?: boolean;
   markChoiceAnswer?: boolean;
   highlightKeyword?: string;
   expandOnHover?: boolean;
   expandOnClick?: boolean;
   hoverDetailDelay?: number;
   knowledgeRecognitionStatus?: QuestionKnowledgeRecognitionStatus | null;
+  /** 渲染在题干（与选项）之后、参考答案之前，供作答/复核内容占位。 */
+  children?: ReactNode;
 } & HTMLAttributes<HTMLDivElement>) {
   const [isHovered, setIsHovered] = useState(false);
   const [isHoverExpanded, setIsHoverExpanded] = useState(false);
@@ -430,7 +436,9 @@ export function QuestionPreviewCard({
         ? "多选题"
         : "单选题"
       : questionTypeFullLabel[normalizedType]
-    : "题目";
+    : // 外部系统（学习通等）的题型串未必落在题库六类里，此时照原样显示，
+      // 不猜成一个默认题型。
+      question.type?.trim() || "题目";
 
   const difficultyLabel =
     DIFFICULTY_LABELS[question.difficulty] ?? String(question.difficulty);
@@ -572,19 +580,21 @@ export function QuestionPreviewCard({
               {typeLabel}
             </span>
           ) : null}
-          {(() => {
-            const meta = QUESTION_SOURCE_META[question.source ?? "manual"];
-            return (
-              <span
-                className={cn(
-                  "inline-flex shrink-0 items-center whitespace-nowrap rounded-md px-2 py-0.5 text-xs font-medium",
-                  meta.className,
-                )}
-              >
-                {meta.label}
-              </span>
-            );
-          })()}
+          {!hideSourceBadge ? (
+            (() => {
+              const meta = QUESTION_SOURCE_META[question.source ?? "manual"];
+              return (
+                <span
+                  className={cn(
+                    "inline-flex shrink-0 items-center whitespace-nowrap rounded-md px-2 py-0.5 text-xs font-medium",
+                    meta.className,
+                  )}
+                >
+                  {meta.label}
+                </span>
+              );
+            })()
+          ) : null}
           {headerKnowledge ? (
             <span className="hidden min-w-0 truncate text-xs text-muted-foreground sm:inline">
               {headerKnowledge}
@@ -645,6 +655,8 @@ export function QuestionPreviewCard({
           highlightKeyword={highlightKeyword}
           markCorrect={markChoiceAnswer}
         />
+
+        {children}
 
         {recognitionMeta ? (
           <div className="mt-2 flex flex-wrap items-center gap-2">

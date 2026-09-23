@@ -5,7 +5,6 @@ import hashlib
 import io
 import json
 import math
-import re
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
@@ -15,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.grading import service as grading
 from app.grading.models import GradingAuditEvent, GradingResultSnapshot, GradingTask, RoleBinding
 from .models import ExternalAudit, ExternalCandidate, ExternalExam, ExternalItem
+from .question_types import ai_type, is_objective
 
 SOURCE = "chaoxing_submission"
 
@@ -31,14 +31,6 @@ def valid_score(score, maximum) -> bool:
         and math.isfinite(maximum)
         and 0 <= score <= maximum
     )
-
-
-def ai_type(question_type: str) -> str | None:
-    if re.search("编程|程序设计|代码", question_type):
-        return "code"
-    if re.search("简答|论述|问答|计算|证明|分析|解答|设计|填空", question_type):
-        return "short_answer"
-    return None
 
 
 async def owned_candidate(db, candidate_id, owner_id, *, lock=False):
@@ -150,16 +142,22 @@ async def import_paper(db: AsyncSession, owner, account_key, course, exam, sourc
         if not isinstance(maximum, (int, float)) or not math.isfinite(maximum) or maximum < 0:
             maximum = None
         source_score = q["source_score"] if valid_score(q["source_score"], maximum) else None
+        # The label is the authority when this reader recognizes it; otherwise the
+        # provider's own `objective` class decides. A question the provider already
+        # marked must never end up in the AI queue, and a subjective one must not be
+        # silently kept out of it either.
+        objective_by_label = is_objective(q["question_type"])
+        objective = q["objective"] if objective_by_label is None else objective_by_label
         manual = (
             q["requires_manual_review"]
             or not maximum
             or not q["content"]
             or not q["reference_answer"]
-            or not ai_type(q["question_type"])
+            or not ai_type(q["question_type"], q["content"])
         )
         status = (
             ("source" if source_score is not None else "manual")
-            if q["objective"]
+            if objective
             else ("manual" if manual else "pending")
         )
         db.add(
@@ -173,7 +171,7 @@ async def import_paper(db: AsyncSession, owner, account_key, course, exam, sourc
                 student_answer=q["student_answer"],
                 reference_answer=q["reference_answer"],
                 max_score=maximum,
-                objective=q["objective"],
+                objective=objective,
                 source_score=source_score,
                 requires_manual_review=manual,
                 status=status,
@@ -208,11 +206,12 @@ async def enqueue(db, candidate_id, owner):
         return {"queued": 0}
     binding = await active_binding(db)
     for item in items:
+        question_type = ai_type(item.question_type, item.content)
         task = GradingTask(
             source_type=SOURCE,
             source_business_id=str(item.id),
             status="pending",
-            question_type=ai_type(item.question_type),
+            question_type=question_type,
             question_content=item.content,
             student_answer_raw=item.student_answer,
             max_score=item.max_score,
@@ -224,9 +223,7 @@ async def enqueue(db, candidate_id, owner):
                 "dimensions": [{"key": "correctness", "label": "正确性与完整性", "max_score": item.max_score}]
             },
             dimension_weights={"correctness": 1},
-            execution_env={"mode": "static_review", "executed": False}
-            if ai_type(item.question_type) == "code"
-            else None,
+            execution_env={"mode": "static_review", "executed": False} if question_type == "code" else None,
         )
         db.add(task)
         await db.flush()

@@ -132,3 +132,60 @@ test("保存答卷、AI评分、教师确认及导出（模拟模型）", async 
   expect((await downloaded).suggestedFilename()).toBe("学习通评分.csv");
   expect(errors).toEqual([]);
 });
+
+test("长名单可滚动，查看答卷后答卷进入视口", async ({ page, isMobile }) => {
+  // 两个已修回归：/grading/chaoxing 曾被当成整屏页（main overflow-hidden），
+  // 名单超一屏就再也滚不动；答卷渲染在整张名单下方，点「查看答卷」看不到任何变化。
+  const user = { id: "teacher", full_name: "测试教师", username: "teacher", persona: "teacher", primary_org: { role_name: "teacher" }, organizations: [{ role_name: "teacher" }] };
+  await page.addInitScript(user => { localStorage.setItem("access_token", "test-only-token"); localStorage.setItem("user", JSON.stringify(user)); }, user);
+  const candidates = Array.from({ length: 30 }, (_, index) => ({
+    id: `candidate-${index + 1}`,
+    name: `考生${index + 1}`,
+    student_no: `3256240${String(100 + index)}`,
+    status: "submitted",
+    readable: true,
+  }));
+  const review = {
+    questions: [1, 2].map(position => ({
+      source_id: `q${position}`, question_type: "简答题", content: `第 ${position} 题`, student_answer: "for n in range(3):\n    print(n)",
+      reference_answer: "", max_score: 20, source_score: null, objective: false, requires_manual_review: false,
+    })),
+    review_hash: "a".repeat(64), declared_max_score: 100, notice: "",
+  };
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.route("**/api/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    const listing = (items: object[]) => ({ items, complete: false, notice: "尚未确认分页完整性，请与学习通核对。" });
+    let json: unknown = {};
+    if (path.endsWith("/capabilities")) json = { enabled: true, reason: "" };
+    else if (path === "/api/chaoxing/session") json = { id: "session", connected: true, width: 1080, height: 720, remaining_seconds: 7200 };
+    else if (path.endsWith("/courses")) json = { ...listing([{ id: "course", title: "Python 程序设计", readable: true }]), semesters: [] };
+    else if (path.endsWith("/exams")) json = listing([{ id: "exam", title: "期中考试", submitted_count: 30, readable: true }]);
+    else if (path.endsWith("/candidates")) json = listing(candidates);
+    else if (path.endsWith("/review")) json = review;
+    else if (path.includes("unread-count")) json = { count: 0 };
+    else if (path.includes("notification")) json = [];
+    await route.fulfill({ json });
+  });
+  await page.goto("/grading/chaoxing");
+  await page.getByRole("button", { name: "读取考试" }).click();
+  await page.getByRole("button", { name: "读取考生" }).click();
+  await expect(page.getByText(candidates[29].student_no, { exact: true })).toBeAttached();
+  const main = page.locator("main");
+  expect(await main.evaluate(element => getComputedStyle(element).overflowY)).toBe("auto");
+  if (!isMobile) {
+    // 真实滚轮：滚不动说明内容被裁掉了。触摸模拟下 wheel 不生效，只在桌面指针下断言。
+    await page.mouse.move(540, 500);
+    await page.mouse.wheel(0, 1600);
+    await expect.poll(() => main.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+    await expect(page.locator("table tbody tr").last()).toBeInViewport();
+  }
+  // 点第一行的「查看答卷」：答卷在名单下方，必须自己进入视口，否则用户以为没反应。
+  await main.evaluate(element => { element.scrollTop = 0; });
+  await page.getByRole("button", { name: "查看答卷" }).first().click();
+  await expect(page.getByText("已读取 2 题", { exact: false })).toBeInViewport();
+  await expect(page.locator("pre").first()).toHaveText("for n in range(3):\n    print(n)");
+  await page.screenshot({ path: test.info().outputPath("chaoxing-long-roster.png") });
+  expect(errors).toEqual([]);
+});

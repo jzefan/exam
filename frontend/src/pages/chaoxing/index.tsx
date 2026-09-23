@@ -9,6 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ConnectionError, connectionRequest } from "./api";
 import type { Connection, Listing, RecordItem, Review, Semester, Verified } from "./api";
 import { LoginDialog } from "./login-dialog";
+import { buildQuestionPreview } from "./question-preview";
+import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
 
 export function ChaoxingPage() {
   const navigate = useNavigate();
@@ -31,6 +33,7 @@ export function ChaoxingPage() {
   const alive = useRef(true);
   const generation = useRef(0);
   const inFlight = useRef(false);
+  const reviewRef = useRef<HTMLElement | null>(null);
 
   const clearData = () => {
     setCourses([]); setCourse(undefined); setExams([]); setExam(undefined);
@@ -75,6 +78,11 @@ export function ChaoxingPage() {
     }).finally(() => { if (!abort.signal.aborted) setBusy(false); });
     return () => { alive.current = false; abort.abort(); };
   }, []);
+  useEffect(() => {
+    // The answer sheet renders below the whole roster, so without this the
+    // "查看答卷" click looks like it did nothing on a long candidate list.
+    if (review) reviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [review]);
   const base = `/sessions/${session?.id}`;
   const verified = (data: Verified) => {
     setSession(data.session); acceptCourses(data); setLoginOpen(false); setError("");
@@ -149,8 +157,8 @@ export function ChaoxingPage() {
         </Table>
       </div>
       {busy && <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="size-3 animate-spin" />正在读取学习通页面…</p>}
-      {review && candidate && <section className="space-y-4" aria-label="答卷内容">
-        <h2 className="text-sm font-semibold">{candidate.name} · {candidate.student_no || "学号未识别"} <span className="font-normal text-muted-foreground">已读取 {review.questions.length} 题</span></h2>
+      {review && candidate && <section ref={reviewRef} className="scroll-mt-4 space-y-4" aria-label="答卷内容">
+        <h2 className="text-sm font-semibold">{candidate.name} · {candidate.student_no || "学号未识别"} <span className="font-normal text-muted-foreground">已读取 {review.questions.length} 题 · 点开题目可看参考答案</span></h2>
         <div className="flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-xs"><Checkbox checked={checked} onCheckedChange={value => setChecked(value === true)} />已与学习通核对本份答卷的题目和分值</label>
           <Button size="sm" disabled={busy || !checked || !review.review_hash || !candidate.student_no} onClick={() => void run(async () => {
@@ -161,14 +169,22 @@ export function ChaoxingPage() {
           })}>保存答卷并阅卷</Button>
           {review.declared_max_score != null && <span className="text-xs text-muted-foreground">源试卷满分 {review.declared_max_score}</span>}
         </div>
-        {review.questions.map((question, index) => <article key={question.source_id} className="space-y-3 rounded-md border border-border p-4 text-sm">
-          <div className="flex flex-wrap justify-between gap-2"><h3 className="font-medium">{index + 1}. {question.question_type || "题型未识别"}</h3>
-            <span className="text-xs text-muted-foreground">学习通得分 {question.source_score ?? "未知"} / {question.max_score ?? "未知"}</span></div>
-          <p className="whitespace-pre-wrap break-words">{question.content}</p>
-          <div><h4 className="mb-1 text-xs text-muted-foreground">考生答案</h4><pre className="whitespace-pre-wrap break-words rounded bg-muted/40 p-3 font-mono text-xs">{question.student_answer || "未读取到文字答案"}</pre></div>
-          {question.reference_answer && <details><summary className="cursor-pointer text-xs text-muted-foreground">参考答案</summary><pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs">{question.reference_answer}</pre></details>}
-          {question.requires_manual_review && <p className="text-xs text-muted-foreground">含附件或识别信息不全，需要教师在学习通核对。</p>}
-        </article>)}
+        {review.questions.map((question, index) => <QuestionPreviewCard
+          key={question.source_id}
+          question={buildQuestionPreview({ ...question, id: question.source_id })}
+          index={index + 1}
+          mode="compact"
+          expandOnClick
+          hideAnswer
+          hideMeta
+          hideSourceBadge
+          hideScoreAndDifficulty
+          className="cursor-pointer transition-colors hover:border-primary/40"
+          trailing={<span className="inline-flex shrink-0 items-center gap-2 text-xs text-muted-foreground"><span>学习通得分 {question.source_score ?? "未知"}</span><span>满分 {question.max_score ?? "未知"}</span></span>}
+        >
+          <div className="mt-3"><h4 className="mb-1 text-xs text-muted-foreground">考生答案</h4><pre className="whitespace-pre-wrap break-words rounded bg-muted/40 p-3 font-mono text-xs">{question.student_answer || "未读取到文字答案"}</pre></div>
+          {question.requires_manual_review && <p className="mt-2 text-xs text-muted-foreground">含附件或识别信息不全，需要教师在学习通核对。</p>}
+        </QuestionPreviewCard>)}
       </section>}
     </>}
     {session && <LoginDialog session={session} open={loginOpen} onOpenChange={setLoginOpen} onVerified={verified} onExpired={expire} />}

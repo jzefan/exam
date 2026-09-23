@@ -9,6 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { connectionFetch, connectionRequest } from "./api";
 import type { SavedExam, SavedItem, SavedPaper } from "./api";
+import { buildQuestionPreview } from "./question-preview";
+import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
 
 const statuses: Record<string, string> = { pending: "待评分", queued: "排队中", running: "评分中", review: "待教师确认", confirmed: "已确认", manual: "需人工评分", source: "沿用学习通客观分", failed: "评分失败", obsolete: "历史任务已停止" };
 const display = (value: number | null | undefined) => value ?? "—";
@@ -20,11 +22,21 @@ function ItemReview({ item, disabled, historical, onConfirm }: { item: SavedItem
   const [draftReason, setReason] = useState<string | null>(null);
   const reason = draftReason ?? item.comment;
   const valid = score.trim() !== "" && Number.isFinite(Number(score)) && Number(score) >= 0 && Number(score) <= (item.max_score ?? Number(maximum)) && (item.max_score != null || Number(maximum) > 0);
-  return <article className="space-y-3 rounded-md border border-border p-4 text-sm">
-    <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-medium">{item.position}. {item.question_type || "题型未识别"} · 满分 {display(item.max_score)}</h3><span className="text-xs text-muted-foreground">{statuses[item.status] ?? item.status}</span></div>
-    <p className="whitespace-pre-wrap break-words">{item.content || "未读取到题干，请到学习通核对"}</p>
-    <div><h4 className="mb-1 text-xs text-muted-foreground">考生答案</h4><pre className="whitespace-pre-wrap break-words rounded bg-muted/40 p-3 font-mono text-xs">{item.student_answer || "无文字答案"}</pre></div>
-    {item.reference_answer && <details><summary className="cursor-pointer text-xs text-muted-foreground">参考答案</summary><pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs">{item.reference_answer}</pre></details>}
+  return <article className="space-y-3 text-sm">
+    <QuestionPreviewCard
+      question={buildQuestionPreview(item)}
+      index={item.position}
+      mode="compact"
+      expandOnClick
+      hideAnswer
+      hideMeta
+      hideSourceBadge
+      hideScoreAndDifficulty
+      className="cursor-pointer transition-colors hover:border-primary/40"
+      trailing={<span className="inline-flex shrink-0 items-center gap-2 text-xs text-muted-foreground"><span>满分 {display(item.max_score)}</span><span>{statuses[item.status] ?? item.status}</span></span>}
+    >
+      <div className="mt-3"><h4 className="mb-1 text-xs text-muted-foreground">考生答案</h4><pre className="whitespace-pre-wrap break-words rounded bg-muted/40 p-3 font-mono text-xs">{item.student_answer || "无文字答案"}</pre></div>
+    </QuestionPreviewCard>
     <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs"><span>学习通得分 {display(item.source_score)}</span><span>AI 建议 {display(item.ai_score)}</span><span className="font-medium">教师确认 {display(item.confirmed_score)}</span></div>
     {item.binding_version && <p className="text-xs text-muted-foreground">评分配置版本 {item.binding_version} · 主评与复核</p>}
     {item.feedback && <div className="space-y-1 border-l-2 border-border pl-3 text-xs text-muted-foreground">
@@ -117,6 +129,7 @@ export function ChaoxingResultsPage() {
           })}>{running && <Loader2 className="animate-spin" />}AI 评分</Button>}
         </div></div>
         {paper.totals && <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs"><span>已处理 {paper.totals.resolved_count} / {paper.totals.question_count} 题</span><span>AI 主观题建议小计 {paper.totals.ai_subjective_score}（{paper.totals.ai_graded_count} 题）</span><span>已确认小计 {paper.totals.confirmed_subtotal}</span><span className="font-semibold">最终成绩 {paper.totals.final_score ?? "待确认"}</span></div>}
+        {!historical && <p className="text-xs text-muted-foreground">AI 只评主观题（简答、论述、编程），客观题沿用学习通得分；点开题目可看参考答案。</p>}
         {paper.totals?.score_mismatch && <Alert><AlertDescription>题目满分之和与学习通试卷满分不一致，请重新核对并导入完整答卷。当前不生成最终成绩。</AlertDescription></Alert>}
         {historical && <p className="text-xs text-muted-foreground">历史版本，仅供查看。</p>}
       </section>

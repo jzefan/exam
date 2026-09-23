@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.chaoxing import service, worker
+from app.chaoxing import parsers, service, worker
 from app.chaoxing.models import ExternalAudit, ExternalItem
 from app.chaoxing.schemas import ConfirmScore
 from app.grading import service as grading
@@ -226,6 +226,73 @@ async def test_missing_information_manual_scoring_and_mismatch(db_session, confi
 @pytest.mark.parametrize("value", ["=1+2", "+cmd", "-cmd", "@SUM(A1)", " \t=cmd"])
 def test_csv_formula_safety(value):
     assert service.csv_cell(value).startswith("'")
+
+
+# Shape of a live paper: objective questions carry no score field at all (the
+# full score is printed inside the type label) and the programming question is
+# filed under 简答题 while its stem asks for a program.
+LIVE_PAGE = """<input id="examFullScore" value="14">
+<div class="borderBox objective" data1="q1"><div class="mark_name">1. (单选题, 2.0分) 合法标识符</div>
+<span class="colorShallow">(单选题, 2.0分)</span>
+<div class="topicStudentAnswer"><span class="colorDeep">考生答案：A</span></div>
+<input class="questionScore" value="2"></div>
+<div class="borderBox" data1="q2"><div class="mark_name">2. (简答题, 12.0分) 请编写程序，输出偶数</div>
+<span class="colorShallow">(简答题, 12.0分)</span>
+<div class="topicStudentAnswer"><div class="SubjectStuAnswer"><pre>print(2)</pre></div></div>
+<div class="topicRightAnswer"><div class="objAnswer_right">参考答案：print(2)</div></div>
+<input class="questionScore" data-max-score="12" value="12"></div>"""
+
+
+async def test_live_shaped_paper_keeps_objective_marks_and_queues_the_program(db_session, configured):
+    review = parsers.review(LIVE_PAGE)
+    candidate = await save(db_session, review)
+    result = await service.detail(db_session, candidate.id, OWNER)
+    objective, program = result["items"]
+    # 学习通 already marked the objective question; it must not become人工评分.
+    assert objective["status"] == "source" and objective["source_score"] == 2 and objective["max_score"] == 2
+    # The subjective question has a readable answer and a reference answer, so the
+    # model grades it instead of the teacher having to.
+    assert program["status"] == "pending" and program["max_score"] == 12
+    assert result["totals"]["question_count"] == 2 and not result["totals"]["score_mismatch"]
+    assert result["totals"]["max_score"] == 14
+    assert (await service.enqueue(db_session, candidate.id, OWNER))["queued"] == 1
+    await db_session.commit()
+    task = await db_session.scalar(select(GradingTask).where(GradingTask.source_type == service.SOURCE))
+    # A stem that asks for a program gets the programming prompt, even when the
+    # provider labels the question 简答题.
+    assert task.question_type == "code" and task.execution_env["mode"] == "static_review"
+    job = await worker.claim(configured[0])
+    await worker.execute(job, configured[0])
+    async with configured[0]() as db:
+        item = (await service.detail(db, candidate.id, OWNER))["items"][1]
+        assert item["ai_score"] == 2.25 and item["status"] == "review" and item["feedback"]["dimension_comments"]
+
+
+def test_answer_for_the_teacher_stays_manual_when_the_type_is_unknown():
+    assert service.ai_type("简答题", "说明循环的作用") == "short_answer"
+    assert service.ai_type("简答题", "请编写程序，输出偶数") == "code"
+    assert service.ai_type("编程题", "任意题干") == "code"
+    assert service.ai_type("程序设计题", "求最大值函数") == "code"
+    assert service.ai_type("名词解释", "解释变量作用域") == "short_answer"
+    # Nothing subjective about these: the provider's own mark is kept.
+    assert service.ai_type("单选题", "题干") is None
+    assert service.ai_type("判断题", "题干") is None
+    assert service.ai_type("填空题", "补全语句") is None
+
+
+async def test_only_subjective_answers_ever_reach_the_ai_queue(db_session, configured):
+    # The site's own objective marks must survive a page that reports the flag
+    # differently, and a written answer must not be pushed out of the queue by one.
+    review = copy.deepcopy(REVIEW)
+    review["questions"][0].update(question_type="简答题", objective=True)
+    review["questions"][1].update(question_type="填空题", objective=False)
+    candidate = await save(db_session, review)
+    subjective, objective = (await service.detail(db_session, candidate.id, OWNER))["items"]
+    assert objective["objective"] is True and objective["status"] == "source"
+    assert objective["source_score"] == 2
+    assert subjective["objective"] is False and subjective["status"] == "pending"
+    assert (await service.enqueue(db_session, candidate.id, OWNER))["queued"] == 1
+    await db_session.commit()
 
 
 async def test_model_failure_is_persisted_and_does_not_invent_zero(db_session, configured, monkeypatch):

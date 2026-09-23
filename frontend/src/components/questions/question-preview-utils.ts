@@ -26,6 +26,12 @@ const QUESTION_TYPE_ALIASES: Record<string, QuestionType> = {
   shortanswer: "short_answer",
   "简答题": "short_answer",
   简答: "short_answer",
+  名词解释: "short_answer",
+  名词解释题: "short_answer",
+  解答题: "short_answer",
+  计算题: "short_answer",
+  分析题: "short_answer",
+  设计题: "short_answer",
   essay: "essay",
   "论述题": "essay",
   论述: "essay",
@@ -34,6 +40,8 @@ const QUESTION_TYPE_ALIASES: Record<string, QuestionType> = {
   programming: "code",
   "编程题": "code",
   编程: "code",
+  代码题: "code",
+  程序设计题: "code",
 };
 
 export const questionTypeChar: Record<QuestionType, string> = {
