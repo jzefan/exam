@@ -158,6 +158,7 @@ import {
   updateCourseKnowledgePointName,
   updateCourseMaterial,
   uploadCourseMaterialFile,
+  updateCourseSemesterClasses,
   type CourseAssignmentScoreSummary,
   type CourseKnowledgeNode,
   type CourseSemester,
@@ -168,6 +169,7 @@ import {
 import { AddLinkDialog } from "./AddLinkDialog";
 import { NewSemesterDialog } from "./NewSemesterDialog";
 import { AssociateClassesDialog } from "./AssociateClassesDialog";
+import { ClassStudentsDialog } from "./ClassStudentsDialog";
 import { GradeWeightPanel } from "./GradeWeightPanel";
 import { CourseGradebook } from "./CourseGradebook";
 import { CourseMasteryAnalytics } from "./CourseMasteryAnalytics";
@@ -198,6 +200,12 @@ import {
 const AI_PREFILL_KEY = "ai_generate_prefill_v1";
 
 const ALL_SEMESTERS = "__all__";
+interface SemesterClassCard {
+  semesterId: string;
+  id: string;
+  name: string;
+  semesterName: string;
+}
 const QUESTION_TYPE_FILTERS: QuestionType[] = [
   "choice",
   "true_false",
@@ -4649,6 +4657,9 @@ export function CourseDetailPage() {
     useState<string>(ALL_SEMESTERS);
   const [newSemesterOpen, setNewSemesterOpen] = useState(false);
   const [associateClassesOpen, setAssociateClassesOpen] = useState(false);
+  const [classStudentsTarget, setClassStudentsTarget] = useState<SemesterClassCard | null>(null);
+  const [classToRemove, setClassToRemove] = useState<SemesterClassCard | null>(null);
+  const [removingClassKey, setRemovingClassKey] = useState<string | null>(null);
   const [manageSubTab, setManageSubTab] = useState<"classes" | "weights">("classes");
   const [statisticsSubTab, setStatisticsSubTab] = useState<"grades" | "mastery">("grades");
   const [semesterHintDismissed, setSemesterHintDismissed] = useState(false);
@@ -4772,7 +4783,7 @@ export function CourseDetailPage() {
   // 「班级」模块：当前学期（或全部学期）关联的班级，即选学本课程的班级。
   const semesterClasses = useMemo(() => {
     const source = selectedSemester ? [selectedSemester] : semesters;
-    const out: { id: string; name: string; semesterName: string }[] = [];
+    const out: SemesterClassCard[] = [];
     const seen = new Set<string>();
     for (const sem of source) {
       for (const classId of sem.class_ids ?? []) {
@@ -4780,6 +4791,7 @@ export function CourseDetailPage() {
         if (seen.has(key)) continue;
         seen.add(key);
         out.push({
+          semesterId: sem.id,
           id: classId,
           name: classNameMap[classId] ?? "未命名班级",
           semesterName: sem.name,
@@ -4788,6 +4800,35 @@ export function CourseDetailPage() {
     }
     return out;
   }, [selectedSemester, semesters, classNameMap]);
+
+  const handleRemoveClassAssociation = async () => {
+    if (!classToRemove || !id) return;
+    const semester = semesters.find((item) => item.id === classToRemove.semesterId);
+    if (!semester) return;
+
+    const key = `${classToRemove.semesterId}:${classToRemove.id}`;
+    setRemovingClassKey(key);
+    try {
+      const updated = await updateCourseSemesterClasses(
+        id,
+        semester.id,
+        semester.class_ids.filter((classId) => classId !== classToRemove.id),
+      );
+      setSemesters((current) =>
+        current.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      toast({ title: "已移除班级关联", description: classToRemove.name });
+      setClassToRemove(null);
+    } catch (error) {
+      toast({
+        title: "移除失败",
+        description: error instanceof Error ? error.message : "请稍后重试",
+        variant: "destructive",
+      });
+    } finally {
+      setRemovingClassKey(null);
+    }
+  };
 
   // 「试卷」模块数量徽标：本课程（主知识点）的试卷数。与 PaperListBody 的查询参数
   // 一致，React Query 去重，不会重复请求。
@@ -6757,6 +6798,43 @@ export function CourseDetailPage() {
         }}
       />
 
+      <ClassStudentsDialog
+        classId={classStudentsTarget?.id ?? null}
+        className={classStudentsTarget?.name ?? "班级"}
+        open={classStudentsTarget !== null}
+        onOpenChange={(next) => {
+          if (!next) setClassStudentsTarget(null);
+        }}
+      />
+
+      <AlertDialog
+        open={classToRemove !== null}
+        onOpenChange={(next) => {
+          if (!next && !removingClassKey) setClassToRemove(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>移除班级关联？</AlertDialogTitle>
+            <AlertDialogDescription>
+              确认从「{classToRemove?.semesterName}」中移除「{classToRemove?.name}」？
+              移除后不会删除学生或班级，只是不再作为本课程的选学班级。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={removingClassKey !== null}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault();
+                void handleRemoveClassAssociation();
+              }}
+            >
+              {removingClassKey !== null ? "移除中..." : "确认移除"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <KnowledgeImportDialog
         open={importDialogOpen}
         onOpenChange={setImportDialogOpen}
@@ -7706,18 +7784,45 @@ export function CourseDetailPage() {
                         {semesterClasses.map((cls) => (
                           <div
                             key={`${cls.semesterName}-${cls.id}`}
-                            className="rounded-lg border border-border bg-card p-4"
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => setClassStudentsTarget(cls)}
+                            onKeyDown={(event) => {
+                              if (event.target !== event.currentTarget) return;
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                setClassStudentsTarget(cls);
+                              }
+                            }}
+                            className="cursor-pointer rounded-lg border border-border bg-card p-4 text-left transition-colors hover:border-primary/40 hover:bg-primary/[0.02] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                           >
                             <div className="flex items-center gap-3">
                               <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
                                 <Users size={20} />
                               </div>
-                              <div className="min-w-0">
+                              <div className="min-w-0 flex-1">
                                 <p className="truncate text-sm font-semibold">{cls.name}</p>
                                 <p className="truncate text-xs text-muted-foreground">
                                   {cls.semesterName}
                                 </p>
                               </div>
+                              {course.can_write ? (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="shrink-0 text-muted-foreground hover:text-destructive"
+                                  disabled={removingClassKey === `${cls.semesterId}:${cls.id}`}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setClassToRemove(cls);
+                                  }}
+                                >
+                                  {removingClassKey === `${cls.semesterId}:${cls.id}`
+                                    ? "移除中..."
+                                    : "移除关联"}
+                                </Button>
+                              ) : null}
                             </div>
                           </div>
                         ))}
