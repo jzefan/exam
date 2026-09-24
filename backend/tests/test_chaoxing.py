@@ -889,8 +889,45 @@ async def test_module_entry_is_found_when_the_shell_only_has_it_in_its_script(mo
     assert any("task/index" in url for url in read_urls)
 
 
+def test_course_capture_summarizes_iframes_without_unpacking_query_values(monkeypatch, tmp_path):
+    """Summarizing an iframe's query must not assume parse_qs yields pairs.
+
+    The first version iterated parse_qs() as if it produced (key, value) pairs,
+    so any course page carrying an iframe with a query raised ValueError and the
+    whole read came back as a generic failure instead of a notice.
+    """
+    from app.chaoxing import browser as connector
+    from app.chaoxing import router as routes
+    from bs4 import BeautifulSoup
+
+    monkeypatch.setattr(connector, "PAGE_DUMP_DIR", tmp_path)
+    page = (
+        '<iframe src="https://mooc2-ans.chaoxing.com/mooc2-ans-vue/fanyav3/index??courseId=12'
+        '&amp;clazzId=45&amp;enc=home-token&amp;t=1"></iframe>'
+        '<iframe data-src="https://task.chaoxing.com/task/index?courseId=12&amp;enc=task-token"></iframe>'
+        '<iframe></iframe>'
+    )
+    final = "https://mooc2-ans.chaoxing.com/mooc2-ans-vue/fanyav3/tch?courseid=12&cpi=34&clazzid=45&enc=x"
+
+    routes.capture_unreadable_course(final, page, BeautifulSoup(page, "html.parser"))
+
+    notes = next(tmp_path.glob("*-course-no-assignment-source-requests.txt")).read_text(encoding="utf-8")
+    assert "page=mooc2-ans.chaoxing.com/mooc2-ans-vue/fanyav3/tch" in notes
+    assert "query_keys=clazzid,courseid,cpi,enc" in notes
+    assert "enc_input=no work_enc_input=no" in notes
+    assert "iframe=mooc2-ans.chaoxing.com/mooc2-ans-vue/fanyav3/index keys=" in notes
+    assert "iframe=task.chaoxing.com/task/index keys=courseId,enc" in notes
+    assert "iframe=<unusable> attrs=" in notes
+    assert "home-token" not in notes and "task-token" not in notes, "query values leaked into the summary"
+
+
 async def test_course_without_any_assignment_source_is_recorded(monkeypatch, tmp_path):
-    """The dead-end branch has to leave the page behind or nothing can be adapted."""
+    """The dead-end branch has to leave the page and its modules behind.
+
+    A course page carrying only the home module is the live case: nothing can be
+    attempted from the markup alone, so the page, the module the teacher is
+    looking at, and that module's own calls all have to be kept.
+    """
     from app.chaoxing import browser as connector
     from app.chaoxing import router as routes
 
@@ -900,17 +937,21 @@ async def test_course_without_any_assignment_source_is_recorded(monkeypatch, tmp
     session.connected = True
     monkeypatch.setattr(manager, "sessions", {session.id: session})
     course = session.remember("course", parsers.courses(COURSE))[0]
-    plain_page = "<html><body>no modules here</body></html>"
-    monkeypatch.setattr(
-        routes,
-        "read_page",
-        AsyncMock(
-            return_value=(
-                "https://mooc2-ans.chaoxing.com/mooc2-ans-vue/fanyav3/tch?courseid=12&cpi=34&clazzid=45",
-                plain_page,
-            )
-        ),
+    vue_page = (
+        '<iframe src="https://mooc2-ans.chaoxing.com/mooc2-ans-vue/fanyav3/index??courseId=12'
+        '&amp;clazzId=45&amp;cpi=34&amp;enc=home-token&amp;t=1"></iframe>'
     )
+    reads: list[str] = []
+
+    async def fake_read_page(_session, url, refused=None, json_responses=None, network_events=None):
+        reads.append(url)
+        if "/fanyav3/index" in url:
+            if network_events is not None:
+                network_events.append("GET mooc2-ans.chaoxing.com/course-ans/home/list status=200 code=200 data_count=1")
+            return url, "<div>home module with the assignment list</div>"
+        return "https://mooc2-ans.chaoxing.com/mooc2-ans-vue/fanyav3/tch?courseid=12&cpi=34&clazzid=45", vue_page
+
+    monkeypatch.setattr(routes, "read_page", AsyncMock(side_effect=fake_read_page))
     monkeypatch.setattr(
         routes,
         "read_samples",
@@ -919,11 +960,13 @@ async def test_course_without_any_assignment_source_is_recorded(monkeypatch, tmp
 
     result = await routes.list_exams(session.id, course["id"], user)
     assert result["assignment_notice"] == "当前课程未提供作业读取凭据，未读取作业列表。"
+    assert any("/fanyav3/index" in url for url in reads), "the home module was not read"
     dumped = {path.name.split("-", 2)[2]: path.read_text(encoding="utf-8") for path in tmp_path.iterdir()}
-    assert "no modules here" in dumped["course-no-assignment-source-0.html"]
+    assert "home module with the assignment list" in dumped["home-module-0.html"]
     notes = dumped["course-no-assignment-source-requests.txt"]
     assert "enc_input=no" in notes and "work_enc_input=no" in notes
-    assert "query_keys=clazzid,courseid,cpi" in notes
+    assert "iframe=mooc2-ans.chaoxing.com/mooc2-ans-vue/fanyav3/index keys=" in notes
+    assert "data_count=1" in dumped["home-module-network-requests.txt"]
 
 
 async def test_vue_module_read_waits_for_mount_before_taking_the_page():

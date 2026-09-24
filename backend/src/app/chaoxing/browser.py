@@ -430,6 +430,32 @@ async def read_page(
         request_url = urlsplit(response.url)
         if request_url.hostname == "task.chaoxing.com" and request_url.path == "/task/getTaskDataLists":
             response_tasks.append(asyncio.create_task(capture_task_list(response)))
+        elif network_events is not None:
+            response_tasks.append(asyncio.create_task(summarize_json(response)))
+
+    async def summarize_json(response):
+        """Record which provider APIs a module calls, without their bodies.
+
+        The module that shows a list may not be the one whose endpoint is
+        already known, and a module that renders from its own call looks like an
+        empty shell in the markup. Summaries are enough to find that call; query
+        values and response bodies are never written.
+        """
+        if network_events is None or not allowed_resource(response.url):
+            return
+        request_url = urlsplit(response.url)
+        if "json" not in str((getattr(response, "headers", None) or {}).get("content-type", "")):
+            return
+        summary = f"{response.request.method} {request_url.hostname}{request_url.path} status={response.status}"
+        try:
+            payload = await response.json()
+        except Exception:
+            network_events.append(summary + " json=false")
+            return
+        data = payload.get("data") if isinstance(payload, dict) else None
+        code = payload.get("code") if isinstance(payload, dict) else None
+        count = len(data) if isinstance(data, list) else "n/a"
+        network_events.append(f"{summary} code={code} data_count={count}")
 
     async def drain_responses():
         # Drain as we go: a response that lands while an earlier one is being read

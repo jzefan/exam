@@ -405,9 +405,10 @@ def capture_unreadable_course(final: str, course_html: str, soup) -> None:
         f"enc_input={'yes' if soup.select_one('#enc') else 'no'} work_enc_input={'yes' if soup.select_one('#workEnc') else 'no'}",
     ]
     for frame in soup.select("iframe"):
-        raw = str(frame.get("src") or frame.get("data-src") or "")
+        raw = str(frame.get("src") or frame.get("data-src") or "").replace("&amp;", "&")
         module = urlsplit(raw) if raw else None
-        keys = ",".join(sorted({key for key, _ in parse_qs(module.query)})) if module else ""
+        # parse_qs returns a mapping; its keys are the parameter names.
+        keys = ",".join(sorted(parse_qs(module.query))) if module else ""
         notes.append(
             f"iframe={module.netloc}{module.path} keys={keys}"
             if module and module.netloc
@@ -597,6 +598,10 @@ async def list_exams(session_id: str, course_id: str, user: Teacher, refresh: bo
         else:
             assignment_notice = "当前课程未提供作业读取凭据，未读取作业列表。"
             capture_unreadable_course(final, course_html, course_soup)
+            # A course page that carries only the home module still needs that
+            # module read: on this generation the home module is the one the
+            # teacher is looking at while the assignment list is on screen.
+            await capture_home_module(session, course_html, course_soup, final)
         if not unique and exam_list_unrecognized:
             raise HTTPException(502, "未识别到考试或作业列表，请核对教师权限或页面结构")
         result = {
