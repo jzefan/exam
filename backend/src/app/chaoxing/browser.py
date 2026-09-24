@@ -358,14 +358,46 @@ ATTACHMENT_SUFFIXES = frozenset({
 })
 
 
-async def read_attachment(session: Session, host: str, object_id: str, suffix: str, notes: list[str] | None = None):
+ATTACHMENT_SCRIPT = """async (args) => {
+  const xhr = { headers: { "X-Requested-With": "XMLHttpRequest" }, credentials: "include" };
+  let status;
+  try {
+    status = await fetch(`/ananas/status/${args.id}`, xhr);
+  } catch (error) {
+    return { error: `status fetch failed: ${error}` };
+  }
+  if (!status.ok) return { error: `status ${status.status}` };
+  let payload;
+  try {
+    payload = await status.json();
+  } catch (error) {
+    return { error: "status did not answer json" };
+  }
+  const url = payload && payload.download;
+  if (!url) return { error: "status carried no download address" };
+  let response;
+  try {
+    response = await fetch(url, xhr);
+  } catch (error) {
+    return { error: `download fetch failed: ${error}`, url };
+  }
+  if (!response.ok) return { error: `download ${response.status}`, url };
+  const size = Number(response.headers.get("content-length") || 0);
+  if (size > args.limit) return { error: `download is ${size} bytes`, url };
+  const text = await response.text();
+  if (text.length > args.limit) return { error: `download is ${text.length} bytes`, url };
+  return { text, url };
+}"""
+
+
+async def read_attachment(session: Session, sheet_url: str, object_id: str, suffix: str, notes: list[str] | None = None):
     """Read the text of one uploaded answer attachment, or nothing.
 
-    Only the provider's own object store is asked, over the same authenticated
-    context the pages are read with, and the result is returned as text for
-    grading. A redirect is not followed: the download address the provider hands
-    back is the only file address the reader will open, so its host is known
-    before the bytes are.
+    The provider's own download button asks `/ananas/status/<objectid>` from the
+    answer page and then fetches what it returns, and its CDN refuses a bare
+    request, so the same call is made from inside the page: same cookies, same
+    referer, same `X-Requested-With`. Only a text/code attachment on a provider
+    host is read, it is capped in size, and it is never written to disk.
     """
     def note(message: str) -> str:
         if notes is not None:
@@ -376,33 +408,35 @@ async def read_attachment(session: Session, host: str, object_id: str, suffix: s
         return note(f"attachment {object_id!r} is not an object id")
     if (suffix or "").lower().lstrip(".") not in ATTACHMENT_SUFFIXES:
         return note(f"attachment type {suffix!r} is not read as text")
-    if not re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*\.chaoxing\.com", host or ""):
-        return note(f"attachment host {host!r} is not a provider host")
-    request = session.context.request
-    status = await request.get(f"https://{host}/ananas/status/{object_id}", timeout=20_000, max_redirects=0)
-    if status.status != 200:
-        return note(f"attachment status call returned HTTP {status.status}")
+    from .parsers import read_url
+
+    if not read_url(sheet_url):
+        return note("attachment was not read: the answer page is not on the read allowlist")
+    page = await session.context.new_page()
     try:
-        download = str((await status.json()).get("download") or "")
-    except Exception:
-        return note("attachment status call did not return json")
-    where = urlsplit(download)
-    if where.scheme != "https" or not allowed_resource(download) or re_mutation(where.path):
-        return note(f"attachment download address rejected: {where.scheme}://{where.netloc}{where.path}")
-    response = await request.get(download, timeout=30_000, max_redirects=0)
-    if 300 <= response.status < 400:
-        return note(f"attachment download redirected to {response.headers.get('location', 'unknown')}")
-    if response.status != 200:
-        return note(f"attachment download returned HTTP {response.status}")
-    body = await response.body()
-    if not body:
+        async def guard(route):
+            request = route.request
+            if not allowed_resource(request.url) or not read_request_allowed(request.method, request.url):
+                await route.abort()
+            else:
+                await route.fallback()
+
+        await page.route("**/*", guard)
+        await page.goto(sheet_url, wait_until="domcontentloaded", timeout=30_000)
+        result = await page.evaluate(ATTACHMENT_SCRIPT, {"id": object_id, "limit": ATTACHMENT_MAX_BYTES})
+    except Exception as exc:  # Playwright failures must not take the sheet down
+        return note(f"attachment was not read: {type(exc).__name__}")
+    finally:
+        await page.close()
+    outcome = result if isinstance(result, dict) else {}
+    if outcome.get("error"):
+        where = urlsplit(str(outcome.get("url") or ""))
+        suffix_note = f" at {where.netloc}{where.path}" if where.netloc else ""
+        return note(f"attachment was not read: {outcome['error']}{suffix_note}")
+    text = str(outcome.get("text") or "")
+    if not text:
         return note("attachment was empty")
-    if len(body) > ATTACHMENT_MAX_BYTES:
-        return note(f"attachment is {len(body)} bytes, over the {ATTACHMENT_MAX_BYTES} byte limit")
-    try:
-        return body.decode("utf-8")
-    except UnicodeDecodeError:
-        return note("attachment is not utf-8 text")
+    return text
 
 
 def dumping_enabled() -> bool:

@@ -1015,92 +1015,81 @@ def test_rosters_only_report_a_submission_time_the_provider_printed():
     assert rows[0]["submitted_at"] is None and rows[0]["student_no"] == "3266260201"
 
 
-class FakeResponse:
-    def __init__(self, status=200, payload=None, body=b"", headers=None):
-        self.status = status
-        self._payload = payload
-        self._body = body
-        self.headers = headers or {}
+class FakeAttachmentPage:
+    """Just enough of a provider page to run the attachment fetch."""
 
-    async def json(self):
-        if self._payload is None:
-            raise ValueError("not json")
-        return self._payload
+    def __init__(self, outcome, error=None):
+        self.outcome = outcome
+        self.error = error
+        self.routed = False
+        self.goto_calls = []
+        self.evaluate_calls = []
 
-    async def body(self):
-        return self._body
+    async def route(self, _pattern, _handler):
+        self.routed = True
 
+    async def goto(self, url, **_kwargs):
+        self.goto_calls.append(url)
+        return SimpleNamespace(status=200)
 
-class FakeRequestContext:
-    def __init__(self, responses):
-        self.responses = list(responses)
-        self.calls = []
+    async def evaluate(self, script, args):
+        self.evaluate_calls.append((script, args))
+        if self.error:
+            raise self.error
+        return self.outcome
 
-    async def get(self, url, **_kwargs):
-        self.calls.append(url)
-        return self.responses.pop(0) if self.responses else FakeResponse(status=404)
+    async def close(self):
+        pass
 
 
 async def test_an_uploaded_answer_is_read_as_text_within_its_limits():
     """The one provider file the reader opens: a text answer attachment.
 
-    The address comes from the provider's own metadata call, which the reader
-    makes the same way the provider's download button does.
+    The provider's CDN refuses a bare request, so the status call and the file
+    fetch are both made from inside the answer page, exactly where the provider's
+    own download button makes them.
     """
     from app.chaoxing import browser as connector
 
     session = make_session()
-    request = FakeRequestContext([
-        FakeResponse(payload={"download": "https://p.ananas.chaoxing.com/star3/origin/f657"}),
-        FakeResponse(body="print('hi')\n".encode()),
-    ])
-    session.context.request = request
+    page = FakeAttachmentPage({"text": "print('hi')\n", "url": "https://p.ananas.chaoxing.com/star3/origin/f657"})
+    session.context.new_page = AsyncMock(return_value=page)
+    sheet = "https://mooc2-ans.chaoxing.com/mooc2-ans/work/library/review-work?workAnswerId=1"
 
-    text = await connector.read_attachment(session, "mooc2-ans.chaoxing.com", "f" * 32, "py")
+    text = await connector.read_attachment(session, sheet, "f" * 32, "py")
     assert text == "print('hi')\n"
-    assert request.calls == [
-        f"https://mooc2-ans.chaoxing.com/ananas/status/{'f' * 32}",
-        "https://p.ananas.chaoxing.com/star3/origin/f657",
-    ]
+    assert page.routed and page.goto_calls == [sheet]
+    script, args = page.evaluate_calls[0]
+    assert "ananas/status/" in script and args == {"id": "f" * 32, "limit": connector.ATTACHMENT_MAX_BYTES}
 
 
 async def test_an_uploaded_answer_is_refused_outside_its_limits():
     from app.chaoxing import browser as connector
 
     session = make_session()
-    request = FakeRequestContext([])
-    session.context.request = request
-    # Nothing is even asked for when the descriptor is not one the reader opens.
-    assert await connector.read_attachment(session, "mooc2-ans.chaoxing.com", "not-an-object-id", "py") == ""
-    assert await connector.read_attachment(session, "mooc2-ans.chaoxing.com", "f" * 32, "png") == ""
-    assert await connector.read_attachment(session, "evil.example.com", "f" * 32, "py") == ""
-    assert request.calls == []
+    sheet = "https://mooc2-ans.chaoxing.com/mooc2-ans/work/library/review-work?workAnswerId=1"
+    # Nothing is even fetched when the descriptor is not one the reader opens.
+    page = FakeAttachmentPage({"text": "x"})
+    session.context.new_page = AsyncMock(return_value=page)
+    assert await connector.read_attachment(session, sheet, "not-an-object-id", "py") == ""
+    assert await connector.read_attachment(session, sheet, "f" * 32, "png") == ""
+    assert await connector.read_attachment(session, "https://example.com/answer", "f" * 32, "py") == ""
+    assert session.context.new_page.await_count == 0
 
     notes: list[str] = []
-    session.context.request = FakeRequestContext([FakeResponse(payload={"download": "https://evil.example.com/x.py"})])
-    assert await connector.read_attachment(session, "mooc2-ans.chaoxing.com", "f" * 32, "py", notes) == ""
-    assert "rejected" in notes[-1]
+    for outcome, expected in (
+        ({"error": "status 403"}, "status 403"),
+        ({"error": "download 404", "url": "https://p.ananas.chaoxing.com/star3/origin/f657"}, "at p.ananas.chaoxing.com"),
+        ({"error": "download is 900000 bytes"}, "900000 bytes"),
+        ({"text": ""}, "attachment was empty"),
+    ):
+        session.context.new_page = AsyncMock(return_value=FakeAttachmentPage(outcome))
+        assert await connector.read_attachment(session, sheet, "f" * 32, "py", notes) == ""
+        assert expected in notes[-1]
 
-    session.context.request = FakeRequestContext([
-        FakeResponse(payload={"download": "https://p.ananas.chaoxing.com/star3/origin/f657"}),
-        FakeResponse(status=302, headers={"location": "https://cdn.example.com/x.py"}),
-    ])
-    assert await connector.read_attachment(session, "mooc2-ans.chaoxing.com", "f" * 32, "py", notes) == ""
-    assert "redirected" in notes[-1]
-
-    session.context.request = FakeRequestContext([
-        FakeResponse(payload={"download": "https://p.ananas.chaoxing.com/star3/origin/f657"}),
-        FakeResponse(body=b"x" * (connector.ATTACHMENT_MAX_BYTES + 1)),
-    ])
-    assert await connector.read_attachment(session, "mooc2-ans.chaoxing.com", "f" * 32, "py", notes) == ""
-    assert "over the" in notes[-1]
-
-    session.context.request = FakeRequestContext([
-        FakeResponse(payload={"download": "https://p.ananas.chaoxing.com/star3/origin/f657"}),
-        FakeResponse(body=b"\xff\xfe\x00\x01"),
-    ])
-    assert await connector.read_attachment(session, "mooc2-ans.chaoxing.com", "f" * 32, "py", notes) == ""
-    assert "utf-8" in notes[-1]
+    session.context.new_page = AsyncMock(return_value=FakeAttachmentPage({}, error=RuntimeError("page closed")))
+    assert await connector.read_attachment(session, sheet, "f" * 32, "py", notes) == ""
+    assert "RuntimeError" in notes[-1]
 
 
 async def test_an_unreadable_attachment_leaves_the_question_for_a_human(monkeypatch):

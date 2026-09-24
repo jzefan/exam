@@ -766,7 +766,7 @@ async def resolve_attachments(session, pages: list[tuple[str, str]], questions: 
     """
     from .browser import read_attachment
 
-    host = urlsplit(pages[0][0]).hostname or "" if pages else ""
+    sheet_url = pages[0][0] if pages else ""
     notes: list[str] = []
     for question in questions.values():
         object_id = str(question.pop("attachment_id", "") or "")
@@ -774,14 +774,14 @@ async def resolve_attachments(session, pages: list[tuple[str, str]], questions: 
         suffix = str(question.pop("attachment_suffix", "") or "")
         if not object_id:
             continue
-        text = await read_attachment(session, host, object_id, suffix, notes)
+        text = await read_attachment(session, sheet_url, object_id, suffix, notes)
         if not text:
             continue
         label = f"【附件 {name}】" if name else "【附件】"
         question["student_answer"] = f"{question['student_answer']}\n\n{label}\n{text}" if question["student_answer"] else f"{label}\n{text}"
         question["requires_manual_review"] = False
     if notes and dumping_enabled():
-        dump_requests(f"attachment-{host or 'unknown'}", notes)
+        dump_requests(f"attachment-{(urlsplit(sheet_url).hostname or 'unknown')}", notes)
 
 
 @router.get("/sessions/{session_id}/candidates/{candidate_id}/review")
