@@ -15,7 +15,7 @@ COURSES_URL = "https://fycourse.fanya.chaoxing.com/fyportal/courselist/course"
 READ_PATHS = {
     "fycourse.fanya.chaoxing.com": re.compile(r"^/fyportal/courselist/(course|coursegroupdata|entercoursenewfy)/?$"),
     "mooc2-ans.chaoxing.com": re.compile(
-        r"^/(?:mooc2-ans/)?(?:mycourse/tch|mooc2-ans-vue/fanyav3/(?:tch|index)|mooc2-ans-ue/fanya3/(?:tch|index)|work/(?:list|mark)|exam/test(?:/(?:marklist|mark|review|markpaper))?)/?$"
+        r"^/(?:mooc2-ans/)?(?:mycourse/tch|mooc2-ans-vue/fanyav3/(?:tch|index)|mooc2-ans-ue/fanya3/(?:tch|index)|work/(?:list|mark)|work/library/review-work|exam/test(?:/(?:marklist|mark|review|markpaper))?)/?$"
     ),
     # Course assignments use a separate, older host and route family from the
     # course exam list. Keep this allowlist narrow: the connector only follows
@@ -353,6 +353,29 @@ def candidates(html: str, base: str) -> list[dict]:
             student_no=student_no,
             status="unsubmitted" if unsubmitted else "submitted" if url else "unknown",
             source_score=number(score.get("value") or score.get("data")) if score else None,
+            _url=url,
+        )
+    # A work roster (the generation serving /mooc2-ans/work/mark) is a plain
+    # list rather than a LayUI table: one <ul class="dataBody_td"> per student,
+    # whose id is that student's answer id and whose 批阅 link opens the answer.
+    for row in soup.select("ul.dataBody_td[id]"):
+        name = text(row.select_one(".py_name"))
+        name_cell = row.select_one(".taskBody_name")
+        number_cell = name_cell.find_next_sibling("li") if name_cell else None
+        review = row.select_one("a.cz_py[data], a.cz_py[href]")
+        url = read_url(str(review.get("data") or review.get("href") or ""), base) if review else ""
+        source_id = str(row.get("id") or "") or query(url, "workAnswerId", "answerId", "id")
+        if not name or not source_id:
+            continue
+        # The score box on this list is the teacher's marking input, not a mark
+        # the provider awarded, so no source score is read from it.
+        unsubmitted = bool(re.search("未交|未提交", text(row))) and not url
+        found[source_id] = dict(
+            source_id=source_id,
+            name=name,
+            student_no=text(number_cell) if number_cell is not None else "",
+            status="unsubmitted" if unsubmitted else "submitted" if url else "unknown",
+            source_score=None,
             _url=url,
         )
     return list(found.values())

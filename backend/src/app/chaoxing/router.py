@@ -542,6 +542,47 @@ async def read_work_list_assignments(session, final: str) -> tuple[list[dict], s
     return items, notice
 
 
+WORK_ROSTER_PAGE_SIZE = 500
+
+
+def work_page_url(url: str, page: int, size: int) -> str:
+    """The same roster page with an explicit page number and page size."""
+    from urllib.parse import parse_qsl, urlunsplit
+
+    where = urlsplit(url)
+    params = [
+        (key, value)
+        for key, value in parse_qsl(where.query, keep_blank_values=True)
+        if key.lower() not in ("pages", "size")
+    ]
+    params += [("pages", str(page)), ("size", str(size))]
+    return urlunsplit((where.scheme, where.netloc, where.path, urlencode(params), ""))
+
+
+async def append_work_roster_pages(session, url: str, pages: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Follow a work roster's remaining pages.
+
+    Its pager is a script call rather than links, so pages are requested by
+    number. The size is asked for large enough that a class fits in one request,
+    which is why this normally adds nothing.
+    """
+    from bs4 import BeautifulSoup
+
+    total = size = 0
+    for _, html in pages:
+        soup = BeautifulSoup(html, "html.parser")
+        total_node = soup.select_one("#totalPage")
+        size_node = soup.select_one("#pageSize")
+        total = max(total, int(str(total_node.get("value", 0) or 0)) if total_node else 0)
+        size = size or (int(str(size_node.get("value", 0) or 0)) if size_node else 0)
+    for number in range(2, total + 1):
+        try:
+            pages.append(await read_page(session, work_page_url(url, number, size or WORK_ROSTER_PAGE_SIZE)))
+        except HTTPException:
+            break
+    return pages
+
+
 @router.get("/sessions/{session_id}/courses/{course_id}/exams")
 async def list_exams(session_id: str, course_id: str, user: Teacher, refresh: bool = False):
     from . import parsers
@@ -685,7 +726,15 @@ async def list_candidates(session_id: str, exam_id: str, user: Teacher, refresh:
             cached = session.cached_read(cache_key)
             if cached is not None:
                 return cached
-        pages = await read_samples(session, exam["_url"])
+        # A work roster is paged by its own script, so it is asked for a page big
+        # enough for a class and then for its remaining pages by number.
+        url = exam["_url"]
+        work_roster = "/work/mark" in urlsplit(url).path
+        if work_roster:
+            url = work_page_url(url, 1, WORK_ROSTER_PAGE_SIZE)
+        pages = await read_samples(session, url)
+        if work_roster:
+            pages = await append_work_roster_pages(session, url, pages)
         items = {item["source_id"]: item for base, html in pages for item in parsers.candidates(html, base)}
         if not items:
             # An exam with no submitted answer has an empty roster: that is a
@@ -737,6 +786,9 @@ async def get_review(session_id: str, candidate_id: str, user: Teacher, refresh:
                     raise HTTPException(502, "同一题目出现不一致内容，请在学习通核对答卷")
                 questions[question["source_id"]] = question
         if not questions:
+            # Keep what the provider returned: a work answer sheet is a different
+            # document from an exam one and has to be adapted from real markup.
+            dump_pages(f"review-{candidate_id[:8]}", pages)
             raise HTTPException(502, "未识别到答卷题目，暂不能导入评分")
         review = {"questions": list(questions.values()), "declared_max_score": declared_max_score}
         candidate["_review"] = review

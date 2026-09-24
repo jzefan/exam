@@ -994,6 +994,69 @@ def test_new_work_list_rows_are_parsed_with_their_review_link():
     )
 
 
+def test_work_roster_rows_are_parsed_with_their_answer_link():
+    """A work roster is not a LayUI table: one ul per student.
+
+    Its id is that student's answer id, the name sits in `.py_name`, and the
+    answer opens through the row's own `a.cz_py` link. The score box on that
+    list is the teacher's marking input, so it must not become a source score.
+    """
+    html = '''<ul class="dataBody_td" id="55935067" createid="567220386">
+      <li class="dataBody_check"><input type="checkbox"></li>
+      <li class="taskBody_name"><div class="py_name" id="name55935067">陈娇</div></li>
+      <li class="taskBody_con wid_bf_12">3266260201</li>
+      <li class="taskBody_con wid_bf_12">09-22 18:02</li>
+      <li class="taskBody_con wid_bf_10">待批阅</li>
+      <li class="taskBody_con wid_bf_12"><input class="inp80 scoreInput" value="0"></li>
+      <li class="taskBody_con wid_bf_12"><p class="caozuo">
+        <a href="javascript:;" onclick="toMarkWork(this)" class="cz_py"
+          data="/mooc2-ans/work/library/review-work?courseid=266835378&amp;workId=56028428&amp;workAnswerId=55935067">批阅</a>
+      </p></li>
+    </ul>'''
+    rows = parsers.candidates(html, "https://mooc2-ans.chaoxing.com/mooc2-ans/work/mark?id=1")
+    assert [(r["source_id"], r["name"], r["student_no"], r["status"], r["source_score"]) for r in rows] == [
+        ("55935067", "陈娇", "3266260201", "submitted", None)
+    ]
+    assert rows[0]["_url"] == (
+        "https://mooc2-ans.chaoxing.com/mooc2-ans/work/library/review-work"
+        "?courseid=266835378&workId=56028428&workAnswerId=55935067"
+    )
+
+
+def test_work_page_url_sets_the_page_and_size_it_is_given():
+    from app.chaoxing import router as routes
+
+    url = "https://mooc2-ans.chaoxing.com/mooc2-ans/work/mark?courseid=12&prePageSize=12"
+    assert routes.work_page_url(url, 2, 500) == (
+        "https://mooc2-ans.chaoxing.com/mooc2-ans/work/mark?"
+        "courseid=12&prePageSize=12&pages=2&size=500"
+    )
+    assert routes.work_page_url(routes.work_page_url(url, 2, 20), 3, 20).endswith("pages=3&size=20")
+
+
+async def test_work_roster_reads_the_remaining_pages(monkeypatch):
+    from app.chaoxing import router as routes
+
+    first = (
+        '<input type="hidden" id="pages" value="1"><input type="hidden" id="totalPage" value="3">'
+        '<input type="hidden" id="pageSize" value="20">'
+        '<ul class="dataBody_td" id="1"><li class="taskBody_name"><div class="py_name">甲</div></li></ul>'
+    )
+    later = '<ul class="dataBody_td" id="2"><li class="taskBody_name"><div class="py_name">乙</div></li></ul>'
+    reads: list[str] = []
+
+    async def fake_read_page(_session, url, refused=None, json_responses=None, network_events=None):
+        reads.append(url)
+        return url, later
+
+    monkeypatch.setattr(routes, "read_page", AsyncMock(side_effect=fake_read_page))
+    url = "https://mooc2-ans.chaoxing.com/mooc2-ans/work/mark?courseid=12"
+    pages = await routes.append_work_roster_pages(make_session(), url, [(url, first)])
+
+    assert [page_url for page_url, _ in pages] == [url, routes.work_page_url(url, 2, 20), routes.work_page_url(url, 3, 20)]
+    assert reads == [routes.work_page_url(url, 2, 20), routes.work_page_url(url, 3, 20)]
+
+
 def test_work_list_url_carries_the_course_identity():
     """The menu route is rebuilt from the course page's own parameters.
 
