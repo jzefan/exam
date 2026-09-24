@@ -159,8 +159,8 @@ test("保存答卷、AI评分、教师确认及导出（模拟模型）", async 
   await page.getByRole("button", { name: "读取考试" }).click();
   await page.getByRole("button", { name: "读取考生" }).click();
   await page.getByRole("button", { name: "查看答卷" }).click();
-  await expect(page.getByRole("button", { name: "AI 评分", exact: true })).toBeDisabled();
-  await page.getByRole("checkbox").check();
+  // 确认勾选框去掉后，AI 评分只要这份答卷有可评的主观题就直接可用。
+  await expect(page.getByRole("button", { name: "AI 评分", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "AI 评分", exact: true }).click();
   await expect(page).toHaveURL(/results\?candidate=c1/);
   await expect(page.getByRole("heading", { name: "学习通阅卷记录" })).toBeVisible();
@@ -231,14 +231,14 @@ test("长名单进入独立考生阅卷视图，主客观题与分值表都在",
   }
   await page.getByRole("button", { name: "查看答卷" }).first().click();
   await expect(page.getByRole("complementary", { name: "按考生阅卷导航" })).toBeVisible();
-  await expect(page.getByText("主观题答题卡")).toBeVisible();
-  if (isMobile) await expect(page.getByText("主观题答题卡")).toBeInViewport();
+  await expect(page.getByRole("heading", { name: "答题卡" })).toBeVisible();
+  if (isMobile) await expect(page.getByRole("heading", { name: "答题卡" })).toBeInViewport();
   await page.getByRole("button", { name: "下一个" }).click();
   await expect(page.getByRole("complementary", { name: "按考生阅卷导航" }).getByText("考生2")).toBeVisible();
   await page.getByRole("button", { name: "上一个" }).click();
   await expect(page.getByRole("complementary", { name: "按考生阅卷导航" }).getByText("考生1", { exact: true })).toBeVisible();
   // 客观题现在同样渲染（沿用学习通得分），并列出每种题型的应得分/实得分。
-  await expect(page.getByText(/客观题 1 题沿用学习通得分/)).toBeVisible();
+  await expect(page.getByRole("tab", { name: "客观题 1" })).toBeVisible();
   const scoreTable = page.getByRole("table");
   await expect(scoreTable.getByText("单选题")).toBeVisible();
   await expect(scoreTable.getByText("简答题")).toBeVisible();

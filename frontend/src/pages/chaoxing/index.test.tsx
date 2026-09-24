@@ -40,8 +40,8 @@ describe("学习通连接验证", () => {
     // 题目按题库统一口径展示：源站题型串 名词解释题 显示为题库的 简答题。
     expect(screen.getByText("简答题")).toBeInTheDocument();
     expect(screen.getByText("满分 10")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "保存答卷" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("checkbox"));
+    // 确认勾选框已去掉：保存答卷直接可用，AI 评分仍由"有没有可评的主观题"把关。
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "保存答卷" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "AI 评分" })).toBeDisabled();
     expect(screen.getByText("含附件或识别信息不全，需要教师在学习通核对。")).toBeInTheDocument();
@@ -173,9 +173,10 @@ describe("学习通连接验证", () => {
     fireEvent.click(await screen.findByRole("button", { name: "读取考生" }));
     fireEvent.click((await screen.findAllByRole("button", { name: "查看答卷" }))[0]);
     expect(await screen.findByText("说明循环的用途")).toBeInTheDocument();
-    // 客观题同样展示（沿用学习通得分），只是不进入 AI 评分队列。
+    // 客观题同样展示，并在答题卡里有自己的页签，只是不进入 AI 评分队列。
     expect(screen.getByText(/选择正确选项/)).toBeInTheDocument();
-    expect(screen.getByText(/客观题 1 题沿用学习通得分/)).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "客观题 1" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "主观题 1" })).toBeInTheDocument();
     // 分值表与阅卷中心同一口径：应得分取满分，实得分只算学习通已给出的分，
     // 主观题未评分就不显示数字，小计加 * 说明不含未评分题目。
     const table = screen.getByRole("table");
@@ -183,8 +184,6 @@ describe("学习通连接验证", () => {
     expect(within(table).getByText("简答题")).toBeInTheDocument();
     expect(within(table).getByText("12")).toBeInTheDocument();
     expect(within(table).getByText("2*")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "AI 评分" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.click(screen.getByRole("button", { name: "AI 评分" }));
     await waitFor(() => expect(request).toHaveBeenCalledWith("/grading/candidates/saved-1/grade", { method: "POST" }));
     const paths = request.mock.calls.map(([path]) => path);
@@ -206,7 +205,6 @@ describe("学习通连接验证", () => {
     fireEvent.click(await screen.findByRole("button", { name: "读取考生" }));
     fireEvent.click((await screen.findAllByRole("button", { name: "查看答卷" }))[0]);
     await screen.findByText("说明循环的用途");
-    fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.click(screen.getByRole("button", { name: "AI 评分" }));
     expect(await screen.findByText(/答卷已保存，但 AI 评分未启动：请管理员先配置主评和复核模型/)).toBeInTheDocument();
   });

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ArrowLeft, ChevronLeft, ChevronRight, Link2, RefreshCw, Search, Sparkles, Unplug } from "lucide-react";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -10,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { PixelGrid, PixelLoaderOverlay } from "@/components/ui/pixel-loader";
 import { ConnectionError, connectionRequest } from "./api";
-import type { Connection, Listing, RecordItem, Review, Semester, Verified } from "./api";
+import type { Connection, Listing, Question, RecordItem, Review, Semester, Verified } from "./api";
 import { LoginDialog } from "./login-dialog";
 import { ChaoxingPageHeader } from "./page-header";
 import { buildQuestionPreview } from "./question-preview";
@@ -25,6 +24,21 @@ interface BatchProgress {
   failed: number;
   errors: string[];
   running: boolean;
+}
+
+/** 按题型给题号分组，答题卡与分值表用同一个题型口径。 */
+function groupByType(items: { question: Question; number: number }[]) {
+  const groups: { type: string; items: { question: Question; number: number }[] }[] = [];
+  for (const item of items) {
+    const label = item.question.question_type?.trim() || "未识别题型";
+    let group = groups.find(entry => entry.type === label);
+    if (!group) {
+      group = { type: label, items: [] };
+      groups.push(group);
+    }
+    group.items.push(item);
+  }
+  return groups;
 }
 
 const CANDIDATE_STATUS_LABELS: Record<string, string> = {
@@ -44,7 +58,7 @@ const courseDetails = (item: RecordItem) => [
 
 export function ChaoxingPage() {
   const navigate = useNavigate();
-  const [checked, setChecked] = useState(false);
+  const [navTab, setNavTab] = useState<"objective" | "subjective">("subjective");
   const [capability, setCapability] = useState<{ enabled: boolean; reason: string }>();
   const [session, setSession] = useState<Connection | null>(null);
   const [loginOpen, setLoginOpen] = useState(false);
@@ -173,7 +187,7 @@ export function ChaoxingPage() {
   const canGrade = subjectiveQuestions.some(({ question }) => !question.requires_manual_review && !!question.content.trim() && !!question.reference_answer.trim() && (question.max_score ?? 0) > 0);
   const selectCandidate = (item: RecordItem, refresh = false) => void run(refresh ? "正在重新读取答卷" : "正在读取答卷", async () => {
     const version = generation.current;
-    setCandidate(item); setReview(undefined); setChecked(false);
+    setCandidate(item); setReview(undefined); setNavTab("subjective");
     const data = await connectionRequest<Review>(`${base}/candidates/${item.id}/review${refresh ? "?refresh=true" : ""}`);
     if (generation.current === version) setReview(data);
   });
@@ -338,21 +352,30 @@ export function ChaoxingPage() {
             <div className="mt-4 flex items-baseline justify-between border-t border-border pt-3 text-xs"><span className="text-muted-foreground">学习通原分</span><span className="font-semibold">{candidate.source_score ?? "未知"}</span></div>
             <div className="mt-3 grid grid-cols-2 gap-2"><Button size="sm" variant="outline" disabled={busy || candidateIndex <= 0} onClick={() => selectCandidate(readableCandidates[candidateIndex - 1])}><ChevronLeft />上一个</Button><Button size="sm" variant="outline" disabled={busy || candidateIndex < 0 || candidateIndex >= readableCandidates.length - 1} onClick={() => selectCandidate(readableCandidates[candidateIndex + 1])}>下一个<ChevronRight /></Button></div>
           </section>
-          {review && <section className="rounded-md border border-border bg-card p-4"><h3 className="text-sm font-semibold">主观题答题卡</h3><p className="mt-1 text-xs text-muted-foreground">{subjectiveQuestions.length} 题 · 客观题 {objectiveQuestions.length} 题沿用学习通得分</p>
-            <div className="mt-3 flex flex-wrap gap-2">{subjectiveQuestions.map(({ question, number }) => <a key={question.source_id} href={`#chaoxing-question-${number}`} className="inline-flex size-9 items-center justify-center rounded-md border border-border text-xs font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={`跳转第 ${number} 题`}>{number}</a>)}
-              {!subjectiveQuestions.length && <span className="text-xs text-muted-foreground">没有主观题</span>}</div>
+          {review && <section className="rounded-md border border-border bg-card p-4">
+            <h3 className="text-sm font-semibold">答题卡</h3>
+            <div className="mt-2 grid grid-cols-2 gap-1 rounded-md bg-muted p-1 text-xs" role="tablist" aria-label="题型">
+              {([["objective", `客观题 ${objectiveQuestions.length}`], ["subjective", `主观题 ${subjectiveQuestions.length}`]] as const).map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={navTab === value} onClick={() => setNavTab(value)} className={navTab === value ? "rounded bg-card px-2 py-1 font-medium shadow-sm" : "rounded px-2 py-1 text-muted-foreground hover:text-foreground"}>{label}</button>)}
+            </div>
+            <div className="mt-3 space-y-3">
+              {(navTab === "objective" ? objectiveQuestions : subjectiveQuestions).length === 0
+                ? <p className="text-xs text-muted-foreground">{navTab === "objective" ? "没有客观题" : "没有主观题"}</p>
+                : groupByType(navTab === "objective" ? objectiveQuestions : subjectiveQuestions).map(group => <div key={group.type}>
+                  <p className="text-xs text-muted-foreground">{group.type}</p>
+                  <div className="mt-1 flex flex-wrap gap-2">{group.items.map(({ question, number }) => <a key={question.source_id} href={`#chaoxing-question-${number}`} className="inline-flex size-9 items-center justify-center rounded-md border border-border text-xs font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={`跳转第 ${number} 题`}>{number}</a>)}</div>
+                </div>)}
+            </div>
           </section>}
-          <Button size="sm" variant="ghost" onClick={() => { setCandidate(undefined); setReview(undefined); setChecked(false); }}><ArrowLeft />返回考生列表</Button>
+          <Button size="sm" variant="ghost" onClick={() => { setCandidate(undefined); setReview(undefined); }}><ArrowLeft />返回考生列表</Button>
         </aside>
         <section className="min-w-0 space-y-4" aria-label="考生答卷">
           <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border pb-3"><div><h2 className="text-base font-semibold">答卷内容</h2><p className="mt-1 text-xs text-muted-foreground">主观题 {subjectiveQuestions.length} 题 · 客观题 {objectiveQuestions.length} 题 · 试卷满分 {review?.declared_max_score ?? "未知"}</p></div>
-            <div className="flex flex-wrap items-center gap-2">{review && <Button size="sm" variant="outline" title="跳过缓存，从学习通重新读取" disabled={busy} onClick={() => selectCandidate(candidate, true)}><RefreshCw />重新读取答卷</Button>}</div></div>
+            {review && <div className="flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="outline" title="跳过缓存，从学习通重新读取" disabled={busy} onClick={() => selectCandidate(candidate, true)}><RefreshCw />重新读取答卷</Button>
+              <Button size="sm" variant="outline" disabled={busy || !review.review_hash || !candidate.student_no} onClick={() => savePaper(false)}>保存答卷</Button>
+              <Button size="sm" disabled={busy || !review.review_hash || !candidate.student_no || !canGrade} onClick={() => savePaper(true)}><Sparkles />AI 评分</Button>
+            </div>}</div>
           {review && <>
-            <div className="flex flex-wrap items-center gap-3 rounded-md border border-border p-3">
-              <label className="flex items-center gap-2 text-xs"><Checkbox checked={checked} onCheckedChange={value => setChecked(value === true)} />已与学习通核对本份答卷的题目和分值</label>
-              <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={busy || !checked || !review.review_hash || !candidate.student_no} onClick={() => savePaper(false)}>保存答卷</Button>
-                <Button size="sm" disabled={busy || !checked || !review.review_hash || !candidate.student_no || !canGrade} onClick={() => savePaper(true)}><Sparkles />AI 评分</Button></div>
-            </div>
             {!!typeRows.length && <div className="overflow-x-auto rounded-md border border-border">
               <table className="w-full text-sm">
                 <thead><tr className="border-b border-border bg-muted/40">
