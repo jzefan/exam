@@ -10,6 +10,7 @@ import contextlib
 import hashlib
 import importlib.util
 import os
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -317,8 +318,6 @@ class BrowserManager:
 
 
 def re_mutation(path: str) -> bool:
-    import re
-
     return bool(re.search(r"submitmark|savemark|delete|publish|submitpaper|updateScore", path, re.I))
 
 
@@ -343,6 +342,67 @@ def enlarged_list_body(body: str | None) -> str | None:
     pairs = [(k, v) for k, v in parse_qsl(body, keep_blank_values=True) if k != "size"]
     pairs.append(("size", str(LIST_PAGE_SIZE)))
     return encode(pairs)
+
+
+# The one provider file the reader fetches: an answer that lives in an uploaded
+# attachment. The provider's own download button resolves it through
+# `/ananas/status/<objectid>` and then fetches whatever that returns, so the
+# reader does the same over the same authenticated context — but only for a
+# text/code attachment, only over https on a provider host, capped in size, and
+# never written to disk.
+ATTACHMENT_MAX_BYTES = 512 * 1024
+ATTACHMENT_OBJECT = re.compile(r"^[0-9a-fA-F]{16,64}$")
+ATTACHMENT_SUFFIXES = frozenset({
+    "py", "txt", "java", "c", "h", "cpp", "cc", "cs", "go", "rs", "js", "ts", "jsx", "tsx",
+    "sql", "md", "json", "xml", "yml", "yaml", "sh", "bat", "html", "css", "rb", "php", "r", "m",
+})
+
+
+async def read_attachment(session: Session, host: str, object_id: str, suffix: str, notes: list[str] | None = None):
+    """Read the text of one uploaded answer attachment, or nothing.
+
+    Only the provider's own object store is asked, over the same authenticated
+    context the pages are read with, and the result is returned as text for
+    grading. A redirect is not followed: the download address the provider hands
+    back is the only file address the reader will open, so its host is known
+    before the bytes are.
+    """
+    def note(message: str) -> str:
+        if notes is not None:
+            notes.append(message)
+        return ""
+
+    if not ATTACHMENT_OBJECT.fullmatch(object_id or ""):
+        return note(f"attachment {object_id!r} is not an object id")
+    if (suffix or "").lower().lstrip(".") not in ATTACHMENT_SUFFIXES:
+        return note(f"attachment type {suffix!r} is not read as text")
+    if not re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*\.chaoxing\.com", host or ""):
+        return note(f"attachment host {host!r} is not a provider host")
+    request = session.context.request
+    status = await request.get(f"https://{host}/ananas/status/{object_id}", timeout=20_000, max_redirects=0)
+    if status.status != 200:
+        return note(f"attachment status call returned HTTP {status.status}")
+    try:
+        download = str((await status.json()).get("download") or "")
+    except Exception:
+        return note("attachment status call did not return json")
+    where = urlsplit(download)
+    if where.scheme != "https" or not allowed_resource(download) or re_mutation(where.path):
+        return note(f"attachment download address rejected: {where.scheme}://{where.netloc}{where.path}")
+    response = await request.get(download, timeout=30_000, max_redirects=0)
+    if 300 <= response.status < 400:
+        return note(f"attachment download redirected to {response.headers.get('location', 'unknown')}")
+    if response.status != 200:
+        return note(f"attachment download returned HTTP {response.status}")
+    body = await response.body()
+    if not body:
+        return note("attachment was empty")
+    if len(body) > ATTACHMENT_MAX_BYTES:
+        return note(f"attachment is {len(body)} bytes, over the {ATTACHMENT_MAX_BYTES} byte limit")
+    try:
+        return body.decode("utf-8")
+    except UnicodeDecodeError:
+        return note("attachment is not utf-8 text")
 
 
 def dumping_enabled() -> bool:

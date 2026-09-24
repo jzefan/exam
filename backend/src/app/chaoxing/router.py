@@ -754,6 +754,36 @@ async def list_candidates(session_id: str, exam_id: str, user: Teacher, refresh:
         return session.cache_read(cache_key, result)
 
 
+async def resolve_attachments(session, pages: list[tuple[str, str]], questions: dict) -> None:
+    """Fold an answer that lives in an uploaded file into the answer text.
+
+    An answer is sometimes a file the teacher can only grade by reading it, so
+    the reader fetches that file's text — see read_attachment() for the limits —
+    and appends it the way it was submitted. Every question loses its attachment
+    descriptor here, whether or not it had one, so no internal field is stored,
+    hashed or returned. A file that could not be read leaves the question as it
+    was: still flagged for a human, never silently treated as answered.
+    """
+    from .browser import read_attachment
+
+    host = urlsplit(pages[0][0]).hostname or "" if pages else ""
+    notes: list[str] = []
+    for question in questions.values():
+        object_id = str(question.pop("attachment_id", "") or "")
+        name = str(question.pop("attachment_name", "") or "")
+        suffix = str(question.pop("attachment_suffix", "") or "")
+        if not object_id:
+            continue
+        text = await read_attachment(session, host, object_id, suffix, notes)
+        if not text:
+            continue
+        label = f"【附件 {name}】" if name else "【附件】"
+        question["student_answer"] = f"{question['student_answer']}\n\n{label}\n{text}" if question["student_answer"] else f"{label}\n{text}"
+        question["requires_manual_review"] = False
+    if notes and dumping_enabled():
+        dump_requests(f"attachment-{host or 'unknown'}", notes)
+
+
 @router.get("/sessions/{session_id}/candidates/{candidate_id}/review")
 async def get_review(session_id: str, candidate_id: str, user: Teacher, refresh: bool = False):
     from . import parsers
@@ -790,6 +820,7 @@ async def get_review(session_id: str, candidate_id: str, user: Teacher, refresh:
             # document from an exam one and has to be adapted from real markup.
             dump_pages(f"review-{candidate_id[:8]}", pages)
             raise HTTPException(502, "未识别到答卷题目，暂不能导入评分")
+        await resolve_attachments(session, pages, questions)
         review = {"questions": list(questions.values()), "declared_max_score": declared_max_score}
         candidate["_review"] = review
         result = {

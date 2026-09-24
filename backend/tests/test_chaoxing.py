@@ -1015,6 +1015,121 @@ def test_rosters_only_report_a_submission_time_the_provider_printed():
     assert rows[0]["submitted_at"] is None and rows[0]["student_no"] == "3266260201"
 
 
+class FakeResponse:
+    def __init__(self, status=200, payload=None, body=b"", headers=None):
+        self.status = status
+        self._payload = payload
+        self._body = body
+        self.headers = headers or {}
+
+    async def json(self):
+        if self._payload is None:
+            raise ValueError("not json")
+        return self._payload
+
+    async def body(self):
+        return self._body
+
+
+class FakeRequestContext:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    async def get(self, url, **_kwargs):
+        self.calls.append(url)
+        return self.responses.pop(0) if self.responses else FakeResponse(status=404)
+
+
+async def test_an_uploaded_answer_is_read_as_text_within_its_limits():
+    """The one provider file the reader opens: a text answer attachment.
+
+    The address comes from the provider's own metadata call, which the reader
+    makes the same way the provider's download button does.
+    """
+    from app.chaoxing import browser as connector
+
+    session = make_session()
+    request = FakeRequestContext([
+        FakeResponse(payload={"download": "https://p.ananas.chaoxing.com/star3/origin/f657"}),
+        FakeResponse(body="print('hi')\n".encode()),
+    ])
+    session.context.request = request
+
+    text = await connector.read_attachment(session, "mooc2-ans.chaoxing.com", "f" * 32, "py")
+    assert text == "print('hi')\n"
+    assert request.calls == [
+        f"https://mooc2-ans.chaoxing.com/ananas/status/{'f' * 32}",
+        "https://p.ananas.chaoxing.com/star3/origin/f657",
+    ]
+
+
+async def test_an_uploaded_answer_is_refused_outside_its_limits():
+    from app.chaoxing import browser as connector
+
+    session = make_session()
+    request = FakeRequestContext([])
+    session.context.request = request
+    # Nothing is even asked for when the descriptor is not one the reader opens.
+    assert await connector.read_attachment(session, "mooc2-ans.chaoxing.com", "not-an-object-id", "py") == ""
+    assert await connector.read_attachment(session, "mooc2-ans.chaoxing.com", "f" * 32, "png") == ""
+    assert await connector.read_attachment(session, "evil.example.com", "f" * 32, "py") == ""
+    assert request.calls == []
+
+    notes: list[str] = []
+    session.context.request = FakeRequestContext([FakeResponse(payload={"download": "https://evil.example.com/x.py"})])
+    assert await connector.read_attachment(session, "mooc2-ans.chaoxing.com", "f" * 32, "py", notes) == ""
+    assert "rejected" in notes[-1]
+
+    session.context.request = FakeRequestContext([
+        FakeResponse(payload={"download": "https://p.ananas.chaoxing.com/star3/origin/f657"}),
+        FakeResponse(status=302, headers={"location": "https://cdn.example.com/x.py"}),
+    ])
+    assert await connector.read_attachment(session, "mooc2-ans.chaoxing.com", "f" * 32, "py", notes) == ""
+    assert "redirected" in notes[-1]
+
+    session.context.request = FakeRequestContext([
+        FakeResponse(payload={"download": "https://p.ananas.chaoxing.com/star3/origin/f657"}),
+        FakeResponse(body=b"x" * (connector.ATTACHMENT_MAX_BYTES + 1)),
+    ])
+    assert await connector.read_attachment(session, "mooc2-ans.chaoxing.com", "f" * 32, "py", notes) == ""
+    assert "over the" in notes[-1]
+
+    session.context.request = FakeRequestContext([
+        FakeResponse(payload={"download": "https://p.ananas.chaoxing.com/star3/origin/f657"}),
+        FakeResponse(body=b"\xff\xfe\x00\x01"),
+    ])
+    assert await connector.read_attachment(session, "mooc2-ans.chaoxing.com", "f" * 32, "py", notes) == ""
+    assert "utf-8" in notes[-1]
+
+
+async def test_an_unreadable_attachment_leaves_the_question_for_a_human(monkeypatch):
+    from app.chaoxing import browser as connector
+    from app.chaoxing import router as routes
+
+    def question():
+        return dict(
+            source_id="1", student_answer="", requires_manual_review=True,
+            attachment_id="f" * 32, attachment_name="2026.9.22 步数睡眠.py", attachment_suffix="py",
+        )
+
+    pages = [("https://mooc2-ans.chaoxing.com/mooc2-ans/work/library/review-work?workAnswerId=1", "<html></html>")]
+    monkeypatch.setattr(connector, "read_attachment", AsyncMock(return_value="# 步数睡眠\nprint(1)"))
+    questions = {"1": question()}
+    await routes.resolve_attachments(make_session(), pages, questions)
+    assert questions["1"]["student_answer"] == "【附件 2026.9.22 步数睡眠.py】\n# 步数睡眠\nprint(1)"
+    assert questions["1"]["requires_manual_review"] is False
+    assert set(questions["1"]) & {"attachment_id", "attachment_name", "attachment_suffix"} == set()
+
+    # A file that cannot be read must not look answered, and its descriptor still
+    # has to leave: it is reader bookkeeping, not part of the sheet.
+    monkeypatch.setattr(connector, "read_attachment", AsyncMock(return_value=""))
+    questions = {"1": question()}
+    await routes.resolve_attachments(make_session(), pages, questions)
+    assert questions["1"]["student_answer"] == "" and questions["1"]["requires_manual_review"] is True
+    assert set(questions["1"]) & {"attachment_id", "attachment_name", "attachment_suffix"} == set()
+
+
 def test_work_answer_sheet_is_parsed_without_marking_inputs():
     """A work answer sheet has no questionScore input to hang questions off.
 

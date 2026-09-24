@@ -450,8 +450,10 @@ def graded_question(container: Tag, qid: str, score: Tag | None) -> dict:
     # Counting every <a>/<img> in the answer area flagged all 42 questions of a
     # live paper as "needs a human", which kept the subjective ones — the only
     # ones AI grading can help with — out of the queue entirely.
+    file_node = answer_container.select_one("iframe.attach-iframe[objectid], iframe[attach][objectid]") if answer_container else None
     attachment = bool(answer_container) and (
-        answer_container.select_one("img[src], iframe[src]") is not None
+        file_node is not None
+        or answer_container.select_one("img[src], iframe[src]") is not None
         or any(
             re.search(r"download|attachment|file", str(link.get("href", "")), re.I)
             for link in answer_container.select("a[href]")
@@ -489,6 +491,12 @@ def graded_question(container: Tag, qid: str, score: Tag | None) -> dict:
             else objective_by_label
         ),
         requires_manual_review=max_score is None or student is None or (attachment and not student_answer),
+        # An uploaded answer file is fetched by the caller, which owns the
+        # network; the descriptor rides along so it does not have to re-read the
+        # markup. Both keys are removed before the sheet is returned or saved.
+        attachment_id=str(file_node.get("objectid") or "") if file_node else "",
+        attachment_name=str(file_node.get("filename") or "") if file_node else "",
+        attachment_suffix=str(file_node.get("filetype") or "") if file_node else "",
     )
 
 
