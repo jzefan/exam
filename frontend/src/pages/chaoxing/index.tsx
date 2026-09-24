@@ -7,6 +7,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 import { PixelGrid, PixelLoaderOverlay } from "@/components/ui/pixel-loader";
 import { ConnectionError, connectionRequest } from "./api";
 import type { Connection, Listing, RecordItem, Review, Semester, Verified } from "./api";
@@ -195,9 +196,13 @@ export function ChaoxingPage() {
   };
 
   return <div className="flex w-full min-w-0 flex-col gap-5">
-    <ChaoxingPageHeader title="学习通" subtitle="读取答卷 · AI 评分 · 教师复核" actions={<>
+    <ChaoxingPageHeader title="学习通" subtitle="读取答卷 · AI 评分 · 教师复核" status={
+      <Badge variant={session?.connected ? "success" : session ? "warning" : "outline"} role="status" className="gap-1.5 rounded-full px-3 py-1 text-xs">
+        <span className={session?.connected ? "size-1.5 rounded-full bg-emerald-600" : session ? "size-1.5 rounded-full bg-amber-500" : "size-1.5 rounded-full bg-muted-foreground"} />
+        {session?.connected ? "已连接" : session ? "等待登录" : "未连接"}
+      </Badge>
+    } actions={<>
         <Button asChild size="sm" variant="outline"><Link to="/grading/chaoxing/results">已保存的阅卷</Link></Button>
-        <span className="text-xs text-muted-foreground" role="status">{session?.connected ? "已连接" : session ? "等待登录" : "未连接"}</span>
         {session && <Button size="sm" variant="outline" disabled={busy} onClick={() => void run("正在断开连接", async () => {
           await connectionRequest(`${base}`, { method: "DELETE" });
           generation.current += 1; clearData(); setSession(null); setLoginOpen(false);
@@ -206,6 +211,7 @@ export function ChaoxingPage() {
           const current = session ?? await connectionRequest<Connection>("/sessions", { method: "POST" });
           setSession(current); setLoginOpen(true);
         })}>{busy ? <PixelGrid /> : <Link2 />}{session ? "继续登录" : "连接学习通"}</Button>}
+        <Button asChild size="sm" variant="ghost"><Link to="/grading"><ArrowLeft />阅卷中心</Link></Button>
     </>} />
     {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
     {capability && !capability.enabled && <Alert className="border-border"><AlertDescription>{capability.reason}</AlertDescription></Alert>}
@@ -238,7 +244,6 @@ export function ChaoxingPage() {
               acceptCourses(data);
             }
           })}><RefreshCw />刷新</Button>}
-          <Button asChild variant="ghost" size="sm"><Link to="/grading"><ArrowLeft />阅卷中心</Link></Button>
         </div>
       </div>
       {!exam && <div className="overflow-hidden rounded-md border border-border" aria-busy={busy}>
