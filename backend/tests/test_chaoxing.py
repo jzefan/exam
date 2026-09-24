@@ -1015,6 +1015,52 @@ def test_rosters_only_report_a_submission_time_the_provider_printed():
     assert rows[0]["submitted_at"] is None and rows[0]["student_no"] == "3266260201"
 
 
+def test_work_answer_sheet_is_parsed_without_marking_inputs():
+    """A work answer sheet has no questionScore input to hang questions off.
+
+    Its block is `<div class="mark_item1">` named by the stem element, the type
+    sits in a hidden input that carries no score, and the score is printed in the
+    label beside it. Only the visible label may be read as the stem's fallback,
+    never as the question itself.
+    """
+    html = """<div class="mark_item1" id="index_1" index="1" name="其它">
+      <h3 class="mark_name colorDeep" id="questionStem_112590515">1.
+        <span class="colorShallow">(其它, 100分)</span>
+        <div class="hiddenTitle workTextWrap"><p><img src="https://p.ananas.chaoxing.com/x.png"></p></div></h3>
+      <input type="hidden" id="typeName_112590515" value="其它">
+      <div class="mark_answer_key" id="qb1">
+        <dl class="mark_fill studentAns" id="stuanswer_112590515" data2="100">
+          <dt><i>学生答案：</i></dt>
+          <dd class="stuAnswerWords textwrap"><p>用 int() 转换类型</p></dd></dl>
+        <dl class="mark_fill hiddenAnswer" id="correctanswer_112590515"><dt><i>正确答案：</i></dt></dl>
+      </div>
+      <input type="hidden" id="fullScore112590515" value="100">
+    </div>
+    <input type="hidden" id="fullScore" name="fullScore" value="100">"""
+    parsed = parsers.review(html)
+    assert parsed["declared_max_score"] == 100
+    question = parsed["questions"][0]
+    assert (question["source_id"], question["question_type"], question["max_score"]) == ("112590515", "其它", 100)
+    assert question["student_answer"] == "用 int() 转换类型"
+    assert question["reference_answer"] == ""
+    # The stem is an image, so there is no text to show and none may be invented
+    # from the type label that happens to sit in the same heading.
+    assert question["content"] == ""
+    assert question["requires_manual_review"] is False
+
+
+def test_work_answer_that_lives_only_in_an_attachment_needs_a_human():
+    html = """<div id="index_1"><h3 class="mark_name" id="questionStem_7">1.
+        <span class="colorShallow">(其它, 100分)</span></h3>
+      <input type="hidden" id="typeName_7" value="其它">
+      <dl class="mark_fill studentAns" id="stuanswer_7"><dd class="stuAnswerWords">
+        <iframe class="attach-iframe" src="/ananas/common-modules/attachment/insertCloud.html"></iframe>
+      </dd></dl></div>"""
+    question = parsers.review(html)["questions"][0]
+    assert question["student_answer"] == "" and question["max_score"] == 100
+    assert question["requires_manual_review"] is True
+
+
 def test_work_roster_rows_are_parsed_with_their_answer_link():
     """A work roster is not a LayUI table: one ul per student.
 

@@ -400,6 +400,98 @@ def candidates(html: str, base: str) -> list[dict]:
     return list(found.values())
 
 
+def graded_question(container: Tag, qid: str, score: Tag | None) -> dict:
+    """One answer-sheet question, from whichever generation's markup holds it.
+
+    `score` is the marking input the older exam sheet hangs a question off; the
+    work generation ships none, so every reading below tolerates its absence.
+    """
+    type_node = container.select_one('input[id^="typeName_"]')
+    label_node = container.select_one(".colorShallow,.questionType,.mark_type")
+    # The hidden input carries the bare type, the visible label the type together
+    # with its full score, so both are read: neither alone has everything.
+    type_label = str(type_node.get("value", "")) if type_node else text(label_node)
+    # The live page prints the type together with its full score, e.g.
+    # "(单选题, 2.0分)". Keep the bare type for display and routing, and read
+    # the score out of that label: objective questions carry no score field at
+    # all, and without the full score neither the paper total nor the objective
+    # marks can be resolved.
+    match = re.search(r"([\u4e00-\u9fa5]{1,8}题)", type_label)
+    if match is None:
+        # Not every provider type ends in 题: "(名词解释, 20.0分)" is a single
+        # label, and the score must not travel inside the displayed type.
+        match = re.search(r"[（(]\s*([\u4e00-\u9fa5]{2,8})\s*[,，]", type_label)
+    question_type = match[1] if match else type_label
+    full_score = container.select_one('input[id^="fullScore"]')
+    label_score = re.search(r"(\d+(?:\.\d+)?)\s*分", f"{type_label} {text(label_node)}")
+    placeholder = re.search(r"0\s*[-~—]\s*(\d+(?:\.\d+)?)", str(score.get("placeholder") or "")) if score else None
+    max_score = number(
+        (score.get("data-max-score") if score else None)
+        or container.get("data2")
+        or (full_score.get("value") if full_score else None)
+        or (label_score[1] if label_score else None)
+        or (placeholder[1] if placeholder else None)
+    )
+    student = container.select_one(
+        ".SubjectStuAnswer,.topicStudentAnswer .colorDeep,.studentAnswer,.answerCon,.stuAnswerWords,.studentAns dd"
+    )
+    reference = container.select_one(
+        ".topicRightAnswer .objAnswer_right,.topicRightAnswer .colorGreen,.rightAnswer,.correctAnswer,"
+        ".standardAnswer,dl[id^='correctanswer_'] dd,.hiddenAnswer dd"
+    )
+    if student is None:
+        student = next((p for p in container.select("p") if re.match("考生答案|学生答案", text(p))), None)
+    if reference is None:
+        reference = next((node for node in container.select("p, dt") if re.match("参考答案|标准答案|正确答案", text(node))), None)
+    answer_container = (
+        container.select_one(".topicStudentAnswer,.studentAnswer,.answerCon,.stuAnswerWords,.studentAns dd") or student
+    )
+    # A human is needed when the answer itself lives in a file we cannot read.
+    # Counting every <a>/<img> in the answer area flagged all 42 questions of a
+    # live paper as "needs a human", which kept the subjective ones — the only
+    # ones AI grading can help with — out of the queue entirely.
+    attachment = bool(answer_container) and (
+        answer_container.select_one("img[src], iframe[src]") is not None
+        or any(
+            re.search(r"download|attachment|file", str(link.get("href", "")), re.I)
+            for link in answer_container.select("a[href]")
+        )
+    )
+    # select_one returns document order, not selector order, and on a work sheet
+    # the generic `.mark_name` heading *contains* the real stem, so the specific
+    # stem element is looked up first instead of being listed beside it.
+    stem_node = container.select_one(".hiddenTitle,.questionStem,.Zy_TItle,.qtContent,.stem")
+    if stem_node is None:
+        stem_node = container.select_one(".mark_name")
+    stem = answer_text(stem_node)
+    question_content = stem
+    if re.search(r"选择|单选|多选", question_type):
+        options = choice_options(container)
+        if options:
+            question_content = "\n".join([" ".join(stem.split()), *(option for option in options if option not in stem)])
+    student_answer = answer_text(student)
+    # The label decides whether a question is objective, because CSS classes are
+    # the provider's rendering detail; the class is only the fallback for labels
+    # this reader does not recognize. Keeping the split identical to the rest of
+    # the project is what keeps the platform's own marks out of the AI queue.
+    objective_by_label = is_objective(question_type)
+    return dict(
+        source_id=str(qid),
+        question_type=question_type,
+        content=question_content,
+        student_answer=student_answer,
+        reference_answer=answer_text(reference),
+        max_score=max_score,
+        source_score=number(score.get("value")) if score else None,
+        objective=(
+            "objective" in container.get("class", [])
+            if objective_by_label is None
+            else objective_by_label
+        ),
+        requires_manual_review=max_score is None or student is None or (attachment and not student_answer),
+    )
+
+
 def review(html: str) -> dict:
     soup = BeautifulSoup(html, "html.parser")
     found = {}
@@ -418,81 +510,16 @@ def review(html: str) -> dict:
             qid = match[0] if match else ""
         if not qid:
             continue  # Never invent an identity for a grading question.
-        type_node = container.select_one('input[id^="typeName_"]')
-        type_label = (
-            str(type_node.get("value", ""))
-            if type_node
-            else text(container.select_one(".colorShallow,.questionType,.mark_type"))
-        )
-        # The live page prints the type together with its full score, e.g.
-        # "(单选题, 2.0分)". Keep the bare type for display and routing, and read
-        # the score out of that label: objective questions carry no score field
-        # at all, and without the full score neither the paper total nor the
-        # objective marks can be resolved.
-        match = re.search(r"([\u4e00-\u9fa5]{1,8}题)", type_label)
-        if match is None:
-            # Not every provider type ends in 题: "(名词解释, 20.0分)" is a single
-            # label, and the score must not travel inside the displayed type.
-            match = re.search(r"[（(]\s*([\u4e00-\u9fa5]{2,8})\s*[,，]", type_label)
-        question_type = match[1] if match else type_label
-        full_score = container.select_one('input[id^="fullScore"]')
-        label_score = re.search(r"(\d+(?:\.\d+)?)\s*分", type_label)
-        placeholder = re.search(r"0\s*[-~—]\s*(\d+(?:\.\d+)?)", str(score.get("placeholder") or ""))
-        max_score = number(
-            score.get("data-max-score")
-            or container.get("data2")
-            or (full_score.get("value") if full_score else None)
-            or (label_score[1] if label_score else None)
-            or (placeholder[1] if placeholder else None)
-        )
-        student = container.select_one(".SubjectStuAnswer,.topicStudentAnswer .colorDeep,.studentAnswer,.answerCon")
-        reference = container.select_one(
-            ".topicRightAnswer .objAnswer_right,.topicRightAnswer .colorGreen,.rightAnswer,.correctAnswer,.standardAnswer"
-        )
-        if student is None:
-            student = next((p for p in container.select("p") if re.match("考生答案|学生答案", text(p))), None)
-        if reference is None:
-            reference = next(
-                (p for p in container.select("p") if re.match("参考答案|标准答案|正确答案", text(p))), None
-            )
-        answer_container = container.select_one(".topicStudentAnswer,.studentAnswer,.answerCon") or student
-        # A human is needed when the answer itself lives in a file we cannot read.
-        # Counting every <a>/<img> in the answer area flagged all 42 questions of
-        # a live paper as "needs a human", which kept the subjective ones — the
-        # only ones AI grading can help with — out of the queue entirely.
-        attachment = bool(answer_container) and (
-            answer_container.select_one("img[src]") is not None
-            or any(
-                re.search(r"download|attachment|file", str(link.get("href", "")), re.I)
-                for link in answer_container.select("a[href]")
-            )
-        )
-        stem = answer_text(container.select_one(".hiddenTitle,.questionStem,.Zy_TItle,.qtContent,.stem,.mark_name"))
-        question_content = stem
-        if re.search(r"选择|单选|多选", question_type):
-            options = choice_options(container)
-            if options:
-                question_content = "\n".join([" ".join(stem.split()), *(option for option in options if option not in stem)])
-        student_answer = answer_text(student)
-        # The label decides whether a question is objective, because CSS classes are
-        # the provider's rendering detail; the class is only the fallback for labels
-        # this reader does not recognize. Keeping the split identical to the rest of
-        # the project is what keeps the platform's own marks out of the AI queue.
-        objective_by_label = is_objective(question_type)
-        found[str(qid)] = dict(
-            source_id=str(qid),
-            question_type=question_type,
-            content=question_content,
-            student_answer=student_answer,
-            reference_answer=answer_text(reference),
-            max_score=max_score,
-            source_score=number(score.get("value")),
-            objective=(
-                "objective" in container.get("class", [])
-                if objective_by_label is None
-                else objective_by_label
-            ),
-            requires_manual_review=max_score is None or student is None or (attachment and not student_answer),
-        )
-    full = soup.select_one("#examFullScore")
+        found[str(qid)] = graded_question(container, str(qid), score)
+    if not found:
+        # A work answer sheet carries no marking inputs at all: each question is a
+        # numbered block whose stem element names it. Only read this way when the
+        # marking inputs were absent, so one sheet is never read as both shapes.
+        for container in soup.select("div.mark_item1, div[id^='index_']"):
+            stem_node = container.select_one("h3[id^='questionStem_']")
+            qid = re.sub(r"\D", "", str(stem_node.get("id") or "")) if stem_node else ""
+            if not qid or qid in found:
+                continue
+            found[qid] = graded_question(container, qid, None)
+    full = soup.select_one("#examFullScore") or soup.select_one("#fullScore")
     return dict(questions=list(found.values()), declared_max_score=number(full.get("value")) if full else None)
