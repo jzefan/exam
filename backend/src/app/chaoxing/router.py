@@ -406,6 +406,42 @@ async def read_task_assignments(session, course_html: str, soup, final: str) -> 
     return [], "学习通已响应教学任务列表，但没有返回可识别的作业。"
 
 
+async def capture_home_module(session, course_html: str, soup, final: str) -> None:
+    """Leave the course home module behind when the assignment list is unread.
+
+    The Vue shell mounts the course home as an iframe module, and it is the
+    module the teacher is looking at while the assignment list is on screen. Its
+    list can be server-rendered markup or its own call, so record both. Same
+    opt-in gate as the other diagnostics, and failures change nothing.
+    """
+    if not dumping_enabled():
+        return
+    dump_pages("course-no-work-credential", [(final, course_html)])
+    entry = next(
+        (
+            url
+            for host, path in (
+                ("mooc2-ans.chaoxing.com", "/mooc2-ans-vue/fanyav3/index"),
+                ("mooc2-ans.chaoxing.com", "/mooc2-ans-ue/fanya3/index"),
+            )
+            if (url := module_entry(soup, host, path))
+        ),
+        "",
+    )
+    if not entry:
+        return
+    refused: list[str] = []
+    responses: list[dict] = []
+    events: list[str] = []
+    try:
+        module_final, module_html = await read_page(session, entry, refused, responses, events)
+    except HTTPException:
+        return
+    dump_pages("home-module", [(module_final, module_html)])
+    dump_requests("home-module", refused)
+    dump_requests("home-module-network", events)
+
+
 @router.get("/sessions/{session_id}/courses/{course_id}/exams")
 async def list_exams(session_id: str, course_id: str, user: Teacher, refresh: bool = False):
     from . import parsers
@@ -478,6 +514,8 @@ async def list_exams(session_id: str, course_id: str, user: Teacher, refresh: bo
             )
             for item in parsed_assignments:
                 unique[item["source_id"]] = item
+            if not parsed_assignments:
+                await capture_home_module(session, course_html, course_soup, final)
         elif work_enc and page_enc and work_course_id and work_class_id and cpi:
             work_params = {
                 "courseId": work_course_id,

@@ -15,7 +15,7 @@ COURSES_URL = "https://fycourse.fanya.chaoxing.com/fyportal/courselist/course"
 READ_PATHS = {
     "fycourse.fanya.chaoxing.com": re.compile(r"^/fyportal/courselist/(course|coursegroupdata|entercoursenewfy)/?$"),
     "mooc2-ans.chaoxing.com": re.compile(
-        r"^/(?:mooc2-ans/)?(?:mycourse/tch|mooc2-ans-vue/fanyav3/tch|mooc2-ans-ue/fanya3/tch|exam/test(?:/(?:marklist|mark|review|markpaper))?)/?$"
+        r"^/(?:mooc2-ans/)?(?:mycourse/tch|mooc2-ans-vue/fanyav3/(?:tch|index)|mooc2-ans-ue/fanya3/(?:tch|index)|exam/test(?:/(?:marklist|mark|review|markpaper))?)/?$"
     ),
     # Course assignments use a separate, older host and route family from the
     # course exam list. Keep this allowlist narrow: the connector only follows

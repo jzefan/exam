@@ -801,6 +801,51 @@ async def test_vue_task_list_is_read_even_when_diagnostic_dumps_are_off(monkeypa
     assert not (tmp_path / "absent").exists()
 
 
+async def test_vue_course_home_module_is_captured_when_the_task_list_is_empty(monkeypatch, tmp_path):
+    """The shell's course-home module is the fallback lead for the assignment list.
+
+    The task module answered with nothing, and the page the teacher is looking at
+    belongs to the home module, so its markup and calls are what the reader has to
+    be adapted against next.
+    """
+    from app.chaoxing import browser as connector
+    from app.chaoxing import router as routes
+
+    monkeypatch.setattr(connector, "PAGE_DUMP_DIR", tmp_path)
+    user = SimpleNamespace(id=uuid.uuid4())
+    session = make_session(str(user.id))
+    session.connected = True
+    monkeypatch.setattr(manager, "sessions", {session.id: session})
+    course = session.remember("course", parsers.courses(COURSE))[0]
+    vue_page = (
+        '<iframe src="https://task.chaoxing.com/task/index?courseId=12&amp;clazzId=45&amp;cpi=34&amp;enc=a"></iframe>'
+        '<iframe src="https://mooc2-ans.chaoxing.com/mooc2-ans-vue/fanyav3/index??courseId=12&amp;enc=b"></iframe>'
+    )
+    read_urls: list[str] = []
+
+    async def fake_read_page(_session, url, refused=None, json_responses=None, network_events=None):
+        read_urls.append(url)
+        if url.startswith("https://task.chaoxing.com/task/index"):
+            network_events.append("GET task.chaoxing.com/task/getTaskDataLists status=200 code=200 data_count=0")
+            return url, "<div>任务引擎</div>"
+        if "/fanyav3/index" in url:
+            return url, "<div>20260922课堂实训作业</div>"
+        return "https://mooc2-ans.chaoxing.com/mooc2-ans-vue/fanyav3/tch?courseid=12&cpi=34&clazzid=45", vue_page
+
+    monkeypatch.setattr(routes, "read_page", AsyncMock(side_effect=fake_read_page))
+    monkeypatch.setattr(
+        routes,
+        "read_samples",
+        AsyncMock(return_value=[("https://mooc2-ans.chaoxing.com/mooc2-ans/exam/test", "<p>暂无考试</p>")]),
+    )
+
+    result = await routes.list_exams(session.id, course["id"], user)
+    assert result["items"] == []
+    assert any("/fanyav3/index" in url for url in read_urls), "the home module was not read"
+    dumped = {path.name.split("-", 2)[2]: path.read_text(encoding="utf-8") for path in tmp_path.iterdir()}
+    assert "20260922课堂实训作业" in dumped["home-module-0.html"]
+
+
 async def test_vue_module_read_waits_for_mount_before_taking_the_page():
     """A module read must wait for the module to mount, not just for idle network.
 
