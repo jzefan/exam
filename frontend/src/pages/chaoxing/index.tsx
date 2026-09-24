@@ -127,12 +127,49 @@ export function ChaoxingPage() {
   const rosterIncomplete = expectedSubmitted === null || submittedCandidates.length !== expectedSubmitted;
   const readableCandidates = visibleCandidates.filter(item => item.readable);
   const candidateIndex = readableCandidates.findIndex(item => item.id === candidate?.id);
-  const subjectiveQuestions = review?.questions.map((question, index) => ({ question, number: index + 1 })).filter(({ question }) => !question.objective) ?? [];
-  const objectiveQuestions = review?.questions.filter(question => question.objective) ?? [];
+  const numberedQuestions = review?.questions.map((question, index) => ({ question, number: index + 1 })) ?? [];
+  const subjectiveQuestions = numberedQuestions.filter(({ question }) => !question.objective);
+  const objectiveQuestions = numberedQuestions.filter(({ question }) => question.objective);
   const subjectiveMax = subjectiveQuestions.reduce((sum, { question }) => sum + (question.max_score ?? 0), 0);
   const subjectiveMaxKnown = subjectiveQuestions.every(({ question }) => question.max_score != null);
-  const objectiveScore = objectiveQuestions.reduce((sum, question) => sum + (question.source_score ?? 0), 0);
-  const objectiveScoreKnown = objectiveQuestions.every(question => question.source_score != null);
+  const objectiveMax = objectiveQuestions.reduce((sum, { question }) => sum + (question.max_score ?? 0), 0);
+  const objectiveMaxKnown = objectiveQuestions.every(({ question }) => question.max_score != null);
+  const objectiveScore = objectiveQuestions.reduce((sum, { question }) => sum + (question.source_score ?? 0), 0);
+  const objectiveScoreKnown = objectiveQuestions.every(({ question }) => question.source_score != null);
+  // 每种题型的应得分与学习通实得分，与阅卷中心的分值表同一口径：拿不到分的
+  // 题型不显示数字，不把未知当 0。
+  const typeRows: { type: string; expected: number; expectedComplete: boolean; actual: number; actualComplete: boolean }[] = [];
+  for (const { question } of numberedQuestions) {
+    const label = question.question_type?.trim() || "未识别题型";
+    let row = typeRows.find(item => item.type === label);
+    if (!row) {
+      row = { type: label, expected: 0, expectedComplete: true, actual: 0, actualComplete: true };
+      typeRows.push(row);
+    }
+    if (question.max_score == null) row.expectedComplete = false;
+    else row.expected += question.max_score;
+    if (question.source_score == null) row.actualComplete = false;
+    else row.actual += question.source_score;
+  }
+  const expectedTotal = typeRows.reduce((sum, row) => sum + row.expected, 0);
+  const expectedComplete = typeRows.every(row => row.expectedComplete);
+  const actualTotal = typeRows.reduce((sum, row) => sum + row.actual, 0);
+  const actualComplete = typeRows.every(row => row.actualComplete);
+  const renderQuestionCard = ({ question, number }: (typeof numberedQuestions)[number]) => <div id={`chaoxing-question-${number}`} key={question.source_id} className="scroll-mt-5"><QuestionPreviewCard
+    question={buildQuestionPreview({ ...question, id: question.source_id })}
+    index={number}
+    mode="compact"
+    expandOnClick
+    hideAnswer
+    hideMeta
+    hideSourceBadge
+    hideScoreAndDifficulty
+    className="cursor-pointer transition-colors hover:border-primary/40"
+    trailing={<span className="inline-flex shrink-0 items-center gap-2 text-xs text-muted-foreground"><span>学习通得分 {question.source_score ?? "未知"}</span><span>满分 {question.max_score ?? "未知"}</span></span>}
+  >
+    <div className="mt-3"><h4 className="mb-1 text-xs text-muted-foreground">考生答案</h4><pre className="whitespace-pre-wrap break-words rounded bg-muted/40 p-3 font-mono text-xs">{question.student_answer || "未读取到文字答案"}</pre></div>
+    {question.requires_manual_review && <p className="mt-2 text-xs text-muted-foreground">含附件或识别信息不全，需要教师在学习通核对。</p>}
+  </QuestionPreviewCard></div>;
   const canGrade = subjectiveQuestions.some(({ question }) => !question.requires_manual_review && !!question.content.trim() && !!question.reference_answer.trim() && (question.max_score ?? 0) > 0);
   const selectCandidate = (item: RecordItem, refresh = false) => void run(refresh ? "正在重新读取答卷" : "正在读取答卷", async () => {
     const version = generation.current;
@@ -308,30 +345,45 @@ export function ChaoxingPage() {
           <Button size="sm" variant="ghost" onClick={() => { setCandidate(undefined); setReview(undefined); setChecked(false); }}><ArrowLeft />返回考生列表</Button>
         </aside>
         <section className="min-w-0 space-y-4" aria-label="考生答卷">
-          <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border pb-3"><div><h2 className="text-base font-semibold">主观题</h2><p className="mt-1 text-xs text-muted-foreground">{subjectiveQuestions.length} 题 · 满分 {subjectiveMaxKnown ? subjectiveMax : "未知"} · 仅对主观题进行 AI 评分</p></div>
-            <div className="flex flex-wrap items-center gap-2">{review && <><span className="text-xs text-muted-foreground">客观题源站得分 {objectiveScoreKnown ? objectiveScore : "未知"} · 试卷满分 {review.declared_max_score ?? "未知"}</span><Button size="sm" variant="outline" title="跳过缓存，从学习通重新读取" disabled={busy} onClick={() => selectCandidate(candidate, true)}><RefreshCw />重新读取答卷</Button></>}</div></div>
+          <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border pb-3"><div><h2 className="text-base font-semibold">答卷内容</h2><p className="mt-1 text-xs text-muted-foreground">主观题 {subjectiveQuestions.length} 题 · 客观题 {objectiveQuestions.length} 题 · 试卷满分 {review?.declared_max_score ?? "未知"}</p></div>
+            <div className="flex flex-wrap items-center gap-2">{review && <Button size="sm" variant="outline" title="跳过缓存，从学习通重新读取" disabled={busy} onClick={() => selectCandidate(candidate, true)}><RefreshCw />重新读取答卷</Button>}</div></div>
           {review && <>
             <div className="flex flex-wrap items-center gap-3 rounded-md border border-border p-3">
               <label className="flex items-center gap-2 text-xs"><Checkbox checked={checked} onCheckedChange={value => setChecked(value === true)} />已与学习通核对本份答卷的题目和分值</label>
               <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={busy || !checked || !review.review_hash || !candidate.student_no} onClick={() => savePaper(false)}>保存答卷</Button>
                 <Button size="sm" disabled={busy || !checked || !review.review_hash || !candidate.student_no || !canGrade} onClick={() => savePaper(true)}><Sparkles />AI 评分</Button></div>
             </div>
-            {subjectiveQuestions.map(({ question, number }) => <div id={`chaoxing-question-${number}`} key={question.source_id} className="scroll-mt-5"><QuestionPreviewCard
-              question={buildQuestionPreview({ ...question, id: question.source_id })}
-              index={number}
-              mode="compact"
-              expandOnClick
-              hideAnswer
-              hideMeta
-              hideSourceBadge
-              hideScoreAndDifficulty
-              className="cursor-pointer transition-colors hover:border-primary/40"
-              trailing={<span className="inline-flex shrink-0 items-center gap-2 text-xs text-muted-foreground"><span>学习通得分 {question.source_score ?? "未知"}</span><span>满分 {question.max_score ?? "未知"}</span></span>}
-            >
-              <div className="mt-3"><h4 className="mb-1 text-xs text-muted-foreground">考生答案</h4><pre className="whitespace-pre-wrap break-words rounded bg-muted/40 p-3 font-mono text-xs">{question.student_answer || "未读取到文字答案"}</pre></div>
-              {question.requires_manual_review && <p className="mt-2 text-xs text-muted-foreground">含附件或识别信息不全，需要教师在学习通核对。</p>}
-            </QuestionPreviewCard></div>)}
-            {!subjectiveQuestions.length && <p className="rounded-md border border-border p-8 text-center text-sm text-muted-foreground">本份答卷没有需要批改的主观题。</p>}
+            {!!typeRows.length && <div className="overflow-x-auto rounded-md border border-border">
+              <table className="w-full text-sm">
+                <thead><tr className="border-b border-border bg-muted/40">
+                  <th className="px-4 py-2 text-left text-xs font-medium text-muted-foreground">题型</th>
+                  {typeRows.map(row => <th key={row.type} className="whitespace-nowrap px-4 py-2 text-center text-xs font-medium">{row.type}</th>)}
+                  <th className="px-4 py-2 text-center text-xs font-semibold">总分</th>
+                </tr></thead>
+                <tbody>
+                  <tr className="border-b border-border">
+                    <td className="px-4 py-2 text-left text-xs text-muted-foreground">应得分</td>
+                    {typeRows.map(row => <td key={row.type} className="px-4 py-2 text-center tabular-nums">{row.expectedComplete ? row.expected : "—"}</td>)}
+                    <td className="px-4 py-2 text-center font-semibold tabular-nums">{expectedComplete ? expectedTotal : "—"}</td>
+                  </tr>
+                  <tr>
+                    <td className="px-4 py-2 text-left text-xs text-muted-foreground">实得分</td>
+                    {typeRows.map(row => <td key={row.type} className="px-4 py-2 text-center tabular-nums">{row.actualComplete ? row.actual : "—"}</td>)}
+                    <td className="px-4 py-2 text-center font-semibold tabular-nums">{actualComplete ? actualTotal : actualTotal > 0 ? `${actualTotal}*` : "—"}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p className="border-t border-border px-4 py-2 text-xs text-muted-foreground">实得分取学习通已给出的分数；主观题由 AI 与教师评分，确认后在「已保存的阅卷」查看。{!actualComplete && actualTotal > 0 ? " * 仅为已给分小计，不含未评分题目。" : ""}</p>
+            </div>}
+            {!!subjectiveQuestions.length && <div className="space-y-3">
+              <h3 className="text-sm font-semibold">主观题<span className="ml-2 font-normal text-muted-foreground">{subjectiveQuestions.length} 题 · 满分 {subjectiveMaxKnown ? subjectiveMax : "未知"} · 由 AI 与教师评分</span></h3>
+              {subjectiveQuestions.map(renderQuestionCard)}
+            </div>}
+            {!!objectiveQuestions.length && <div className="space-y-3">
+              <h3 className="text-sm font-semibold">客观题<span className="ml-2 font-normal text-muted-foreground">{objectiveQuestions.length} 题 · 满分 {objectiveMaxKnown ? objectiveMax : "未知"} · 沿用学习通得分 {objectiveScoreKnown ? objectiveScore : "未知"}</span></h3>
+              {objectiveQuestions.map(renderQuestionCard)}
+            </div>}
+            {!numberedQuestions.length && <p className="rounded-md border border-border p-8 text-center text-sm text-muted-foreground">本份答卷没有可显示的题目。</p>}
           </>}
         </section>
       </div>}

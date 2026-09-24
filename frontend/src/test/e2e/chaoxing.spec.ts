@@ -182,7 +182,7 @@ test("保存答卷、AI评分、教师确认及导出（模拟模型）", async 
   expect(errors).toEqual([]);
 });
 
-test("长名单进入独立考生阅卷视图，只展示主观题", async ({ page, isMobile }) => {
+test("长名单进入独立考生阅卷视图，主客观题与分值表都在", async ({ page, isMobile }) => {
   const user = { id: "teacher", full_name: "测试教师", username: "teacher", persona: "teacher", primary_org: { role_name: "teacher" }, organizations: [{ role_name: "teacher" }] };
   await page.addInitScript(user => { localStorage.setItem("access_token", "test-only-token"); localStorage.setItem("user", JSON.stringify(user)); }, user);
   const candidates = Array.from({ length: 30 }, (_, index) => ({
@@ -237,9 +237,13 @@ test("长名单进入独立考生阅卷视图，只展示主观题", async ({ pa
   await expect(page.getByRole("complementary", { name: "按考生阅卷导航" }).getByText("考生2")).toBeVisible();
   await page.getByRole("button", { name: "上一个" }).click();
   await expect(page.getByRole("complementary", { name: "按考生阅卷导航" }).getByText("考生1", { exact: true })).toBeVisible();
-  await expect(page.getByText("B. user_name")).toHaveCount(0);
+  // 客观题现在同样渲染（沿用学习通得分），并列出每种题型的应得分/实得分。
   await expect(page.getByText(/客观题 1 题沿用学习通得分/)).toBeVisible();
-  await expect(page.locator("pre").last()).toHaveText("for n in range(3):\n    print(n)");
+  const scoreTable = page.getByRole("table");
+  await expect(scoreTable.getByText("单选题")).toBeVisible();
+  await expect(scoreTable.getByText("简答题")).toBeVisible();
+  // 第 2 题是主观题，它的程序作答仍挂在题号锚点上（答题卡跳转依赖它）。
+  await expect(page.locator("#chaoxing-question-2 pre")).toHaveText("for n in range(3):\n    print(n)");
   await page.screenshot({ path: test.info().outputPath("chaoxing-long-roster.png") });
   expect(errors).toEqual([]);
 });

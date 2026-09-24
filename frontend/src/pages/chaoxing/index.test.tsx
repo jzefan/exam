@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { MemoryRouter } from "react-router-dom";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChaoxingPage } from "./index";
 import { ConnectionError, connectionRequest } from "./api";
@@ -151,7 +151,7 @@ describe("学习通连接验证", () => {
     expect(request).toHaveBeenCalledWith("/grading/candidates/saved-2/grade", { method: "POST" });
   });
 
-  it("核对后保存答卷并使用系统主观题评分接口，客观题不进入阅卷区", async () => {
+  it("展示两选题型的分值表，并只把主观题交给系统评分接口", async () => {
     const fallback = request.getMockImplementation()!;
     request.mockImplementation(async (path, init) => {
       if (path.endsWith("/review")) return {
@@ -173,8 +173,16 @@ describe("学习通连接验证", () => {
     fireEvent.click(await screen.findByRole("button", { name: "读取考生" }));
     fireEvent.click((await screen.findAllByRole("button", { name: "查看答卷" }))[0]);
     expect(await screen.findByText("说明循环的用途")).toBeInTheDocument();
-    expect(screen.queryByText("选择正确选项")).not.toBeInTheDocument();
+    // 客观题同样展示（沿用学习通得分），只是不进入 AI 评分队列。
+    expect(screen.getByText(/选择正确选项/)).toBeInTheDocument();
     expect(screen.getByText(/客观题 1 题沿用学习通得分/)).toBeInTheDocument();
+    // 分值表与阅卷中心同一口径：应得分取满分，实得分只算学习通已给出的分，
+    // 主观题未评分就不显示数字，小计加 * 说明不含未评分题目。
+    const table = screen.getByRole("table");
+    expect(within(table).getByText("单选题")).toBeInTheDocument();
+    expect(within(table).getByText("简答题")).toBeInTheDocument();
+    expect(within(table).getByText("12")).toBeInTheDocument();
+    expect(within(table).getByText("2*")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "AI 评分" })).toBeDisabled();
     fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.click(screen.getByRole("button", { name: "AI 评分" }));
