@@ -272,11 +272,12 @@ export function ChaoxingPage() {
           {batchProgress.running ? "批量处理中，请保持页面打开" : "批量处理结束"}：{batchProgress.processed}/{batchProgress.total} 份 · 已提交 AI {batchProgress.queuedCandidates} 份（{batchProgress.queuedQuestions} 题）· 无新增评分任务 {batchProgress.noNewTasks} 份 · 失败 {batchProgress.failed} 份
           {batchProgress.errors.length > 0 && <ul className="mt-2 list-inside list-disc text-xs">{batchProgress.errors.slice(0, 5).map((message, index) => <li key={index}>{message}</li>)}{batchProgress.errors.length > 5 && <li>另有 {batchProgress.errors.length - 5} 份失败</li>}</ul>}
         </AlertDescription></Alert>}
-        <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" aria-label="考生">
+        <ul className="grid gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6" aria-label="考生">
           {visibleCandidates.map(item => <li key={item.id} className="group flex min-w-0 items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2">
             <div className="min-w-0">
               <p className="truncate text-sm font-medium">{item.name}</p>
               <p className="truncate text-xs tabular-nums text-muted-foreground">{item.student_no || "学号未识别"}</p>
+              {item.submitted_at && <p className="truncate text-xs tabular-nums text-muted-foreground">提交 {item.submitted_at}</p>}
             </div>
             {item.readable
               ? <Button size="sm" variant="ghost" className="shrink-0 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100" disabled={busy} onClick={() => selectCandidate(item)}>查看答卷<ChevronRight /></Button>

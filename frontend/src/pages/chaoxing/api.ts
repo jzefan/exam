@@ -20,6 +20,8 @@ export interface RecordItem {
   semester_title?: string;
   course_tags?: string;
   source_score?: number | null;
+  /** Set only when the provider prints a submission time for that answer. */
+  submitted_at?: string | null;
   readable: boolean;
 }
 export interface Semester { id: string; title: string; selected: boolean }

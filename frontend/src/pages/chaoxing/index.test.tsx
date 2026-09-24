@@ -10,7 +10,7 @@ const request = vi.mocked(connectionRequest);
 const session = { id: "session-1", connected: true, width: 1080, height: 720, remaining_seconds: 1000 };
 const course = { id: "course-1", title: "Python 程序设计", readable: true };
 const exam = { id: "exam-1", title: "期中考试", readable: true, submitted_count: 2 };
-const candidate = { id: "candidate-1", name: "张三", student_no: "20260001", status: "submitted", readable: true };
+const candidate = { id: "candidate-1", name: "张三", student_no: "20260001", status: "submitted", submitted_at: "09-22 18:02", readable: true };
 const secondCandidate = { id: "candidate-2", name: "李四", student_no: "20260002", status: "submitted", readable: true };
 const renderPage = () => render(<StrictMode><MemoryRouter><ChaoxingPage /></MemoryRouter></StrictMode>);
 
@@ -54,6 +54,9 @@ describe("学习通连接验证", () => {
     fireEvent.click(await screen.findByRole("button", { name: "读取考生" }));
     await screen.findByText("20260001");
     expect(screen.getByRole("region", { name: "考生列表" })).toBeInTheDocument();
+    // The submission time is shown only for the answers that carry one.
+    expect(screen.getByText("提交 09-22 18:02")).toBeInTheDocument();
+    expect(screen.getAllByText(/^提交 /)).toHaveLength(1);
     fireEvent.click(screen.getAllByRole("button", { name: "查看答卷" })[0]);
     await screen.findByText(/for n in range/);
     expect(screen.getByRole("complementary", { name: "按考生阅卷导航" })).toBeInTheDocument();

@@ -994,6 +994,27 @@ def test_new_work_list_rows_are_parsed_with_their_review_link():
     )
 
 
+def test_rosters_only_report_a_submission_time_the_provider_printed():
+    """A submission time is recognized by shape, and never invented.
+
+    The exam roster fixture has no time cell and a work row that has one must
+    yield it; a row without one keeps the field empty rather than borrowing a
+    value from a neighbouring cell.
+    """
+    assert [r["submitted_at"] for r in parsers.candidates(ROSTER, "https://mooc2-ans.chaoxing.com")] == [
+        None,
+        None,
+    ]
+    work = """<ul class="dataBody_td" id="7">
+      <li class="taskBody_name"><div class="py_name">甲</div></li>
+      <li class="taskBody_con">3266260201</li>
+      <li class="taskBody_con">122.96.36.98</li>
+      <li class="taskBody_con">待批阅</li>
+    </ul>"""
+    rows = parsers.candidates(work, "https://mooc2-ans.chaoxing.com/mooc2-ans/work/mark?id=1")
+    assert rows[0]["submitted_at"] is None and rows[0]["student_no"] == "3266260201"
+
+
 def test_work_roster_rows_are_parsed_with_their_answer_link():
     """A work roster is not a LayUI table: one ul per student.
 
@@ -1014,9 +1035,10 @@ def test_work_roster_rows_are_parsed_with_their_answer_link():
       </p></li>
     </ul>'''
     rows = parsers.candidates(html, "https://mooc2-ans.chaoxing.com/mooc2-ans/work/mark?id=1")
-    assert [(r["source_id"], r["name"], r["student_no"], r["status"], r["source_score"]) for r in rows] == [
-        ("55935067", "陈娇", "3266260201", "submitted", None)
-    ]
+    assert [
+        (r["source_id"], r["name"], r["student_no"], r["status"], r["source_score"], r["submitted_at"])
+        for r in rows
+    ] == [("55935067", "陈娇", "3266260201", "submitted", None, "09-22 18:02")]
     assert rows[0]["_url"] == (
         "https://mooc2-ans.chaoxing.com/mooc2-ans/work/library/review-work"
         "?courseid=266835378&workId=56028428&workAnswerId=55935067"

@@ -73,6 +73,9 @@ def number(value) -> float | None:
 
 
 CHOICE_OPTION = re.compile(r"^([A-H])(?:\s*[.．、:：)]|\s+)\s*(.+)$")
+# Both roster generations print a submission time, but in a cell with no stable
+# name and at a position that differs per layout, so it is recognized by shape.
+SUBMITTED_AT = re.compile(r"\d{2,4}-\d{1,2}(?:-\d{1,2})?\s+\d{1,2}:\d{2}(?::\d{2})?")
 ANSWER_AREAS = {
     "topicStudentAnswer", "studentAnswer", "SubjectStuAnswer", "stuAnswer", "answerCon", "mark_answer",
     "topicRightAnswer", "rightAnswer", "correctAnswer", "standardAnswer", "answerAnalysis", "AnalysisCon", "mark_score",
@@ -292,6 +295,20 @@ def task_assignments(payload: dict) -> list[dict]:
     return list(found.values())
 
 
+def submitted_at(node: Tag) -> str:
+    """The row's submission time, when the provider prints one.
+
+    The value is recognized by its shape rather than by cell name or position:
+    the two roster generations put it in different columns, and a row without a
+    submitted answer has none at all.
+    """
+    for cell in node.select("td, li"):
+        match = SUBMITTED_AT.search(text(cell))
+        if match:
+            return match.group(0)
+    return ""
+
+
 def candidates(html: str, base: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     groups: dict[str, list[Tag]] = {}
@@ -353,6 +370,7 @@ def candidates(html: str, base: str) -> list[dict]:
             student_no=student_no,
             status="unsubmitted" if unsubmitted else "submitted" if url else "unknown",
             source_score=number(score.get("value") or score.get("data")) if score else None,
+            submitted_at=submitted_at(row) or None,
             _url=url,
         )
     # A work roster (the generation serving /mooc2-ans/work/mark) is a plain
@@ -376,6 +394,7 @@ def candidates(html: str, base: str) -> list[dict]:
             student_no=text(number_cell) if number_cell is not None else "",
             status="unsubmitted" if unsubmitted else "submitted" if url else "unknown",
             source_score=None,
+            submitted_at=submitted_at(row) or None,
             _url=url,
         )
     return list(found.values())
