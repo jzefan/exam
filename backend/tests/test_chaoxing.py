@@ -846,6 +846,86 @@ async def test_vue_course_home_module_is_captured_when_the_task_list_is_empty(mo
     assert "20260922课堂实训作业" in dumped["home-module-0.html"]
 
 
+async def test_module_entry_is_found_when_the_shell_only_has_it_in_its_script(monkeypatch, tmp_path):
+    """The shell does not always publish a module as an iframe `src`.
+
+    A module that is created on demand appears only inside the shell's own
+    script, with its query escaped, so looking at iframe attributes alone found
+    no entry and the reader fell back to reporting no credential.
+    """
+    from app.chaoxing import browser as connector
+    from app.chaoxing import router as routes
+
+    monkeypatch.setattr(connector, "PAGE_DUMP_DIR", tmp_path)
+    user = SimpleNamespace(id=uuid.uuid4())
+    session = make_session(str(user.id))
+    session.connected = True
+    monkeypatch.setattr(manager, "sessions", {session.id: session})
+    course = session.remember("course", parsers.courses(COURSE))[0]
+    vue_page = (
+        '<script>var entry = "https://task.chaoxing.com/task/index?courseId=12'
+        '\\u0026clazzId=45\\u0026cpi=34\\u0026enc=module-token";</script>'
+    )
+    read_urls: list[str] = []
+
+    async def fake_read_page(_session, url, refused=None, json_responses=None, network_events=None):
+        read_urls.append(url)
+        if url.startswith("https://task.chaoxing.com/task/index"):
+            assert "clazzId=45" in url, "the escaped query was not decoded"
+            json_responses.append({"code": 200, "data": [{"taskId": "789", "name": "20260922课堂实训作业"}]})
+            network_events.append("GET task.chaoxing.com/task/getTaskDataLists status=200 code=200 data_count=1")
+            return url, "<div></div>"
+        return "https://mooc2-ans.chaoxing.com/mooc2-ans-vue/fanyav3/tch?courseid=12&cpi=34&clazzid=45", vue_page
+
+    monkeypatch.setattr(routes, "read_page", AsyncMock(side_effect=fake_read_page))
+    monkeypatch.setattr(
+        routes,
+        "read_samples",
+        AsyncMock(return_value=[("https://mooc2-ans.chaoxing.com/mooc2-ans/exam/test", "<p>暂无考试</p>")]),
+    )
+
+    result = await routes.list_exams(session.id, course["id"], user)
+    assert [item["title"] for item in result["items"]] == ["20260922课堂实训作业"]
+    assert any("task/index" in url for url in read_urls)
+
+
+async def test_course_without_any_assignment_source_is_recorded(monkeypatch, tmp_path):
+    """The dead-end branch has to leave the page behind or nothing can be adapted."""
+    from app.chaoxing import browser as connector
+    from app.chaoxing import router as routes
+
+    monkeypatch.setattr(connector, "PAGE_DUMP_DIR", tmp_path)
+    user = SimpleNamespace(id=uuid.uuid4())
+    session = make_session(str(user.id))
+    session.connected = True
+    monkeypatch.setattr(manager, "sessions", {session.id: session})
+    course = session.remember("course", parsers.courses(COURSE))[0]
+    plain_page = "<html><body>no modules here</body></html>"
+    monkeypatch.setattr(
+        routes,
+        "read_page",
+        AsyncMock(
+            return_value=(
+                "https://mooc2-ans.chaoxing.com/mooc2-ans-vue/fanyav3/tch?courseid=12&cpi=34&clazzid=45",
+                plain_page,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        routes,
+        "read_samples",
+        AsyncMock(return_value=[("https://mooc2-ans.chaoxing.com/mooc2-ans/exam/test", "<p>暂无考试</p>")]),
+    )
+
+    result = await routes.list_exams(session.id, course["id"], user)
+    assert result["assignment_notice"] == "当前课程未提供作业读取凭据，未读取作业列表。"
+    dumped = {path.name.split("-", 2)[2]: path.read_text(encoding="utf-8") for path in tmp_path.iterdir()}
+    assert "no modules here" in dumped["course-no-assignment-source-0.html"]
+    notes = dumped["course-no-assignment-source-requests.txt"]
+    assert "enc_input=no" in notes and "work_enc_input=no" in notes
+    assert "query_keys=clazzid,courseid,cpi" in notes
+
+
 async def test_vue_module_read_waits_for_mount_before_taking_the_page():
     """A module read must wait for the module to mount, not just for idle network.
 

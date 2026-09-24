@@ -359,23 +359,68 @@ async def list_courses(session_id: str, user: Teacher, semester: str | None = No
         return await course_list(session, semester, refresh=refresh)
 
 
-def module_entry(soup, host: str, path: str) -> str:
-    """The URL a Vue course page publishes as one of its module entry points."""
+def module_entry(course_html: str, soup, host: str, path: str) -> str:
+    """The URL a Vue course page publishes as one of its module entry points.
+
+    The shell decides when a module exists, so the entry is not reliably an
+    iframe `src`: it may sit in a lazy `data-src`, or only inside the shell's own
+    script. Search the markup for an allowlisted URL on that host and path
+    instead of trusting one attribute name; an entry that is not on the read
+    allowlist is not returned.
+    """
+    import re
+
     from . import parsers
 
-    for frame in soup.select("iframe[src]"):
-        url = parsers.read_url(str(frame.get("src", "")))
-        where = urlsplit(url) if url else None
-        if where and where.hostname == host and where.path.rstrip("/") == path:
+    pattern = re.compile(rf"https://{re.escape(host)}{re.escape(path)}\?[^\"'<>\s]*")
+    for match in pattern.finditer(course_html):
+        url = parsers.read_url(match.group(0).replace("\\u0026", "&"))
+        if url:
             return url
+    for frame in soup.select("iframe"):
+        url = parsers.read_url(str(frame.get("src") or frame.get("data-src") or ""))
+        if url:
+            where = urlsplit(url)
+            if where.hostname == host and where.path.rstrip("/") == path:
+                return url
     return ""
+
+
+def capture_unreadable_course(final: str, course_html: str, soup) -> None:
+    """Record a course page whose assignment list could not even be attempted.
+
+    Nothing downstream runs once the page offers neither the old hidden
+    credentials nor a module entry, so without this the only trace of such a
+    course is the notice in the UI. The summary says what the page did offer, so
+    an entry that moved can be found without guessing. Opt-in, and write failures
+    are already swallowed by the two dump helpers.
+    """
+    if not dumping_enabled():
+        return
+    dump_pages("course-no-assignment-source", [(final, course_html)])
+    where = urlsplit(final)
+    notes = [
+        f"page={where.netloc}{where.path}",
+        f"query_keys={','.join(sorted({key.lower() for key in parse_qs(where.query)}))}",
+        f"enc_input={'yes' if soup.select_one('#enc') else 'no'} work_enc_input={'yes' if soup.select_one('#workEnc') else 'no'}",
+    ]
+    for frame in soup.select("iframe"):
+        raw = str(frame.get("src") or frame.get("data-src") or "")
+        module = urlsplit(raw) if raw else None
+        keys = ",".join(sorted({key for key, _ in parse_qs(module.query)})) if module else ""
+        notes.append(
+            f"iframe={module.netloc}{module.path} keys={keys}"
+            if module and module.netloc
+            else f"iframe=<unusable> attrs={','.join(sorted(frame.attrs))}"
+        )
+    dump_requests("course-no-assignment-source", notes)
 
 
 async def read_task_assignments(session, course_html: str, soup, final: str) -> tuple[list[dict], str]:
     """Read tasks using the Vue module's own authenticated list request."""
     from . import parsers
 
-    entry = module_entry(soup, "task.chaoxing.com", "/task/index")
+    entry = module_entry(course_html, soup, "task.chaoxing.com", "/task/index")
     if not entry:
         if dumping_enabled():
             dump_pages("course-no-task-module", [(final, course_html)])
@@ -424,7 +469,7 @@ async def capture_home_module(session, course_html: str, soup, final: str) -> No
                 ("mooc2-ans.chaoxing.com", "/mooc2-ans-vue/fanyav3/index"),
                 ("mooc2-ans.chaoxing.com", "/mooc2-ans-ue/fanya3/index"),
             )
-            if (url := module_entry(soup, host, path))
+            if (url := module_entry(course_html, soup, host, path))
         ),
         "",
     )
@@ -491,7 +536,7 @@ async def list_exams(session_id: str, course_id: str, user: Teacher, refresh: bo
         work_class_id = course_query.get("clazzid", "")
         cpi = course_query.get("cpi", "")
         assignment_notice = ""
-        task_entry = module_entry(course_soup, "task.chaoxing.com", "/task/index")
+        task_entry = module_entry(course_html, course_soup, "task.chaoxing.com", "/task/index")
         if not task_entry and not (work_enc and page_enc) and work_course_id and work_class_id and cpi:
             middle_params = {
                 "courseid": work_course_id,
@@ -551,6 +596,7 @@ async def list_exams(session_id: str, course_id: str, user: Teacher, refresh: bo
                 dump_pages("work-list", work_pages)
         else:
             assignment_notice = "当前课程未提供作业读取凭据，未读取作业列表。"
+            capture_unreadable_course(final, course_html, course_soup)
         if not unique and exam_list_unrecognized:
             raise HTTPException(502, "未识别到考试或作业列表，请核对教师权限或页面结构")
         result = {
