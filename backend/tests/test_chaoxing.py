@@ -799,3 +799,82 @@ async def test_vue_task_list_is_read_even_when_diagnostic_dumps_are_off(monkeypa
     assert [item["title"] for item in result["items"]] == ["单元作业"]
     assert reads.await_count == 2
     assert not (tmp_path / "absent").exists()
+
+
+async def test_vue_module_read_waits_for_mount_before_taking_the_page():
+    """A module read must wait for the module to mount, not just for idle network.
+
+    Reading the Vue task module and taking its markup as soon as the network went
+    idle produced the un-mounted template (raw {{…}} placeholders), so the module
+    had not issued its own list call yet and nothing was captured. The read waits
+    for v-cloak to clear and for that call to answer.
+    """
+    from app.chaoxing.browser import MODULE_READY
+
+    session = make_session()
+    handlers = {}
+    payload = {"code": 200, "data": [{"taskId": "789", "name": "20260922课堂实训作业"}]}
+
+    class Response:
+        url = "https://task.chaoxing.com/task/getTaskDataLists?courseId=12&folderId=0"
+        status = 200
+        request = SimpleNamespace(method="GET")
+
+        async def json(self):
+            return payload
+
+    page = SimpleNamespace(
+        route=AsyncMock(),
+        wait_for_load_state=AsyncMock(),
+        wait_for_function=AsyncMock(),
+        content=AsyncMock(return_value="<div>20260922课堂实训作业</div>"),
+        url="https://task.chaoxing.com/task/index?courseId=12",
+        close=AsyncMock(),
+        on=lambda event, handler: handlers.__setitem__(event, handler),
+    )
+
+    async def goto(*_args, **_kwargs):
+        handlers["response"](Response())  # the module's own list call answers
+        return SimpleNamespace(status=200)
+
+    page.goto = goto
+    session.context.new_page = AsyncMock(return_value=page)
+
+    responses: list[dict] = []
+    events: list[str] = []
+    _, content = await read_page(session, "https://task.chaoxing.com/task/index?courseId=12", None, responses, events)
+
+    assert page.wait_for_function.await_args.args[0] == MODULE_READY
+    assert responses == [payload]
+    assert events == [
+        "GET task.chaoxing.com/task/getTaskDataLists status=200 query_keys=courseId,folderId code=200 data_count=1"
+    ]
+    assert content == "<div>20260922课堂实训作业</div>"
+    page.close.assert_awaited_once()
+
+
+async def test_vue_module_read_reports_a_list_call_that_never_happened(monkeypatch):
+    from app.chaoxing import browser as connector
+
+    monkeypatch.setattr(connector, "MODULE_LIST_GRACE_SECONDS", 0.3)
+    session = make_session()
+    handlers = {}
+    page = SimpleNamespace(
+        route=AsyncMock(),
+        wait_for_load_state=AsyncMock(),
+        wait_for_function=AsyncMock(side_effect=Exception("still on the un-mounted template")),
+        content=AsyncMock(return_value="<div>{{row.name}}</div>"),
+        url="https://task.chaoxing.com/task/index?courseId=12",
+        close=AsyncMock(),
+        on=lambda event, handler: handlers.__setitem__(event, handler),
+    )
+    page.goto = AsyncMock(return_value=SimpleNamespace(status=200))
+    session.context.new_page = AsyncMock(return_value=page)
+
+    responses: list[dict] = []
+    events: list[str] = []
+    _, content = await read_page(session, "https://task.chaoxing.com/task/index?courseId=12", None, responses, events)
+
+    assert responses == []
+    assert any("was not observed" in event for event in events)
+    assert "{{row.name}}" in content

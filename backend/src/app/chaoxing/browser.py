@@ -39,6 +39,13 @@ LIST_PAGE_SIZE = 500
 # The tables above appear after the page's own script runs.
 ROWS_READY = "() => !!document.querySelector('tr[data-index] td')"
 ROWS_READY_TIMEOUT_MS = 8000
+# The Vue course modules hide themselves behind v-cloak until they mount, and ask
+# for their list only after that. Waiting for networkidle alone returned the
+# un-mounted template (raw {{…}} placeholders) with no list call ever issued, so
+# the module read waits for the mount and then briefly for that call to answer.
+MODULE_READY = "() => !document.querySelector('[v-cloak]')"
+MODULE_READY_TIMEOUT_MS = 15000
+MODULE_LIST_GRACE_SECONDS = 5
 READ_CACHE_TTL_SECONDS = 300
 READ_CACHE_MAX_ENTRIES = 32
 
@@ -424,6 +431,14 @@ async def read_page(
         if request_url.hostname == "task.chaoxing.com" and request_url.path == "/task/getTaskDataLists":
             response_tasks.append(asyncio.create_task(capture_task_list(response)))
 
+    async def drain_responses():
+        # Drain as we go: a response that lands while an earlier one is being read
+        # still has to be summarized, and the page closes at the end of this call.
+        while response_tasks:
+            pending = list(response_tasks)
+            response_tasks.clear()
+            await asyncio.gather(*pending, return_exceptions=True)
+
     def on_request_failed(request):
         request_url = urlsplit(request.url)
         if network_events is not None and request_url.hostname == "task.chaoxing.com" and request_url.path == "/task/getTaskDataLists":
@@ -457,8 +472,17 @@ async def read_page(
             raise HTTPException(502, f"学习通返回 HTTP {response.status}，请稍后重试")
         with contextlib.suppress(Exception):
             await page.wait_for_load_state("networkidle", timeout=5000)
-        if response_tasks:
-            await asyncio.gather(*response_tasks, return_exceptions=True)
+        if json_responses is not None or network_events is not None:
+            with contextlib.suppress(Exception):
+                await page.wait_for_function(MODULE_READY, timeout=MODULE_READY_TIMEOUT_MS)
+            if json_responses is not None:
+                deadline = time.monotonic() + MODULE_LIST_GRACE_SECONDS
+                while time.monotonic() < deadline:
+                    await drain_responses()
+                    if json_responses:
+                        break
+                    await asyncio.sleep(0.2)
+        await drain_responses()
         if urlsplit(page.url).hostname == "passport2.chaoxing.com":
             session.connected = False
             session.records.clear()
