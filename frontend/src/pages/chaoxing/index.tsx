@@ -215,8 +215,7 @@ export function ChaoxingPage() {
     </div> : <>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <nav aria-label="读取位置" className="flex min-w-0 flex-wrap items-center gap-1 text-sm">
-          <Button asChild variant="ghost" size="sm"><Link to="/grading"><ArrowLeft />阅卷中心</Link></Button>
-          <ChevronRight className="size-3 text-muted-foreground" /><Button variant="ghost" size="sm" disabled={busy} onClick={() => { setCourse(undefined); setExam(undefined); setCandidate(undefined); setReview(undefined); }}>课程</Button>
+          <Button variant="ghost" size="sm" disabled={busy} onClick={() => { setCourse(undefined); setExam(undefined); setCandidate(undefined); setReview(undefined); }}>课程</Button>
           {course && <><ChevronRight className="size-3 text-muted-foreground" /><Button variant="ghost" size="sm" disabled={busy} onClick={() => { setExam(undefined); setCandidate(undefined); setReview(undefined); }}>{course.title}</Button></>}
           {exam && <><ChevronRight className="size-3 text-muted-foreground" /><span className="break-words text-xs">{exam.title}</span></>}
         </nav>
@@ -227,7 +226,9 @@ export function ChaoxingPage() {
           })}><SelectTrigger className="w-52" aria-label="学期"><SelectValue placeholder="选择学期" /></SelectTrigger>
             <SelectContent>{semesters.map(s => <SelectItem key={s.id} value={s.id}>{s.title}</SelectItem>)}</SelectContent>
           </Select>}
-          <Button size="sm" variant="outline" disabled={busy} title="跳过缓存，从学习通重新读取" aria-label={course ? "重新读取考试与作业" : "重新读取课程"} onClick={() => void run(course ? "正在重新读取考试与作业" : "正在重新读取课程", async () => {
+          {/* The roster screen refreshes through 「刷新名单」, so the list-level
+              refresh is not repeated there. */}
+          {!exam && <Button size="sm" variant="outline" disabled={busy} title="跳过缓存，从学习通重新读取" aria-label={course ? "重新读取考试与作业" : "重新读取课程"} onClick={() => void run(course ? "正在重新读取考试与作业" : "正在重新读取课程", async () => {
             if (course) {
               const data = await connectionRequest<Listing>(`${base}/courses/${course.id}/exams?refresh=true`);
               setExams(data.items); setAssignmentNotice(data.assignment_notice ?? "");
@@ -236,7 +237,8 @@ export function ChaoxingPage() {
               const data = await connectionRequest<Listing>(`${base}/courses${query}`);
               acceptCourses(data);
             }
-          })}><RefreshCw />刷新</Button>
+          })}><RefreshCw />刷新</Button>}
+          <Button asChild variant="ghost" size="sm"><Link to="/grading"><ArrowLeft />阅卷中心</Link></Button>
         </div>
       </div>
       {!exam && <div className="overflow-hidden rounded-md border border-border" aria-busy={busy}>
