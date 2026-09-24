@@ -15,7 +15,7 @@ COURSES_URL = "https://fycourse.fanya.chaoxing.com/fyportal/courselist/course"
 READ_PATHS = {
     "fycourse.fanya.chaoxing.com": re.compile(r"^/fyportal/courselist/(course|coursegroupdata|entercoursenewfy)/?$"),
     "mooc2-ans.chaoxing.com": re.compile(
-        r"^/(?:mooc2-ans/)?(?:mycourse/tch|mooc2-ans-vue/fanyav3/(?:tch|index)|mooc2-ans-ue/fanya3/(?:tch|index)|work/list|exam/test(?:/(?:marklist|mark|review|markpaper))?)/?$"
+        r"^/(?:mooc2-ans/)?(?:mycourse/tch|mooc2-ans-vue/fanyav3/(?:tch|index)|mooc2-ans-ue/fanya3/(?:tch|index)|work/(?:list|mark)|exam/test(?:/(?:marklist|mark|review|markpaper))?)/?$"
     ),
     # Course assignments use a separate, older host and route family from the
     # course exam list. Keep this allowlist narrow: the connector only follows
@@ -193,13 +193,39 @@ def exams(html: str, base: str) -> list[dict]:
     return list(found.values())
 
 
+def work_row(row: Tag, work_id: str, review_url: str, base: str) -> dict:
+    """One provider work row, with nothing invented for what it does not show."""
+    title_node = row.select_one(".workTit,.list_li_tit,.overHidden2,h1,h2,h3,h4,.title,.name")
+    label = text(title_node) or text(row)
+    title = label.split(";")[0].strip() or f"作业 {work_id}"
+    counts = {}
+    for name, term in (("submitted_count", "已提交|已交"), ("unsubmitted_count", "未提交|未交")):
+        match = re.search(rf"(\d+)\s*人?\s*(?:{term})|(?:{term})\s*[:：]?\s*(\d+)", text(row))
+        counts[name] = int(match[1] or match[2]) if match else None
+    if not review_url:
+        # Only teacher-side pages can provide a roster/review entry point. A
+        # student task URL is still useful metadata, but is not a candidate URL.
+        review_urls = actions(row, base, r"/mooc-ans/work/selectWorkQuestion(?:YiPiYue)?$|/mooc2-ans/work/mark$")
+        review_url = review_urls[0] if review_urls else ""
+    return dict(
+        source_id=f"work:{work_id}",
+        title=title,
+        _url=review_url,
+        item_type="作业",
+        submitted_count=counts["submitted_count"],
+        unsubmitted_count=counts["unsubmitted_count"],
+    )
+
+
 def assignments(html: str, base: str) -> list[dict]:
     """Parse course work rows and retain only provider-supplied read URLs.
 
-    Chaoxing has multiple generations of its work page. The stable list shape
-    is a goTask element whose data attribute carries workId/answerId. Some
-    teacher pages additionally expose a direct review URL in the row; preserve
-    it only when it is one of our explicit read-only paths.
+    Chaoxing has multiple generations of its work page. The older one is a
+    goTask element whose data attribute carries workId/answerId; the generation
+    that serves `/mooc2-ans/work/list` renders a `<li id="work…">` row whose
+    review link is an ordinary `a.piyueBtn` carrying the work id in its query.
+    Some teacher pages additionally expose a direct review URL in the row;
+    preserve it only when it is one of our explicit read-only paths.
     """
     soup = BeautifulSoup(html, "html.parser")
     found = {}
@@ -220,26 +246,18 @@ def assignments(html: str, base: str) -> list[dict]:
         if not work_id:
             continue
         row = node.find_parent(["li", "tr"]) or node
-        title_node = row.select_one(".workTit,.overHidden2,h1,h2,h3,h4,.title,.name")
-        label = text(title_node) or text(row)
-        title = label.split(";")[0].strip() or f"作业 {work_id}"
-        counts = {}
-        for name, term in (("submitted_count", "已提交|已交"), ("unsubmitted_count", "未提交|未交")):
-            match = re.search(rf"(\d+)\s*人?\s*(?:{term})|(?:{term})\s*[:：]?\s*(\d+)", text(row))
-            counts[name] = int(match[1] or match[2]) if match else None
-        # Only teacher-side pages can provide a roster/review entry point. A
-        # student task URL is still useful metadata, but is not a candidate URL.
-        review_urls = actions(row, base, r"/mooc-ans/work/selectWorkQuestion(?:YiPiYue)?$")
-        review_url = review_urls[0] if review_urls else ""
-        source_id = f"work:{work_id}"
-        found[source_id] = dict(
-            source_id=source_id,
-            title=title,
-            _url=review_url,
-            item_type="作业",
-            submitted_count=counts["submitted_count"],
-            unsubmitted_count=counts["unsubmitted_count"],
-        )
+        # The data URL is the student task entry, not the teacher review entry;
+        # the review link is looked up in the row itself.
+        found[f"work:{work_id}"] = work_row(row, work_id, "", base)
+    for row in soup.select('li[id^="work"]'):
+        review = row.select_one("a.piyueBtn[href]")
+        review_url = read_url(str(review.get("href") or ""), base) if review else ""
+        # The work id is the provider's own row id and is also carried by its
+        # review link; either identifies the assignment.
+        work_id = query(review_url, "id", "workId") or re.sub(r"\D", "", str(row.get("id") or ""))
+        if not work_id:
+            continue
+        found.setdefault(f"work:{work_id}", work_row(row, work_id, review_url, base))
     return list(found.values())
 
 

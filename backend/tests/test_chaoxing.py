@@ -969,6 +969,31 @@ async def test_course_without_any_assignment_source_is_recorded(monkeypatch, tmp
     assert "data_count=1" in dumped["home-module-network-requests.txt"]
 
 
+def test_new_work_list_rows_are_parsed_with_their_review_link():
+    """The generation behind /mooc2-ans/work/list does not use goTask rows.
+
+    Its row is a `<li id="work…">` whose title sits in `h2.list_li_tit`, whose
+    counts are plain text, and whose review entry is an ordinary `a.piyueBtn`
+    carrying the work id. Reading it needed the review route allowlisted too.
+    """
+    html = '''<ul><li id="work131562744">
+      <div class="list_li_ct"><h2 class="list_li_tit color1"
+        onclick="viewWork('b716b55d3fb94ae5879468aa9bae45b7','56028428','154009473');">20260922课堂实训作业</h2></div>
+      <div class="wid15"><p class="piyuePcon"><span><em class="fs28">66</em>待批</span>
+        <span>66 已交</span><span>4 未交</span></p></div>
+      <div class="wid9"><a href="/mooc2-ans/work/mark?courseid=266835378&amp;clazzid=0&amp;id=131562744&amp;cpi=263234753"
+        class="jb_btn fs14 piyueBtn">批阅</a></div>
+    </li></ul>'''
+    items = parsers.assignments(html, "https://mooc2-ans.chaoxing.com/mooc2-ans/work/list?courseid=12")
+    assert [
+        (item["source_id"], item["title"], item["item_type"], item["submitted_count"], item["unsubmitted_count"])
+        for item in items
+    ] == [("work:131562744", "20260922课堂实训作业", "作业", 66, 4)]
+    assert items[0]["_url"] == (
+        "https://mooc2-ans.chaoxing.com/mooc2-ans/work/mark?courseid=266835378&clazzid=0&id=131562744&cpi=263234753"
+    )
+
+
 def test_work_list_url_carries_the_course_identity():
     """The menu route is rebuilt from the course page's own parameters.
 
