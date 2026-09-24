@@ -219,7 +219,16 @@ test("长名单进入独立考生阅卷视图，只展示主观题", async ({ pa
   await page.getByRole("button", { name: "读取考试" }).click();
   await page.getByRole("button", { name: "读取考生" }).click();
   await expect(page.getByText(candidates[29].student_no, { exact: true })).toBeAttached();
-  await expect(page.getByRole("region", { name: "考生列表" }).locator("tbody tr")).toHaveCount(30);
+  const roster = page.getByRole("region", { name: "考生列表" });
+  await expect(roster.getByRole("listitem")).toHaveCount(30);
+  // Cards keep the roster compact by revealing the action on hover; a keyboard
+  // user reaches it by focusing the button, which must reveal it too.
+  if (!isMobile) {
+    const action = roster.getByRole("button", { name: "查看答卷" }).first();
+    await expect(action).toHaveCSS("opacity", "0");
+    await action.hover();
+    await expect(action).toHaveCSS("opacity", "1");
+  }
   await page.getByRole("button", { name: "查看答卷" }).first().click();
   await expect(page.getByRole("complementary", { name: "按考生阅卷导航" })).toBeVisible();
   await expect(page.getByText("主观题答题卡")).toBeVisible();

@@ -26,6 +26,12 @@ interface BatchProgress {
   running: boolean;
 }
 
+const CANDIDATE_STATUS_LABELS: Record<string, string> = {
+  submitted: "已提交",
+  unsubmitted: "未提交",
+  unknown: "未知",
+};
+
 const courseDetails = (item: RecordItem) => [
   item.course_code && `课程编号：${item.course_code}`,
   item.teacher_name && `教师：${item.teacher_name}`,
@@ -266,14 +272,23 @@ export function ChaoxingPage() {
           {batchProgress.running ? "批量处理中，请保持页面打开" : "批量处理结束"}：{batchProgress.processed}/{batchProgress.total} 份 · 已提交 AI {batchProgress.queuedCandidates} 份（{batchProgress.queuedQuestions} 题）· 无新增评分任务 {batchProgress.noNewTasks} 份 · 失败 {batchProgress.failed} 份
           {batchProgress.errors.length > 0 && <ul className="mt-2 list-inside list-disc text-xs">{batchProgress.errors.slice(0, 5).map((message, index) => <li key={index}>{message}</li>)}{batchProgress.errors.length > 5 && <li>另有 {batchProgress.errors.length - 5} 份失败</li>}</ul>}
         </AlertDescription></Alert>}
-        <div className="overflow-x-auto rounded-md border border-border"><Table><TableHeader><TableRow><TableHead>姓名</TableHead><TableHead>学号</TableHead><TableHead>提交状态</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader>
-          <TableBody>{visibleCandidates.map(item => <TableRow key={item.id}><TableCell className="font-medium">{item.name}</TableCell><TableCell>{item.student_no || "未识别"}</TableCell><TableCell className="text-muted-foreground">{{ submitted: "已提交", unsubmitted: "未提交", unknown: "未知" }[item.status ?? "unknown"]}</TableCell><TableCell className="text-right"><Button size="sm" variant="ghost" disabled={busy || !item.readable} onClick={() => selectCandidate(item)}>查看答卷<ChevronRight /></Button></TableCell></TableRow>)}
-            {!visibleCandidates.length && <TableRow><TableCell colSpan={4} className="h-28 text-center text-muted-foreground">{candidates.length ? "没有匹配的考生" : "当前列表为空"}</TableCell></TableRow>}</TableBody></Table></div>
+        <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" aria-label="考生">
+          {visibleCandidates.map(item => <li key={item.id} className="group flex min-w-0 items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium">{item.name}</p>
+              <p className="truncate text-xs tabular-nums text-muted-foreground">{item.student_no || "学号未识别"}</p>
+            </div>
+            {item.readable
+              ? <Button size="sm" variant="ghost" className="shrink-0 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100" disabled={busy} onClick={() => selectCandidate(item)}>查看答卷<ChevronRight /></Button>
+              : <span className="shrink-0 text-xs text-muted-foreground">{CANDIDATE_STATUS_LABELS[item.status ?? "unknown"]}</span>}
+          </li>)}
+          {!visibleCandidates.length && <li className="col-span-full rounded-md border border-border py-12 text-center text-sm text-muted-foreground">{candidates.length ? "没有匹配的考生" : "当前列表为空"}</li>}
+        </ul>
       </section>}
       {exam && candidate && <div ref={detailRef} className="grid min-w-0 scroll-mt-4 gap-5 lg:grid-cols-[280px_minmax(0,1fr)]" aria-busy={busy}>
         <aside className="min-w-0 space-y-4" aria-label="按考生阅卷导航">
           <section className="rounded-md border border-border bg-card p-4">
-            <div className="flex items-center justify-between gap-2"><h2 className="truncate text-sm font-semibold">{candidate.name}</h2><span className="text-xs text-muted-foreground">{{ submitted: "已提交", unsubmitted: "未提交", unknown: "未知" }[candidate.status ?? "unknown"]}</span></div>
+            <div className="flex items-center justify-between gap-2"><h2 className="truncate text-sm font-semibold">{candidate.name}</h2><span className="text-xs text-muted-foreground">{CANDIDATE_STATUS_LABELS[candidate.status ?? "unknown"]}</span></div>
             <p className="mt-1 text-xs text-muted-foreground">学号 {candidate.student_no || "未识别"}</p>
             <div className="mt-4 flex items-baseline justify-between border-t border-border pt-3 text-xs"><span className="text-muted-foreground">学习通原分</span><span className="font-semibold">{candidate.source_score ?? "未知"}</span></div>
             <div className="mt-3 grid grid-cols-2 gap-2"><Button size="sm" variant="outline" disabled={busy || candidateIndex <= 0} onClick={() => selectCandidate(readableCandidates[candidateIndex - 1])}><ChevronLeft />上一个</Button><Button size="sm" variant="outline" disabled={busy || candidateIndex < 0 || candidateIndex >= readableCandidates.length - 1} onClick={() => selectCandidate(readableCandidates[candidateIndex + 1])}>下一个<ChevronRight /></Button></div>
