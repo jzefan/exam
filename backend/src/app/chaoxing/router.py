@@ -15,7 +15,17 @@ from app.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from .schemas import ImportPaper
 from . import service
-from .browser import COURSES_URL, HEIGHT, WIDTH, dump_pages, manager, read_page, read_samples
+from .browser import (
+    COURSES_URL,
+    HEIGHT,
+    WIDTH,
+    dump_pages,
+    dump_requests,
+    dumping_enabled,
+    manager,
+    read_page,
+    read_samples,
+)
 from .credentials import (
     credentials_encryption_enabled,
     delete_credentials,
@@ -349,6 +359,53 @@ async def list_courses(session_id: str, user: Teacher, semester: str | None = No
         return await course_list(session, semester, refresh=refresh)
 
 
+def module_entry(soup, host: str, path: str) -> str:
+    """The URL a Vue course page publishes as one of its module entry points."""
+    from . import parsers
+
+    for frame in soup.select("iframe[src]"):
+        url = parsers.read_url(str(frame.get("src", "")))
+        where = urlsplit(url) if url else None
+        if where and where.hostname == host and where.path.rstrip("/") == path:
+            return url
+    return ""
+
+
+async def read_task_assignments(session, course_html: str, soup, final: str) -> tuple[list[dict], str]:
+    """Read tasks using the Vue module's own authenticated list request."""
+    from . import parsers
+
+    entry = module_entry(soup, "task.chaoxing.com", "/task/index")
+    if not entry:
+        if dumping_enabled():
+            dump_pages("course-no-task-module", [(final, course_html)])
+        return [], "新版课程页未提供可读取的教学任务入口。"
+    refused: list[str] = []
+    task_responses: list[dict] = []
+    network_events: list[str] = []
+    try:
+        module_final, module_html = await read_page(session, entry, refused, task_responses, network_events)
+    except HTTPException:
+        if dumping_enabled():
+            dump_pages("course-no-work-credential", [(final, course_html)])
+            dump_requests("task-module", refused)
+        return [], "学习通教学任务入口暂时无法读取。"
+    if dumping_enabled():
+        dump_pages("course-no-work-credential", [(final, course_html)])
+        dump_pages("task-module", [(module_final, module_html)])
+        dump_requests("task-module", refused)
+        dump_requests("task-module-network", network_events)
+    if not task_responses:
+        return [], "教学任务页未返回作业列表数据。"
+    items = []
+    for payload in task_responses:
+        items.extend(parsers.task_assignments(payload))
+    unique = {item["source_id"]: item for item in items}
+    if unique:
+        return list(unique.values()), "新版作业已读取；该任务类型暂不支持读取学生答卷。"
+    return [], "学习通已响应教学任务列表，但没有返回可识别的作业。"
+
+
 @router.get("/sessions/{session_id}/courses/{course_id}/exams")
 async def list_exams(session_id: str, course_id: str, user: Teacher, refresh: bool = False):
     from . import parsers
@@ -398,7 +455,8 @@ async def list_exams(session_id: str, course_id: str, user: Teacher, refresh: bo
         work_class_id = course_query.get("clazzid", "")
         cpi = course_query.get("cpi", "")
         assignment_notice = ""
-        if not (work_enc and page_enc) and work_course_id and work_class_id and cpi:
+        task_entry = module_entry(course_soup, "task.chaoxing.com", "/task/index")
+        if not task_entry and not (work_enc and page_enc) and work_course_id and work_class_id and cpi:
             middle_params = {
                 "courseid": work_course_id,
                 "clazzid": work_class_id,
@@ -414,7 +472,13 @@ async def list_exams(session_id: str, course_id: str, user: Teacher, refresh: bo
             middle_soup = BeautifulSoup(middle_html, "html.parser")
             work_enc = work_enc or str((middle_soup.select_one("#workEnc") or {}).get("value", "")).strip()
             page_enc = page_enc or str((middle_soup.select_one("#enc") or {}).get("value", "")).strip()
-        if work_enc and page_enc and work_course_id and work_class_id and cpi:
+        if task_entry:
+            parsed_assignments, assignment_notice = await read_task_assignments(
+                session, course_html, course_soup, final
+            )
+            for item in parsed_assignments:
+                unique[item["source_id"]] = item
+        elif work_enc and page_enc and work_course_id and work_class_id and cpi:
             work_params = {
                 "courseId": work_course_id,
                 "classId": work_class_id,
@@ -445,6 +509,8 @@ async def list_exams(session_id: str, course_id: str, user: Teacher, refresh: bo
                 marker in html for _, html in work_pages for marker in ("暂无作业", "没有作业", "暂无已发放作业")
             ):
                 assignment_notice = "未识别到课程作业列表项；请检查学习通页面结构。"
+            if not parsed_assignments:
+                dump_pages("work-list", work_pages)
         else:
             assignment_notice = "当前课程未提供作业读取凭据，未读取作业列表。"
         if not unique and exam_list_unrecognized:

@@ -79,6 +79,76 @@ def test_course_assignments_are_listed_as_a_distinct_read_only_type():
     ) == []
 
 
+def test_vue_task_api_rows_are_normalized_as_course_assignments():
+    rows = parsers.task_assignments({"code": 200, "data": [
+        {"taskId": "task-789", "name": "20260922课堂实作业", "taskStudentsNumber": 70},
+        {"taskId": "task-789", "name": "重复项"},
+        {"taskId": "task-no-title", "name": "  "},
+        {"name": "缺少任务编号"},
+    ]})
+    assert rows == [{
+        "source_id": "task:task-789",
+        "title": "20260922课堂实作业",
+        "_url": "",
+        "item_type": "作业",
+        "submitted_count": None,
+        "unsubmitted_count": None,
+    }]
+    assert parsers.task_assignments({"code": 500, "data": [{"taskId": "ignored", "name": "错误响应"}]}) == []
+
+
+async def test_task_list_response_is_captured_without_logging_signed_query_values():
+    class FakePage:
+        def __init__(self):
+            self.handlers = {}
+            self.url = ""
+
+        async def route(self, *_args):
+            return None
+
+        def on(self, name, callback):
+            self.handlers[name] = callback
+
+        async def goto(self, url, **_kwargs):
+            self.url = url
+            request = SimpleNamespace(
+                method="GET",
+                url="https://task.chaoxing.com/task/getTaskDataLists?courseId=12&enc=private-token&page=1",
+            )
+            response = SimpleNamespace(
+                url=request.url,
+                request=request,
+                status=200,
+                json=AsyncMock(return_value={"code": 200, "data": [{"taskId": "789", "name": "单元作业"}]}),
+            )
+            self.handlers["response"](response)
+            return SimpleNamespace(status=200)
+
+        async def wait_for_load_state(self, *_args, **_kwargs):
+            return None
+
+        async def content(self):
+            return "<html></html>"
+
+        async def close(self):
+            return None
+
+    page = FakePage()
+    session = make_session()
+    session.context = SimpleNamespace(new_page=AsyncMock(return_value=page))
+    payloads: list[dict] = []
+    events: list[str] = []
+    await read_page(
+        session,
+        "https://task.chaoxing.com/task/index?courseId=12&enc=entry-token",
+        json_responses=payloads,
+        network_events=events,
+    )
+    assert payloads == [{"code": 200, "data": [{"taskId": "789", "name": "单元作业"}]}]
+    assert events == ["GET task.chaoxing.com/task/getTaskDataLists status=200 query_keys=courseId,enc,page code=200 data_count=1"]
+    assert "private-token" not in str(events)
+
+
 def test_semester_picker_lists_each_semester_once():
     # The live course page ships two `select[name="xq"]` elements, so a naive
     # read listed all 17 semesters twice and the picker repeated every option.
@@ -406,6 +476,19 @@ def make_session(owner="teacher"):
     return Session(owner=owner, context=SimpleNamespace(close=AsyncMock()), page=SimpleNamespace(close=AsyncMock()))
 
 
+@pytest.fixture(autouse=True)
+def no_page_dumps(monkeypatch, tmp_path):
+    """Keep the opt-in diagnostics off unless a test asks for them.
+
+    They are gated on the dump directory existing, so a developer who happens to
+    have the default directory would otherwise exercise a different path than CI,
+    and the suite would write provider pages into it.
+    """
+    from app.chaoxing import browser as connector
+
+    monkeypatch.setattr(connector, "PAGE_DUMP_DIR", tmp_path / "no-page-dumps")
+
+
 async def test_session_isolation_expiry_and_secret_redaction(monkeypatch):
     registry = BrowserManager()
     session = make_session()
@@ -632,3 +715,87 @@ async def test_process_guard_and_session_capacity(monkeypatch, tmp_path):
     assert session.closed
     await second.start()
     await second.shutdown()
+
+
+async def test_vue_course_page_reads_the_task_modules_own_list_request(monkeypatch, tmp_path):
+    """The Vue generation mounts modules as iframes and ships no hidden enc inputs.
+
+    The old work/list endpoint needs hidden enc inputs that this generation does
+    not contain. Read the task module in the authenticated browser and normalize
+    the response it gets from GET /task/getTaskDataLists instead.
+    """
+    from app.chaoxing import browser as connector
+    from app.chaoxing import router as routes
+
+    monkeypatch.setattr(connector, "PAGE_DUMP_DIR", tmp_path)
+    user = SimpleNamespace(id=uuid.uuid4())
+    session = make_session(str(user.id))
+    session.connected = True
+    monkeypatch.setattr(manager, "sessions", {session.id: session})
+    course = session.remember("course", parsers.courses(COURSE))[0]
+    vue_page = (
+        '<iframe src="https://task.chaoxing.com/task/index?courseId=12&amp;clazzId=45'
+        '&amp;cpi=34&amp;enc=module-token"></iframe>'
+    )
+    module_page = '<div class="xtask_list"></div>'
+    async def fake_read_page(_session, url, refused=None, json_responses=None, network_events=None):
+        if url.startswith("https://task.chaoxing.com/task/index"):
+            assert json_responses is not None and network_events is not None
+            json_responses.append({"code": 200, "data": [{
+                "taskId": "789", "name": "20260922课堂实作业", "taskStudentsNumber": 70,
+            }]})
+            network_events.append("GET task.chaoxing.com/task/getTaskDataLists status=200 code=200 data_count=1")
+            return "https://task.chaoxing.com/task/index?courseId=12", module_page
+        return "https://mooc2-ans.chaoxing.com/mooc2-ans-vue/fanyav3/tch?courseid=12&cpi=34&clazzid=45", vue_page
+
+    reads = AsyncMock(side_effect=fake_read_page)
+    monkeypatch.setattr(routes, "read_page", reads)
+    monkeypatch.setattr(
+        routes,
+        "read_samples",
+        AsyncMock(return_value=[("https://mooc2-ans.chaoxing.com/mooc2-ans/exam/test", "<p>暂无考试</p>")]),
+    )
+
+    result = await routes.list_exams(session.id, course["id"], user)
+    assert [(item["title"], item["item_type"], item["readable"]) for item in result["items"]] == [
+        ("20260922课堂实作业", "作业", False),
+    ]
+    assert "学生答卷" in result["assignment_notice"]
+    assert reads.await_count == 2, "the Vue task module was not read"
+    assert "stucoursemiddle" not in str(reads.await_args_list)
+    dumped = {path.name.split("-", 2)[2]: path.read_text(encoding="utf-8") for path in tmp_path.iterdir()}
+    assert "course-no-work-credential-0.html" in dumped
+    assert "task-module-0.html" in dumped
+    assert "task-module-network-requests.txt" in dumped
+
+
+async def test_vue_task_list_is_read_even_when_diagnostic_dumps_are_off(monkeypatch, tmp_path):
+    from app.chaoxing import browser as connector
+    from app.chaoxing import router as routes
+
+    monkeypatch.setattr(connector, "PAGE_DUMP_DIR", tmp_path / "absent")
+    user = SimpleNamespace(id=uuid.uuid4())
+    session = make_session(str(user.id))
+    session.connected = True
+    monkeypatch.setattr(manager, "sessions", {session.id: session})
+    course = session.remember("course", parsers.courses(COURSE))[0]
+    vue_page = '<iframe src="https://task.chaoxing.com/task/index?courseId=12"></iframe>'
+    async def fake_read_page(_session, url, refused=None, json_responses=None, network_events=None):
+        if url.startswith("https://task.chaoxing.com/task/index"):
+            json_responses.append({"code": 200, "data": [{"taskId": "789", "name": "单元作业"}]})
+            network_events.append("GET task.chaoxing.com/task/getTaskDataLists status=200 code=200 data_count=1")
+            return url, "<div></div>"
+        return "https://mooc2-ans.chaoxing.com/mooc2-ans-vue/fanyav3/tch?courseid=12&cpi=34&clazzid=45", vue_page
+
+    reads = AsyncMock(side_effect=fake_read_page)
+    monkeypatch.setattr(routes, "read_page", reads)
+    monkeypatch.setattr(
+        routes,
+        "read_samples",
+        AsyncMock(return_value=[("https://mooc2-ans.chaoxing.com/mooc2-ans/exam/test", "<p>暂无考试</p>")]),
+    )
+
+    result = await routes.list_exams(session.id, course["id"], user)
+    assert [item["title"] for item in result["items"]] == ["单元作业"]
+    assert reads.await_count == 2
+    assert not (tmp_path / "absent").exists()

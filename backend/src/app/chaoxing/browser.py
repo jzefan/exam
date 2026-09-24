@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from fastapi import HTTPException
 
@@ -338,6 +338,11 @@ def enlarged_list_body(body: str | None) -> str | None:
     return encode(pairs)
 
 
+def dumping_enabled() -> bool:
+    """Is the opt-in page dump directory present?"""
+    return PAGE_DUMP_DIR.is_dir()
+
+
 def dump_pages(label: str, pages: list[tuple[str, str]]) -> list[str]:
     """Write provider pages the fixed read routes cannot recognize.
 
@@ -358,12 +363,72 @@ def dump_pages(label: str, pages: list[tuple[str, str]]) -> list[str]:
     return written
 
 
-async def read_page(session: Session, url: str) -> tuple[str, str]:
+def dump_requests(label: str, requests: list[str]) -> str:
+    """Write safe request/response summaries for a page's task list call.
+
+    Query values and response bodies are never written. Same opt-in gate and
+    local-only handling rules as dump_pages().
+    """
+    if not requests or not PAGE_DUMP_DIR.is_dir():
+        return ""
+    target = PAGE_DUMP_DIR / f"{time.strftime('%Y%m%d-%H%M%S')}-{label}-requests.txt"
+    with contextlib.suppress(OSError):
+        target.write_text("\n".join(requests) + "\n", encoding="utf-8")
+        return str(target)
+    return ""
+
+
+async def read_page(
+    session: Session,
+    url: str,
+    refused: list[str] | None = None,
+    json_responses: list[dict] | None = None,
+    network_events: list[str] | None = None,
+) -> tuple[str, str]:
+    """Read one allowlisted page.
+
+    `refused`, when a list is passed, collects the provider requests this page
+    issued and the read channel turned down. It is diagnostics only — nothing is
+    sent to the caller or the frontend, and the requests themselves are still
+    aborted; see dump_requests().
+    """
     from .parsers import read_url
 
     if not read_url(url):
         raise HTTPException(422, "不支持的学习通读取地址")
     page = await session.context.new_page()
+    response_tasks = []
+
+    async def capture_task_list(response):
+        request_url = urlsplit(response.url)
+        if request_url.hostname != "task.chaoxing.com" or request_url.path != "/task/getTaskDataLists":
+            return
+        request_keys = sorted({key for key, _ in parse_qs(request_url.query).items()})
+        summary = f"{response.request.method} {request_url.hostname}{request_url.path} status={response.status} query_keys={','.join(request_keys)}"
+        try:
+            payload = await response.json()
+        except Exception:
+            if network_events is not None:
+                network_events.append(summary + " json=false")
+            return
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if network_events is not None:
+            code = payload.get("code") if isinstance(payload, dict) else None
+            count = len(data) if isinstance(data, list) else "n/a"
+            network_events.append(f"{summary} code={code} data_count={count}")
+        if json_responses is not None and isinstance(payload, dict):
+            json_responses.append(payload)
+
+    def on_response(response):
+        request_url = urlsplit(response.url)
+        if request_url.hostname == "task.chaoxing.com" and request_url.path == "/task/getTaskDataLists":
+            response_tasks.append(asyncio.create_task(capture_task_list(response)))
+
+    def on_request_failed(request):
+        request_url = urlsplit(request.url)
+        if network_events is not None and request_url.hostname == "task.chaoxing.com" and request_url.path == "/task/getTaskDataLists":
+            network_events.append(f"{request.method} {request_url.hostname}{request_url.path} failed={request.failure or 'unknown'}")
+
     try:
         # Stronger than the login guard: reader traffic is GET/HEAD, plus the
         # individually named read-only list endpoints the provider queries with
@@ -371,6 +436,8 @@ async def read_page(session: Session, url: str) -> tuple[str, str]:
         async def guard(route):
             request = route.request
             if not allowed_resource(request.url) or not read_request_allowed(request.method, request.url):
+                if refused is not None and allowed_resource(request.url):
+                    refused.append(f"{request.method} {urlsplit(request.url).hostname}{urlsplit(request.url).path}")
                 await route.abort()
             elif request.method in ("GET", "HEAD"):
                 await route.fallback()
@@ -382,11 +449,16 @@ async def read_page(session: Session, url: str) -> tuple[str, str]:
                     await route.continue_(post_data=body)
 
         await page.route("**/*", guard)
+        if json_responses is not None or network_events is not None:
+            page.on("response", on_response)
+            page.on("requestfailed", on_request_failed)
         response = await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
         if response and response.status >= 400:
             raise HTTPException(502, f"学习通返回 HTTP {response.status}，请稍后重试")
         with contextlib.suppress(Exception):
             await page.wait_for_load_state("networkidle", timeout=5000)
+        if response_tasks:
+            await asyncio.gather(*response_tasks, return_exceptions=True)
         if urlsplit(page.url).hostname == "passport2.chaoxing.com":
             session.connected = False
             session.records.clear()
@@ -411,6 +483,9 @@ async def read_page(session: Session, url: str) -> tuple[str, str]:
             # Report the site without its query: signatures stay server-side.
             where = urlsplit(final)
             raise HTTPException(502, f"学习通跳转到了不支持的页面：{where.netloc or '未知站点'}{where.path or '/'}")
+        if json_responses is not None or network_events is not None:
+            if network_events is not None and not any("getTaskDataLists" in event for event in network_events):
+                network_events.append("GET task.chaoxing.com/task/getTaskDataLists was not observed")
         return final, content
     finally:
         await page.close()

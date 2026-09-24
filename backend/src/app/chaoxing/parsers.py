@@ -23,6 +23,11 @@ READ_PATHS = {
     "mooc1.chaoxing.com": re.compile(
         r"^/(?:visit/stucoursemiddle|mooc2/work/list|mooc-ans/mooc2/work/(?:task|view|dowork)|mooc-ans/work/selectWorkQuestion(?:YiPiYue)?)/?$"
     ),
+    # The Vue course generation (mooc2-ans-vue/fanyav3/tch) mounts every module
+    # as an iframe instead of embedding the older hidden `enc` inputs, so its
+    # assignment list can only be reached through the module entry point the
+    # course page itself publishes. Read-only course module landing page.
+    "task.chaoxing.com": re.compile(r"^/task/index/?$"),
 }
 
 
@@ -227,6 +232,37 @@ def assignments(html: str, base: str) -> list[dict]:
             submitted_count=counts["submitted_count"],
             unsubmitted_count=counts["unsubmitted_count"],
         )
+    return list(found.values())
+
+
+def task_assignments(payload: dict) -> list[dict]:
+    """Parse the Vue teaching-task list API response into course assignments.
+
+    The browser page itself issues GET /task/getTaskDataLists. Its response is
+    captured in the authenticated browser context so this adapter does not have
+    to reconstruct the page's signed URL or request headers.
+    """
+    if not isinstance(payload, dict) or payload.get("code") not in (None, 200, "200"):
+        return []
+    rows = payload.get("data")
+    if not isinstance(rows, list):
+        return []
+    found = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        task_id = str(row.get("taskId") or row.get("id") or "").strip()
+        title = str(row.get("name") or row.get("title") or "").strip()
+        if not task_id or not title:
+            continue
+        found.setdefault(task_id, dict(
+            source_id=f"task:{task_id}",
+            title=title,
+            _url="",
+            item_type="作业",
+            submitted_count=None,
+            unsubmitted_count=None,
+        ))
     return list(found.values())
 
 
