@@ -969,6 +969,77 @@ async def test_course_without_any_assignment_source_is_recorded(monkeypatch, tmp
     assert "data_count=1" in dumped["home-module-network-requests.txt"]
 
 
+def test_work_list_url_carries_the_course_identity():
+    """The menu route is rebuilt from the course page's own parameters.
+
+    The course menu links assignments relatively and adds the identity itself, so
+    the route has to carry the course back with it; page-only parameters must not
+    travel along.
+    """
+    from app.chaoxing import router as routes
+
+    final = (
+        "https://mooc2-ans.chaoxing.com/mooc2-ans-vue/fanyav3/tch?courseId=266835378&clazzId=154009473"
+        "&cpi=263234753&enc=abc&t=1790&v=6&perspectiveType=0&ut=t"
+    )
+    url = routes.work_list_url(final)
+    assert url.startswith("https://mooc2-ans.chaoxing.com/mooc2-ans/work/list?")
+    assert "courseid=266835378" in url and "courseId=266835378" in url
+    assert "clazzid=154009473" in url and "classId=154009473" in url and "clazzId=154009473" in url
+    assert "cpi=263234753" in url and "enc=abc" in url
+    assert "perspectiveType" not in url and "v=6" not in url
+    assert routes.work_list_url("https://mooc2-ans.chaoxing.com/mooc2-ans-vue/fanyav3/tch") == ""
+
+
+async def test_assignment_list_is_read_from_the_course_menu_route(monkeypatch, tmp_path):
+    """The Vue shell ships no assignment credential; the menu route has the list.
+
+    The old reader asked mooc1's work list for hidden enc inputs this generation
+    does not have. The course menu links assignments at /mooc2-ans/work/list, so
+    that route is read with the course's own identity and parsed as usual.
+    """
+    from app.chaoxing import browser as connector
+    from app.chaoxing import router as routes
+
+    monkeypatch.setattr(connector, "PAGE_DUMP_DIR", tmp_path)
+    user = SimpleNamespace(id=uuid.uuid4())
+    session = make_session(str(user.id))
+    session.connected = True
+    monkeypatch.setattr(manager, "sessions", {session.id: session})
+    course = session.remember("course", parsers.courses(COURSE))[0]
+    assignment_page = (
+        '<ul><li onclick="goTask(this)" data="/mooc-ans/mooc2/work/task?courseId=12&amp;classId=45'
+        '&amp;cpi=34&amp;workId=789&amp;answerId=0&amp;enc=task-token">'
+        '<h3 class="workTit">20260922课堂实训作业</h3><p>66人已交 4人未交</p></li></ul>'
+    )
+    reads: list[str] = []
+
+    async def fake_read_page(_session, url, refused=None, json_responses=None, network_events=None):
+        reads.append(url)
+        if "/mooc2-ans/work/list" in url:
+            return url, assignment_page
+        return "https://mooc2-ans.chaoxing.com/mooc2-ans-vue/fanyav3/tch?courseid=12&cpi=34&clazzid=45&enc=x", (
+            "<html><body>shell without any module</body></html>"
+        )
+
+    monkeypatch.setattr(routes, "read_page", AsyncMock(side_effect=fake_read_page))
+    monkeypatch.setattr(
+        routes,
+        "read_samples",
+        AsyncMock(return_value=[("https://mooc2-ans.chaoxing.com/mooc2-ans/exam/test", "<p>暂无考试</p>")]),
+    )
+
+    result = await routes.list_exams(session.id, course["id"], user)
+    assert [
+        (item["title"], item["item_type"], item["submitted_count"], item["unsubmitted_count"], item["readable"])
+        for item in result["items"]
+    ] == [("20260922课堂实训作业", "作业", 66, 4, False)]
+    assert any("/mooc2-ans/work/list" in url for url in reads)
+    assert "未提供可识别的教师批阅入口" in result["assignment_notice"]
+    dumped = {path.name.split("-", 2)[2]: path.read_text(encoding="utf-8") for path in tmp_path.iterdir()}
+    assert "20260922课堂实训作业" in dumped["work-list-module-0.html"]
+
+
 async def test_vue_module_read_waits_for_mount_before_taking_the_page():
     """A module read must wait for the module to mount, not just for idle network.
 

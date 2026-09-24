@@ -15,7 +15,7 @@ COURSES_URL = "https://fycourse.fanya.chaoxing.com/fyportal/courselist/course"
 READ_PATHS = {
     "fycourse.fanya.chaoxing.com": re.compile(r"^/fyportal/courselist/(course|coursegroupdata|entercoursenewfy)/?$"),
     "mooc2-ans.chaoxing.com": re.compile(
-        r"^/(?:mooc2-ans/)?(?:mycourse/tch|mooc2-ans-vue/fanyav3/(?:tch|index)|mooc2-ans-ue/fanya3/(?:tch|index)|exam/test(?:/(?:marklist|mark|review|markpaper))?)/?$"
+        r"^/(?:mooc2-ans/)?(?:mycourse/tch|mooc2-ans-vue/fanyav3/(?:tch|index)|mooc2-ans-ue/fanya3/(?:tch|index)|work/list|exam/test(?:/(?:marklist|mark|review|markpaper))?)/?$"
     ),
     # Course assignments use a separate, older host and route family from the
     # course exam list. Keep this allowlist narrow: the connector only follows
@@ -207,8 +207,16 @@ def assignments(html: str, base: str) -> list[dict]:
         raw_url = str(node.get("data") or "")
         url = read_url(raw_url, base)
         if not url:
-            continue
-        work_id = query(url, "workId", "workid", "id")
+            # A provider row whose review route this reader may not open is still
+            # a real assignment: the provider's own list is the evidence it
+            # exists, so it is reported unreadable instead of dropped without a
+            # trace. A row that does not point at the provider at all is not ours
+            # to interpret.
+            from .browser import allowed_resource
+
+            if not allowed_resource(urljoin(base, raw_url.replace("&amp;", "&"))):
+                continue
+        work_id = query(url or raw_url, "workId", "workid", "id")
         if not work_id:
             continue
         row = node.find_parent(["li", "tr"]) or node

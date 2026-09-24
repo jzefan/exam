@@ -488,6 +488,60 @@ async def capture_home_module(session, course_html: str, soup, final: str) -> No
     dump_requests("home-module-network", events)
 
 
+def work_list_url(final: str) -> str:
+    """The assignment list route this generation publishes in its course menu.
+
+    The course menu links assignments at the relative `/mooc2-ans/work/list` and
+    appends the course identity itself, so the route is rebuilt from the course
+    page's own parameters rather than scraped from the menu. The older reader
+    used `mooc1.chaoxing.com/mooc2/work/list`, which is a different generation.
+    """
+    from . import parsers
+
+    where = urlsplit(final)
+    if not where.hostname or not where.query:
+        return ""
+    params = {key.lower(): value[0] for key, value in parse_qs(where.query).items()}
+    identity = {
+        key: params[key]
+        for key in ("courseid", "clazzid", "cpi", "enc", "t", "ut", "openc")
+        if params.get(key)
+    }
+    if not identity.get("courseid") or not identity.get("cpi"):
+        return ""
+    # The work module historically reads camelCase names even though the course
+    # page carries lower case, so both are sent rather than picking one.
+    for lower, camel in (("courseid", "courseId"), ("clazzid", "classId"), ("clazzid", "clazzId")):
+        if identity.get(lower):
+            identity[camel] = identity[lower]
+    url = f"https://{where.hostname}/mooc2-ans/work/list?" + urlencode(identity)
+    return url if parsers.read_url(url) else ""
+
+
+async def read_work_list_assignments(session, final: str) -> tuple[list[dict], str]:
+    """Read the assignment list from the course menu's own route."""
+    from . import parsers
+
+    url = work_list_url(final)
+    if not url:
+        return [], ""
+    try:
+        work_final, work_html = await read_page(session, url)
+    except HTTPException:
+        return [], "学习通作业列表暂时无法读取。"
+    if dumping_enabled():
+        dump_pages("work-list-module", [(work_final, work_html)])
+    items = parsers.assignments(work_html, work_final)
+    if not items:
+        return [], "未识别到课程作业列表项；请检查学习通页面结构。"
+    notice = (
+        "已读取作业列表，但部分作业未提供可识别的教师批阅入口；不可读项目已禁用。"
+        if any(not item["_url"] for item in items)
+        else ""
+    )
+    return items, notice
+
+
 @router.get("/sessions/{session_id}/courses/{course_id}/exams")
 async def list_exams(session_id: str, course_id: str, user: Teacher, refresh: bool = False):
     from . import parsers
@@ -598,10 +652,14 @@ async def list_exams(session_id: str, course_id: str, user: Teacher, refresh: bo
         else:
             assignment_notice = "当前课程未提供作业读取凭据，未读取作业列表。"
             capture_unreadable_course(final, course_html, course_soup)
-            # A course page that carries only the home module still needs that
-            # module read: on this generation the home module is the one the
-            # teacher is looking at while the assignment list is on screen.
+            # A page that carries only the home module still needs that module
+            # read: on this generation it is the one showing the coursework.
             await capture_home_module(session, course_html, course_soup, final)
+            found, notice = await read_work_list_assignments(session, final)
+            for item in found:
+                unique[item["source_id"]] = item
+            if found:
+                assignment_notice = notice
         if not unique and exam_list_unrecognized:
             raise HTTPException(502, "未识别到考试或作业列表，请核对教师权限或页面结构")
         result = {
