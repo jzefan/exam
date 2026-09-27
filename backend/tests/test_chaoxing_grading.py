@@ -102,6 +102,9 @@ async def test_durable_grading_dedup_confirmation_and_export(db_session, configu
         item = data["items"][0]
         assert item["ai_score"] == 2.25 and item["max_score"] == 2.5
         assert item["status"] == "review" and item["feedback"]["deduction_reasons"]
+        assert item["feedback"]["dimension_scores"] == {"correctness": 2.25}
+        assert item["feedback"]["dimension_labels"] == {"correctness": "正确性与完整性"}
+        assert item["feedback"]["dimension_max_scores"] == {"correctness": 2.5}
         assert data["totals"]["final_score"] is None
         await service.confirm(
             db, candidate.id, item["id"], OWNER, ConfirmScore(version=item["version"], score=2.4, reason="教师复核")
@@ -294,16 +297,103 @@ async def test_live_shaped_paper_keeps_objective_marks_and_queues_the_program(db
         assert item["ai_score"] == 2.25 and item["status"] == "review" and item["feedback"]["dimension_comments"]
 
 
-def test_answer_for_the_teacher_stays_manual_when_the_type_is_unknown():
+def test_unknown_non_objective_types_use_the_generic_text_grader():
     assert service.ai_type("简答题", "说明循环的作用") == "short_answer"
     assert service.ai_type("简答题", "请编写程序，输出偶数") == "code"
     assert service.ai_type("编程题", "任意题干") == "code"
     assert service.ai_type("程序设计题", "求最大值函数") == "code"
     assert service.ai_type("名词解释", "解释变量作用域") == "short_answer"
-    # Nothing subjective about these: the provider's own mark is kept.
+    assert service.ai_type("其它", "根据课程要求完成总结") == "short_answer"
+    assert service.ai_type(None, "题目没有类型标记") == "short_answer"
+    assert service.ai_type("", "题目没有类型标记") == "short_answer"
+    # Recognized objective labels never enter the AI queue.
     assert service.ai_type("单选题", "题干") is None
     assert service.ai_type("判断题", "题干") is None
     assert service.ai_type("填空题", "补全语句") is None
+
+
+def test_missing_question_type_is_displayed_as_other_and_parsed_as_short_answer():
+    review = parsers.review('''
+      <div class="borderBox" data1="q1">
+        <div class="mark_name">根据课程要求完成总结</div>
+        <div class="topicStudentAnswer"><span class="colorDeep">已完成总结</span></div>
+        <div class="topicRightAnswer"><span>完整回答</span></div>
+        <input class="questionScore" data-max-score="10" value="10">
+      </div>
+    ''')
+    question = review["questions"][0]
+    assert question["question_type"] == "其它"
+    assert service.ai_type(question["question_type"], question["content"]) == "short_answer"
+
+
+async def test_other_subjective_type_without_reference_answer_can_be_graded(db_session, configured):
+    review = copy.deepcopy(REVIEW)
+    review["questions"][0].update(
+        question_type="其它", reference_answer="", requires_manual_review=False,
+    )
+    candidate = await save(db_session, review)
+    item = (await service.detail(db_session, candidate.id, OWNER))["items"][0]
+    assert item["status"] == "pending"
+    assert (await service.enqueue(db_session, candidate.id, OWNER))["queued"] == 1
+
+
+async def test_missing_question_type_uses_short_answer_grader(db_session, configured):
+    review = parsers.review('''
+      <div class="borderBox" data1="q-no-type">
+        <div class="mark_name">根据课程要求完成总结</div>
+        <div class="topicStudentAnswer"><span class="colorDeep">已完成总结</span></div>
+        <div class="topicRightAnswer"><span>完整回答</span></div>
+        <input class="questionScore" data-max-score="10" value="10">
+      </div>
+    ''')
+    candidate = await save(db_session, review)
+    item = (await service.detail(db_session, candidate.id, OWNER))["items"][0]
+    assert item["question_type"] == "其它"
+    assert item["status"] == "pending"
+    assert (await service.enqueue(db_session, candidate.id, OWNER))["queued"] == 1
+    task = await db_session.scalar(select(GradingTask).where(GradingTask.source_type == service.SOURCE))
+    assert task.question_type == "short_answer"
+
+
+async def test_legacy_manual_item_with_missing_type_is_requeued_as_short_answer(db_session, configured):
+    review = copy.deepcopy(REVIEW)
+    media_id = str(uuid.uuid4())
+    review["questions"][0].update(
+        question_type="", requires_manual_review=True, student_answer="",
+        rich_content={
+            "content": [{"kind": "text", "text": "根据要求完成总结"}],
+            "student_answer": [{"kind": "image", "asset_id": media_id, "name": "作答图片"}],
+        },
+    )
+    candidate = await save(db_session, review)
+    item = (await service.detail(db_session, candidate.id, OWNER))["items"][0]
+    assert item["status"] == "manual"
+
+    result = await service.enqueue(db_session, candidate.id, OWNER)
+
+    assert result["queued"] == 1
+    item = (await service.detail(db_session, candidate.id, OWNER))["items"][0]
+    assert item["status"] == "queued" and not item["requires_manual_review"]
+    task = await db_session.scalar(select(GradingTask).where(GradingTask.source_type == service.SOURCE))
+    assert task.question_type == "short_answer"
+    assert task.attachment_refs == [{
+        "kind": "chaoxing_media", "media_id": media_id, "role": "student_answer", "name": "作答图片",
+    }]
+
+
+async def test_manual_item_without_student_answer_stays_manual(db_session, configured):
+    review = copy.deepcopy(REVIEW)
+    review["questions"][0].update(
+        question_type="其它", student_answer="", requires_manual_review=True,
+        rich_content={"content": [{"kind": "text", "text": "总结课程内容"}], "student_answer": []},
+    )
+    candidate = await save(db_session, review)
+
+    result = await service.enqueue(db_session, candidate.id, OWNER)
+
+    item = (await service.detail(db_session, candidate.id, OWNER))["items"][0]
+    assert result["queued"] == 0 and result["state"] == "no_ai_questions"
+    assert item["status"] == "manual" and item["requires_manual_review"]
 
 
 async def test_only_subjective_answers_ever_reach_the_ai_queue(db_session, configured):

@@ -96,6 +96,7 @@ import {
   parseJsonQuestions,
   parseTemplateQuestions,
   selectEnhanceTargets,
+  structuredJsonText,
 } from "./import-utils";
 
 async function questionApiFetch<T>(
@@ -211,7 +212,7 @@ export function QuestionImportPage() {
     useState<QuestionImportDocumentSummary | null>(null);
   const [mode, setMode] = useState<"review" | "source-edit">("review");
   const [sourceEdits, setSourceEdits] = useState<Record<string, string>>({});
-  const [clientParsed, setClientParsed] = useState(false);
+  const [ruleParseLabel, setRuleParseLabel] = useState<string | null>(null);
   const [jsonImageWarnings, setJsonImageWarnings] = useState<string[]>([]);
 
   const { query: banksQuery } = useList<IQuestionBank>({
@@ -372,7 +373,8 @@ export function QuestionImportPage() {
 
     setLoading(true);
     setParseError(null);
-    setClientParsed(false);
+    setRuleParseLabel(null);
+    setJsonImageWarnings([]);
 
     let payload: Awaited<ReturnType<typeof extractQuestionImportPayload>> | null = null;
     let nextDocumentPayload: ImportDocumentPayload | null = null;
@@ -392,44 +394,29 @@ export function QuestionImportPage() {
         try {
           const result = parseJsonQuestions(rawText);
           drafts = result.drafts;
-          unresolvedImageCount = result.unresolvedImages.length;
-          parseLabel = "JSON 题目解析";
+          parseLabel = "JSON 规则解析";
 
-          // If images were already resolved from ZIP, inject their URLs into drafts
+          // ZIP 图片按文件名替换 JSON 草稿中的占位地址，支持数组与 questions 包装对象。
+          const urlByFilename = new Map(
+            (docPayload.images ?? []).map((image) => [image.alt, image.url]),
+          );
           if (docPayload.images && docPayload.images.length > 0) {
-            const urlByFilename = new Map<string, string>();
-            for (const img of docPayload.images) {
-              const fname = img.alt || img.image_id;
-              urlByFilename.set(fname, img.url);
-            }
-            // Re-parse to get per-question image references
-            try {
-              const reparsed = JSON.parse(rawText);
-              const items = Array.isArray(reparsed) ? reparsed : [reparsed];
-              drafts = drafts.map((draft, idx) => {
-                const item = items[idx];
-                if (!item?.images || !Array.isArray(item.images)) return draft;
-                const resolved = item.images
-                  .filter((img: { filename: string }) => urlByFilename.has(img.filename))
-                  .map((img: { filename: string; description?: string }, i: number) => ({
-                    image_id: `resolved-${img.filename.replace(/[^a-zA-Z0-9]/g, "-")}`,
-                    url: urlByFilename.get(img.filename) || "",
-                    order: i + 1,
-                    alt: img.description || img.filename,
-                  }));
-                if (resolved.length > 0) {
-                  return { ...draft, images: resolved };
-                }
-                return draft;
-              });
-            } catch {
-              // Keep drafts as-is if re-parse fails
-            }
+            drafts = drafts.map((draft) => ({
+              ...draft,
+              images: draft.images?.map((image) => ({
+                ...image,
+                url: urlByFilename.get(image.url) ?? image.url,
+              })),
+            }));
           }
 
-          if (result.unresolvedImages.length > 0 && (!docPayload.images || docPayload.images.length === 0)) {
+          const unresolvedImages = result.unresolvedImages.filter(
+            (image) => !urlByFilename.has(image.filename ?? ""),
+          );
+          unresolvedImageCount = unresolvedImages.length;
+          if (unresolvedImages.length > 0) {
             setJsonImageWarnings(
-              result.unresolvedImages.map(
+              unresolvedImages.map(
                 (img) => `图片 "${img.filename}" 未上传，建议使用 ZIP 打包上传（JSON + images 文件夹）`,
               ),
             );
@@ -446,11 +433,11 @@ export function QuestionImportPage() {
       // Try inline exam format, then template format
       if (drafts.length === 0 && detectInlineExamFormat(rawText)) {
         drafts = parseInlineExamQuestions(rawText);
-        parseLabel = "前端内联题目解析";
+        parseLabel = "内联题目规则解析";
       }
       if (drafts.length === 0) {
         drafts = parseTemplateQuestions(rawText);
-        parseLabel = "前端模板解析";
+        parseLabel = "模板规则解析";
       }
       if (drafts.length === 0) return false;
 
@@ -462,7 +449,7 @@ export function QuestionImportPage() {
       setSelectedDraftId(drafts[0]?.draft_id ?? null);
       setDocumentPayload(docPayload);
       setSourceFileName(fileName);
-      setClientParsed(true);
+      setRuleParseLabel(parseLabel);
       setMode("review");
       setParseError(null);
 
@@ -500,6 +487,7 @@ export function QuestionImportPage() {
       const result = (await response.json()) as QuestionImportDocumentRecognizeResponse;
       setDrafts(result.drafts);
       setRecognizedSummary(result.summary);
+      setRuleParseLabel(result.mode === "template" ? "标准模板规则解析" : null);
       if (result.summary.duplicates_removed > 0) {
         toast({ title: `已自动去除 ${result.summary.duplicates_removed} 道重复题目` });
       }
@@ -559,14 +547,15 @@ export function QuestionImportPage() {
 
       // Use client-side parsing when content exceeds limits OR when
       // the text matches a well-structured format (faster & more reliable than AI)
-      const isJsonFile = extractedPayload.sourceFormat === "json";
+      const jsonText = structuredJsonText(extractedPayload.rawText);
+      const isJsonFile = extractedPayload.sourceFormat === "json" || jsonText !== null;
       const useClientParse =
         isJsonFile ||
         exceedsBackendImportLimits(extractedPayload.rawText, extractedPayload.images) ||
         detectInlineExamFormat(extractedPayload.rawText);
 
       if (useClientParse) {
-        if (applyClientParse(extractedPayload.rawText, file.name, nextDocumentPayload, isJsonFile)) {
+        if (applyClientParse(jsonText ?? extractedPayload.rawText, file.name, nextDocumentPayload, isJsonFile)) {
           return;
         }
         if (exceedsBackendImportLimits(extractedPayload.rawText, extractedPayload.images)) {
@@ -584,6 +573,7 @@ export function QuestionImportPage() {
       );
       setDrafts(response.drafts);
       setRecognizedSummary(response.summary);
+      setRuleParseLabel(response.mode === "template" ? "标准模板规则解析" : null);
       if (response.summary.duplicates_removed > 0) {
         toast({
           title: `已自动去除 ${response.summary.duplicates_removed} 道重复题目`,
@@ -619,7 +609,7 @@ export function QuestionImportPage() {
       setDocumentPayload(null);
       setSourceEdits({});
       setSelectedDraftId(null);
-      setClientParsed(false);
+      setRuleParseLabel(null);
     } finally {
       setLoading(false);
     }
@@ -674,6 +664,7 @@ export function QuestionImportPage() {
       }
       setDrafts(response.drafts);
       setRecognizedSummary(response.summary);
+      setRuleParseLabel(null);
       setSourceEdits(
         Object.fromEntries(
           response.drafts.map((draft) => [draft.draft_id, draft.raw_text]),
@@ -729,6 +720,7 @@ export function QuestionImportPage() {
         (await response.json()) as QuestionImportDocumentRecognizeResponse;
       setDrafts(result.drafts);
       setRecognizedSummary(result.summary);
+      setRuleParseLabel(null);
       setSourceEdits(
         Object.fromEntries(result.drafts.map((d) => [d.draft_id, d.raw_text])),
       );
@@ -1172,6 +1164,7 @@ export function QuestionImportPage() {
                   setSourceEdits({});
                   setSelectedDraftId(null);
                   setSourceFileName("");
+                  setRuleParseLabel(null);
                   return;
                 }
                 if (navState.backTo) {
@@ -1201,21 +1194,19 @@ export function QuestionImportPage() {
                     审核模式
                   </Badge>
                 )}
-                {clientParsed && (
+                {ruleParseLabel && (
                   <Badge
                     variant="secondary"
                     className="h-5 border-none bg-amber-100 px-2 text-[11px] font-bold text-amber-700"
                   >
-                    前端模板解析
+                    {ruleParseLabel}
                   </Badge>
                 )}
               </div>
               <p className="text-xs leading-snug text-muted-foreground">
                 {showReviewer
-                  ? clientParsed
-                    ? `模板解析: ${sourceFileName}（内容超过服务端限制，已通过前端模板格式解析）`
-                    : `正在处理: ${sourceFileName}`
-                  : "通过 AI 快速解析并导入多格式题目"}
+                  ? `正在处理: ${sourceFileName}`
+                  : "导入 JSON、Markdown 或文档题目"}
               </p>
             </div>
           </div>
@@ -1281,10 +1272,9 @@ export function QuestionImportPage() {
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={importing || aiRecognizing || !documentPayload || clientParsed}
+                  disabled={importing || aiRecognizing || !documentPayload}
                   onClick={handleAiReRecognize}
                   className="h-9 rounded-lg px-3 text-sm font-bold"
-                  title={clientParsed ? "前端模板解析模式下不可用（内容超过服务端限制）" : undefined}
                 >
                   {aiRecognizing ? (
                     <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
@@ -1298,8 +1288,7 @@ export function QuestionImportPage() {
                   <Button
                     type="button"
                     variant="outline"
-                    disabled={importing || aiRecognizing || !documentPayload || clientParsed}
-                    title={clientParsed ? "前端模板解析模式下不可用（内容超过服务端限制）" : undefined}
+                    disabled={importing || aiRecognizing || !documentPayload}
                     onClick={handleVisualRecognize}
                     className="h-9 rounded-lg px-3 text-sm font-bold"
                   >
@@ -1485,7 +1474,7 @@ export function QuestionImportPage() {
                         正在解析文档
                       </p>
                       <p className="text-sm leading-snug text-muted-foreground mt-1">
-                        正在按模板规则识别并拆分题目...
+                        正在分析文件并识别题目...
                       </p>
                     </div>
                   </div>

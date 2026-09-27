@@ -25,10 +25,16 @@ export function QuestionRenderer({ question, answer, onChange }: Props) {
   const Component = COMPONENTS[question.type];
   if (!Component) {
     return (
-      <p className="text-sm text-muted-foreground py-8 text-center">
-        暂不支持此题型：{question.type}
-      </p>
+      <div className="contents" data-ai-explain-question-id={question.question_id}>
+        <p className="text-sm text-muted-foreground py-8 text-center">
+          暂不支持此题型：{question.type}
+        </p>
+      </div>
     );
   }
-  return <Component key={question.question_id} question={question} answer={answer} onChange={onChange} />;
+  return (
+    <div className="contents" data-ai-explain-question-id={question.question_id}>
+      <Component key={question.question_id} question={question} answer={answer} onChange={onChange} />
+    </div>
+  );
 }

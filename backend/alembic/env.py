@@ -1,5 +1,15 @@
 import asyncio
 from logging.config import fileConfig
+from pathlib import Path
+import sys
+
+# The backend uses a src/ package layout. `uv run alembic ...` starts Alembic
+# from backend/, which does not put src/ on sys.path unless callers remember to
+# set PYTHONPATH themselves. Keep migrations runnable with the documented
+# command by resolving the package root relative to this file.
+src_path = str(Path(__file__).resolve().parents[1] / "src")
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
 
 from alembic import context
 from sqlalchemy import pool, text
@@ -9,7 +19,7 @@ from app.config import settings
 from app.models import Base
 
 # Import all models so Alembic can detect them
-from app.chaoxing.models import ExternalExam, ExternalCandidate, ExternalItem, ExternalAudit  # noqa: F401
+from app.chaoxing.models import ExternalExam, ExternalCandidate, ExternalItem, ExternalAudit, ChaoxingReadSnapshot  # noqa: F401
 from app.chaoxing.credentials import ChaoxingCredential  # noqa: F401
 from app.grading.models import GradingTask  # noqa: F401
 from app.auth.models import User  # noqa: F401

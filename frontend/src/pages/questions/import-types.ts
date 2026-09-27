@@ -34,6 +34,7 @@ export interface QuestionImportDraft {
   answer_html?: string;
   analysis: string | null;
   difficulty: number;
+  score?: number;
   segment_source: string;
   type_confidence: ImportConfidence;
   boundary_confidence: ImportConfidence;

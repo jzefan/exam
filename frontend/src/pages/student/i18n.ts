@@ -15,6 +15,11 @@ type StudentMessageKey =
   | "time_up_countdown"
   | "switch_limit_countdown"
   | "switch_remaining_warning"
+  | "ai_explain_action"
+  | "ai_explain_title"
+  | "ai_explain_selected_text"
+  | "ai_explain_loading"
+  | "ai_explain_failed"
   | "dashboard_greeting"
   | "dashboard_pending_summary"
   | "dashboard_empty_summary"
@@ -215,6 +220,11 @@ const STUDENT_DICTIONARY: Record<StudentLocale, Record<StudentMessageKey, string
     time_up_countdown: "考试时间到，{seconds} 秒后自动提交...",
     switch_limit_countdown: "切屏次数已达上限，{seconds} 秒后自动提交...",
     switch_remaining_warning: "注意：切屏机会仅剩 {remaining} 次",
+    ai_explain_action: "解释这段",
+    ai_explain_title: "AI 讲解",
+    ai_explain_selected_text: "选中内容",
+    ai_explain_loading: "正在生成讲解…",
+    ai_explain_failed: "讲解生成失败，请稍后重试",
     dashboard_greeting: "你好，{name} 👋",
     dashboard_pending_summary: "本周有 {count} 场考试即将进行，加油！",
     dashboard_empty_summary: "当前没有待参加的考试，去复习下错题吧。",
@@ -414,6 +424,11 @@ const STUDENT_DICTIONARY: Record<StudentLocale, Record<StudentMessageKey, string
     time_up_countdown: "Time is up, auto-submitting in {seconds} seconds...",
     switch_limit_countdown: "Switch limit reached, auto-submitting in {seconds} seconds...",
     switch_remaining_warning: "Warning: only {remaining} tab-switch chances left",
+    ai_explain_action: "Explain this",
+    ai_explain_title: "AI explanation",
+    ai_explain_selected_text: "Selected text",
+    ai_explain_loading: "Generating an explanation…",
+    ai_explain_failed: "Could not generate an explanation. Try again later.",
     dashboard_greeting: "Hi, {name} 👋",
     dashboard_pending_summary: "{count} exams are coming up this week. Keep it up!",
     dashboard_empty_summary: "No pending exams right now. Review your mistakes instead.",

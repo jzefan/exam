@@ -16,6 +16,7 @@ import {
   renderStandardAnswer,
 } from "./utils";
 import { getStudentLocale, getStudentQuestionTypeLabel, tStudent } from "./i18n";
+import { SelectionAIExplain } from "./components/selection-ai-explain";
 
 const api = axios.create();
 api.interceptors.request.use((config) => {
@@ -101,7 +102,8 @@ export function WrongAnswerDetailPage() {
       : [];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-ai-explain-question-id={item.question_id}>
+      <SelectionAIExplain wrongAnswerId={item.id} enabled />
       <div className="flex items-center justify-between">
         <h1 className="text-base font-bold text-foreground tracking-tight">{tStudent("wrong_detail_title", undefined, locale)}</h1>
         <div className="flex items-center gap-3">

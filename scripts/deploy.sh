@@ -166,11 +166,12 @@ require_command() {
 render_nginx_config() {
   local backend_slot="$1"
   local frontend_slot="$2"
+  local output_file="${3:-${NGINX_DIR}/default.conf}"
   sed \
     -e "s/__BACKEND_SLOT__/${backend_slot}/g" \
     -e "s/__FRONTEND_SLOT__/${frontend_slot}/g" \
     "${CURRENT_LINK}/deploy/nginx/default.conf.template" \
-    > "${NGINX_DIR}/default.conf"
+    > "${output_file}"
 }
 
 normalize_slot() {
@@ -254,6 +255,17 @@ wait_for_health() {
   done
 }
 
+service_is_healthy() {
+  local service="$1"
+  local container_id health
+
+  container_id="$(docker compose -f "${CURRENT_LINK}/docker-compose.yml" ps -q "${service}" | head -n 1)"
+  [[ -n "${container_id}" ]] || return 1
+
+  health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${container_id}" 2>/dev/null || true)"
+  [[ "${health}" == "healthy" || "${health}" == "running" ]]
+}
+
 require_command docker
 require_command sed
 require_command curl
@@ -320,6 +332,27 @@ ACTIVE_FRONTEND_SLOT_FILE="${NGINX_DIR}/active_frontend_slot"
 ACTIVE_BACKEND_SLOT="$(read_slot_file "${ACTIVE_BACKEND_SLOT_FILE}" "${ACTIVE_SLOT_FILE}")"
 ACTIVE_FRONTEND_SLOT="$(read_slot_file "${ACTIVE_FRONTEND_SLOT_FILE}" "${ACTIVE_SLOT_FILE}")"
 
+# Slot files are the intended source of truth, but a failed or interrupted
+# release can leave one pointing at a stopped container. Reconcile against
+# running healthy containers before choosing the next inactive slot.
+if target_includes_backend || target_includes_frontend; then
+  if [[ -n "${ACTIVE_BACKEND_SLOT}" ]] && ! service_is_healthy "backend_${ACTIVE_BACKEND_SLOT}"; then
+    FALLBACK_BACKEND_SLOT="$(opposite_slot "${ACTIVE_BACKEND_SLOT}")"
+    if service_is_healthy "backend_${FALLBACK_BACKEND_SLOT}"; then
+      log "Recorded active backend ${ACTIVE_BACKEND_SLOT} is not healthy; reconciling to ${FALLBACK_BACKEND_SLOT}"
+      ACTIVE_BACKEND_SLOT="${FALLBACK_BACKEND_SLOT}"
+    fi
+  fi
+
+  if [[ -n "${ACTIVE_FRONTEND_SLOT}" ]] && ! service_is_healthy "frontend_${ACTIVE_FRONTEND_SLOT}"; then
+    FALLBACK_FRONTEND_SLOT="$(opposite_slot "${ACTIVE_FRONTEND_SLOT}")"
+    if service_is_healthy "frontend_${FALLBACK_FRONTEND_SLOT}"; then
+      log "Recorded active frontend ${ACTIVE_FRONTEND_SLOT} is not healthy; reconciling to ${FALLBACK_FRONTEND_SLOT}"
+      ACTIVE_FRONTEND_SLOT="${FALLBACK_FRONTEND_SLOT}"
+    fi
+  fi
+fi
+
 case "${DEPLOY_TARGET}" in
   all|app)
     TARGET_BACKEND_SLOT="$(opposite_slot "${ACTIVE_BACKEND_SLOT:-green}")"
@@ -346,6 +379,20 @@ case "${DEPLOY_TARGET}" in
     TARGET_FRONTEND_SLOT="${ACTIVE_FRONTEND_SLOT:-}"
     ;;
 esac
+
+# A frontend-only deployment cannot recover by building a backend, so fail
+# before doing work if neither backend slot is healthy.
+if [[ "${DEPLOY_TARGET}" == "frontend" ]] && ! service_is_healthy "backend_${TARGET_BACKEND_SLOT}"; then
+  FALLBACK_BACKEND_SLOT="$(opposite_slot "${TARGET_BACKEND_SLOT}")"
+  if service_is_healthy "backend_${FALLBACK_BACKEND_SLOT}"; then
+    log "Recorded active backend ${TARGET_BACKEND_SLOT} is not healthy; using healthy backend ${FALLBACK_BACKEND_SLOT}"
+    ACTIVE_BACKEND_SLOT="${FALLBACK_BACKEND_SLOT}"
+    TARGET_BACKEND_SLOT="${FALLBACK_BACKEND_SLOT}"
+  else
+    echo "Cannot deploy frontend: neither backend_${TARGET_BACKEND_SLOT} nor backend_${FALLBACK_BACKEND_SLOT} is healthy." >&2
+    exit 1
+  fi
+fi
 
 log "Deploy target: ${DEPLOY_TARGET}"
 log "Active slots -> backend: ${ACTIVE_BACKEND_SLOT:-none}, frontend: ${ACTIVE_FRONTEND_SLOT:-none}"
@@ -382,7 +429,9 @@ fi
 SWITCH_STARTED=0
 BACKEND_HANDOFF=0
 NGINX_BACKUP="${NEW_RELEASE}/previous-nginx.conf"
-if [[ -f "${NGINX_DIR}/default.conf" ]]; then
+if [[ -n "${ACTIVE_BACKEND_SLOT}" && -n "${ACTIVE_FRONTEND_SLOT}" ]]; then
+  render_nginx_config "${ACTIVE_BACKEND_SLOT}" "${ACTIVE_FRONTEND_SLOT}" "${NGINX_BACKUP}"
+elif [[ -f "${NGINX_DIR}/default.conf" ]]; then
   cp "${NGINX_DIR}/default.conf" "${NGINX_BACKUP}"
 fi
 rollback_failed_switch() {

@@ -3,8 +3,9 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, LargeBinary, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.postgresql import JSONB
 
 from app.models import BaseModel
 
@@ -46,6 +47,7 @@ class ExternalItem(BaseModel):
     position: Mapped[int] = mapped_column(Integer)
     question_type: Mapped[str] = mapped_column(String(100))
     content: Mapped[str] = mapped_column(Text)
+    rich_content: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     student_answer: Mapped[str] = mapped_column(Text)
     reference_answer: Mapped[str] = mapped_column(Text)
     max_score: Mapped[float | None] = mapped_column(Float)
@@ -70,3 +72,29 @@ class ExternalAudit(BaseModel):
     actor_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"))
     action: Mapped[str] = mapped_column(String(50))
     details: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class ExternalMedia(BaseModel):
+    __tablename__ = "chaoxing_media"
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), index=True)
+    mime_type: Mapped[str] = mapped_column(String(100))
+    data: Mapped[bytes] = mapped_column(LargeBinary)
+
+
+class ChaoxingReadSnapshot(BaseModel):
+    """Latest normalized read result; deliberately contains no source URLs or tokens."""
+
+    __tablename__ = "chaoxing_read_snapshots"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "account_key", "kind", "scope_key", name="uq_cx_read_snapshot_scope"),
+    )
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), index=True)
+    account_key: Mapped[str] = mapped_column(String(64))
+    kind: Mapped[str] = mapped_column(String(20))
+    scope_key: Mapped[str] = mapped_column(String(512))
+    payload: Mapped[dict] = mapped_column(JSON().with_variant(JSONB, "postgresql"))
+    content_hash: Mapped[str] = mapped_column(String(64))
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    fresh_until: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    purge_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)

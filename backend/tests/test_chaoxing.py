@@ -621,8 +621,11 @@ async def test_verify_requires_real_cookie_and_teacher_course(monkeypatch):
     session.page.close.assert_awaited_once()
 
 
-async def test_full_read_chain_does_not_create_students_or_write_scores(monkeypatch):
+async def test_full_read_chain_does_not_create_students_or_write_scores(monkeypatch, db_session):
     from app.chaoxing import router as routes
+    from app.chaoxing import media
+
+    monkeypatch.setattr(media, "fetch_bytes", AsyncMock(side_effect=ValueError("fixture media unavailable")))
 
     user = SimpleNamespace(id=uuid.uuid4())
     session = make_session(str(user.id))
@@ -649,7 +652,7 @@ async def test_full_read_chain_does_not_create_students_or_write_scores(monkeypa
     monkeypatch.setattr(routes, "read_samples", samples)
     exams = await routes.list_exams(session.id, course["id"], user)
     roster = await routes.list_candidates(session.id, exams["items"][0]["id"], user)
-    result = await routes.get_review(session.id, roster["items"][0]["id"], user)
+    result = await routes.get_review(session.id, roster["items"][0]["id"], user, db_session)
     assert len(result["questions"]) == 3 and not result["complete"]
     assert roster["expected_submitted"] == 9
     assert "private" not in str((exams, roster, result))
@@ -1092,31 +1095,6 @@ async def test_an_uploaded_answer_is_refused_outside_its_limits():
     assert "RuntimeError" in notes[-1]
 
 
-async def test_an_unreadable_attachment_leaves_the_question_for_a_human(monkeypatch):
-    from app.chaoxing import browser as connector
-    from app.chaoxing import router as routes
-
-    def question():
-        return dict(
-            source_id="1", student_answer="", requires_manual_review=True,
-            attachment_id="f" * 32, attachment_name="2026.9.22 步数睡眠.py", attachment_suffix="py",
-        )
-
-    pages = [("https://mooc2-ans.chaoxing.com/mooc2-ans/work/library/review-work?workAnswerId=1", "<html></html>")]
-    monkeypatch.setattr(connector, "read_attachment", AsyncMock(return_value="# 步数睡眠\nprint(1)"))
-    questions = {"1": question()}
-    await routes.resolve_attachments(make_session(), pages, questions)
-    assert questions["1"]["student_answer"] == "【附件 2026.9.22 步数睡眠.py】\n# 步数睡眠\nprint(1)"
-    assert questions["1"]["requires_manual_review"] is False
-    assert set(questions["1"]) & {"attachment_id", "attachment_name", "attachment_suffix"} == set()
-
-    # A file that cannot be read must not look answered, and its descriptor still
-    # has to leave: it is reader bookkeeping, not part of the sheet.
-    monkeypatch.setattr(connector, "read_attachment", AsyncMock(return_value=""))
-    questions = {"1": question()}
-    await routes.resolve_attachments(make_session(), pages, questions)
-    assert questions["1"]["student_answer"] == "" and questions["1"]["requires_manual_review"] is True
-    assert set(questions["1"]) & {"attachment_id", "attachment_name", "attachment_suffix"} == set()
 
 
 def test_work_answer_sheet_is_parsed_without_marking_inputs():

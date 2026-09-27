@@ -1,3 +1,4 @@
+import { PaperContent } from "./paper-content";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ArrowLeft, ChevronLeft, ChevronRight, Download, RefreshCw } from "lucide-react";
@@ -27,6 +28,7 @@ function ItemReview({ item, disabled, historical, onConfirm }: { item: SavedItem
   return <article className="space-y-3 text-sm">
     <QuestionPreviewCard
       question={buildQuestionPreview(item)}
+    questionBody={<PaperContent blocks={item.rich_content?.content} text={String(buildQuestionPreview(item).content.text ?? "")} />}
       index={item.position}
       mode="compact"
       expandOnClick
@@ -37,7 +39,7 @@ function ItemReview({ item, disabled, historical, onConfirm }: { item: SavedItem
       className="cursor-pointer transition-colors hover:border-primary/40"
       trailing={<span className="inline-flex shrink-0 items-center gap-2 text-xs text-muted-foreground"><span>满分 {display(item.max_score)}</span><span>{statuses[item.status] ?? item.status}</span></span>}
     >
-      <div className="mt-3"><h4 className="mb-1 text-xs text-muted-foreground">考生答案</h4><pre className="whitespace-pre-wrap break-words rounded bg-muted/40 p-3 font-mono text-xs">{item.student_answer || "无文字答案"}</pre></div>
+      <div className="mt-3"><h4 className="mb-1 text-xs text-muted-foreground">考生答案</h4><PaperContent blocks={item.rich_content?.student_answer} text={item.student_answer} empty="未读取到答案" /></div>
     </QuestionPreviewCard>
     <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs"><span>学习通得分 {display(item.source_score)}</span><span>AI 建议 {display(item.ai_score)}</span><span className="font-medium">教师确认 {display(item.confirmed_score)}</span></div>
     {item.binding_version && <p className="text-xs text-muted-foreground">评分配置版本 {item.binding_version} · 主评与复核</p>}
@@ -61,6 +63,7 @@ export function ChaoxingResultsPage() {
   const candidateId = params.get("candidate");
   const revision = params.get("revision");
   const [exams, setExams] = useState<SavedExam[]>([]);
+  const [selectedExamId, setSelectedExamId] = useState<string>();
   const [paper, setPaper] = useState<SavedPaper>();
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -96,6 +99,16 @@ export function ChaoxingResultsPage() {
   }, [refresh]);
   const running = !historical && paper?.items.some(i => ["queued", "running"].includes(i.status));
   const savedCandidates = exams.find(exam => exam.id === paper?.exam_id)?.candidates ?? [];
+  const selectedExam = exams.find(exam => exam.id === selectedExamId);
+  useEffect(() => {
+    if (!exams.length) {
+      setSelectedExamId(undefined);
+      return;
+    }
+    if (!selectedExamId || !exams.some(exam => exam.id === selectedExamId)) {
+      setSelectedExamId(exams[0].id);
+    }
+  }, [exams, selectedExamId]);
   const savedIndex = savedCandidates.findIndex(candidate => candidate.id === paper?.id);
   const subjectiveItems = paper?.items.filter(item => !item.objective) ?? [];
   const objectiveCount = paper?.items.filter(item => item.objective).length ?? 0;
@@ -129,10 +142,22 @@ export function ChaoxingResultsPage() {
     {message && <p role="status" className="text-xs text-muted-foreground">{message}</p>}
     {!candidateId && <>
       {!busy && !exams.length && <p className="rounded-md border border-border p-8 text-center text-sm text-muted-foreground">暂无已保存答卷，请先连接学习通读取。</p>}
-      {exams.map(exam => <section key={exam.id} className="space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="text-sm font-semibold">{exam.course_title} · {exam.title}</h2><p className="mt-1 text-xs text-muted-foreground">已保存 {exam.candidates.length} 份 / 学习通已提交 {display(exam.expected_submitted)} 份</p></div><Button size="sm" variant="outline" disabled={busy} onClick={() => void exportExam(exam.id)}><Download />导出成绩</Button></div>
-        <div className="overflow-x-auto rounded-md border border-border"><Table><TableHeader><TableRow><TableHead>姓名</TableHead><TableHead>学号</TableHead><TableHead>已处理题目</TableHead><TableHead>最终成绩</TableHead><TableHead>操作</TableHead></TableRow></TableHeader><TableBody>{exam.candidates.map(c => <TableRow key={c.id}><TableCell>{c.name}</TableCell><TableCell>{c.student_no}</TableCell><TableCell>{c.totals.resolved_count} / {c.totals.question_count}</TableCell><TableCell>{c.totals.final_score ?? "待确认"}</TableCell><TableCell><Button asChild size="sm" variant="ghost"><Link to={`?candidate=${c.id}`}>查看评分</Link></Button></TableCell></TableRow>)}</TableBody></Table></div>
-      </section>)}
+      {!!exams.length && <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(220px,300px)_minmax(0,1fr)]">
+        <aside className="min-w-0 space-y-2" aria-label="考试和作业列表">
+          <h2 className="px-1 text-xs font-medium text-muted-foreground">考试 / 作业（{exams.length}）</h2>
+          <nav className="max-h-[calc(100vh-15rem)] space-y-1 overflow-y-auto rounded-md border border-border bg-card p-2" aria-label="选择考试或作业">
+            {exams.map(exam => <button key={exam.id} type="button" aria-pressed={selectedExam?.id === exam.id} onClick={() => setSelectedExamId(exam.id)} className={`w-full rounded-md border px-3 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selectedExam?.id === exam.id ? "border-primary/40 bg-accent" : "border-transparent hover:bg-muted/60"}`}>
+              <span className="block text-sm font-medium leading-5">{exam.title}</span>
+              <span className="mt-1 block truncate text-xs text-muted-foreground">{exam.course_title}</span>
+              <span className="mt-2 block text-xs text-muted-foreground">已保存 {exam.candidates.length} 份 / 已提交 {display(exam.expected_submitted)} 份</span>
+            </button>)}
+          </nav>
+        </aside>
+        {selectedExam && <section className="min-w-0 space-y-3" aria-label="考生名单">
+          <div className="flex flex-wrap items-center justify-between gap-2"><div className="min-w-0"><h2 className="truncate text-sm font-semibold">{selectedExam.course_title} · {selectedExam.title}</h2><p className="mt-1 text-xs text-muted-foreground">已保存 {selectedExam.candidates.length} 份 / 学习通已提交 {display(selectedExam.expected_submitted)} 份</p></div><Button size="sm" variant="outline" disabled={busy} onClick={() => void exportExam(selectedExam.id)}><Download />导出成绩</Button></div>
+          <div className="overflow-x-auto rounded-md border border-border"><Table><TableHeader><TableRow><TableHead>姓名</TableHead><TableHead>学号</TableHead><TableHead>已处理题目</TableHead><TableHead>最终成绩</TableHead><TableHead>操作</TableHead></TableRow></TableHeader><TableBody>{selectedExam.candidates.map(c => <TableRow key={c.id}><TableCell>{c.name}</TableCell><TableCell>{c.student_no}</TableCell><TableCell>{c.totals.resolved_count} / {c.totals.question_count}</TableCell><TableCell>{c.totals.final_score ?? "待确认"}</TableCell><TableCell><Button asChild size="sm" variant="ghost"><Link to={`?candidate=${c.id}`}>查看评分</Link></Button></TableCell></TableRow>)}{!selectedExam.candidates.length && <TableRow><TableCell colSpan={5} className="h-24 text-center text-sm text-muted-foreground">该考试 / 作业暂无已保存的考生答卷。</TableCell></TableRow>}</TableBody></Table></div>
+        </section>}
+      </div>}
     </>}
     {paper && <div className="grid min-w-0 gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
       <aside className="min-w-0 space-y-4" aria-label="按考生阅卷导航">

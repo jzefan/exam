@@ -114,9 +114,72 @@ export function getQuestionTitle(question: IQuestion): string {
   return question.title;
 }
 
+const STRUCTURED_STEM_LINE = /^(?:```|~~~|\$\$|\\\[|\\\]|<img\b|!\[|\[IMAGE:|\|.*\||#{1,6}\s|[-*+]\s|\d+[.、)]\s|[A-H][.．、]\s)/i;
+const COMPLETE_STEM_LINE = /[。！？!?；;：:.][”"'’」』）)]?$/;
+
+function isStructuredStemLine(line: string): boolean {
+  return STRUCTURED_STEM_LINE.test(line.trim()) || /^ {4,}\S/.test(line);
+}
+
+function joinStemLines(previous: string, next: string): string {
+  const needsSpace =
+    /[A-Za-z0-9]$/.test(previous) && /^[A-Za-z0-9\p{Script=Han}]/u.test(next) ||
+    /\p{Script=Han}$/u.test(previous) && /^[A-Za-z0-9]/.test(next);
+  return `${previous}${needsSpace ? " " : ""}${next}`;
+}
+
+/** 合并导入文本中句子内部的软换行，保留明确的段落和结构边界。 */
+export function normalizeImportedStemLineBreaks(text: string): string {
+  return text.replace(/\r\n?/g, "\n").split(/\n{2,}/).map((block) => {
+    const result: string[] = [];
+    let previousRawLine = "";
+    for (const rawLine of block.split("\n")) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      const previous = result[result.length - 1];
+      if (
+        previous &&
+        !isStructuredStemLine(previousRawLine) &&
+        !isStructuredStemLine(rawLine) &&
+        !COMPLETE_STEM_LINE.test(previous) &&
+        !/ {2,}$/.test(previousRawLine)
+      ) {
+        result[result.length - 1] = joinStemLines(previous, line);
+      } else {
+        result.push(line);
+      }
+      previousRawLine = rawLine;
+    }
+    return result.join("\n");
+  }).join("\n\n");
+}
+
+function matchesGeneratedParagraphs(html: string, text: string): boolean {
+  const lines = text.replace(/\r\n?/g, "\n").split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  return lines.length > 1 &&
+    html.trim() === lines.map((line) => `<p>${escapeStemHtml(line)}</p>`).join("");
+}
+
+function escapeStemHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
+
 export function getQuestionContentHtml(question: IQuestion): string | null {
   if (typeof question.content?.html === "string" && question.content.html.trim()) {
-    return question.content.html;
+    const html = question.content.html;
+    const text = question.content.text;
+    if (
+      question.source === "imported" &&
+      typeof text === "string" &&
+      !/(?:```|~~~|(?:^|\n)[ \t]*(?:\$\$|\\\[))/.test(text) &&
+      matchesGeneratedParagraphs(html, text)
+    ) {
+      const normalized = normalizeImportedStemLineBreaks(text);
+      return normalized.split(/\n+/).map((line) => line.trim()).filter(Boolean)
+        .map((line) => `<p>${escapeStemHtml(line)}</p>`).join("");
+    }
+    return html;
   }
   return null;
 }

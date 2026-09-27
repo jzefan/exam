@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import uuid
 
 from sqlalchemy import select
 
@@ -9,8 +10,9 @@ from app.config import settings
 from app.database import async_session
 from app.grading import service as grading
 from app.grading.models import GradingResultSnapshot, GradingTask
-from .models import ExternalCandidate, ExternalItem
+from .models import ExternalCandidate, ExternalExam, ExternalItem
 from .service import SOURCE
+from .vision import ChaoxingVisionUnavailable, add_image_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -79,12 +81,22 @@ async def claim(factory=async_session):
 async def execute(claim_data, factory=async_session):
     item_id, task_id, version, candidate_id, revision = claim_data
     score, error = None, ""
+    manual_review = False
     try:
         async with asyncio.timeout(360):
             async with factory() as db:
                 task = await db.get(GradingTask, task_id)
                 if task is None or task.source_type != SOURCE:
                     raise ValueError("invalid source task")
+                if task.attachment_refs:
+                    source_item = await db.get(ExternalItem, uuid.UUID(task.source_business_id))
+                    if source_item is None or source_item.task_id != task.id:
+                        raise ValueError("invalid source attachment")
+                    candidate = await db.get(ExternalCandidate, source_item.candidate_id)
+                    exam = await db.get(ExternalExam, candidate.exam_id) if candidate else None
+                    if exam is None:
+                        raise ValueError("invalid source attachment owner")
+                    await add_image_evidence(db, task, exam.owner_id)
                 binding = await grading._load_role_binding(db, task.role_binding_version)
                 await grading.run_grading_task(
                     db,
@@ -103,6 +115,10 @@ async def execute(claim_data, factory=async_session):
                 else:
                     error = "模型评分失败，请稍后重试或人工评分"
                 await db.commit()
+    except ChaoxingVisionUnavailable as exc:
+        logger.info("Chaoxing image evidence unavailable for task %s", task_id)
+        error = str(exc)
+        manual_review = True
     except Exception:
         # Detailed provider diagnostics, when available, stay in grading audits.
         # Never surface raw provider responses or source/student content in logs.
@@ -121,7 +137,7 @@ async def execute(claim_data, factory=async_session):
             and item.status == "running"
         ):
             item.ai_score, item.error = score, error
-            item.status = "failed" if error else "review"
+            item.status = "manual" if manual_review else ("failed" if error else "review")
             item.version += 1
         elif item.status == "running" and candidate.revision != revision:
             item.status = "obsolete"

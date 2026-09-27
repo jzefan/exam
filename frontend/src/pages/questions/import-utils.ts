@@ -157,7 +157,11 @@ export async function extractQuestionImportPayload(file: File): Promise<{
   }
 
   if (format === "md") {
-    const normalized = normalizeMarkdownImages(await readFileAsText(file));
+    const markdown = await readFileAsText(file);
+    if (structuredJsonText(markdown)) {
+      return { rawText: markdown, sourceFormat: format, images: [], tables: [] };
+    }
+    const normalized = normalizeMarkdownImages(markdown);
     return {
       rawText: normalized.html,
       sourceFormat: format,
@@ -524,7 +528,9 @@ export function buildImportableQuestions(drafts: QuestionImportDraft[], question
         answer,
         analysis: draft.analysis || null,
         difficulty: clampedDifficulty,
-        score: getDefaultScore(draft.type, Array.isArray(answer.correct)),
+        score: draft.score && draft.score > 0
+          ? draft.score
+          : getDefaultScore(draft.type, Array.isArray(answer.correct)),
         source: "imported" as const,
         tag_ids: [],
         knowledge_point_ids: draft.suggested_knowledge_points?.map((kp) => kp.id) ?? [],
@@ -1137,7 +1143,8 @@ export function exceedsBackendImportLimits(
 interface JsonQuestionImage {
   page?: number;
   source?: string;
-  filename: string;
+  filename?: string;
+  url?: string;
   position?: string;
   description?: string;
 }
@@ -1145,12 +1152,17 @@ interface JsonQuestionImage {
 interface JsonQuestion {
   id?: string | number;
   type?: string;
-  content?: string;
+  question_type?: string;
+  content?: string | { text?: string; html?: string; description?: string };
+  content_text?: string;
+  content_html?: string;
   title?: string;
-  options?: Record<string, string>;
-  answer?: string | string[] | boolean | Record<string, unknown>;
+  options?: Record<string, unknown> | unknown[];
+  answer?: unknown;
+  answer_text?: string;
+  answer_html?: string;
   analysis?: string;
-  difficulty?: number;
+  difficulty?: number | string;
   score?: number;
   images?: JsonQuestionImage[];
 }
@@ -1166,82 +1178,161 @@ const JSON_TYPE_MAP: Record<string, QuestionType> = {
   code: "code",
 };
 
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function jsonAnswerValue(value: unknown, separator: string): string | null {
+  if (typeof value === "string") return value;
+  if (typeof value === "boolean" || typeof value === "number") return String(value);
+  if (Array.isArray(value)) {
+    const parts = value.map((part) => jsonAnswerValue(part, separator));
+    return parts.every((part): part is string => part !== null)
+      ? parts.join(separator)
+      : null;
+  }
+  return null;
+}
+
 function buildJsonAnswerPayload(
   type: QuestionType,
   answer: JsonQuestion["answer"],
 ): string | null {
-  if (answer === undefined || answer === null) return null;
-  if (typeof answer === "boolean") return String(answer);
-  if (typeof answer === "string") return answer;
-  if (Array.isArray(answer)) return answer.join("、");
-  if (typeof answer === "object") {
-    if (type === "fill_in" && Array.isArray((answer as Record<string, unknown>).correct)) {
-      return ((answer as Record<string, unknown>).correct as string[]).join("；");
-    }
-    if (Array.isArray((answer as Record<string, unknown>).points)) {
-      return ((answer as Record<string, unknown>).points as string[]).join("\n");
-    }
-    return JSON.stringify(answer);
-  }
+  const separator = type === "fill_in" ? "；" : "、";
+  if (!isJsonRecord(answer)) return jsonAnswerValue(answer, separator);
+  if (answer.correct !== undefined) return jsonAnswerValue(answer.correct, separator);
+  if (answer.points !== undefined) return jsonAnswerValue(answer.points, "\n");
+  if (answer.code !== undefined) return jsonAnswerValue(answer.code, "\n");
+  if (answer.text !== undefined) return jsonAnswerValue(answer.text, "\n");
+  if (answer.value !== undefined) return jsonAnswerValue(answer.value, separator);
+  if (typeof answer.html === "string") return htmlToImportText(answer.html).trim();
   return null;
 }
 
 function mapJsonImages(images: JsonQuestionImage[]): QuestionImportImageInput[] {
   return images.map((img, i) => ({
-    image_id: `json-img-${img.filename.replace(/[^a-zA-Z0-9]/g, "-")}-${i}`,
-    url: img.filename, // placeholder — user uploads real images later
+    image_id: `json-img-${(img.filename || img.url || String(i)).replace(/[^a-zA-Z0-9]/g, "-")}-${i}`,
+    url: img.url || img.filename || "", // filename is a placeholder until ZIP images are uploaded
     order: i + 1,
     page: img.page,
-    alt: img.description || img.filename,
+    alt: img.description || img.filename || "题目图片",
   }));
+}
+
+export function structuredJsonText(rawText: string): string | null {
+  const trimmed = rawText.replace(/^\uFEFF/, "").trim();
+  const fenced = trimmed.match(/^```json\s*\n([\s\S]*?)\n```$/i);
+  const candidate = fenced ? fenced[1].trim() : trimmed;
+  if (!candidate.startsWith("{") && !candidate.startsWith("[")) return null;
+  try {
+    const parsed = JSON.parse(candidate);
+    return parsed && typeof parsed === "object" ? candidate : null;
+  } catch {
+    return null;
+  }
 }
 
 export function parseJsonQuestions(
   jsonText: string,
 ): { drafts: QuestionImportDraft[]; unresolvedImages: JsonQuestionImage[] } {
   const parsed = JSON.parse(jsonText);
-  // Support both bare arrays and wrapper objects like { questions: [...], metadata: {...} }
+  // Support bare arrays, one question, and { questions: [...] } wrappers.
   const rawItems: unknown[] = Array.isArray(parsed)
     ? parsed
     : Array.isArray(parsed?.questions)
       ? parsed.questions
       : [parsed];
-  const items = rawItems.filter(
-    (item): item is JsonQuestion => Boolean(item) && typeof item === "object",
-  );
 
   const drafts: QuestionImportDraft[] = [];
   const unresolvedImages: JsonQuestionImage[] = [];
 
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    if (!item || typeof item !== "object") continue;
-    if (!item.content && !item.title) continue;
-
-    const questionType: QuestionType = JSON_TYPE_MAP[item.type || ""] || "short_answer";
-    const contentText = item.content || item.title || "";
-    const answerText = buildJsonAnswerPayload(questionType, item.answer);
-
-    const images = item.images || [];
-    if (images.length > 0) {
-      unresolvedImages.push(...images);
+  for (let i = 0; i < rawItems.length; i++) {
+    if (!isJsonRecord(rawItems[i])) {
+      throw new Error(`第 ${i + 1} 道题不是 JSON 对象`);
     }
+    const item = rawItems[i] as JsonQuestion;
+    const content = isJsonRecord(item.content) ? item.content : null;
+    const contentHtml = typeof item.content_html === "string"
+      ? item.content_html
+      : typeof content?.html === "string" ? content.html : undefined;
+    const contentText = [
+      item.content_text,
+      typeof item.content === "string" ? item.content : undefined,
+      content?.text,
+      content?.description,
+      contentHtml ? htmlToImportText(contentHtml) : undefined,
+      item.title,
+    ].find((value): value is string => typeof value === "string" && Boolean(value.trim()))?.trim() ?? "";
+    if (!contentText) throw new Error(`第 ${i + 1} 道题缺少题干`);
+
+    const rawType = (typeof item.type === "string" ? item.type :
+      typeof item.question_type === "string" ? item.question_type : "").trim().toLowerCase();
+    const questionType = rawType
+      ? JSON_TYPE_MAP[rawType.replace(/[\s-]+/g, "_")] ??
+        Object.entries(TYPE_MAP).find(([label]) => rawType.includes(label))?.[1]
+      : undefined;
+    if (rawType && !questionType) throw new Error(`第 ${i + 1} 道题题型不受支持`);
+
+    const rawOptions = item.options;
+    const options: Record<string, string> = {};
+    if (Array.isArray(rawOptions)) {
+      rawOptions.forEach((value, optionIndex) => {
+        const option = isJsonRecord(value) ? value : null;
+        const key = typeof option?.key === "string" ? option.key : String.fromCharCode(65 + optionIndex);
+        const text = option ? option.text ?? option.content ?? option.value : value;
+        if (typeof text === "string" || typeof text === "number") options[key] = String(text);
+      });
+    } else if (isJsonRecord(rawOptions)) {
+      for (const [key, value] of Object.entries(rawOptions)) {
+        const option = isJsonRecord(value) ? value : null;
+        const text = option ? option.text ?? option.content ?? option.value : value;
+        if (typeof text === "string" || typeof text === "number") options[key] = String(text);
+      }
+    }
+    const resolvedType: QuestionType = questionType ??
+      (Object.keys(options).length >= 2 ? "choice" : "short_answer");
+    const answerText = typeof item.answer_text === "string"
+      ? item.answer_text
+      : buildJsonAnswerPayload(resolvedType, item.answer) ??
+        (typeof item.answer_html === "string" ? htmlToImportText(item.answer_html).trim() : null);
+
+    const images = Array.isArray(item.images)
+      ? item.images.filter((image): image is JsonQuestionImage =>
+          isJsonRecord(image) && (typeof image.filename === "string" || typeof image.url === "string"),
+        )
+      : [];
+    unresolvedImages.push(...images.filter((image) => image.filename && !image.url));
 
     const issues: string[] = [];
-    if (!answerText) issues.push("未识别到答案");
+    if (!answerText?.trim()) issues.push("未识别到答案");
+    if (resolvedType === "choice" && Object.keys(options).length < 2) {
+      issues.push("选择题选项不足");
+    }
 
-    const draftId = `json-${item.id || i + 1}`;
+    const rawDifficulty = typeof item.difficulty === "number"
+      ? item.difficulty
+      : typeof item.difficulty === "string"
+        ? (DIFFICULTY_MAP[item.difficulty] ?? Number(item.difficulty))
+        : 3;
+    const difficulty = Number.isFinite(rawDifficulty) ? Math.min(5, Math.max(1, Math.round(rawDifficulty))) : 3;
 
     drafts.push({
-      draft_id: draftId,
+      draft_id: `json-${i + 1}`,
       raw_text: JSON.stringify(item, null, 2),
-      title: generateImportQuestionTitle(contentText),
-      type: questionType,
+      title: typeof item.title === "string" && item.title.trim()
+        ? item.title.trim().slice(0, 120)
+        : generateImportQuestionTitle(contentText),
+      type: resolvedType,
       content_text: contentText,
-      options: item.options && Object.keys(item.options).length >= 2 ? { ...item.options } : null,
+      ...(contentHtml ? { content_html: contentHtml } : {}),
+      options: Object.keys(options).length >= 2 ? options : null,
       answer_text: answerText,
-      analysis: item.analysis || null,
-      difficulty: Math.min(5, Math.max(1, Math.round(item.difficulty || 3))),
+      ...(typeof item.answer_html === "string" ? { answer_html: item.answer_html } :
+        isJsonRecord(item.answer) && typeof item.answer.html === "string"
+          ? { answer_html: item.answer.html } : {}),
+      analysis: typeof item.analysis === "string" ? item.analysis : null,
+      difficulty,
+      ...(typeof item.score === "number" && item.score > 0 ? { score: item.score } : {}),
       images: mapJsonImages(images),
       segment_source: "client-json",
       type_confidence: "high",

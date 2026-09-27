@@ -1,6 +1,8 @@
 import asyncio
+from collections.abc import AsyncIterator
 from collections import Counter
 import hashlib
+from html import unescape
 import json
 import logging
 import os
@@ -12,6 +14,7 @@ from typing import Annotated, Any
 import unicodedata
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, WebSocket, WebSocketException, status
+from fastapi.responses import StreamingResponse
 
 from app.activity_logs.service import CATEGORY_EXAM, log_event
 import httpx
@@ -22,6 +25,7 @@ from app.auth.dependencies import CurrentUser
 from app.auth.external_guest_dependencies import get_actor_for_exam
 from app.auth.models import User
 from app.auth.security import decode_access_token
+from app.auth.user_settings import get_user_ai_config
 from app.code_runner.client import run_code_via_judge_runner
 from app.code_runner.service import run_code
 from app.config import settings
@@ -30,6 +34,7 @@ from app.exams.models import (
     AppealStatus,
     Exam,
     ExamAttemptState,
+    ExamQuestion,
     ExamStudent,
     GradingStatus,
     StudentExamAnswer,
@@ -65,6 +70,7 @@ from app.exams.student_schemas import (
     RemedialPracticeGroupItem,
     RemedialPracticeSummaryItem,
     SaveAnswersRequest,
+    SelectedTextExplainRequest,
     StartExamRequest,
     StudentCodeRunRequest,
     StudentCodeRunResponse,
@@ -1795,6 +1801,7 @@ async def start_exam(
         exam_id=exam.id,
         title=exam.title,
         category=exam.category,
+        ai_explanation_enabled=exam.category == "practice" or exam.hidden_from_list,
         duration_minutes=exam.duration_minutes,
         max_switch_count=exam.max_switch_count,
         allow_retake=exam.allow_retake,
@@ -1803,6 +1810,198 @@ async def start_exam(
         questions=questions,
         saved_answers=_build_public_saved_answers(exam_student.saved_answers),
         switch_count=exam_student.switch_count,
+    )
+
+
+def _selection_context_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _selection_context_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_selection_context_value(item) for item in value]
+    if isinstance(value, str):
+        return unescape(_strip_html(value))
+    return value
+
+
+async def _stream_selected_text_explanation(
+    db: AsyncSession,
+    user: User,
+    question: Question,
+    selected_text: str,
+    *,
+    include_solution: bool,
+) -> StreamingResponse:
+    content = question.content if isinstance(question.content, dict) else {}
+    raw_context = content.get("text") or content.get("description") or content.get("html") or question.title
+    question_context = f"题目：{_strip_html(question.title)}\n题干：{unescape(_strip_html(str(raw_context)))}"
+    if isinstance(question.options, dict):
+        option_lines = [
+            f"{key}. {unescape(_strip_html(str(value)))}"
+            for key, value in question.options.items()
+            if value is not None
+        ]
+        if option_lines:
+            question_context += "\n选项：\n" + "\n".join(option_lines[:12])
+    if include_solution:
+        if question.answer:
+            question_context += "\n参考答案：\n" + json.dumps(
+                _selection_context_value(question.answer), ensure_ascii=False
+            )[:2000]
+        if question.analysis:
+            question_context += "\n题目解析：\n" + unescape(_strip_html(question.analysis))[:2000]
+    question_context = question_context[:6000]
+
+    provider, api_key, model_name, base_url = await get_user_ai_config(db, user.id)
+    if not api_key or not model_name or not base_url:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="没有可用的 AI 模型配置，请联系管理员或检查模型设置")
+
+    endpoint = base_url.rstrip("/")
+    if not endpoint.endswith("/chat/completions"):
+        endpoint = f"{endpoint}/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    request_body = {
+        "model": model_name,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "你是课程学习中的学习助教。根据当前题目背景，简明、准确地解释学生选中的术语或片段，"
+                    "说明关键概念、符号或它在题目中的作用。不要把整道题的答案直接照抄给学生。"
+                    "必要时使用 Markdown 标题、列表、加粗或行内代码来组织讲解。"
+                    "如果选中的是数学表达式，请解释符号含义，并用 $...$ 或 $$...$$ 标记公式。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"题目类型：{getattr(question.type, 'value', question.type)}\n"
+                    f"题目背景：\n{question_context}\n\n"
+                    f"请解释这段选中内容：\n{selected_text}"
+                ),
+            },
+        ],
+        "temperature": 0.3,
+        "max_tokens": 1200,
+        "stream": True,
+    }
+
+    def sse(event: dict[str, str]) -> str:
+        return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    async def event_stream() -> AsyncIterator[str]:
+        try:
+            async with httpx.AsyncClient(timeout=90.0) as client:
+                async with client.stream("POST", endpoint, json=request_body, headers=headers) as response:
+                    if response.is_error:
+                        logger.warning(
+                            "AI selection explanation request failed: provider=%s status=%s",
+                            provider,
+                            response.status_code,
+                        )
+                        yield sse({"type": "error", "message": "AI 服务暂时不可用，请稍后重试"})
+                        return
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data = line.removeprefix("data:").strip()
+                        if not data:
+                            continue
+                        if data == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data)
+                        except json.JSONDecodeError:
+                            continue
+                        choices = chunk.get("choices")
+                        if not isinstance(choices, list) or not choices:
+                            continue
+                        delta = choices[0].get("delta", {})
+                        text = delta.get("content") if isinstance(delta, dict) else None
+                        if isinstance(text, str) and text:
+                            yield sse({"type": "delta", "text": text})
+            yield sse({"type": "done"})
+        except Exception:
+            logger.exception("AI selection explanation stream failed: provider=%s", provider)
+            yield sse({"type": "error", "message": "解释生成中断，请稍后重试"})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/exams/{exam_id}/questions/{question_id}/explain-selected/stream")
+async def explain_selected_question_text(
+    exam_id: uuid.UUID,
+    question_id: uuid.UUID,
+    payload: SelectedTextExplainRequest,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> StreamingResponse:
+    exam, exam_student = await _get_exam_for_student(db, exam_id, user.id)
+    question = (
+        await db.execute(
+            select(Question)
+            .join(ExamQuestion, ExamQuestion.question_id == Question.id)
+            .where(ExamQuestion.exam_id == exam.id, Question.id == question_id)
+        )
+    ).scalar_one_or_none()
+    if question is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="题目不属于当前考试")
+
+    selected_text = payload.selected_text.strip()
+    if not selected_text:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="请先选择要解释的内容")
+
+    if exam_student.submitted_at is None:
+        if exam.category != "practice" and not exam.hidden_from_list:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="AI 讲解仅在练习中开放")
+        if exam_student.started_at is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前练习尚未开始")
+        return await _stream_selected_text_explanation(
+            db, user, question, selected_text, include_solution=False
+        )
+
+    can_view_result = (
+        exam.show_result
+        or exam.category == "practice"
+        or exam_student.grading_status == GradingStatus.PENDING_AI.value
+    )
+    if not can_view_result:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="教师暂未开放查看结果权限")
+    if exam_student.latest_submission_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="没有找到本次提交记录")
+
+    answer = (
+        await db.execute(
+            select(StudentExamSubmissionAnswer).where(
+                StudentExamSubmissionAnswer.submission_id == exam_student.latest_submission_id,
+                StudentExamSubmissionAnswer.question_id == question.id,
+                StudentExamSubmissionAnswer.student_id == user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if answer is None or answer.is_correct:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅可讲解已确认答错的题目")
+    feedback = answer.feedback if isinstance(answer.feedback, dict) else {}
+    if feedback.get("grading_failed") or feedback.get("needs_human_review"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="该题评分尚未确认")
+    pending_question_ids = await list_active_exam_submission_task_question_ids(
+        db,
+        exam_id=exam.id,
+        student_id=user.id,
+        submission_id=exam_student.latest_submission_id,
+    )
+    if question.id in pending_question_ids:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="该题仍在评分中")
+
+    return await _stream_selected_text_explanation(
+        db, user, question, selected_text, include_solution=True
     )
 
 
@@ -2522,6 +2721,35 @@ async def get_wrong_answer_detail(
         exam_question_order=(
             question_orders.get((exam.id, question.id)) if exam else None
         ),
+    )
+
+
+@wrong_answers_router.post("/{progress_id}/explain-selected/stream")
+async def explain_selected_wrong_answer_text(
+    progress_id: uuid.UUID,
+    payload: SelectedTextExplainRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
+) -> StreamingResponse:
+    result = await db.execute(
+        select(StudentQuestionProgress, Question)
+        .join(Question, Question.id == StudentQuestionProgress.question_id)
+        .where(
+            StudentQuestionProgress.id == progress_id,
+            StudentQuestionProgress.student_id == user.id,
+            StudentQuestionProgress.wrong_count > 0,
+        )
+    )
+    row = result.one_or_none()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Wrong answer not found")
+
+    _, question = row
+    selected_text = payload.selected_text.strip()
+    if not selected_text:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="请先选择要解释的内容")
+    return await _stream_selected_text_explanation(
+        db, user, question, selected_text, include_solution=True
     )
 
 

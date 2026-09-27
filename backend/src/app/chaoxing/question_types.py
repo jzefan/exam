@@ -68,11 +68,16 @@ def is_objective(question_type: str | None) -> bool | None:
 def ai_type(question_type: str | None, content: str = "") -> str | None:
     """Which grader should read this answer, or None when it stays with the teacher.
 
-    Only subjective answers are ever sent to a model; 单选/多选/判断/填空 keep the
-    provider's own mark. A concept question and a "write a program" question can
+    The caller routes recognized objective questions around the AI queue. Known
+    written types use the matching grader; missing or unrecognized non-objective
+    types use the generic text grader so labels such as "其它" do not silently
+    require a teacher. A concept question and a "write a program" question can
     share one label (简答题), so the stem picks the programming prompt.
     """
-    canonical = canonical_type(question_type)
+    label = (question_type or "").strip()
+    canonical = canonical_type(label)
+    if canonical is None:
+        return "short_answer"
     if canonical not in SUBJECTIVE_TYPES:
         return None
     return "code" if canonical == "code" or CODE_REQUEST.search(content) else "short_answer"

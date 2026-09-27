@@ -1,7 +1,7 @@
 import { useCreate, useGetIdentity, useList } from "@refinedev/core";
 import { useNavigate, useLocation } from "react-router-dom";
-import { useState } from "react";
-import { Plus, X, ChevronsUpDown, Check } from "lucide-react";
+import { useRef, useState } from "react";
+import { Plus, X, ChevronsUpDown, Check, Sigma } from "lucide-react";
 import type { IQuestionBank, ITag, QuestionType } from "../../types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,6 +19,7 @@ import { Separator } from "@/components/ui/separator";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command";
 import { PageIntroHeader } from "@/components/ui/page-intro-header";
+import { LatexFormulaHint } from "@/components/ui/latex-formula-hint";
 import { RichTextEditor, htmlToPlainText } from "@/components/ui/rich-text-editor";
 import { TagSelector } from "@/components/ui/tag-selector";
 import { formatQuestionBankLabel } from "@/lib/question-banks";
@@ -94,6 +95,7 @@ export function QuestionCreate() {
   const type = toBackendType(uiType);
   const isMultiChoice = uiType === "multi_choice";
   const [selectedAnswers, setSelectedAnswers] = useState<string[]>([]);
+  const answerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [form, setForm] = useState({
     contentHtml: "",
     analysis: "",
@@ -112,6 +114,21 @@ export function QuestionCreate() {
 
   const updateField = (field: string, value: string) => {
     setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const insertAnswerFormula = () => {
+    const textarea = answerTextareaRef.current;
+    if (!textarea) return;
+
+    const { selectionStart, selectionEnd } = textarea;
+    updateField(
+      "answer",
+      `${form.answer.slice(0, selectionStart)}$x$${form.answer.slice(selectionEnd)}`,
+    );
+    window.requestAnimationFrame(() => {
+      textarea.focus();
+      textarea.setSelectionRange(selectionStart + 1, selectionStart + 2);
+    });
   };
 
   const updateOption = (index: number, value: string) => {
@@ -217,6 +234,7 @@ export function QuestionCreate() {
       <Card>
         <CardContent className="pt-6">
           <form onSubmit={handleSubmit} className="space-y-5">
+            <LatexFormulaHint />
             {/* Type + Difficulty + Question Bank */}
             <div className="grid grid-cols-3 gap-4">
               <div className="space-y-1.5">
@@ -695,16 +713,36 @@ export function QuestionCreate() {
                       添加空
                     </Button>
                   </div>
-                ) : (
+                ) : type === "code" ? (
                   <Textarea
-                    placeholder={
-                      type === "code" ? "输入参考答案代码（可选）..." : "每行一个答案要点..."
-                    }
+                    placeholder="输入参考答案代码（可选）..."
                     rows={4}
                     value={form.answer}
                     onChange={(e) => updateField("answer", e.target.value)}
-                    required={type !== "code"}
                   />
+                ) : (
+                  <div className="flex items-start gap-2">
+                    <Textarea
+                      ref={answerTextareaRef}
+                      placeholder="每行一个答案要点..."
+                      rows={4}
+                      value={form.answer}
+                      onChange={(e) => updateField("answer", e.target.value)}
+                      required
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      title="插入公式"
+                      aria-label="插入公式"
+                      className="shrink-0"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={insertAnswerFormula}
+                    >
+                      <Sigma size={14} />
+                    </Button>
+                  </div>
                 )}
               </div>
             )}

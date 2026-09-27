@@ -28,6 +28,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command";
+import { LatexFormulaHint } from "@/components/ui/latex-formula-hint";
 import { RichTextEditor, htmlToPlainText } from "@/components/ui/rich-text-editor";
 import { TagSelector } from "@/components/ui/tag-selector";
 import { KnowledgePointSelector, type SelectedKnowledgePoint } from "@/components/questions/knowledge-point-selector";
@@ -469,6 +470,8 @@ export function QuestionEditFormContent({
                 </div>
               </Alert>
             ) : null}
+
+            <LatexFormulaHint />
 
             {/* Type + Difficulty + Question Bank */}
             <div className={cn("grid gap-4", showQuestionBankAndTags ? "grid-cols-3" : "grid-cols-2")}>

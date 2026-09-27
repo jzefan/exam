@@ -129,8 +129,9 @@ services:
     ports:
       - "3036:3036"
     volumes:
-      # scripts/deploy.sh renders the active upstream here during each release.
-      - ${APP_ROOT}/shared/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      # Mount the directory so atomically rendered default.conf replacements
+      # are visible inside the container without leaving a stale file bind mount.
+      - ${APP_ROOT}/shared/nginx:/etc/nginx/conf.d:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3036/healthz || exit 1"]
       interval: 10s

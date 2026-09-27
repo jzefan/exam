@@ -16,41 +16,93 @@ export function LatexText({ children, className }: { children: string | number |
 const LATEX_RE = /(\$\$[\s\S]+?\$\$|\$(?!\s)[^$\n]+?(?<!\s)\$)/g;
 
 function escapeHtml(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
-/** Render LaTeX in plain text — escapes non-LaTeX portions. */
+function renderFormula(match: string): string {
+  const isBlock = match.startsWith("$$");
+  const formula = isBlock ? match.slice(2, -2).trim() : match.slice(1, -1).trim();
+  try {
+    return katex.renderToString(formula, {
+      displayMode: isBlock,
+      throwOnError: false,
+      strict: "ignore",
+      output: "html",
+    });
+  } catch {
+    return `<code>${escapeHtml(formula)}</code>`;
+  }
+}
+
+/** Render LaTeX in plain text, escaping all surrounding text before injecting HTML. */
 export function renderLatex(text: string): string {
   if (typeof text !== "string") return "";
-  return text.replace(LATEX_RE, (match) => {
-    const isBlock = match.startsWith("$$");
-    const formula = isBlock ? match.slice(2, -2).trim() : match.slice(1, -1).trim();
-    try {
-      return katex.renderToString(formula, {
-        displayMode: isBlock,
-        throwOnError: false,
-        strict: "ignore",
-        output: "html",
-      });
-    } catch {
-      return `<code>${escapeHtml(formula)}</code>`;
-    }
-  });
+  const matcher = new RegExp(LATEX_RE.source, "g");
+  let result = "";
+  let cursor = 0;
+
+  for (const match of text.matchAll(matcher)) {
+    const value = match[0];
+    const index = match.index ?? 0;
+    result += escapeHtml(text.slice(cursor, index));
+    result += renderFormula(value);
+    cursor = index + value.length;
+  }
+
+  return result + escapeHtml(text.slice(cursor));
 }
 
 /**
  * Render LaTeX formulas within HTML content.
- * Processes only text outside of HTML tags to avoid corrupting markup.
+ * Processes text nodes only, so formulas are decoded from HTML entities and tags/attributes stay intact.
  */
 export function renderLatexInHtml(html: string): string {
-  if (!LATEX_RE.test(html)) return html;
-  // Reset regex state
-  LATEX_RE.lastIndex = 0;
+  if (typeof html !== "string" || !html) return "";
+  if (!new RegExp(LATEX_RE.source).test(html)) return html;
 
-  // Split by HTML tags — process only non-tag segments
-  return html.replace(/(<[^>]+>)|([^<]+)/g, (_match, tag: string | undefined, text: string | undefined) => {
-    if (tag) return tag;
-    if (text) return renderLatex(text);
-    return "";
-  });
+  if (typeof document === "undefined") {
+    const matcher = new RegExp(LATEX_RE.source, "g");
+    return html.replace(/(<[^>]+>)|([^<]+)/g, (_match, tag: string | undefined, text: string | undefined) => {
+      if (tag) return tag;
+      if (!text) return "";
+      return text.replace(matcher, renderFormula);
+    });
+  }
+
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+  const textNodes: Text[] = [];
+  let node = walker.nextNode();
+  while (node) {
+    textNodes.push(node as Text);
+    node = walker.nextNode();
+  }
+
+  for (const textNode of textNodes) {
+    const value = textNode.nodeValue ?? "";
+    if (!new RegExp(LATEX_RE.source).test(value)) continue;
+
+    let parent = textNode.parentElement;
+    let insideCode = false;
+    while (parent) {
+      if (parent.matches("code, pre, script, style, .katex")) {
+        insideCode = true;
+        break;
+      }
+      parent = parent.parentElement;
+    }
+    if (insideCode) continue;
+
+    const replacement = document.createElement("template");
+    replacement.innerHTML = renderLatex(value);
+    textNode.replaceWith(replacement.content);
+  }
+
+  return template.innerHTML;
 }

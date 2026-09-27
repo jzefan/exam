@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.grading import service as grading
 from app.grading.models import GradingAuditEvent, GradingResultSnapshot, GradingTask, RoleBinding
 from .models import ExternalAudit, ExternalCandidate, ExternalExam, ExternalItem
-from .question_types import ai_type, is_objective
+from .question_types import ai_type, canonical_type, is_objective
 
 SOURCE = "chaoxing_submission"
 
@@ -154,11 +154,20 @@ async def import_paper(
         # silently kept out of it either.
         objective_by_label = is_objective(q["question_type"])
         objective = q["objective"] if objective_by_label is None else objective_by_label
+        rich_content = q.get("rich_content") or {}
+        grading_assets = rich_content.get("grading_assets", []) if isinstance(rich_content, dict) else []
+        asset_roles = {asset.get("role") for asset in grading_assets if isinstance(asset, dict)}
+        has_content = bool(q["content"].strip()) or "content" in asset_roles
+        has_reference = bool(q["reference_answer"].strip()) or "reference_answer" in asset_roles
+        # Chaoxing often labels written work as "其它" and omits a separate
+        # reference-answer block. The prompt or attached rubric can still provide
+        # grading evidence, so only known written types require a reference answer.
+        reference_required = canonical_type(q["question_type"]) is not None
         manual = (
             q["requires_manual_review"]
             or not maximum
-            or not q["content"]
-            or not q["reference_answer"]
+            or not has_content
+            or (reference_required and not has_reference)
             or not ai_type(q["question_type"], q["content"])
         )
         status = (
@@ -174,6 +183,7 @@ async def import_paper(
                 question_id=q["source_id"],
                 question_type=q["question_type"],
                 content=q["content"],
+                rich_content=rich_content,
                 student_answer=q["student_answer"],
                 reference_answer=q["reference_answer"],
                 max_score=maximum,
@@ -186,6 +196,52 @@ async def import_paper(
     audit(db, candidate, owner, "paper.imported", hash=digest, question_count=len(review["questions"]))
     await db.flush()
     return candidate
+
+
+async def source_candidate_statuses(db, owner_id, account_key, course_key, source_exam_id, source_candidate_ids):
+    """Bulk status lookup used before an exam-wide source read starts."""
+    source_candidate_ids = set(source_candidate_ids)
+    if not source_candidate_ids or not account_key:
+        return {}
+    rows = await db.execute(
+        select(ExternalCandidate, ExternalItem.status)
+        .join(ExternalExam, ExternalExam.id == ExternalCandidate.exam_id)
+        .outerjoin(
+            ExternalItem,
+            (ExternalItem.candidate_id == ExternalCandidate.id)
+            & (ExternalItem.revision == ExternalCandidate.revision),
+        )
+        .where(
+            ExternalExam.owner_id == owner_id,
+            ExternalExam.account_key == account_key,
+            ExternalExam.course_key == course_key,
+            ExternalExam.source_exam_id == source_exam_id,
+            ExternalExam.deleted_at.is_(None),
+            ExternalCandidate.deleted_at.is_(None),
+            ExternalCandidate.source_candidate_id.in_(source_candidate_ids),
+        )
+    )
+    grouped = {}
+    for candidate, item_status in rows:
+        item = grouped.setdefault(candidate.source_candidate_id, {"candidate": candidate, "statuses": []})
+        if item_status:
+            item["statuses"].append(item_status)
+    result = {}
+    for source_id, entry in grouped.items():
+        candidate, statuses = entry["candidate"], entry["statuses"]
+        eligible = [status for status in statuses if status not in ("source", "manual", "obsolete")]
+        needs_work = any(status in ("pending", "failed") for status in eligible)
+        active = any(status in ("queued", "running") for status in eligible)
+        complete = bool(eligible) and all(status in ("review", "confirmed") for status in eligible)
+        no_ai = bool(statuses) and not eligible
+        state = "needs_grading" if needs_work else "grading" if active else "graded" if complete else "no_ai" if no_ai else "saved"
+        result[source_id] = {
+            "saved_candidate_id": str(candidate.id),
+            "saved_revision": candidate.revision,
+            "grading_state": state,
+            "already_ai_graded": complete,
+        }
+    return result
 
 
 async def active_binding(db):
@@ -205,11 +261,73 @@ async def active_binding(db):
         raise HTTPException(409, "主评或复核模型尚未配置可用的密钥，请联系管理员") from None
 
 
+def grading_assets_for_item(item: ExternalItem) -> list[dict]:
+    rich_content = item.rich_content if isinstance(item.rich_content, dict) else {}
+    assets = rich_content.get("grading_assets") or []
+    result = [
+        asset
+        for asset in assets
+        if isinstance(asset, dict) and asset.get("media_id")
+    ]
+    known = {(asset.get("media_id"), asset.get("role")) for asset in result}
+    # Earlier snapshots stored resolved images on their content blocks before
+    # the explicit grading_assets list existed. Recover those refs on retry.
+    for role in ("content", "student_answer", "reference_answer"):
+        for block in rich_content.get(role, []) or []:
+            if not isinstance(block, dict) or block.get("kind") != "image" or block.get("unavailable"):
+                continue
+            media_id = block.get("asset_id")
+            if media_id and (media_id, role) not in known:
+                result.append({"media_id": media_id, "role": role, "name": block.get("name", "图片")})
+                known.add((media_id, role))
+    return result
+
+
+def can_grade_saved_item(item: ExternalItem) -> bool:
+    """Recheck legacy manual items against current AI eligibility rules."""
+    if (
+        item.objective
+        or not isinstance(item.max_score, (int, float))
+        or not math.isfinite(item.max_score)
+        or item.max_score <= 0
+    ):
+        return False
+    if ai_type(item.question_type, item.content) is None:
+        return False
+    roles = {
+        asset.get("role")
+        for asset in grading_assets_for_item(item)
+    }
+    has_content = bool((item.content or "").strip()) or "content" in roles
+    has_answer = bool((item.student_answer or "").strip()) or "student_answer" in roles
+    has_reference = bool((item.reference_answer or "").strip()) or "reference_answer" in roles
+    reference_required = canonical_type(item.question_type) is not None
+    return has_content and has_answer and (not reference_required or has_reference)
+
+
 async def enqueue(db, candidate_id, owner):
     candidate = await owned_candidate(db, candidate_id, owner, lock=True)
-    items = [i for i in await current_items(db, candidate) if i.status in ("pending", "failed")]
+    current = await current_items(db, candidate)
+    # Older imports persisted the aggregate manual flag on the item. Recheck
+    # those rows so newly supported or missing labels can use the current grader,
+    # while still requiring readable question and answer evidence.
+    for item in current:
+        if item.status == "manual" and can_grade_saved_item(item):
+            item.status = "pending"
+            item.requires_manual_review = False
+            item.error = ""
+            item.version += 1
+            audit(db, candidate, owner, "grading.manual_item_requeued", item=item)
+    items = [i for i in current if i.status in ("pending", "failed")]
     if not items:
-        return {"queued": 0}
+        eligible = [i for i in current if i.status not in ("source", "manual", "obsolete")]
+        if eligible and all(i.status in ("review", "confirmed") for i in eligible):
+            return {"queued": 0, "state": "already_graded"}
+        if any(i.status in ("queued", "running") for i in eligible):
+            return {"queued": 0, "state": "in_progress"}
+        if current and not eligible:
+            return {"queued": 0, "state": "no_ai_questions"}
+        return {"queued": 0, "state": "no_new_tasks"}
     binding = await active_binding(db)
     for item in items:
         question_type = ai_type(item.question_type, item.content)
@@ -229,6 +347,15 @@ async def enqueue(db, candidate_id, owner):
                 "dimensions": [{"key": "correctness", "label": "正确性与完整性", "max_score": item.max_score}]
             },
             dimension_weights={"correctness": 1},
+            attachment_refs=[
+                {
+                    "kind": "chaoxing_media",
+                    "media_id": asset["media_id"],
+                    "role": asset.get("role", "student_answer"),
+                    "name": asset.get("name", "附件"),
+                }
+                for asset in grading_assets_for_item(item)
+            ],
             execution_env={"mode": "static_review", "executed": False} if question_type == "code" else None,
         )
         db.add(task)
@@ -246,7 +373,7 @@ async def enqueue(db, candidate_id, owner):
         )
         audit(db, candidate, owner, "grading.queued", item=item, task_id=str(task.id), binding_version=binding.version)
     await db.flush()
-    return {"queued": len(items)}
+    return {"queued": len(items), "state": "queued"}
 
 
 async def confirm(db, candidate_id, item_id, owner, payload):
@@ -339,6 +466,7 @@ async def detail(db, candidate_id, owner, revision=None):
                 "position",
                 "question_type",
                 "content",
+                "rich_content",
                 "student_answer",
                 "reference_answer",
                 "max_score",
@@ -363,15 +491,29 @@ async def detail(db, candidate_id, owner, revision=None):
                 else None
             )
             if snapshot:
+                rubric_dimensions = (task.rubric_definition or {}).get("dimensions") or []
                 row["feedback"] = {
                     k: getattr(snapshot, k)
                     for k in (
+                        "dimension_scores",
                         "dimension_comments",
                         "deduction_reasons",
                         "strengths",
                         "improvement_suggestions",
                         "risk_flags",
                     )
+                }
+                row["feedback"]["dimension_labels"] = {
+                    dimension["key"]: dimension.get("label", dimension["key"])
+                    for dimension in rubric_dimensions
+                    if isinstance(dimension, dict) and dimension.get("key")
+                }
+                row["feedback"]["dimension_max_scores"] = {
+                    dimension["key"]: dimension["max_score"]
+                    for dimension in rubric_dimensions
+                    if isinstance(dimension, dict)
+                    and dimension.get("key")
+                    and isinstance(dimension.get("max_score"), (int, float))
                 }
         rows.append(row)
     audits = list(

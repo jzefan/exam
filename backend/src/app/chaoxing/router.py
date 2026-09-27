@@ -15,6 +15,7 @@ from app.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from .schemas import ImportPaper
 from . import service
+from . import read_cache
 from .browser import (
     COURSES_URL,
     HEIGHT,
@@ -279,7 +280,8 @@ def require_connected(session):
 
 
 async def course_list(
-    session, semester_id: str | None = None, initial_html: str | None = None, *, refresh: bool = False
+    session, semester_id: str | None = None, initial_html: str | None = None, *, refresh: bool = False,
+    db: AsyncSession | None = None, owner_id=None, verified_live_page: bool = False,
 ):
     from . import parsers
 
@@ -287,11 +289,21 @@ async def course_list(
     if refresh:
         session.invalidate_read_cache("courses:", "exams:", "candidates:", "review:")
         session.records.clear()
-    elif initial_html is None:
+    elif initial_html is None or verified_live_page:
         cached = session.cached_read(cache_key)
         if cached is not None:
             session.semesters = cached["semesters"]
             return cached
+        snapshot = (
+            await read_cache.load(db, owner_id, session.account_key, "courses", semester_id or "selected")
+            if db is not None and owner_id is not None and session.account_key else None
+        )
+        if snapshot:
+            result = snapshot["payload"]
+            result["items"] = restore_items(session, "course", result.get("items", []))
+            session.semesters = result.get("semesters", [])
+            hydrated = read_cache.response(result, source="snapshot", fetched_at=snapshot["fetched_at"], stale=snapshot["stale"])
+            return session.cache_read(cache_key, hydrated)
 
     if initial_html is None:
         _, initial_html = await read_page(session, COURSES_URL)
@@ -332,31 +344,81 @@ async def course_list(
         "complete": False,
         "notice": NOTICE,
     }
+    result, _ = read_cache.stamped(result)
     session.cache_read(cache_key, result)
+    if db is not None and owner_id is not None:
+        if refresh:
+            await read_cache.invalidate(db, owner_id, session.account_key, ("exams", "candidates", "review"))
+        await read_cache.save(db, owner_id, session.account_key, "courses", semester_id or "selected", result)
     if semester and semester["selected"]:
         session.cache_read("courses:selected", result)
+        if db is not None and owner_id is not None:
+            await read_cache.save(db, owner_id, session.account_key, "courses", "selected", result)
     return result
 
 
+def restore_items(session, kind: str, items: list[dict], parent: str = "") -> list[dict]:
+    """Rebuild session-local record handles from a URL-free snapshot."""
+    raw_items = []
+    readable = []
+    for item in items:
+        raw_items.append({**{k: v for k, v in item.items() if k not in ("id", "readable")}, "_url": ""})
+        readable.append(bool(item.get("readable")))
+    restored = session.remember(kind, raw_items, parent)
+    return [{**item, "readable": was_readable} for item, was_readable in zip(restored, readable)]
+
+
+async def attach_grading_state(session, exam, result: dict, db, owner_id):
+    if not isinstance(db, AsyncSession):
+        return result
+    course = session.record(exam["parent"], "course")
+    states = await service.source_candidate_statuses(
+        db,
+        owner_id,
+        session.account_key,
+        course["source_id"],
+        exam["source_id"],
+        [item.get("source_id", "") for item in result.get("items", [])],
+    )
+    enriched = {**result, "items": []}
+    for item in result.get("items", []):
+        enriched["items"].append({**item, **states.get(item.get("source_id", ""), {})})
+    return enriched
+
+
 @router.post("/sessions/{session_id}/verify")
-async def verify(session_id: str, user: Teacher):
+async def verify(session_id: str, user: Teacher, db: AsyncSession = Depends(get_db)):
+    if not isinstance(db, AsyncSession):
+        db = None
     async with manager.hold(session_id, str(user.id)) as session:
         cookies = await session.context.cookies([COURSES_URL, "https://mooc2-ans.chaoxing.com"])
         if not any(c["name"] in ("UID", "_uid", "uid") and c["value"] for c in cookies):
             raise HTTPException(409, "尚未检测到学习通登录，请在窗口中完成登录后重试")
-        result = await course_list(session)
         uid = next(c["value"] for c in cookies if c["name"] in ("UID", "_uid", "uid") and c["value"])
         session.account_key = hashlib.sha256(("chaoxing:" + uid).encode()).hexdigest()
+        # Verify the upstream session with a live page, then reuse a cached course
+        # list if available. The snapshot alone never proves current login.
+        _, initial_html = await read_page(session, COURSES_URL)
+        result = await course_list(
+            session,
+            initial_html=initial_html,
+            db=db,
+            owner_id=user.id,
+            verified_live_page=True,
+        )
         session.connected = True
         await session.page.close()
         return {"session": session.status(), **result}
 
 
 @router.get("/sessions/{session_id}/courses")
-async def list_courses(session_id: str, user: Teacher, semester: str | None = None, refresh: bool = False):
+async def list_courses(session_id: str, user: Teacher, semester: str | None = None, refresh: bool = False,
+                       db: AsyncSession = Depends(get_db)):
+    if not isinstance(db, AsyncSession):
+        db = None
     async with manager.hold(session_id, str(user.id)) as session:
         require_connected(session)
-        return await course_list(session, semester, refresh=refresh)
+        return await course_list(session, semester, refresh=refresh, db=db, owner_id=user.id)
 
 
 def module_entry(course_html: str, soup, host: str, path: str) -> str:
@@ -584,7 +646,8 @@ async def append_work_roster_pages(session, url: str, pages: list[tuple[str, str
 
 
 @router.get("/sessions/{session_id}/courses/{course_id}/exams")
-async def list_exams(session_id: str, course_id: str, user: Teacher, refresh: bool = False):
+async def list_exams(session_id: str, course_id: str, user: Teacher,
+                     refresh: bool = False, db: AsyncSession = Depends(get_db)):
     from . import parsers
 
     async with manager.hold(session_id, str(user.id)) as session:
@@ -597,6 +660,16 @@ async def list_exams(session_id: str, course_id: str, user: Teacher, refresh: bo
             cached = session.cached_read(cache_key)
             if cached is not None:
                 return cached
+            snapshot = await read_cache.load(db, user.id, session.account_key, "exams", course["source_id"]) if isinstance(db, AsyncSession) else None
+            if snapshot:
+                result = snapshot["payload"]
+                result["items"] = restore_items(session, "exam", result.get("items", []), course_id)
+                return session.cache_read(
+                    cache_key,
+                    read_cache.response(result, source="snapshot", fetched_at=snapshot["fetched_at"], stale=snapshot["stale"]),
+                )
+        if not course.get("_url"):
+            raise HTTPException(409, "该课程仅有历史缓存，请刷新课程列表后重新进入")
         final, course_html = await read_page(session, course["_url"])
         final_path = urlsplit(final).path.rstrip("/")
         params = {k.lower(): v[0] for k, v in parse_qs(urlsplit(final).query).items()}
@@ -709,26 +782,45 @@ async def list_exams(session_id: str, course_id: str, user: Teacher, refresh: bo
             "notice": NOTICE,
             "assignment_notice": assignment_notice,
         }
+        result, _ = read_cache.stamped(result)
+        if isinstance(db, AsyncSession):
+            if refresh:
+                await read_cache.invalidate(db, user.id, session.account_key, ("candidates", "review"), f"{course['source_id']}:")
+            await read_cache.save(db, user.id, session.account_key, "exams", course["source_id"], result)
         return session.cache_read(cache_key, result)
 
 
 @router.get("/sessions/{session_id}/exams/{exam_id}/candidates")
-async def list_candidates(session_id: str, exam_id: str, user: Teacher, refresh: bool = False):
+async def list_candidates(session_id: str, exam_id: str, user: Teacher,
+                          refresh: bool = False, db: AsyncSession = Depends(get_db)):
     from . import parsers
 
     async with manager.hold(session_id, str(user.id)) as session:
         require_connected(session)
         exam = session.record(exam_id, "exam")
+        course = session.record(exam["parent"], "course")
         cache_key = f"candidates:{exam_id}"
+        snapshot_scope = f"{course['source_id']}:{exam['source_id']}"
         if refresh:
             session.invalidate_read_cache(cache_key, "review:")
         else:
             cached = session.cached_read(cache_key)
             if cached is not None:
-                return cached
+                return await attach_grading_state(session, exam, cached, db, user.id)
+            snapshot = await read_cache.load(db, user.id, session.account_key, "candidates", snapshot_scope) if isinstance(db, AsyncSession) else None
+            if snapshot:
+                result = snapshot["payload"]
+                result["items"] = restore_items(session, "candidate", result.get("items", []), exam_id)
+                hydrated = session.cache_read(
+                    cache_key,
+                    read_cache.response(result, source="snapshot", fetched_at=snapshot["fetched_at"], stale=snapshot["stale"]),
+                )
+                return await attach_grading_state(session, exam, hydrated, db, user.id)
         # A work roster is paged by its own script, so it is asked for a page big
         # enough for a class and then for its remaining pages by number.
-        url = exam["_url"]
+        url = exam.get("_url")
+        if not url:
+            raise HTTPException(409, "该考试仅有历史缓存，请刷新课程与考试列表后重新进入")
         work_roster = "/work/mark" in urlsplit(url).path
         if work_roster:
             url = work_page_url(url, 1, WORK_ROSTER_PAGE_SIZE)
@@ -751,41 +843,18 @@ async def list_candidates(session_id: str, exam_id: str, user: Teacher, refresh:
             "complete": False,
             "notice": NOTICE,
         }
-        return session.cache_read(cache_key, result)
-
-
-async def resolve_attachments(session, pages: list[tuple[str, str]], questions: dict) -> None:
-    """Fold an answer that lives in an uploaded file into the answer text.
-
-    An answer is sometimes a file the teacher can only grade by reading it, so
-    the reader fetches that file's text — see read_attachment() for the limits —
-    and appends it the way it was submitted. Every question loses its attachment
-    descriptor here, whether or not it had one, so no internal field is stored,
-    hashed or returned. A file that could not be read leaves the question as it
-    was: still flagged for a human, never silently treated as answered.
-    """
-    from .browser import read_attachment
-
-    sheet_url = pages[0][0] if pages else ""
-    notes: list[str] = []
-    for question in questions.values():
-        object_id = str(question.pop("attachment_id", "") or "")
-        name = str(question.pop("attachment_name", "") or "")
-        suffix = str(question.pop("attachment_suffix", "") or "")
-        if not object_id:
-            continue
-        text = await read_attachment(session, sheet_url, object_id, suffix, notes)
-        if not text:
-            continue
-        label = f"【附件 {name}】" if name else "【附件】"
-        question["student_answer"] = f"{question['student_answer']}\n\n{label}\n{text}" if question["student_answer"] else f"{label}\n{text}"
-        question["requires_manual_review"] = False
-    if notes and dumping_enabled():
-        dump_requests(f"attachment-{(urlsplit(sheet_url).hostname or 'unknown')}", notes)
+        result, _ = read_cache.stamped(result)
+        if isinstance(db, AsyncSession):
+            if refresh:
+                await read_cache.invalidate(db, user.id, session.account_key, ("review",), f"{snapshot_scope}:")
+            await read_cache.save(db, user.id, session.account_key, "candidates", snapshot_scope, result)
+        cached_result = session.cache_read(cache_key, result)
+        return await attach_grading_state(session, exam, cached_result, db, user.id)
 
 
 @router.get("/sessions/{session_id}/candidates/{candidate_id}/review")
-async def get_review(session_id: str, candidate_id: str, user: Teacher, refresh: bool = False):
+async def get_review(session_id: str, candidate_id: str, user: Teacher,
+                     db: Annotated[AsyncSession, Depends(get_db)], refresh: bool = False):
     from . import parsers
 
     async with manager.hold(session_id, str(user.id)) as session:
@@ -799,12 +868,21 @@ async def get_review(session_id: str, candidate_id: str, user: Teacher, refresh:
             if cached is not None:
                 candidate["_review"] = cached["_source_review"]
                 return {k: v for k, v in cached.items() if k != "_source_review"}
-        if not candidate["_url"]:
-            raise HTTPException(409, "该考生暂无可读取答卷")
+            exam = session.record(candidate["parent"], "exam")
+            course = session.record(exam["parent"], "course")
+            scope = f"{course['source_id']}:{exam['source_id']}:{candidate['source_id']}"
+            snapshot = await read_cache.load(db, user.id, session.account_key, "review", scope)
+            if snapshot:
+                result = snapshot["payload"]
+                candidate["_review"] = {"questions": result["questions"], "declared_max_score": result["declared_max_score"]}
+                candidate["_snapshot_only"] = True
+                return read_cache.response(result, source="snapshot", fetched_at=snapshot["fetched_at"], stale=snapshot["stale"])
+        if not candidate.get("_url"):
+            raise HTTPException(409, "该答卷仅有历史缓存；请刷新课程、考试与考生名单后重新读取")
         pages = await read_samples(session, candidate["_url"])
         questions = {}
         declared_max_score = None
-        for _, html in pages:
+        for base, html in pages:
             parsed = parsers.review(html)
             if parsed["declared_max_score"] is not None:
                 if declared_max_score is not None and declared_max_score != parsed["declared_max_score"]:
@@ -812,17 +890,22 @@ async def get_review(session_id: str, candidate_id: str, user: Teacher, refresh:
                 declared_max_score = parsed["declared_max_score"]
             for question in parsed["questions"]:
                 old = questions.get(question["source_id"])
-                if old and old != question:
+                if old and {k: v for k, v in old.items() if k != "_base_url"} != question:
                     raise HTTPException(502, "同一题目出现不一致内容，请在学习通核对答卷")
+                question["_base_url"] = base
                 questions[question["source_id"]] = question
         if not questions:
             # Keep what the provider returned: a work answer sheet is a different
             # document from an exam one and has to be adapted from real markup.
             dump_pages(f"review-{candidate_id[:8]}", pages)
             raise HTTPException(502, "未识别到答卷题目，暂不能导入评分")
-        await resolve_attachments(session, pages, questions)
+        from .media import resolve_media
+
+        await resolve_media(session, pages, questions, db, user.id)
+        await db.commit()  # Media must exist before publishing a cached review.
         review = {"questions": list(questions.values()), "declared_max_score": declared_max_score}
         candidate["_review"] = review
+        candidate["_snapshot_only"] = False
         result = {
             **review,
             "review_hash": service.fingerprint(review),
@@ -830,6 +913,11 @@ async def get_review(session_id: str, candidate_id: str, user: Teacher, refresh:
             "notice": NOTICE,
             "_source_review": review,
         }
+        exam = session.record(candidate["parent"], "exam")
+        course = session.record(exam["parent"], "course")
+        scope = f"{course['source_id']}:{exam['source_id']}:{candidate['source_id']}"
+        await read_cache.save(db, user.id, session.account_key, "review", scope, result)
+        result, _ = read_cache.stamped(result)
         session.cache_read(cache_key, result)
         return {k: v for k, v in result.items() if k != "_source_review"}
 
@@ -848,6 +936,8 @@ async def save_paper(
         exam = session.record(candidate["parent"], "exam")
         course = session.record(exam["parent"], "course")
         review = candidate.get("_review")
+        if candidate.get("_snapshot_only"):
+            raise HTTPException(409, "答卷来自历史缓存，请重新读取并核对后再保存或评分")
         if not review or service.fingerprint(review) != payload.review_hash:
             raise HTTPException(409, "答卷已变化，请重新读取并核对后保存")
         saved = await service.import_paper(
@@ -857,3 +947,17 @@ async def save_paper(
         # Commit while holding the source-session lock to serialize double clicks.
         await db.commit()
         return {"id": saved.id, "revision": saved.revision}
+
+
+@router.get("/media/{media_id}")
+async def get_media(media_id: uuid.UUID, user: Teacher, db: Annotated[AsyncSession, Depends(get_db)]):
+    from .models import ExternalMedia
+
+    media = await db.get(ExternalMedia, media_id)
+    if media is None or media.owner_id != user.id:
+        raise HTTPException(404, "附件不存在")
+    return Response(media.data, media_type=media.mime_type, headers={
+        "Cache-Control": "no-store, private",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Disposition": "attachment",
+    })

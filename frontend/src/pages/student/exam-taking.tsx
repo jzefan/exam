@@ -29,6 +29,7 @@ import { CountdownTimer } from "./components/countdown-timer";
 import { SwitchCounter } from "./components/switch-counter";
 import { QuestionNav } from "./components/question-nav";
 import { QuestionRenderer } from "./components/question-renderer";
+import { SelectionAIExplain } from "./components/selection-ai-explain";
 import { getStudentLocale, tStudent, translateStudentError } from "./i18n";
 import { resolveStudentReturnHref } from "./wrong-answer-shared";
 import { formatStudentDate } from "./utils";
@@ -549,12 +550,20 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
           onTimeUp={handleTimeUp}
           onSubmitConfirm={() => void handleSubmit()}
         />
+        <SelectionAIExplain
+          examId={examData.exam_id}
+          enabled={Boolean(examData.ai_explanation_enabled)}
+        />
       </>
     );
   }
 
   return (
     <div className="fixed inset-0 flex flex-col bg-background overflow-hidden">
+      <SelectionAIExplain
+        examId={examData.exam_id}
+        enabled={Boolean(examData.ai_explanation_enabled)}
+      />
       {/* ── Switch warning banner ── */}
       {switchWarning && (
         <div className="absolute top-0 left-0 right-0 z-[60] bg-red-600 text-white text-center py-2.5 text-sm font-medium">

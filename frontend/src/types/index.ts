@@ -486,6 +486,7 @@ export interface IExamTaking {
   exam_id: string;
   title: string;
   category: ExamCategory;
+  ai_explanation_enabled?: boolean;
   duration_minutes: number;
   max_switch_count: number;
   allow_retake: boolean;

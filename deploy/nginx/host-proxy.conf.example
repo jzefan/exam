@@ -1,0 +1,157 @@
+# ===================================================
+# 宿主机 nginx 参考配置（122.51.58.187）
+# ===================================================
+#
+# 线上实际文件是 /etc/nginx/conf.d/proxy.conf，本文件是它的完整镜像
+# （含 llmpingce.com 与 math314159.com 两个站点）。
+#
+# 拓扑：
+#   公网 → 122.51.58.187（本机 nginx，TLS 终止 + 反代）
+#        → 146.56.224.80:3036（deploy/nginx/default.conf.template 起的 Docker nginx）
+#        → frontend / backend 容器
+#   另一站点 math314159.com → 127.0.0.1:3037（本地 Docker 容器）
+#   另有 /etc/nginx/conf.d/locate-3038.conf：3038 ssl + root /var/www/locate（静态站）
+#
+# 证书：腾讯云 TrustAsia 免费 DV，**有效期只有 90 天、不自动续签**，
+#   到期后「http://IP:端口 能开、域名打不开」就是它。
+#   llmpingce.com → /home/ubuntu/ssl_cert/llmpingce.com/
+#                   2026-06-26 ~ 2026-09-24（已换）→ 2026-09-26 ~ 2026-12-25
+#   math314159.com → /home/ubuntu/ssl_cert/math314/
+#                   notAfter = 2026-10-04
+#
+# CA 文件验证（DCV）落点：**一个域名一个目录**（文件名都叫 fileauth.txt，共用会互相覆盖）
+#   llmpingce.com  → /var/www/pki-validation/fileauth.txt
+#   math314159.com → /var/www/pki-validation-math/fileauth.txt
+#
+# ---------------------------------------------------
+# DCV 日志格式（排查「验证中」卡住时的唯一观测手段）
+# ---------------------------------------------------
+# 不要用默认 combined：它不含 $host，两个域名共用同一个日志文件时
+# **无法判断 CA 到底在验哪个域名**。
+# 也不要写 access_log off —— 那等于把观测手段关掉，只能在控制台干等。
+#
+# 另注：两份 token 长度可能完全相同（实测 llmpingce 和 math314159 都是 45 字节），
+# 所以 $body_bytes_sent=45 只能证明"长度对"，证明不了"内容是这一单的"。
+# 判据 = host=<域名> + 自己抓一次该 Host 比对内容。
+#
+# 真核验方（成对出现）：DigiCert DCV Bot/1.1、CertCloud/1.0
+# 只是预检：GuzzleHttp/7（腾讯控制台 PHP）
+#
+# 注：下面这行按线上原样保留 \" 的写法（单引号串内 nginx 会把 \" 还原成 "，
+#     实测 dcv.log 输出正常，无多余反斜杠）。改成不带反斜杠也可，语义相同。
+log_format dcv_fmt '$remote_addr [$time_local] host=$host \"$request\" $status $body_bytes_sent \"$http_referer\" \"$http_user_agent\"';
+
+# ---------------------------------------------------
+# 服务2 - llmpingce.com
+# ---------------------------------------------------
+server {
+    listen 80;
+    server_name llmpingce.com www.llmpingce.com;
+
+    # Match backend problem import upload limit.
+    client_max_body_size 200m;
+
+    # CA 文件验证路径：必须用 ^~ 前缀匹配抢在 location / 之前命中。
+    # 注意：不要把 return 301 写在 server 级——return 在 rewrite 阶段就结束请求，
+    # 任何 location 都不会执行，CA 拿到 301 后跟随跳转会撞上一张过期的证书。
+    location ^~ /.well-known/pki-validation/ {
+        alias /var/www/pki-validation/;
+        default_type text/plain;
+        access_log /var/log/nginx/dcv.log dcv_fmt;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name llmpingce.com www.llmpingce.com;
+
+    ssl_certificate /home/ubuntu/ssl_cert/llmpingce.com/llmpingce.com_bundle.crt;
+    ssl_certificate_key /home/ubuntu/ssl_cert/llmpingce.com/llmpingce.com.key;
+    ssl_session_timeout 15m;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-RSA-AES128-GCM-SHA256:HIGH:!aNULL:!MD5:!RC4:!DHE;
+    ssl_prefer_server_ciphers on;
+
+    client_max_body_size 200m;
+
+    # CA 文件验证路径（HTTPS 侧）。443 的 location / 是全量 proxy_pass，
+    # 没有这个块的话请求会一路穿到内层 nginx 的 SPA 兜底，返回 index.html。
+    location ^~ /.well-known/pki-validation/ {
+        alias /var/www/pki-validation/;
+        default_type text/plain;
+        access_log /var/log/nginx/dcv.log dcv_fmt;
+    }
+
+    location / {
+        proxy_pass http://146.56.224.80:3036;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_connect_timeout  3600s;
+        proxy_send_timeout     3600s;
+        proxy_read_timeout     3600s;
+    }
+}
+
+# ---------------------------------------------------
+# 服务3 - math314159.com（独立证书 + 本地 3037 容器）
+# ---------------------------------------------------
+server {
+    listen 80;
+    server_name math314159.com www.math314159.com;
+
+    # Match backend problem import upload limit.
+    client_max_body_size 200m;
+
+    # CA 文件验证路径：注意用**独立目录**。
+    # 两个域名要的文件名都是 fileauth.txt，共用目录会互相覆盖。
+    location ^~ /.well-known/pki-validation/ {
+        alias /var/www/pki-validation-math/;
+        default_type text/plain;
+        access_log /var/log/nginx/dcv.log dcv_fmt;
+    }
+
+    # return 301 必须放在 location 里，不能写在 server 级（否则上面的 location 永不执行）
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name math314159.com www.math314159.com;
+
+    ssl_certificate /home/ubuntu/ssl_cert/math314/math314159.com_bundle.crt;
+    ssl_certificate_key /home/ubuntu/ssl_cert/math314/math314159.com.key;
+
+    ssl_session_timeout 15m;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-RSA-AES128-GCM-SHA256:HIGH:!aNULL:!MD5:!RC4:!DHE;
+    ssl_prefer_server_ciphers on;
+
+    location ^~ /.well-known/pki-validation/ {
+        alias /var/www/pki-validation-math/;
+        default_type text/plain;
+        access_log /var/log/nginx/dcv.log dcv_fmt;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:3037;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_connect_timeout  3600s;
+        proxy_send_timeout     3600s;
+        proxy_read_timeout     3600s;
+    }
+}

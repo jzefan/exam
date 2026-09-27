@@ -54,6 +54,13 @@ def answer_text(node: Tag | None) -> str:
         return ""
     # Preserve indentation and line breaks in programming answers.
     copy = BeautifulSoup(str(node), "html.parser")
+    for el in copy.select("[data-latex], [data-tex], [latex], math"):
+        formula = el.get("data-latex") or el.get("data-tex") or el.get("latex")
+        annotation = el.select_one('annotation[encoding="application/x-tex"]')
+        if annotation:
+            formula = annotation.get_text()
+        if formula:
+            el.replace_with("$" + str(formula).strip("$") + "$")
     for br in copy.find_all("br"):
         br.replace_with("\n")
     for block in copy.select("p, div, li"):
@@ -421,7 +428,10 @@ def graded_question(container: Tag, qid: str, score: Tag | None) -> dict:
         # Not every provider type ends in 题: "(名词解释, 20.0分)" is a single
         # label, and the score must not travel inside the displayed type.
         match = re.search(r"[（(]\s*([\u4e00-\u9fa5]{2,8})\s*[,，]", type_label)
-    question_type = match[1] if match else type_label
+    # Missing provider labels are still subjective by default in this review
+    # flow; display them consistently and route them through the generic
+    # short-answer grader instead of silently making them manual-only.
+    question_type = match[1] if match else type_label.strip() or "其它"
     full_score = container.select_one('input[id^="fullScore"]')
     label_score = re.search(r"(\d+(?:\.\d+)?)\s*分", f"{type_label} {text(label_node)}")
     placeholder = re.search(r"0\s*[-~—]\s*(\d+(?:\.\d+)?)", str(score.get("placeholder") or "")) if score else None
@@ -465,6 +475,13 @@ def graded_question(container: Tag, qid: str, score: Tag | None) -> dict:
     stem_node = container.select_one(".hiddenTitle,.questionStem,.Zy_TItle,.qtContent,.stem")
     if stem_node is None:
         stem_node = container.select_one(".mark_name")
+    from .media import blocks
+
+    rich_content = {
+        "content": blocks(stem_node),
+        "student_answer": blocks(answer_container),
+        "reference_answer": blocks(reference),
+    }
     stem = answer_text(stem_node)
     question_content = stem
     if re.search(r"选择|单选|多选", question_type):
@@ -481,6 +498,8 @@ def graded_question(container: Tag, qid: str, score: Tag | None) -> dict:
         source_id=str(qid),
         question_type=question_type,
         content=question_content,
+        rich_content=rich_content,
+        _answer_present=student is not None,
         student_answer=student_answer,
         reference_answer=answer_text(reference),
         max_score=max_score,
@@ -491,12 +510,7 @@ def graded_question(container: Tag, qid: str, score: Tag | None) -> dict:
             else objective_by_label
         ),
         requires_manual_review=max_score is None or student is None or (attachment and not student_answer),
-        # An uploaded answer file is fetched by the caller, which owns the
-        # network; the descriptor rides along so it does not have to re-read the
-        # markup. Both keys are removed before the sheet is returned or saved.
-        attachment_id=str(file_node.get("objectid") or "") if file_node else "",
-        attachment_name=str(file_node.get("filename") or "") if file_node else "",
-        attachment_suffix=str(file_node.get("filetype") or "") if file_node else "",
+
     )
 
 

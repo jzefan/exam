@@ -1,3 +1,18 @@
+export interface ContentBlock {
+  kind: "text" | "image" | "file";
+  text?: string;
+  name?: string;
+  asset_id?: string;
+  size?: number;
+  preview?: string;
+  embedded_images?: { asset_id: string; name: string }[];
+  unavailable?: boolean;
+}
+export interface PaperRichContent {
+  content?: ContentBlock[];
+  student_answer?: ContentBlock[];
+  reference_answer?: ContentBlock[];
+}
 export interface Connection {
   id: string;
   connected: boolean;
@@ -7,6 +22,7 @@ export interface Connection {
 }
 export interface RecordItem {
   id: string;
+  source_id?: string;
   title?: string;
   item_type?: "考试" | "作业";
   name?: string;
@@ -22,6 +38,10 @@ export interface RecordItem {
   source_score?: number | null;
   /** Set only when the provider prints a submission time for that answer. */
   submitted_at?: string | null;
+  saved_candidate_id?: string;
+  saved_revision?: number;
+  grading_state?: "needs_grading" | "grading" | "graded" | "no_ai" | "saved";
+  already_ai_graded?: boolean;
   readable: boolean;
 }
 export interface Semester { id: string; title: string; selected: boolean }
@@ -33,8 +53,12 @@ export interface Listing {
   semesters?: Semester[];
   semester_id?: string;
   expected_submitted?: number | null;
+  source?: "live" | "session" | "snapshot";
+  fetched_at?: string;
+  stale?: boolean;
 }
 export interface Question {
+  rich_content?: PaperRichContent | null;
   source_id: string;
   question_type: string;
   content: string;
@@ -45,7 +69,10 @@ export interface Question {
   objective: boolean;
   requires_manual_review: boolean;
 }
-export interface Review { questions: Question[]; notice: string; review_hash: string; declared_max_score: number | null }
+export interface Review {
+  questions: Question[]; notice: string; review_hash: string; declared_max_score: number | null;
+  source?: "live" | "session" | "snapshot"; fetched_at?: string; stale?: boolean;
+}
 export interface Verified extends Listing { session: Connection }
 export class ConnectionError extends Error {
   status: number;
@@ -76,11 +103,13 @@ export interface Totals {
 export interface SavedCandidate { id: string; name: string; student_no: string; revision: number; totals: Totals }
 export interface SavedExam { id: string; title: string; course_title: string; expected_submitted: number | null; candidates: SavedCandidate[] }
 export interface SavedItem {
+  rich_content?: PaperRichContent | null;
   id: string; position: number; question_type: string; content: string; student_answer: string;
   reference_answer: string; max_score: number | null; objective: boolean; source_score: number | null;
   ai_score: number | null; confirmed_score: number | null; status: string; version: number;
   comment: string; error: string; requires_manual_review: boolean; binding_version?: number;
-  feedback: { dimension_comments: Record<string, string>; deduction_reasons: string[];
+  feedback: { dimension_scores?: Record<string, number>; dimension_comments: Record<string, string>;
+    dimension_labels?: Record<string, string>; dimension_max_scores?: Record<string, number>; deduction_reasons: string[];
     strengths: string[]; improvement_suggestions: string[]; risk_flags: string[] } | null;
 }
 export interface SavedPaper {

@@ -86,14 +86,22 @@ export function RichContent({
     // No images — render as plain HTML
     return (
       <div
-        className={cn("prose prose-sm max-w-none", className)}
+        className={cn(
+          "prose prose-sm max-w-none [&_.katex-display]:max-w-full [&_.katex-display]:overflow-x-auto",
+          className,
+        )}
         dangerouslySetInnerHTML={{ __html: processed }}
       />
     );
   }
 
   return (
-    <div className={cn("prose prose-sm max-w-none", className)}>
+    <div
+      className={cn(
+        "prose prose-sm max-w-none [&_.katex-display]:max-w-full [&_.katex-display]:overflow-x-auto",
+        className,
+      )}
+    >
       {segments.map((segment, i) => {
         const image = parseImageTag(segment);
         if (image) {

@@ -39,9 +39,35 @@
 
 原理：`fullBleed` 生成 `relative left-1/2 -ml-[50vw] w-screen`，tailwind-merge 将 `relative` 改为 `sticky` 后 `left: 50%` 变为吸附偏移量导致偏移。`ml-[calc(50%-50vw)]` 用 margin 代替 left，不受 sticky 影响。
 
-## Verification Defaults
+## Planning
 
-- Frontend: run focused Vitest tests first, then `pnpm build`; use Playwright or Browser verification when interaction or responsive behavior changed.
-- Backend: run focused pytest tests with `PYTHONPATH=src UV_CACHE_DIR=/tmp/uv-cache uv run pytest`, then broader checks only when justified.
-- Database changes: inspect Alembic heads before adding migrations and avoid destructive operations against shared or production data.
-- Deployment changes: validate Docker Compose configuration and deployment scripts without rebuilding, pruning, migrating, or connecting to production unless explicitly requested.
+- 多步任务、跨模块改动、有架构取舍 → 先出方案再动手。
+- 小改动（改文案、调样式、修一个已定位的 bug）→ 直接改完收工，不要为它写计划、建 todo。
+- 方向走偏了立刻停下重新规划，不要硬推。
+
+## 分级验证（核心规则）
+
+**验证强度跟着「改动影响面」走，不跟着改动行数，也不跟着仪式感走。默认取最低档，只有确实碰到共享代码才升级。**
+
+| 档位 | 什么改动 | 要做到 | 不必做 |
+|---|---|---|---|
+| **L0 界面微调** | 文案、样式、间距、颜色、图标、单个页面的展示细节 | 改的文件能编译；能开页面就扫一眼 | ❌ 不跑测试套件　❌ 不补新测试　❌ 不建 todo |
+| **L1 单页逻辑** | 某页交互逻辑、局部组件、单个 API 调用 | 相关文件类型检查 + 该模块已有测试 | ❌ 不跑全量回归　❌ 不起服务做端到端 |
+| **L2 跨模块** | 后端接口、数据模型、权限、多页共用的 store / 组件 / 工具函数 | 相关模块测试 + 真实走一遍主流程 | — |
+| **L3 高危** | 部署配置、数据迁移、批量改写、不可逆操作 | 全量验证 + 备份 + 明确回滚方式 | — |
+
+- 只有用户明确要求时才跑全量回归。
+- **禁止为了"看起来很严谨"而堆测试**：一次界面微调后面跟着一长串回归用例，是浪费，不是负责。
+- 但"不测"不等于"不报"：跑了什么、没跑什么、为什么不需要跑，如实说清。错误必须暴露，不许静默失败。
+- 判不准档位时按低档执行，并在回复里说明判断依据。
+- **`exam-local-e2e-verify` 技能是 L2/L3 工具**：需要真实浏览器 / 真实链路 / 第三方会话时才用它，一次只挑其中一条路子；L0/L1 不要进。
+
+### 各档具体命令
+
+- **L0**：`cd frontend && npx tsc -b`（或后端同层类型/语法检查）。够。
+- **L1**：`npx tsc -b` + `pnpm exec vitest run <改动模块的测试路径>`；后端 `cd backend && PYTHONPATH=src UV_CACHE_DIR=/tmp/uv-cache uv run pytest <路径>`。
+- **L2**：L1 的命令 + 真实走一遍主流程（起自己的 4100/8100，不碰用户的 4000/8000，见 `exam-local-e2e-verify`）。
+- **L3**：全量 `pnpm exec vitest run` / 全量 pytest，加备份与回滚说明。**注意** `vitest run` 会把 `src/test/e2e/*.spec.ts`（Playwright 用例）一起收集并必然失败，统计时扣掉；既有失败基线见 `exam-local-e2e-verify`。
+- 数据库：加迁移前先 `alembic heads`；不对共享 / 生产库做破坏性操作。
+- 部署：只校验 Compose 与脚本，不重建、不 prune、不迁移、不连生产，除非明确要求。
+- 沙箱里 `pnpm build` 会因清 `dist` 被拦而报失败，这不是代码错；要真实结论用 `npx vite build --outDir .build-check --emptyOutDir`。

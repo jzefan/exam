@@ -22,6 +22,8 @@ import {
   hasBlockingImportIssues,
   htmlToImportText,
   importTextToHtml,
+  parseJsonQuestions,
+  structuredJsonText,
 } from "./import-utils";
 
 const navigateMock = vi.fn();
@@ -112,6 +114,52 @@ afterEach(() => {
 });
 
 describe("question import helpers", () => {
+  it("parses standard JSON question fields without losing structured answers or scores", () => {
+    const source = JSON.stringify({
+      questions: [
+        {
+          type: "multiple_choice",
+          title: "选择正确答案",
+          content: { text: "哪些选项正确？", html: "<p>哪些选项正确？</p>" },
+          options: { A: { text: "甲" }, B: "乙" },
+          answer: { correct: ["A", "B"] },
+          analysis: "两项都正确。",
+          difficulty: "较难",
+          score: 7,
+        },
+        { type: "true_false", content: "命题为真。", answer: { correct: false } },
+      ],
+    });
+
+    const { drafts } = parseJsonQuestions(source);
+    expect(drafts).toHaveLength(2);
+    expect(drafts[0]).toMatchObject({
+      content_text: "哪些选项正确？",
+      content_html: "<p>哪些选项正确？</p>",
+      options: { A: "甲", B: "乙" },
+      answer_text: "A、B",
+      difficulty: 4,
+      score: 7,
+    });
+    expect(drafts[1].answer_text).toBe("false");
+
+    const questions = buildImportableQuestions(
+      drafts.map((draft) => ({ ...draft, review_status: "approved" })),
+      null,
+    );
+    expect(questions[0].answer.correct).toEqual(["A", "B"]);
+    expect(questions[0].score).toBe(7);
+    expect(questions[1].answer.correct).toBe(false);
+  });
+
+  it("does not silently drop malformed JSON items and recognizes fenced JSON in Markdown", () => {
+    const valid = JSON.stringify({ type: "choice", content: "题干", options: { A: "甲", B: "乙" }, answer: "A" });
+    expect(structuredJsonText(`\`\`\`json\n${valid}\n\`\`\``)).toBe(valid);
+    expect(structuredJsonText("[题型] 选择题\n题目内容：题干")).toBeNull();
+    expect(() => parseJsonQuestions(JSON.stringify({ questions: [JSON.parse(valid), null] })))
+      .toThrow("第 2 道题不是 JSON 对象");
+  });
+
   it("only builds bulk import payloads from human-approved drafts", () => {
     const questions = buildImportableQuestions(
       [
@@ -464,6 +512,20 @@ describe("question import helpers", () => {
 });
 
 describe("QuestionImportPage", () => {
+  it("reviews a standard JSON file directly without requesting AI recognition", async () => {
+    renderImportPage();
+    const source = JSON.stringify({
+      questions: [{ type: "choice", content: "首都是哪里？", options: { A: "北京", B: "上海" }, answer: { correct: "A" } }],
+    });
+    fireEvent.change(screen.getByTestId("question-import-file-input"), {
+      target: { files: [new File([source], "questions.json", { type: "application/json" })] },
+    });
+
+    expect(await screen.findByText("JSON 规则解析")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "导入 1 道题目" })).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("keeps the upload screen focused on file selection", () => {
     renderImportPage();
 

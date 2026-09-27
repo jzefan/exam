@@ -44,6 +44,8 @@ from app.chaoxing.browser import manager as chaoxing_manager
 from app.chaoxing.router import router as chaoxing_router
 from app.chaoxing.grading_router import router as chaoxing_grading_router
 from app.chaoxing.worker import run as run_chaoxing_grading
+from app.chaoxing.models import ChaoxingReadSnapshot  # noqa: F401
+from app.chaoxing.read_cache import run_cleanup as run_chaoxing_cache_cleanup
 
 
 @asynccontextmanager
@@ -99,10 +101,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await warm_pool()
 
     await chaoxing_manager.start()
+    cache_cleanup = asyncio.create_task(run_chaoxing_cache_cleanup())
     chaoxing_worker = asyncio.create_task(run_chaoxing_grading()) if settings.chaoxing_enabled else None
     try:
         yield
     finally:
+        cache_cleanup.cancel()
+        await asyncio.gather(cache_cleanup, return_exceptions=True)
         if chaoxing_worker:
             chaoxing_worker.cancel()
             await asyncio.gather(chaoxing_worker, return_exceptions=True)

@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import hashlib
 import importlib.util
+import json
 import os
 import re
 import time
@@ -47,8 +48,19 @@ ROWS_READY_TIMEOUT_MS = 8000
 MODULE_READY = "() => !document.querySelector('[v-cloak]')"
 MODULE_READY_TIMEOUT_MS = 15000
 MODULE_LIST_GRACE_SECONDS = 5
-READ_CACHE_TTL_SECONDS = 300
-READ_CACHE_MAX_ENTRIES = 32
+READ_CACHE_TTL_SECONDS = {
+    "courses": 30 * 60,
+    "exams": 5 * 60,
+    "candidates": 2 * 60,
+    "review": 30 * 60,
+}
+READ_CACHE_MAX_ENTRIES = {
+    "courses": 20,
+    "exams": 50,
+    "candidates": 50,
+    "review": 200,
+}
+READ_CACHE_MAX_BYTES = 32 * 1024 * 1024
 
 
 def allowed_resource(url: str) -> bool:
@@ -80,7 +92,8 @@ class Session:
     semesters: list[dict] = field(default_factory=list)
     credential_fingerprint: str = ""
     credential_save_task: asyncio.Task | None = None
-    reading_cache: dict[str, tuple[float, dict]] = field(default_factory=dict)
+    reading_cache: dict[str, tuple[float, float, int, dict]] = field(default_factory=dict)
+    reading_cache_bytes: int = 0
 
     def status(self):
         return {
@@ -123,23 +136,43 @@ class Session:
         cached = self.reading_cache.get(key)
         if cached is None:
             return None
-        expires_at, value = cached
+        expires_at, inserted_at, size, value = cached
         if time.monotonic() >= expires_at:
+            self.reading_cache_bytes -= size
             self.reading_cache.pop(key, None)
             return None
-        return value
+        self.reading_cache[key] = (expires_at, time.monotonic(), size, value)
+        return {**value, "source": "session", "stale": bool(value.get("stale", False))}
 
     def cache_read(self, key: str, value: dict) -> dict:
-        if key not in self.reading_cache and len(self.reading_cache) >= READ_CACHE_MAX_ENTRIES:
-            oldest = min(self.reading_cache, key=lambda cache_key: self.reading_cache[cache_key][0])
-            self.reading_cache.pop(oldest, None)
-        self.reading_cache[key] = (time.monotonic() + READ_CACHE_TTL_SECONDS, value)
+        kind = key.split(":", 1)[0]
+        max_entries = READ_CACHE_MAX_ENTRIES.get(kind, 20)
+        size = len(json.dumps(value, ensure_ascii=False, default=str).encode())
+        previous = self.reading_cache.pop(key, None)
+        if previous:
+            self.reading_cache_bytes -= previous[2]
+        same_kind = [cache_key for cache_key in self.reading_cache if cache_key.startswith(kind + ":")]
+        while same_kind and (
+            len(same_kind) >= max_entries or self.reading_cache_bytes + size > READ_CACHE_MAX_BYTES
+        ):
+            oldest = min(same_kind, key=lambda cache_key: self.reading_cache[cache_key][1])
+            removed = self.reading_cache.pop(oldest)
+            self.reading_cache_bytes -= removed[2]
+            same_kind.remove(oldest)
+        while self.reading_cache and self.reading_cache_bytes + size > READ_CACHE_MAX_BYTES:
+            oldest = min(self.reading_cache, key=lambda cache_key: self.reading_cache[cache_key][1])
+            removed = self.reading_cache.pop(oldest)
+            self.reading_cache_bytes -= removed[2]
+        if size > READ_CACHE_MAX_BYTES:
+            return value
+        self.reading_cache[key] = (time.monotonic() + READ_CACHE_TTL_SECONDS.get(kind, 300), time.monotonic(), size, value)
+        self.reading_cache_bytes += size
         return value
 
     def invalidate_read_cache(self, *prefixes: str) -> None:
         for key in list(self.reading_cache):
             if any(key.startswith(prefix) for prefix in prefixes):
-                self.reading_cache.pop(key, None)
+                self.reading_cache_bytes -= self.reading_cache.pop(key)[2]
 
 
 class BrowserManager:
@@ -196,6 +229,7 @@ class BrowserManager:
         session.records.clear()
         session.semesters.clear()
         session.reading_cache.clear()
+        session.reading_cache_bytes = 0
         with contextlib.suppress(Exception):
             await session.context.close()
 
@@ -607,6 +641,7 @@ async def read_page(
             session.connected = False
             session.records.clear()
             session.reading_cache.clear()
+            session.reading_cache_bytes = 0
             raise HTTPException(410, "学习通登录已失效，请重新连接")
         final = page.url
         content = await page.content()
@@ -614,6 +649,7 @@ async def read_page(
             session.connected = False
             session.records.clear()
             session.reading_cache.clear()
+            session.reading_cache_bytes = 0
             raise HTTPException(410, "学习通登录已失效，请重新连接")
         if "layui-table-body" in content:
             # Best effort. The provider renders these tables from its own XHR, so

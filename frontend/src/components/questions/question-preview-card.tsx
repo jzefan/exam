@@ -380,6 +380,7 @@ export function QuestionPreviewCard({
   hoverDetailDelay = 180,
   knowledgeRecognitionStatus,
   children,
+  questionBody,
   onClick,
   onMouseEnter,
   onMouseLeave,
@@ -409,6 +410,8 @@ export function QuestionPreviewCard({
   knowledgeRecognitionStatus?: QuestionKnowledgeRecognitionStatus | null;
   /** 渲染在题干（与选项）之后、参考答案之前，供作答/复核内容占位。 */
   children?: ReactNode;
+  /** External papers can provide structured media without injecting provider HTML. */
+  questionBody?: ReactNode;
 } & HTMLAttributes<HTMLDivElement>) {
   const [isHovered, setIsHovered] = useState(false);
   const [isHoverExpanded, setIsHoverExpanded] = useState(false);
@@ -458,13 +461,13 @@ export function QuestionPreviewCard({
     normalizedType === "short_answer" || normalizedType === "essay"
       ? (question.answer?.html as string | undefined)
       : undefined;
-  const hasAnswerImage = Boolean(answerHtml && /<img\b/i.test(answerHtml));
+  const hasAnswerHtml = Boolean(answerHtml?.trim());
   // 选择题在选项上直接标记答案时，不再单独展示答案/参考答案区。
   const choiceAnswerInline = markChoiceAnswer && normalizedType === "choice";
   const shouldShowAnswer =
     showDetails &&
     !choiceAnswerInline &&
-    (!hideAnswer || hasAnswerText || (isCode && Boolean(codeAnswer)));
+    (!hideAnswer || hasAnswerText || hasAnswerHtml || (isCode && Boolean(codeAnswer)));
 
   const showSimpleAnswer =
     !showDetails &&
@@ -636,7 +639,7 @@ export function QuestionPreviewCard({
 
       {/* body */}
       <div className="px-2 py-2 sm:px-5">
-        {html ? (
+        {questionBody ?? (html ? (
           <RichContent
             html={html}
             className="text-sm leading-relaxed text-foreground"
@@ -648,7 +651,7 @@ export function QuestionPreviewCard({
               highlightKeyword,
             )}
           </p>
-        )}
+        ))}
 
         <ChoiceOptions
           question={question}
@@ -715,7 +718,7 @@ export function QuestionPreviewCard({
                     ) : (
                       <p className="text-sm text-muted-foreground">无</p>
                     )
-                  ) : hasAnswerImage ? (
+                  ) : hasAnswerHtml ? (
                     <div className="rounded-lg border border-primary/20 bg-primary/[0.04] px-3 py-2 text-sm text-foreground">
                       <RichContent html={answerHtml ?? ""} />
                     </div>

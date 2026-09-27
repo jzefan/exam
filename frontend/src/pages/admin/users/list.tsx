@@ -94,6 +94,13 @@ function scopeLabel(user: IUser): string {
   return user.primary_org?.org_name || "岗位模型域"
 }
 
+function formatCreatedAt(value: string): string {
+  const date = new Date(value)
+  if (!value || Number.isNaN(date.getTime())) return "未设置"
+  const pad = (part: number) => String(part).padStart(2, "0")
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
 export function UserList() {
   const {
     tableQuery: { data, isLoading },
@@ -196,20 +203,21 @@ export function UserList() {
                 <TableHead>系统域</TableHead>
                 <TableHead>业务归属</TableHead>
                 <TableHead>状态</TableHead>
+                <TableHead>创建时间</TableHead>
                 <TableHead className="text-right pr-4">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-12 text-sm text-muted-foreground">
+                  <TableCell colSpan={8} className="text-center py-12 text-sm text-muted-foreground">
                     <span className="inline-block h-5 w-5 border-2 border-border border-t-foreground rounded-full animate-spin mr-2 align-middle" />
                     加载中...
                   </TableCell>
                 </TableRow>
               ) : users.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-12">
+                  <TableCell colSpan={8} className="text-center py-12">
                     <Users size={40} className="mx-auto text-muted-foreground mb-3" />
                     <p className="text-sm text-muted-foreground">暂无用户数据</p>
                   </TableCell>
@@ -268,6 +276,9 @@ export function UserList() {
                             {user.is_active ? "正常" : "已禁用"}
                           </span>
                         </div>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
+                        {formatCreatedAt(user.created_at)}
                       </TableCell>
                       <TableCell className="text-right pr-4">
                         <div className="flex items-center justify-end gap-1">

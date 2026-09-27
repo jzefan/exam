@@ -18,6 +18,10 @@ class StartExamRequest(BaseModel):
     retake: bool = False
 
 
+class SelectedTextExplainRequest(BaseModel):
+    selected_text: str = Field(min_length=1, max_length=1200)
+
+
 class SubmitExamRequest(BaseModel):
     answers: list[StudentAnswerItem] = Field(default_factory=list)
 
@@ -46,6 +50,7 @@ class StudentExamStartResponse(BaseModel):
     exam_id: uuid.UUID
     title: str
     category: str = "exam"
+    ai_explanation_enabled: bool = False
     duration_minutes: int
     max_switch_count: int
     allow_retake: bool = False

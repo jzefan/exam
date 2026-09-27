@@ -30,6 +30,7 @@ import {
 import { getStudentLocale, getStudentQuestionTypeLabel, tStudent } from "./i18n";
 import { resolveStudentReturnHref } from "./wrong-answer-shared";
 import { useIsMobile } from "@/hooks/use-viewport";
+import { SelectionAIExplain } from "./components/selection-ai-explain";
 
 const api = axios.create();
 api.interceptors.request.use((config) => {
@@ -248,6 +249,12 @@ export function ExamResultPage() {
     );
   }
 
+  const canExplainQuestion = (question: IExamResult["questions"][number]) =>
+    !question.is_correct &&
+    !question.grading_pending &&
+    !question.grading_failed &&
+    !question.needs_human_review;
+
   const renderQuestionPrompt = (question: IExamResult["questions"][number]) => {
     const content = question.content as { html?: string; text?: string; description?: string };
     const promptHtml = typeof content.html === "string" && content.html.trim()
@@ -394,7 +401,12 @@ export function ExamResultPage() {
     const modelMatches = modelEvaluation?.matches?.filter((item) => item.reason?.trim()) ?? [];
 
     return (
-      <section key={question.question_id} id={`exam-q-${question.order + 1}`} className="scroll-mt-24 rounded-2xl border border-border/70 bg-background p-6">
+      <section
+        key={question.question_id}
+        id={`exam-q-${question.order + 1}`}
+        data-ai-explain-question-id={canExplainQuestion(question) ? question.question_id : undefined}
+        className="scroll-mt-24 rounded-2xl border border-border/70 bg-background p-6"
+      >
         <div className="flex flex-col gap-3">
           <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto] md:items-center">
             <div className="flex flex-wrap items-center gap-2">
@@ -670,7 +682,12 @@ export function ExamResultPage() {
     const isObjectiveQuestion =
       question.type === "choice" || question.type === "true_false" || question.type === "fill_in";
     return (
-      <section key={question.question_id} id={`exam-q-${question.order + 1}`} className="scroll-mt-28 rounded-2xl bg-card shadow-sm ring-1 ring-border/60">
+      <section
+        key={question.question_id}
+        id={`exam-q-${question.order + 1}`}
+        data-ai-explain-question-id={canExplainQuestion(question) ? question.question_id : undefined}
+        className="scroll-mt-28 rounded-2xl bg-card shadow-sm ring-1 ring-border/60"
+      >
         <div className="flex items-center justify-between gap-2 px-3 py-2.5">
           <div className="flex min-w-0 items-center gap-2">
             <Badge variant="secondary" className="shrink-0 rounded-full px-2 py-0.5 text-[11px]">
@@ -860,6 +877,10 @@ export function ExamResultPage() {
   if (isMobile) {
     return (
       <div className="flex min-h-screen flex-col bg-muted/20">
+        <SelectionAIExplain
+          examId={result.exam_id}
+          enabled={questions.some(canExplainQuestion)}
+        />
         <header className="sticky top-0 z-10 flex h-12 items-center gap-2 border-b bg-background px-3">
           <button onClick={() => navigate(returnHref)} className="flex items-center gap-1 text-sm text-muted-foreground">
             <ArrowLeft className="h-4 w-4" />
@@ -935,6 +956,10 @@ export function ExamResultPage() {
 
   return (
     <div className="flex flex-col gap-6">
+      <SelectionAIExplain
+        examId={result.exam_id}
+        enabled={questions.some(canExplainQuestion)}
+      />
       <div className="grid items-center gap-3 sm:grid-cols-[1fr_auto_1fr]">
         <h1 className="text-base font-bold tracking-tight text-foreground sm:justify-self-start">
           {tStudent("result_title", undefined, locale)}

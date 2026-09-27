@@ -15,6 +15,7 @@ import {
   Strikethrough,
   ImageIcon,
   FileCode,
+  Sigma,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -201,6 +202,20 @@ export function RichTextEditor({
           active={editor.isActive("codeBlock")}
         >
           <FileCode size={14} />
+        </ToolbarButton>
+        <ToolbarButton
+          title="插入公式"
+          onClick={() => {
+            const { from, to } = editor.state.selection;
+            editor
+              .chain()
+              .focus()
+              .insertContentAt({ from, to }, "$x$")
+              .setTextSelection({ from: from + 1, to: from + 2 })
+              .run();
+          }}
+        >
+          <Sigma size={14} />
         </ToolbarButton>
       </div>
 

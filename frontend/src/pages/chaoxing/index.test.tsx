@@ -1,5 +1,5 @@
 import { StrictMode } from "react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChaoxingPage } from "./index";
@@ -12,7 +12,11 @@ const course = { id: "course-1", title: "Python 程序设计", readable: true };
 const exam = { id: "exam-1", title: "期中考试", readable: true, submitted_count: 2 };
 const candidate = { id: "candidate-1", name: "张三", student_no: "20260001", status: "submitted", submitted_at: "09-22 18:02", readable: true };
 const secondCandidate = { id: "candidate-2", name: "李四", student_no: "20260002", status: "submitted", readable: true };
-const renderPage = () => render(<StrictMode><MemoryRouter><ChaoxingPage /></MemoryRouter></StrictMode>);
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="current-location">{location.pathname}{location.search}</output>;
+}
+const renderPage = () => render(<StrictMode><MemoryRouter initialEntries={["/grading/chaoxing"]}><LocationProbe /><ChaoxingPage /></MemoryRouter></StrictMode>);
 
 beforeEach(() => {
   request.mockReset();
@@ -40,10 +44,10 @@ describe("学习通连接验证", () => {
     // 题目按题库统一口径展示：源站题型串 名词解释题 显示为题库的 简答题。
     expect(screen.getByText("简答题")).toBeInTheDocument();
     expect(screen.getByText("满分 10")).toBeInTheDocument();
-    // 确认勾选框已去掉：保存答卷直接可用，AI 评分仍由"有没有可评的主观题"把关。
+    // 确认勾选框已去掉：保存答卷和 AI 评分都可直接触发，缺少评分依据时由后端提示人工处理。
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "保存答卷" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "AI 评分" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "AI 评分" })).toBeEnabled();
     expect(screen.getByText("含附件或识别信息不全，需要教师在学习通核对。")).toBeInTheDocument();
     expect(request.mock.calls.every(([path]) => !path.includes("submitmark"))).toBe(true);
   });
@@ -207,6 +211,91 @@ describe("学习通连接验证", () => {
     await screen.findByText("说明循环的用途");
     fireEvent.click(screen.getByRole("button", { name: "AI 评分" }));
     expect(await screen.findByText(/答卷已保存，但 AI 评分未启动：请管理员先配置主评和复核模型/)).toBeInTheDocument();
+    expect(screen.getByTestId("current-location")).toHaveTextContent("/grading/chaoxing");
+  });
+
+  it("点击 AI 评分后留在当前答卷页，并在后台评分期间显示加载状态", async () => {
+    const fallback = request.getMockImplementation()!;
+    request.mockImplementation(async (path, init) => {
+      if (path.endsWith("/review")) return { review_hash: "e".repeat(64), declared_max_score: 10, notice: "", questions: [
+        { source_id: "q1", question_type: "其它", content: "根据课程要求完成总结", student_answer: "已完成总结", reference_answer: "", max_score: 10, source_score: null, objective: false, requires_manual_review: false },
+      ] };
+      if (path.endsWith("/import")) return { id: "saved-1" };
+      if (path === "/grading/candidates/saved-1/grade") return { queued: 1, state: "queued" };
+      if (path === "/grading/candidates/saved-1") return {
+        id: "saved-1", candidate_id: "saved-1", items: [{ id: "item-1", position: 1, status: "queued", objective: false, confirmed_score: null, ai_score: null, max_score: 10 }], audit: [],
+      };
+      return fallback(path, init);
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "读取考试与作业" }));
+    fireEvent.click(await screen.findByRole("button", { name: "读取考生" }));
+    fireEvent.click((await screen.findAllByRole("button", { name: "查看答卷" }))[0]);
+    await screen.findByText("根据课程要求完成总结");
+
+    fireEvent.click(screen.getByRole("button", { name: "AI 评分" }));
+
+    expect(await screen.findByText("AI 评分中，结果会自动刷新")).toBeInTheDocument();
+    expect(screen.getByTestId("current-location")).toHaveTextContent("/grading/chaoxing");
+    expect(screen.getByRole("button", { name: "AI 评分" })).toBeEnabled();
+    expect(request).toHaveBeenCalledWith("/grading/candidates/saved-1/grade", { method: "POST" });
+  });
+
+  it("展示 AI 评分依据并将建议分数预填到教师评分，确认后提交教师分数", async () => {
+    const fallback = request.getMockImplementation()!;
+    let gradingStarted = false;
+    let confirmBody: unknown;
+    const feedback = {
+      dimension_scores: { answer_point_coverage: 7.5 },
+      dimension_comments: { answer_point_coverage: "核心要点覆盖完整。" },
+      dimension_labels: { answer_point_coverage: "要点覆盖" },
+      dimension_max_scores: { answer_point_coverage: 10 },
+      deduction_reasons: ["没有说明边界条件。"],
+      strengths: ["回答结构清晰。"],
+      improvement_suggestions: ["补充异常输入的处理。"],
+      risk_flags: ["请核对题目附件要求。"],
+    };
+    const paper = (status: string, aiScore: number | null) => ({
+      id: "saved-1", exam_id: "exam-1", name: "张三", student_no: "20260001", exam_title: "期中考试", course_title: "Python 程序设计",
+      revision: 1, current_revision: 1, completeness_confirmed: true, source_score: null, totals: null, audit: [],
+      items: [{
+        id: "item-1", position: 1, question_type: "其它", content: "根据课程要求完成总结", student_answer: "已完成总结", reference_answer: "",
+        max_score: 10, objective: false, source_score: null, ai_score: aiScore, confirmed_score: null, status, version: 3,
+        comment: "", error: "", requires_manual_review: false, feedback: aiScore == null ? null : feedback,
+      }],
+    });
+    request.mockImplementation(async (path, init) => {
+      if (path.endsWith("/review")) return { review_hash: "f".repeat(64), declared_max_score: 10, notice: "", questions: [
+        { source_id: "q1", question_type: "其它", content: "根据课程要求完成总结", student_answer: "已完成总结", reference_answer: "", max_score: 10, source_score: null, objective: false, requires_manual_review: false },
+      ] };
+      if (path.endsWith("/import")) return { id: "saved-1" };
+      if (path === "/grading/candidates/saved-1/grade") { gradingStarted = true; return { queued: 1, state: "queued" }; }
+      if (path === "/grading/candidates/saved-1") return gradingStarted ? paper("review", 8.5) : paper("pending", null);
+      if (path.endsWith("/items/item-1/confirm")) {
+        confirmBody = JSON.parse(String(init?.body));
+        return paper("confirmed", 8.5);
+      }
+      return fallback(path, init);
+    });
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "读取考试与作业" }));
+    fireEvent.click(await screen.findByRole("button", { name: "读取考生" }));
+    fireEvent.click((await screen.findAllByRole("button", { name: "查看答卷" }))[0]);
+    await screen.findByText("根据课程要求完成总结");
+    fireEvent.click(screen.getByRole("button", { name: "AI 评分" }));
+
+    expect(await screen.findByText("AI 评分建议")).toBeInTheDocument();
+    expect(screen.getByText("7.5 / 10")).toBeInTheDocument();
+    expect(screen.getByText("核心要点覆盖完整。")).toBeInTheDocument();
+    expect(screen.getByText("没有说明边界条件。")).toBeInTheDocument();
+    const scoreInput = screen.getByRole("spinbutton", { name: "教师评分" });
+    await waitFor(() => expect(scoreInput).toHaveValue(8.5));
+    const confirmButton = screen.getByRole("button", { name: /^确定$/ });
+    expect(confirmButton).toBeEnabled();
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => expect(confirmBody).toEqual({ version: 3, score: 8.5, reason: "教师人工评分" }));
   });
 
   it("等待源站响应时，提示钉在屏幕中央并说明在读什么", async () => {

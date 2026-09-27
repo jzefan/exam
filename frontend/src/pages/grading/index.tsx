@@ -1250,9 +1250,84 @@ export function GradingCenterPage() {
   const hasVisibleQuestions = filteredExamGroups.length > 0;
   const hasAnswerAttachment = (candidateDetail?.attachment_refs?.length ?? 0) > 0;
   const hasAnswerText = Boolean(candidateDetail?.student_answer_raw?.trim());
+  const scoreControls = (
+    <div className="flex shrink-0 items-center gap-2">
+      <label className="text-sm text-muted-foreground" htmlFor="manual-score-inline">分数</label>
+      <div className="flex flex-col items-start gap-1">
+        <Input
+          id="manual-score-inline"
+          type="number"
+          value={manualScore}
+          onChange={(event) => {
+            setManualScore(event.target.value);
+            setAutoScoreReason(null);
+          }}
+          className="h-8 w-24 rounded-lg"
+        />
+        {autoScoreReason ? (
+          <span className="pl-1 text-[11px] leading-4 text-amber-600">{autoScoreReason}</span>
+        ) : null}
+      </div>
+      <div className="flex shrink-0">
+        <Button
+          size="sm"
+          onClick={() => void handleConfirmScoreSmart()}
+          disabled={(actionLoading === "manual" || actionLoading === "confirm") || !selectedTaskId}
+          className="rounded-r-none"
+        >
+          <CheckCircle2 />
+          {actionLoading === "manual" || actionLoading === "confirm" ? "提交中..." : "确定分数"}
+        </Button>
+        <TooltipProvider delayDuration={300}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const score = candidateDetail?.max_score ?? 0;
+                  setManualScore(String(score));
+                  setAutoScoreReason(null);
+                  void handleConfirmScoreSmart(score);
+                }}
+                disabled={(actionLoading === "manual" || actionLoading === "confirm") || !selectedTaskId}
+                className="rounded-none border-l-0"
+              >
+                满分
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>满分 {candidateDetail?.max_score ?? ""} 分，一键确认</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+        <TooltipProvider delayDuration={300}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setManualScore("0");
+                  setAutoScoreReason(null);
+                  void handleConfirmScoreSmart(0);
+                }}
+                disabled={(actionLoading === "manual" || actionLoading === "confirm") || !selectedTaskId}
+                className="rounded-l-none border-l-0"
+              >
+                未得分
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>0 分，一键确认</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </div>
+    </div>
+  );
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden px-0 py-4">
+    <div className={cn(
+      "flex h-full min-h-0 flex-col overflow-hidden px-0 pt-4",
+      showPaperView ? "pb-4" : "pb-0",
+    )}>
       <AttachmentPreviewDialog
         attachment={previewAttachment}
         open={!!previewAttachment}
@@ -1719,7 +1794,10 @@ export function GradingCenterPage() {
           </div>
         </section>
 
-        <section className="flex min-h-[calc(100vh-180px)] flex-col">
+        <section className={cn(
+          "flex min-w-0 flex-col",
+          gradingMode === "question" ? "min-h-0" : "min-h-[calc(100vh-180px)]",
+        )}>
           {loadingInbox && !hasVisibleQuestions ? (
             <div className="flex h-full min-h-0 flex-1 items-center justify-center px-8">
               <div className="flex flex-col items-center gap-3 text-center">
@@ -1931,39 +2009,6 @@ export function GradingCenterPage() {
                       })
                     )}
                   </div>
-                  <div className="flex shrink-0 items-center gap-2 border-t border-border/70 pt-3 pr-3">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="flex-1"
-                      disabled={
-                        !activeCandidateGroup ||
-                        candidateGroups.findIndex(
-                          (group) => group.candidateKey === activeCandidateGroup.candidateKey,
-                        ) <= 0
-                      }
-                      onClick={() => stepCandidatePerson(-1)}
-                    >
-                      <ChevronLeft className="h-4 w-4" />
-                      上一位考生
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="flex-1"
-                      disabled={
-                        !activeCandidateGroup ||
-                        candidateGroups.findIndex(
-                          (group) => group.candidateKey === activeCandidateGroup.candidateKey,
-                        ) >=
-                          candidateGroups.length - 1
-                      }
-                      onClick={() => stepCandidatePerson(1)}
-                    >
-                      下一位考生
-                      <ChevronRight className="h-4 w-4" />
-                    </Button>
-                  </div>
                   </>
                 ) : (
                 <div className="grid min-h-0 flex-1 grid-cols-3 content-start gap-2 overflow-y-auto pr-3 pb-6">
@@ -2047,7 +2092,7 @@ export function GradingCenterPage() {
                   )}
                 >
                 <div className="border-b border-border/70 py-1.5">
-                  <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-4">
+                  <div className="flex items-center gap-4">
                     <div className="flex min-w-0 items-center gap-3 text-sm text-foreground/80">
                       {gradingMode === "candidate" ? (
                         <span className="flex items-center gap-2">
@@ -2089,147 +2134,7 @@ export function GradingCenterPage() {
                         </TooltipProvider>
                       ) : null}
                     </div>
-                    <div className="flex items-center justify-center">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-8 px-2 text-xs"
-                        onClick={() => {
-                          setShowFollowUpWorkspace(true);
-                        }}
-                      >
-                        追加 Prompt 复评
-                      </Button>
-                    </div>
-                    <div className="flex flex-wrap items-center justify-end gap-2">
-                      <div className="flex items-center gap-2">
-                        <label className="text-sm text-muted-foreground" htmlFor="manual-score-inline">
-                          分数
-                        </label>
-                        <div className="flex flex-col items-start gap-1">
-                          <Input
-                            id="manual-score-inline"
-                            type="number"
-                            value={manualScore}
-                            onChange={(event) => {
-                              setManualScore(event.target.value);
-                              setAutoScoreReason(null);
-                            }}
-                            className="h-8 w-24 rounded-lg"
-                          />
-                          {autoScoreReason ? (
-                            <span className="pl-1 text-[11px] leading-4 text-amber-600">
-                              {autoScoreReason}
-                            </span>
-                          ) : null}
-                        </div>
-                      </div>
-                      <div className="flex">
-                        <Button
-                          size="sm"
-                          onClick={() => void handleConfirmScoreSmart()}
-                          disabled={(actionLoading === "manual" || actionLoading === "confirm") || !selectedTaskId}
-                          className="rounded-r-none"
-                        >
-                          <CheckCircle2 className="h-4 w-4" />
-                          {actionLoading === "manual" || actionLoading === "confirm" ? "提交中..." : "确定分数"}
-                        </Button>
-                        <TooltipProvider delayDuration={300}>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => {
-                                  const score = candidateDetail?.max_score ?? 0;
-                                  setManualScore(String(score));
-                                  setAutoScoreReason(null);
-                                  void handleConfirmScoreSmart(score);
-                                }}
-                                disabled={(actionLoading === "manual" || actionLoading === "confirm") || !selectedTaskId}
-                                className="rounded-none border-l-0"
-                              >
-                                满分
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              满分 {candidateDetail?.max_score ?? ""} 分，一键确认
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                        <TooltipProvider delayDuration={300}>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => {
-                                  setManualScore("0");
-                                  setAutoScoreReason(null);
-                                  void handleConfirmScoreSmart(0);
-                                }}
-                                disabled={(actionLoading === "manual" || actionLoading === "confirm") || !selectedTaskId}
-                                className="rounded-l-none border-l-0"
-                              >
-                                未得分
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>0 分，一键确认</TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      </div>
-                      {gradingMode === "candidate" ? (
-                        <>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => stepCandidateQuestion(-1)}
-                            disabled={currentCellIndex <= 0}
-                          >
-                            上一题
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => stepCandidateQuestion(1)}
-                            disabled={
-                              currentCellIndex < 0 ||
-                              currentCellIndex >= (activeCandidateGroup?.cells.length ?? 0) - 1
-                            }
-                          >
-                            下一题
-                          </Button>
-                        </>
-                      ) : (
-                        <>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleStepCandidate(-1)}
-                            disabled={activeCandidateIndex <= 0}
-                          >
-                            上一个考生
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleStepCandidate(1)}
-                            disabled={
-                              activeCandidateIndex < 0 ||
-                              activeCandidateIndex >= sortedCandidates.length - 1
-                            }
-                          >
-                            下一个考生
-                          </Button>
-                        </>
-                      )}
-                    </div>
                   </div>
-                  {reportError ? (
-                    <p className="mt-4 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                      {reportError}
-                    </p>
-                  ) : null}
                 </div>
 
                 <div className="min-h-0 flex-1 overflow-y-auto py-6">
@@ -2503,8 +2408,121 @@ export function GradingCenterPage() {
 
           </div>
           )}
+          {gradingMode === "question" && hasVisibleQuestions ? (
+            <footer
+              aria-label="按题目阅卷操作"
+              data-testid="question-grading-actions"
+              className="sticky bottom-0 z-20 flex shrink-0 flex-col gap-2 border-t border-border bg-background px-4 py-4"
+            >
+              {reportError ? (
+                <p role="alert" className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                  {reportError}
+                </p>
+              ) : null}
+              <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={activeCandidateIndex <= 0}
+                    onClick={() => handleStepCandidate(-1)}
+                  >
+                    上一个考生
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={activeCandidateIndex < 0 || activeCandidateIndex >= sortedCandidates.length - 1}
+                    onClick={() => handleStepCandidate(1)}
+                  >
+                    下一个考生
+                  </Button>
+                </div>
+                <div className="min-w-0 overflow-x-auto">
+                  <div className="ml-auto flex w-max items-center gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={!selectedTaskId}
+                      onClick={() => setShowFollowUpWorkspace(true)}
+                    >
+                      追加 Prompt 复评
+                    </Button>
+                    {scoreControls}
+                  </div>
+                </div>
+              </div>
+            </footer>
+          ) : null}
         </section>
       </main>
+
+      {gradingMode === "candidate" && !showPaperView && hasVisibleQuestions ? (
+        <footer
+          aria-label="按考生阅卷操作"
+          data-testid="candidate-grading-actions"
+          className="sticky bottom-0 z-20 flex shrink-0 flex-col gap-2 border-t border-border bg-background px-4 py-4"
+        >
+          {reportError ? (
+            <p role="alert" className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {reportError}
+            </p>
+          ) : null}
+          <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex shrink-0 items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={activeCandidateGroupIndex <= 0}
+                onClick={() => stepCandidatePerson(-1)}
+              >
+                <ChevronLeft />
+                上一位考生
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={activeCandidateGroupIndex < 0 || activeCandidateGroupIndex >= candidateGroups.length - 1}
+                onClick={() => stepCandidatePerson(1)}
+              >
+                下一位考生
+                <ChevronRight />
+              </Button>
+            </div>
+            <div className="min-w-0 overflow-x-auto">
+              <div className="ml-auto flex w-max items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={!selectedTaskId}
+                  onClick={() => setShowFollowUpWorkspace(true)}
+                >
+                  追加 Prompt 复评
+                </Button>
+                {scoreControls}
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={currentCellIndex <= 0}
+                    onClick={() => stepCandidateQuestion(-1)}
+                  >
+                    上一题
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={currentCellIndex < 0 || currentCellIndex >= (activeCandidateGroup?.cells.length ?? 0) - 1}
+                    onClick={() => stepCandidateQuestion(1)}
+                  >
+                    下一题
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </footer>
+      ) : null}
 
       {showFollowUpWorkspace && hasVisibleQuestions ? (
         <section className="fixed inset-0 z-[120] animate-in fade-in-0 zoom-in-[0.985] duration-300 bg-background">
