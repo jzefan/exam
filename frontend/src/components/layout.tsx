@@ -170,6 +170,7 @@ export function Layout() {
   const isActive = (prefix: string) => location.pathname.startsWith(prefix);
   const role = identity ? getUserRole(identity) : "";
   const isTeacher = role === "teacher" || role === "evaluator";
+  const isTeacherWorkspace = role === "teacher";
   // 我的课程是教师视角入口；evaluator 仍走题库 → 知识点管理。
   const canUseCourses = role === "teacher";
   const isEnterprise = canAccessJobModels(role) && role !== "platform_admin";
@@ -213,6 +214,17 @@ export function Layout() {
     (examNavState.courseOrigin === true ||
       String(examNavState.backTo ?? "").startsWith("/courses/"));
   const coursesNavActive = isCoursesPage || fromCoursesExamFlow;
+  const teacherMobileTitle = isCoursesPage || fromCoursesExamFlow
+    ? "我的课程"
+    : isActive("/grading")
+      ? "阅卷中心"
+      : isActive("/students")
+        ? "学生管理"
+        : "工作台";
+  const isGradingTaskFocused =
+    isTeacherWorkspace &&
+    location.pathname === "/grading" &&
+    new URLSearchParams(location.search).has("taskId");
   const examsNavActive =
     (isActive("/exams") || isActive("/papers")) && !fromCoursesExamFlow;
   const [examMenuOpen, setExamMenuOpen] = useState(false);
@@ -227,8 +239,10 @@ export function Layout() {
   };
 
   return (
+    // Keep a single viewport-height utility: h-screen wins over h-dvh in the
+    // generated CSS and places the teacher bottom navigation behind iOS Safari UI.
     <div
-      className="flex flex-col h-screen overflow-hidden"
+      className="flex h-dvh min-w-0 flex-col overflow-hidden"
       style={(() => {
         if (themeMode === "dark") {
           return {
@@ -249,15 +263,27 @@ export function Layout() {
           {/* Logo */}
           <Link to="/" className="flex items-center gap-2.5 shrink-0">
             <BrandLogoMark className="h-8 w-8 rounded-lg" />
-            <span className="text-base font-bold text-foreground tracking-tight hidden sm:inline">
+            <span className={cn(
+              "hidden text-base font-bold tracking-tight text-foreground sm:inline",
+              isTeacherWorkspace && "sm:hidden md:inline",
+            )}>
               {brand.name}
             </span>
           </Link>
 
+          {isTeacherWorkspace && (
+            <span className="ml-3 truncate text-sm font-semibold text-foreground md:hidden">
+              {teacherMobileTitle}
+            </span>
+          )}
+
           {/* 移动端汉堡菜单按钮 */}
           <button
             type="button"
-            className="md:hidden inline-flex h-9 w-9 items-center justify-center rounded-md text-foreground hover:bg-accent transition-colors"
+            className={cn(
+              "inline-flex h-9 w-9 items-center justify-center rounded-md text-foreground transition-colors hover:bg-accent md:hidden",
+              isTeacherWorkspace && "hidden",
+            )}
             onClick={() => setMobileMenuOpen(true)}
             aria-label="打开菜单"
           >
@@ -329,6 +355,24 @@ export function Layout() {
                     >
                       <FileCheck size={16} className="mr-1.5" />
                       阅卷中心
+                    </NavigationMenuLink>
+                  </NavigationMenuItem>
+                )}
+
+                {isTeacherWorkspace && (
+                  <NavigationMenuItem>
+                    <NavigationMenuLink
+                      className={cn(
+                        navigationMenuTriggerStyle(),
+                        isActive("/students") && "bg-accent/50 text-accent-foreground",
+                      )}
+                      onClick={(event: React.MouseEvent) => {
+                        event.preventDefault();
+                        navigate("/students");
+                      }}
+                    >
+                      <GraduationCap size={16} className="mr-1.5" />
+                      学生管理
                     </NavigationMenuLink>
                   </NavigationMenuItem>
                 )}
@@ -571,7 +615,7 @@ export function Layout() {
           </div>
 
           {/* 右侧：主题 + 通知 + 用户 */}
-          <div className="flex items-center gap-1 shrink-0">
+          <div className="ml-auto flex shrink-0 items-center gap-1 md:ml-0">
             <ThemeCustomizer />
             {(isTeacher || isAdmin) && <NotificationCenter />}
             <Separator
@@ -589,7 +633,7 @@ export function Layout() {
       </header>
 
       {/* 移动端导航抽屉 */}
-      {mobileMenuOpen && (
+      {mobileMenuOpen && !isTeacherWorkspace && (
         <div className="fixed inset-0 z-50 md:hidden">
           <div
             className="absolute inset-0 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200"
@@ -767,7 +811,7 @@ export function Layout() {
 
       <main
         className={cn(
-          "flex-1",
+          "min-h-0 min-w-0 flex-1",
           isFullScreenPage
             ? "min-h-0 overflow-hidden"
             : "overflow-y-auto overflow-x-hidden",
@@ -787,6 +831,35 @@ export function Layout() {
           <Outlet />
         </div>
       </main>
+
+      {isTeacherWorkspace && !isGradingTaskFocused && (
+        <nav
+          aria-label="教师主要导航"
+          className="shrink-0 border-t border-border bg-background pb-[env(safe-area-inset-bottom)] md:hidden"
+        >
+          <div className="grid min-h-14 grid-cols-4">
+            {[
+              { to: "/dashboard", label: "工作台", icon: LayoutDashboard, active: location.pathname === "/" || location.pathname === "/dashboard" },
+              { to: "/courses", label: "课程", icon: LibraryBig, active: coursesNavActive },
+              { to: "/grading", label: "阅卷", icon: FileCheck, active: isActive("/grading") },
+              { to: "/students", label: "学生", icon: GraduationCap, active: isActive("/students") },
+            ].map(({ to, label, icon: Icon, active }) => (
+              <Link
+                key={to}
+                to={to}
+                aria-current={active ? "page" : undefined}
+                className={cn(
+                  "flex min-h-14 flex-col items-center justify-center gap-0.5 px-1 text-[11px] transition-colors",
+                  active ? "text-primary" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <Icon size={18} aria-hidden="true" />
+                <span>{label}</span>
+              </Link>
+            ))}
+          </div>
+        </nav>
+      )}
     </div>
   );
 }

@@ -12,12 +12,19 @@ import {
   Search,
   Share2,
   Trash2,
+  MoreHorizontal,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { formatMajorName } from "@/lib/knowledge-display";
 import { cn } from "@/lib/utils";
 import { PageIntroHeader } from "@/components/ui/page-intro-header";
@@ -89,17 +96,69 @@ function CourseCard({
       tabIndex={0}
       onClick={() => navigate(`/courses/${course.id}`)}
       onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           navigate(`/courses/${course.id}`);
         }
       }}
       className={cn(
-        "group cursor-pointer overflow-hidden rounded-xl border border-border bg-card shadow-none transition-all hover:-translate-y-0.5 hover:border-foreground/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "group cursor-pointer overflow-hidden rounded-xl border border-border bg-card shadow-none transition-colors hover:border-foreground/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:hover:-translate-y-0.5",
         isDeleted && "bg-muted/35 opacity-80 hover:translate-y-0 hover:border-border",
       )}
     >
-      <CardHeader className="p-4 pb-2">
+      <div className="flex min-w-0 items-start gap-3 p-4 md:hidden">
+        <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+          <BookOpen size={18} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-start gap-2">
+            <h3 className="min-w-0 flex-1 line-clamp-2 text-sm font-semibold leading-5 text-foreground">
+              {course.name}
+            </h3>
+            {isDeleted ? <Badge variant="outline" className="shrink-0 text-[11px]">已删除</Badge> : null}
+          </div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+            {showMajorLabel ? <span className="max-w-full truncate">{formatMajorName(course.major_name)}</span> : null}
+            {course.visibility === "platform" ? <span>共享</span> : null}
+            {!course.can_write ? <span>只读</span> : null}
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+            {course.pending_count > 0 && !isDeleted ? (
+              <span className="font-medium text-foreground">{course.pending_count} 项待处理</span>
+            ) : null}
+            <span className="text-muted-foreground">
+              {course.exam_count} 场考试 · {course.assignment_count} 项练习
+            </span>
+          </div>
+        </div>
+        {!isDeleted && course.can_write && onDelete ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-9 shrink-0 text-muted-foreground"
+                aria-label={`更多课程操作：${course.name}`}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <MoreHorizontal size={18} />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                className="text-destructive focus:text-destructive"
+                onClick={() => onDelete(course)}
+              >
+                <Trash2 size={15} className="mr-2" />
+                删除课程
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
+      </div>
+      <CardHeader className="hidden p-4 pb-2 md:block">
         <div className="flex min-h-5 items-center gap-2">
           {showMajorLabel ? (
             <span className="truncate text-xs text-muted-foreground">{formatMajorName(course.major_name)}</span>
@@ -128,7 +187,7 @@ function CourseCard({
               type="button"
               variant="ghost"
               size="icon"
-              className="size-7 opacity-0 text-muted-foreground transition-opacity hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100 group-focus-visible:opacity-100"
+              className="size-7 text-muted-foreground transition-opacity hover:text-destructive md:opacity-0 md:focus-visible:opacity-100 md:group-hover:opacity-100 md:group-focus-visible:opacity-100"
               aria-label="删除课程"
               onClick={(event) => {
                 event.preventDefault();
@@ -141,7 +200,7 @@ function CourseCard({
           ) : null}
         </div>
       </CardHeader>
-      <CardContent className="flex min-h-[210px] flex-col p-4 pt-0">
+      <CardContent className="hidden min-h-[210px] flex-col p-4 pt-0 md:flex">
         <h3 className="min-w-0 truncate font-serif text-base font-semibold tracking-tight text-foreground">
           {course.name}
         </h3>
@@ -180,9 +239,9 @@ function CourseCard({
 
 function CourseListSkeleton() {
   return (
-    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+    <div className="grid gap-2 md:gap-4 md:grid-cols-2 xl:grid-cols-3">
       {[1, 2, 3, 4, 5, 6].map((item) => (
-        <div key={item} className="h-[230px] animate-pulse rounded-xl bg-muted" />
+        <div key={item} className="h-28 animate-pulse rounded-xl bg-muted md:h-[230px]" />
       ))}
     </div>
   );
@@ -289,7 +348,7 @@ export function CourseListPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-4 sm:space-y-6">
       <PageIntroHeader
         title="我的课程"
         description={
@@ -298,8 +357,8 @@ export function CourseListPage() {
             : `正常 ${activeTotal} 门 · 已删除 ${deletedTotal} 门${totalPending > 0 ? ` · ${totalPending} 项待处理` : ""}`
         }
         actions={
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <div className="relative w-[260px] max-w-full">
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+            <div className="relative hidden w-[260px] sm:block">
               <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/70" />
               <Input
                 value={query}
@@ -318,6 +377,17 @@ export function CourseListPage() {
           </div>
         }
       />
+
+      <div className="relative sm:hidden">
+        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/70" />
+        <Input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="搜索课程"
+          aria-label="搜索课程"
+          className="h-10 pl-9 text-sm"
+        />
+      </div>
 
       <NewCourseDialog
         open={createOpen}
@@ -393,7 +463,7 @@ export function CourseListPage() {
                   没有匹配的正常课程
                 </div>
               ) : (
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                <div className="grid gap-2 md:grid-cols-2 md:gap-4 xl:grid-cols-3">
                   {activeCourses.map((course) => (
                     <CourseCard
                       key={course.id}
@@ -415,7 +485,7 @@ export function CourseListPage() {
                     {deletedCourses.length}
                   </span>
                 </div>
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                <div className="grid gap-2 md:grid-cols-2 md:gap-4 xl:grid-cols-3">
                   {deletedCourses.map((course) => (
                     <CourseCard key={course.id} course={course} />
                   ))}

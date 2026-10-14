@@ -44,10 +44,12 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
 import { LatexText } from "@/components/ui/latex-text";
 import { cn } from "@/lib/utils";
+import { useMediaQuery } from "@/hooks/use-viewport";
 import { dimensionLabel } from "@/lib/dimension-display";
 import type { IQuestion } from "@/types";
 import {
   apiRequest,
+  GradingApiError,
   type CandidateGroup,
   type ExamCandidateScore,
   type ExamCandidateScoresResponse,
@@ -63,6 +65,7 @@ import {
   type GradingQuestionCandidate,
   type GradingQuestionDetailResponse,
 } from "./api";
+import { clearRecentGradingTask, rememberRecentGradingTask } from "./recent-task";
 import { WholePaperView } from "./whole-paper-view";
 
 type ExpandedStage = "primary" | "review" | "arbiter";
@@ -313,10 +316,13 @@ function safeInternalBackTo(value: string | null): string | null {
 }
 
 export function GradingCenterPage() {
+  const isWideWorkspace = useMediaQuery("(min-width: 1280px)");
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const scopedExamId = searchParams.get("examId")?.trim() || null;
+  const initialTaskId = searchParams.get("taskId")?.trim() || null;
+  const initialQuestionRef = searchParams.get("questionRef")?.trim() || null;
   // 从课程详情「批改」进入时携带的一次性默认模式（消费后从 URL 移除，避免刷新覆盖手动状态）。
   const initialModeParam = searchParams.get("mode");
   const routeState = (location.state ?? null) as GradingRouteState;
@@ -332,11 +338,21 @@ export function GradingCenterPage() {
   const [questionCountOverrides, setQuestionCountOverrides] = useState<
     Record<string, { pending_count: number; completed_count: number }>
   >({});
-  const [selectedQuestionRef, setSelectedQuestionRef] = useState<string | null>(null);
+  const [selectedQuestionRef, setSelectedQuestionRef] = useState<string | null>(initialQuestionRef);
   const [questionDetail, setQuestionDetail] = useState<GradingQuestionDetailResponse | null>(null);
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(initialTaskId);
+  const requestedTaskIdRef = useRef<string | null>(initialTaskId);
+  const selectedTaskIdRef = useRef(selectedTaskId);
+  selectedTaskIdRef.current = selectedTaskId;
+  const candidateLoadSequenceRef = useRef(0);
+  const [compactPanel, setCompactPanel] = useState<"queue" | "work">(initialTaskId || scopedExamId ? "work" : "queue");
+  const [compactRecoveryMessage, setCompactRecoveryMessage] = useState<string | null>(null);
+  const compactTaskHistoryRef = useRef(Boolean(initialTaskId || scopedExamId));
+  const hadTaskParamRef = useRef(Boolean(initialTaskId));
+  const returningByHistoryRef = useRef(false);
   const [candidateDetail, setCandidateDetail] = useState<GradingCandidateDetailResponse | null>(null);
   const [manualScore, setManualScore] = useState("");
+  const scoreDraftsRef = useRef<Record<string, string>>({});
   const [autoScoreReason, setAutoScoreReason] = useState<string | null>(null);
   const [promptDraft, setPromptDraft] = useState("");
   const [showFollowUpWorkspace, setShowFollowUpWorkspace] = useState(false);
@@ -363,6 +379,8 @@ export function GradingCenterPage() {
   const [loadingQuestion, setLoadingQuestion] = useState(false);
   const [loadingCandidate, setLoadingCandidate] = useState(false);
   const [actionLoading, setActionLoading] = useState<null | "manual" | "run" | "refresh" | "confirm">(null);
+  const scoreSubmitInFlightRef = useRef(false);
+  const restoredInitialTaskRef = useRef(false);
   const [followUpStreaming, setFollowUpStreaming] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
   const [expandedStages, setExpandedStages] = useState<Record<ExpandedStage, boolean>>({
@@ -400,13 +418,14 @@ export function GradingCenterPage() {
     setSearchParams(next, { replace: true, state: location.state });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [candidateExamKey, setCandidateExamKey] = useState<string | null>(null); // exam_id ?? "standalone"
+  const [candidateExamKey, setCandidateExamKey] = useState<string | null>(initialQuestionRef?.split("::")[0] ?? scopedExamId); // exam_id ?? "standalone"
   const [selectedCandidateKey, setSelectedCandidateKey] = useState<string | null>(null);
   // 选中考试每道题的考生列表缓存：questionId -> 该题详情（含 candidates）
   const [examQuestionCandidates, setExamQuestionCandidates] = useState<
     Record<string, GradingQuestionDetailResponse>
   >({});
   const [loadingCandidateGroups, setLoadingCandidateGroups] = useState(false);
+  const [loadedCandidateExamKey, setLoadedCandidateExamKey] = useState<string | null>(null);
   const [candidateScoreMap, setCandidateScoreMap] = useState<Map<string, ExamCandidateScore>>(new Map());
   // 按考生阅卷下的内容区视图：逐题工作流 vs 整卷视图
   const [candidatePaneView, setCandidatePaneView] = useState<"workflow" | "paper">(
@@ -415,6 +434,41 @@ export function GradingCenterPage() {
   useEffect(() => {
     localStorage.setItem("grading_candidate_view", candidatePaneView);
   }, [candidatePaneView]);
+
+  const openCompactWork = () => {
+    setCompactRecoveryMessage(null);
+    compactTaskHistoryRef.current = false;
+    hadTaskParamRef.current = false;
+    returningByHistoryRef.current = false;
+    setCompactPanel("work");
+  };
+  const returnToCompactQueue = () => {
+    compactTaskHistoryRef.current = true;
+    setCompactPanel("queue");
+    const next = new URLSearchParams(searchParams);
+    next.delete("taskId");
+    setSearchParams(next, { replace: true, state: location.state });
+  };
+
+  useEffect(() => {
+    if (searchParams.has("taskId")) {
+      hadTaskParamRef.current = true;
+    } else if (hadTaskParamRef.current && compactPanel === "work") {
+      hadTaskParamRef.current = false;
+      returningByHistoryRef.current = true;
+      setCompactPanel("queue");
+    }
+  }, [searchParams, compactPanel]);
+
+  useEffect(() => {
+    if (compactPanel !== "work" || !selectedTaskId || returningByHistoryRef.current) return;
+    if (searchParams.get("taskId") === selectedTaskId && searchParams.get("questionRef") === selectedQuestionRef) return;
+    const next = new URLSearchParams(searchParams);
+    next.set("taskId", selectedTaskId);
+    if (selectedQuestionRef) next.set("questionRef", selectedQuestionRef);
+    setSearchParams(next, { replace: compactTaskHistoryRef.current, state: location.state });
+    compactTaskHistoryRef.current = true;
+  }, [compactPanel, selectedTaskId, selectedQuestionRef, searchParams, setSearchParams, location.state]);
 
   const markCandidateViewed = async (taskId: string) => {
     if (viewedTaskIdsRef.current.has(taskId)) return;
@@ -506,17 +560,24 @@ export function GradingCenterPage() {
   };
 
   const loadCandidate = async (taskId: string) => {
+    const requestSequence = ++candidateLoadSequenceRef.current;
     setLoadingCandidate(true);
+    setCandidateDetail(null);
     try {
       const payload = await apiRequest<GradingCandidateDetailResponse>(
         `/grading/inbox/tasks/${taskId}`,
       );
+      if (requestSequence !== candidateLoadSequenceRef.current || selectedTaskIdRef.current !== taskId) return null;
       const hydratedPayload = viewedTaskIdsRef.current.has(taskId) ? { ...payload, viewed: true } : payload;
       setCandidateDetail(hydratedPayload);
       const hasAnswer =
         Boolean(hydratedPayload.student_answer_raw?.trim()) ||
         (hydratedPayload.attachment_refs?.length ?? 0) > 0;
-      if (!hasAnswer) {
+      const draft = scoreDraftsRef.current[taskId];
+      if (draft !== undefined) {
+        setManualScore(draft);
+        setAutoScoreReason(null);
+      } else if (!hasAnswer) {
         setManualScore("0");
         setAutoScoreReason("该考生未提交答案，评分自动设为0分");
       } else if (hydratedPayload.suggested_score == null) {
@@ -529,12 +590,21 @@ export function GradingCenterPage() {
       setReportError(null);
       return hydratedPayload;
     } catch (error) {
+      if (requestSequence !== candidateLoadSequenceRef.current || selectedTaskIdRef.current !== taskId) return null;
       setCandidateDetail(null);
-      setReportError(error instanceof Error ? error.message : "加载评分详情失败");
+      if (error instanceof GradingApiError && [403, 404, 410].includes(error.status) && compactPanel === "work") {
+        clearRecentGradingTask(taskId);
+        setCompactRecoveryMessage("这份阅卷任务已不可访问，请从队列重新选择。");
+        returnToCompactQueue();
+      } else {
+        setReportError(error instanceof Error ? error.message : "加载评分详情失败");
+      }
       return null;
     } finally {
-      setLoadingCandidate(false);
-      setActionLoading(null);
+      if (requestSequence === candidateLoadSequenceRef.current) {
+        setLoadingCandidate(false);
+        setActionLoading(null);
+      }
     }
   };
 
@@ -714,6 +784,17 @@ export function GradingCenterPage() {
     void loadQuestion(examId, questionId).then((payload) => {
       if (!payload) return;
       const preferredCandidate = payload.candidates[0];
+      const requestedTaskId = requestedTaskIdRef.current;
+      if (requestedTaskId) {
+        requestedTaskIdRef.current = null;
+        if (!payload.candidates.some((candidate) => candidate.task_id === requestedTaskId)) {
+          clearRecentGradingTask(requestedTaskId);
+          setCompactRecoveryMessage("这份阅卷任务已不可访问，请从队列重新选择。");
+          returnToCompactQueue();
+          setSelectedTaskId(preferredCandidate?.task_id ?? null);
+          return;
+        }
+      }
       if (preferredCandidate) {
         setSelectedTaskId((current) =>
           payload.candidates.some((candidate) => candidate.task_id === current)
@@ -794,14 +875,14 @@ export function GradingCenterPage() {
   }, [activeCandidate, selectedTaskId, gradingMode]);
 
   const navigateCandidateByOffset = (offset: -1 | 1) => {
-    if (!activeCandidate) return;
+    if (!activeCandidate) return false;
     setCandidateTransitionDirection(offset === 1 ? "next" : "prev");
     const ids = sortedCandidates.map((candidate) => candidate.task_id);
     const currentIndex = ids.indexOf(activeCandidate.task_id);
     const nextIndex = currentIndex + offset;
     if (nextIndex >= 0 && nextIndex < ids.length) {
       setSelectedTaskId(ids[nextIndex]);
-      return;
+      return true;
     }
 
     if (offset === 1) {
@@ -813,22 +894,29 @@ export function GradingCenterPage() {
       const questionIndex = questions.findIndex((item) => item.ref === selectedQuestionRef);
       if (questionIndex >= 0 && questionIndex < questions.length - 1) {
         setSelectedQuestionRef(questions[questionIndex + 1].ref);
+        return true;
       }
     }
+    return false;
   };
 
   const finalizeCurrentScore = async (scoreOverride?: number) => {
-    if (!selectedTaskId || !candidateDetail) return true;
+    if (!selectedTaskId || !candidateDetail || scoreSubmitInFlightRef.current) return false;
     const currentTaskId = selectedTaskId;
     const wasAlreadyConfirmed = isConfirmedCandidateStatus(
       activeCandidate?.status ?? candidateDetail.status,
     );
     const scoreValue = scoreOverride !== undefined ? scoreOverride : Number(manualScore);
-    if (Number.isNaN(scoreValue)) return false;
+    if ((manualScore.trim() === "" && scoreOverride === undefined) || !Number.isFinite(scoreValue) || scoreValue < 0 || scoreValue > candidateDetail.max_score) {
+      setReportError(`请输入 0 到 ${candidateDetail.max_score} 之间的分数`);
+      return false;
+    }
 
     const suggestedScore = candidateDetail.suggested_score;
     const scoreChanged = suggestedScore == null || scoreValue !== suggestedScore;
 
+    scoreSubmitInFlightRef.current = true;
+    setReportError(null);
     try {
       if (scoreChanged) {
         setActionLoading("manual");
@@ -888,12 +976,41 @@ export function GradingCenterPage() {
         });
       }
       setAutoScoreReason(null);
+      delete scoreDraftsRef.current[currentTaskId];
       setActionLoading(null);
       return true;
     } catch (error) {
-      setReportError(error instanceof Error ? error.message : "确定分数失败");
       setActionLoading(null);
+      const errorMessage = error instanceof Error ? error.message : "确定分数失败";
+      try {
+        // 响应丢失时先读取服务端结果，避免把已经确认的答案再次提交。
+        const verified = await apiRequest<GradingCandidateDetailResponse>(
+          `/grading/inbox/tasks/${currentTaskId}`,
+        );
+        if (verified.task_id === currentTaskId) {
+          setCandidateDetail(verified);
+          if (isConfirmedCandidateStatus(verified.status) && verified.suggested_score === scoreValue) {
+            delete scoreDraftsRef.current[currentTaskId];
+            setReportError(null);
+            void loadInbox();
+            return true;
+          }
+          if (verified.suggested_score === scoreValue && scoreChanged) {
+            setReportError("分数已保存，但确认尚未完成。请重试确认。");
+            return false;
+          }
+          if (isConfirmedCandidateStatus(verified.status)) {
+            setReportError("该答案已有不同的确认分数，请核对后再操作。");
+            return false;
+          }
+        }
+        setReportError(errorMessage);
+      } catch {
+        setReportError(`${errorMessage}。提交结果暂无法核实，请恢复网络后重试。`);
+      }
       return false;
+    } finally {
+      scoreSubmitInFlightRef.current = false;
     }
   };
 
@@ -908,6 +1025,7 @@ export function GradingCenterPage() {
     );
     if (!examGroup) return;
     setLoadingCandidateGroups(true);
+    setLoadedCandidateExamKey(null);
     try {
       const examId = examGroup.exam_id; // null => standalone
       const entries = await Promise.all(
@@ -927,6 +1045,7 @@ export function GradingCenterPage() {
         }),
       );
       setExamQuestionCandidates(Object.fromEntries(entries));
+      setLoadedCandidateExamKey(examKey);
       if (examId) {
         try {
           const scorePayload = await apiRequest<ExamCandidateScoresResponse>(
@@ -1012,6 +1131,28 @@ export function GradingCenterPage() {
     );
   }, [candidateGroups, searchText]);
 
+  useEffect(() => {
+    const requestedTaskId = requestedTaskIdRef.current;
+    if (gradingMode !== "candidate" || !requestedTaskId || loadedCandidateExamKey !== candidateExamKey) return;
+    requestedTaskIdRef.current = null;
+    if (candidateGroups.some((group) => group.cells.some((cell) => cell.task.task_id === requestedTaskId))) return;
+    clearRecentGradingTask(requestedTaskId);
+    setCompactRecoveryMessage("这份阅卷任务已不可访问，请从队列重新选择。");
+    returnToCompactQueue();
+  }, [gradingMode, loadedCandidateExamKey, candidateExamKey, candidateGroups]);
+
+  useEffect(() => {
+    if (gradingMode !== "candidate" || !initialTaskId || restoredInitialTaskRef.current) return;
+    const matchingGroup = candidateGroups.find((group) =>
+      group.cells.some((cell) => cell.task.task_id === initialTaskId),
+    );
+    if (matchingGroup) {
+      restoredInitialTaskRef.current = true;
+      setSelectedCandidateKey(matchingGroup.candidateKey);
+      setSelectedTaskId(initialTaskId);
+    }
+  }, [gradingMode, candidateGroups, initialTaskId]);
+
   const activeCandidateGroup = useMemo(
     () =>
       candidateGroups.find((group) => group.candidateKey === selectedCandidateKey) ??
@@ -1026,12 +1167,34 @@ export function GradingCenterPage() {
   );
   const currentCell = currentCellIndex >= 0 ? activeCandidateGroup!.cells[currentCellIndex] : null;
 
+  useEffect(() => {
+    if (!selectedTaskId || candidateDetail?.task_id !== selectedTaskId) return;
+    if (!isWideWorkspace && compactPanel !== "work") return;
+    if (isConfirmedCandidateStatus(candidateDetail.status)) return;
+    const questionTitle = gradingMode === "candidate"
+      ? currentCell?.questionLabel
+      : questionDetail?.question_label;
+    rememberRecentGradingTask({
+      taskId: selectedTaskId,
+      title: [questionTitle, candidateDetail.candidate_name].filter(Boolean).join(" · ") || "继续阅卷",
+      questionRef: selectedQuestionRef,
+      mode: gradingMode,
+    });
+  }, [selectedTaskId, candidateDetail, compactPanel, isWideWorkspace, gradingMode, currentCell?.questionLabel, questionDetail?.question_label, selectedQuestionRef]);
+
+  useEffect(() => {
+    if (gradingMode !== "candidate" || !currentCell) return;
+    const examId = candidateExamKey === "standalone" ? null : candidateExamKey;
+    const ref = buildQuestionRef(examId, currentCell.questionId);
+    if (selectedQuestionRef !== ref) setSelectedQuestionRef(ref);
+  }, [gradingMode, candidateExamKey, currentCell, selectedQuestionRef]);
+
   // 整卷视图所需：真实考试 UUID + 考生 UUID（standalone 或缺 ID 时不可用）
   const resolvedExamId =
     candidateExamKey && candidateExamKey !== "standalone" ? candidateExamKey : scopedExamId;
   const paperViewAvailable =
     gradingMode === "candidate" && Boolean(resolvedExamId) && Boolean(activeCandidateGroup?.studentId);
-  const showPaperView = paperViewAvailable && candidatePaneView === "paper";
+  const showPaperView = isWideWorkspace && paperViewAvailable && candidatePaneView === "paper";
   const activeCandidateGroupIndex = candidateGroups.findIndex(
     (group) => group.candidateKey === activeCandidateGroup?.candidateKey,
   );
@@ -1082,7 +1245,7 @@ export function GradingCenterPage() {
     const ok = await finalizeCurrentScore(scoreOverride);
     if (!ok) return;
     if (gradingMode === "question") {
-      navigateCandidateByOffset(1);
+      if (!navigateCandidateByOffset(1)) clearRecentGradingTask(confirmedTaskId ?? undefined);
       return;
     }
     if (confirmedTaskId && cellQuestionId) {
@@ -1114,7 +1277,18 @@ export function GradingCenterPage() {
     if (rest[0]) {
       setCandidateTransitionDirection("next");
       setSelectedTaskId(rest[0].task.task_id);
+      return;
     }
+    const nextCandidate = candidateGroups
+      .slice(activeCandidateGroupIndex + 1)
+      .find((group) => group.cells.some((cell) => !isConfirmedCandidateStatus(cell.task.status)));
+    if (nextCandidate) {
+      setCandidateTransitionDirection("next");
+      setSelectedCandidateKey(nextCandidate.candidateKey);
+      pickFirstPendingTask(nextCandidate);
+      return;
+    }
+    clearRecentGradingTask(confirmedTaskId ?? undefined);
   };
 
   const handlePromptFollowUp = async () => {
@@ -1250,6 +1424,19 @@ export function GradingCenterPage() {
   const hasVisibleQuestions = filteredExamGroups.length > 0;
   const hasAnswerAttachment = (candidateDetail?.attachment_refs?.length ?? 0) > 0;
   const hasAnswerText = Boolean(candidateDetail?.student_answer_raw?.trim());
+  const compactQuestionRefs = filteredExamGroups.flatMap((exam) =>
+    exam.questions.map((question) => buildQuestionRef(exam.exam_id, question.question_id)),
+  );
+  const hasNextCompactItem = gradingMode === "question"
+    ? activeCandidateIndex < sortedCandidates.length - 1 || compactQuestionRefs.indexOf(selectedQuestionRef ?? "") < compactQuestionRefs.length - 1
+    : (activeCandidateGroup?.cells.some((cell) => cell.task.task_id !== selectedTaskId && !isConfirmedCandidateStatus(cell.task.status)) ?? false)
+      || candidateGroups.slice(activeCandidateGroupIndex + 1).some((group) => group.pendingCount > 0);
+  const updateManualScore = (value: string) => {
+    setManualScore(value);
+    if (selectedTaskId) scoreDraftsRef.current[selectedTaskId] = value;
+    setAutoScoreReason(null);
+    setReportError(null);
+  };
   const scoreControls = (
     <div className="flex shrink-0 items-center gap-2">
       <label className="text-sm text-muted-foreground" htmlFor="manual-score-inline">分数</label>
@@ -1258,10 +1445,7 @@ export function GradingCenterPage() {
           id="manual-score-inline"
           type="number"
           value={manualScore}
-          onChange={(event) => {
-            setManualScore(event.target.value);
-            setAutoScoreReason(null);
-          }}
+          onChange={(event) => updateManualScore(event.target.value)}
           className="h-8 w-24 rounded-lg"
         />
         {autoScoreReason ? (
@@ -1286,8 +1470,7 @@ export function GradingCenterPage() {
                 size="sm"
                 onClick={() => {
                   const score = candidateDetail?.max_score ?? 0;
-                  setManualScore(String(score));
-                  setAutoScoreReason(null);
+                  updateManualScore(String(score));
                   void handleConfirmScoreSmart(score);
                 }}
                 disabled={(actionLoading === "manual" || actionLoading === "confirm") || !selectedTaskId}
@@ -1306,8 +1489,7 @@ export function GradingCenterPage() {
                 variant="outline"
                 size="sm"
                 onClick={() => {
-                  setManualScore("0");
-                  setAutoScoreReason(null);
+                  updateManualScore("0");
                   void handleConfirmScoreSmart(0);
                 }}
                 disabled={(actionLoading === "manual" || actionLoading === "confirm") || !selectedTaskId}
@@ -1325,7 +1507,7 @@ export function GradingCenterPage() {
 
   return (
     <div className={cn(
-      "flex h-full min-h-0 flex-col overflow-hidden px-0 pt-4",
+      "flex h-full min-h-0 flex-col overflow-hidden px-0 pt-0 xl:pt-4",
       showPaperView ? "pb-4" : "pb-0",
     )}>
       <AttachmentPreviewDialog
@@ -1347,7 +1529,41 @@ export function GradingCenterPage() {
         </div>
       )}
       {!showFollowUpWorkspace ? (
-        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4 border-b border-border/70 px-4 pb-4">
+        <div className="shrink-0 border-b border-border/70 px-4 py-3 xl:hidden">
+          {compactPanel === "work" ? (
+            <div className="flex min-w-0 items-center gap-3">
+              <Button variant="ghost" size="icon" className="-ml-2 shrink-0" onClick={returnToCompactQueue} aria-label="返回阅卷队列">
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold">{gradingMode === "candidate" ? activeCandidateGroup?.candidateName ?? "阅卷" : questionDetail?.question_label ?? "阅卷"}</p>
+                <p className="truncate text-xs text-muted-foreground">
+                  {gradingMode === "candidate"
+                    ? `第 ${currentCellIndex >= 0 ? currentCellIndex + 1 : "-"} / ${activeCandidateGroup?.cells.length ?? 0} 题`
+                    : `${activeCandidateIndex >= 0 ? activeCandidateIndex + 1 : "-"} / ${sortedCandidates.length} 位考生`}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <h1 aria-hidden={isWideWorkspace} className="truncate text-base font-semibold">{scopedExamId ? scopedExamGroups[0]?.exam_label ?? "阅卷中心" : "阅卷中心"}</h1>
+                  <p className="text-xs text-muted-foreground">待处理 {summaryStats.pendingCount} 条作答 · 已完成 {summaryStats.completedCount} 条</p>
+                </div>
+                {backTo ? <Button variant="ghost" size="sm" onClick={() => navigate(backTo)}>{backLabel}</Button> : null}
+              </div>
+              <div className="grid grid-cols-2 rounded-lg bg-muted p-1" role="group" aria-label="阅卷方式">
+                <button type="button" onClick={() => { setGradingMode("question"); setSidebarHidden(false); }} className={cn("rounded-md px-3 py-2 text-sm", gradingMode === "question" ? "bg-background font-medium shadow-sm" : "text-muted-foreground")}>按题目</button>
+                <button type="button" onClick={() => { setGradingMode("candidate"); setSidebarHidden(true); }} className={cn("rounded-md px-3 py-2 text-sm", gradingMode === "candidate" ? "bg-background font-medium shadow-sm" : "text-muted-foreground")}>按考生</button>
+              </div>
+              {compactRecoveryMessage ? <p role="alert" className="rounded-md border border-border bg-muted/50 px-3 py-2 text-sm text-foreground/80">{compactRecoveryMessage}</p> : null}
+            </div>
+          )}
+        </div>
+      ) : null}
+      {!showFollowUpWorkspace ? (
+        <div className="hidden grid-cols-[1fr_auto_1fr] items-center gap-4 border-b border-border/70 px-4 pb-4 xl:grid">
           <div className="min-w-0 justify-self-start">
             {(() => {
               const fullTitle = scopedExamId
@@ -1357,14 +1573,14 @@ export function GradingCenterPage() {
               const display = isLong ? `${fullTitle.slice(0, 30)}…` : fullTitle;
               if (!isLong) {
                 return (
-                  <h1 className="truncate text-base font-bold tracking-tight">{display}</h1>
+                  <h1 aria-hidden={!isWideWorkspace} className="truncate text-base font-bold tracking-tight">{display}</h1>
                 );
               }
               return (
                 <TooltipProvider delayDuration={300}>
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <h1 className="cursor-default truncate text-base font-bold tracking-tight">
+                      <h1 aria-hidden={!isWideWorkspace} className="cursor-default truncate text-base font-bold tracking-tight">
                         {display}
                       </h1>
                     </TooltipTrigger>
@@ -1377,8 +1593,8 @@ export function GradingCenterPage() {
             })()}
             <p className="mt-1 truncate text-xs text-muted-foreground">
               {scopedExamId
-                ? `共 ${summaryStats.questionCount} 道主观题，待处理 ${summaryStats.pendingCount} 份，已完成 ${summaryStats.completedCount} 份`
-                : `当前共有 ${summaryStats.examCount} 场考试、${summaryStats.questionCount} 道题，待处理 ${summaryStats.pendingCount} 份，已完成 ${summaryStats.completedCount} 份`}
+                ? `共 ${summaryStats.questionCount} 道主观题，待处理 ${summaryStats.pendingCount} 条作答，已完成 ${summaryStats.completedCount} 条`
+                : `当前共有 ${summaryStats.examCount} 场考试、${summaryStats.questionCount} 道题，待处理 ${summaryStats.pendingCount} 条作答，已完成 ${summaryStats.completedCount} 条`}
             </p>
           </div>
           <div className="justify-self-center">
@@ -1521,7 +1737,7 @@ export function GradingCenterPage() {
 
       <main
         className={cn(
-          "relative grid min-h-0 flex-1 gap-0 overflow-hidden transition-[grid-template-columns] duration-500 ease-in-out",
+          "relative grid min-h-0 flex-1 grid-cols-1 gap-0 overflow-hidden transition-[grid-template-columns] duration-500 ease-in-out",
           sidebarHidden ? "xl:grid-cols-[0px_minmax(0,1fr)]" : "xl:grid-cols-[360px_minmax(0,1fr)]",
           showFollowUpWorkspace &&
             "pointer-events-none scale-[0.985] opacity-0 blur-[2px] transition-all duration-200 ease-out",
@@ -1549,7 +1765,8 @@ export function GradingCenterPage() {
         <section
           className={cn(
             "min-h-0 min-w-0 overflow-hidden border-r border-border transition-opacity duration-500 ease-in-out dark:border-white/15",
-            sidebarHidden && "pointer-events-none border-r-0 opacity-0",
+            compactPanel === "work" && "max-xl:hidden",
+            sidebarHidden && "xl:pointer-events-none xl:border-r-0 xl:opacity-0",
           )}
         >
           <div className="flex h-full min-h-0 flex-col overflow-hidden px-4 pt-4 pb-2">
@@ -1568,7 +1785,7 @@ export function GradingCenterPage() {
               </div>
             </div>
 
-            <div className="grading-sidebar-scroll min-h-0 flex-1 overflow-y-scroll pt-4 pr-2">
+            <div className="grading-sidebar-scroll min-h-0 flex-1 overflow-y-auto pt-4 pr-2">
               {loadingInbox ? (
                 <div className="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
                   正在加载题目列表...
@@ -1662,6 +1879,7 @@ export function GradingCenterPage() {
                                               setCandidateTransitionDirection("neutral");
                                               setSelectedCandidateKey(group.candidateKey);
                                               pickFirstPendingTask(group);
+                                              openCompactWork();
                                             }}
                                             className={cn(
                                               "w-full rounded-lg border px-3 py-3 text-left transition-all",
@@ -1725,9 +1943,15 @@ export function GradingCenterPage() {
                                         <button
                                           key={question.question_key}
                                           type="button"
-                                          onClick={() =>
-                                            setSelectedQuestionRef(buildQuestionRef(exam.exam_id, question.question_id))
-                                          }
+                                          onClick={() => {
+                                            const nextRef = buildQuestionRef(exam.exam_id, question.question_id);
+                                            if (nextRef !== selectedQuestionRef) {
+                                              setSelectedTaskId(null);
+                                              setCandidateDetail(null);
+                                            }
+                                            setSelectedQuestionRef(nextRef);
+                                            openCompactWork();
+                                          }}
                                           className={cn(
                                             "w-full rounded-lg border border-transparent px-3 py-3 text-left transition-all hover:border-border hover:bg-accent/30",
                                             selected
@@ -1795,8 +2019,8 @@ export function GradingCenterPage() {
         </section>
 
         <section className={cn(
-          "flex min-w-0 flex-col",
-          gradingMode === "question" ? "min-h-0" : "min-h-[calc(100vh-180px)]",
+          "min-h-0 min-w-0 flex-col",
+          compactPanel === "queue" ? "hidden xl:flex" : "flex",
         )}>
           {loadingInbox && !hasVisibleQuestions ? (
             <div className="flex h-full min-h-0 flex-1 items-center justify-center px-8">
@@ -1845,7 +2069,7 @@ export function GradingCenterPage() {
             ) : (
             <>
             {gradingMode === "candidate" ? null : (
-            <section className="space-y-2 border-b border-border/70 py-3">
+            <section className="space-y-2 border-b border-border/70 py-3 max-xl:max-h-40 max-xl:overflow-y-auto">
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-1">
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
@@ -1855,7 +2079,7 @@ export function GradingCenterPage() {
                       </span>
                     ))}
                   </div>
-                  <p className="text-sm leading-6 text-muted-foreground">
+                  <p className={cn("text-sm leading-6 text-muted-foreground", !questionExpanded && "max-xl:line-clamp-2")}>
                     题目：<LatexText>{questionSummary}</LatexText>
                   </p>
                 </div>
@@ -1893,15 +2117,15 @@ export function GradingCenterPage() {
 
             <div
               className={cn(
-                "grid min-h-0 flex-1 gap-0 overflow-hidden",
+                "grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden xl:grid-rows-1",
                 showCandidateList
                   ? "xl:grid-cols-[300px_minmax(0,1fr)]"
                   : "xl:grid-cols-[minmax(0,1fr)]",
               )}
             >
               {showCandidateList ? (
-                <section className="flex min-h-0 flex-col border-r border-border/70 pr-6 dark:border-white/15">
-                <div className="flex items-center justify-between pb-4 pt-1.5">
+                <section className="flex min-h-0 flex-col border-b border-border/70 pr-0 xl:border-b-0 xl:border-r xl:pr-6 dark:border-white/15">
+                <div className="flex items-center justify-between pb-2 pt-1.5 xl:pb-4">
                   {gradingMode === "candidate" && activeCandidateGroup ? (
                     <div className="flex min-w-0 flex-col gap-0.5">
                       <div className="flex items-center gap-1.5">
@@ -1939,7 +2163,7 @@ export function GradingCenterPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="h-8 gap-1.5 px-2 text-xs text-muted-foreground"
+                          className="hidden h-8 gap-1.5 px-2 text-xs text-muted-foreground xl:inline-flex"
                           onClick={() => setShowCandidateList(false)}
                           aria-label="隐藏考生列表"
                         >
@@ -1953,7 +2177,7 @@ export function GradingCenterPage() {
                 </div>
                 {gradingMode === "candidate" ? (
                   <>
-                  <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-3 pb-6">
+                  <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-3 pb-6 max-xl:max-h-20 max-xl:flex-row max-xl:overflow-x-auto max-xl:overflow-y-hidden max-xl:pb-2">
                     {loadingCandidateGroups ? (
                       <div className="rounded-lg border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
                         正在加载题目...
@@ -1975,7 +2199,7 @@ export function GradingCenterPage() {
                               setSelectedTaskId(cell.task.task_id);
                             }}
                             className={cn(
-                              "rounded-[10px] border p-3 text-left transition-all",
+                              "rounded-[10px] border p-3 text-left transition-all max-xl:min-w-36",
                               active
                                 ? "border-primary/60 bg-primary/8"
                                 : "border-border/80 bg-background hover:border-border hover:bg-accent/30",
@@ -2011,7 +2235,7 @@ export function GradingCenterPage() {
                   </div>
                   </>
                 ) : (
-                <div className="grid min-h-0 flex-1 grid-cols-3 content-start gap-2 overflow-y-auto pr-3 pb-6">
+                <div className="grid min-h-0 flex-1 grid-cols-3 content-start gap-2 overflow-y-auto pr-3 pb-6 max-xl:flex max-xl:max-h-14 max-xl:overflow-x-auto max-xl:overflow-y-hidden max-xl:pb-2">
                   {loadingQuestion ? (
                     <div className="col-span-full rounded-lg border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
                       正在加载考生...
@@ -2030,7 +2254,7 @@ export function GradingCenterPage() {
                             setSelectedTaskId(candidate.task_id);
                           }}
                           className={cn(
-                            "group flex h-8 w-full min-w-0 items-center gap-2 rounded-full border px-3 text-left transition-all duration-200",
+                            "group flex h-8 w-full min-w-0 items-center gap-2 rounded-full border px-3 text-left transition-all duration-200 max-xl:h-10 max-xl:min-w-24",
                             isActiveCandidate
                               ? "exam-primary-soft-active shadow-sm"
                               : "border-transparent bg-muted/40 text-muted-foreground hover:border-border/50 hover:bg-muted hover:text-foreground",
@@ -2078,7 +2302,7 @@ export function GradingCenterPage() {
                 </section>
               ) : null}
 
-              <section className={cn("flex min-h-0 flex-col", showCandidateList ? "pl-6" : "pl-0")}>
+              <section className={cn("flex min-h-0 flex-col", showCandidateList ? "xl:pl-6" : "pl-0")}>
                 <div
                   key={selectedTaskId ?? "empty-candidate"}
                   className={cn(
@@ -2137,9 +2361,9 @@ export function GradingCenterPage() {
                   </div>
                 </div>
 
-                <div className="min-h-0 flex-1 overflow-y-auto py-6">
-                  <div className="space-y-8">
-                    <section className="space-y-3">
+                <div className="min-h-0 flex-1 overflow-y-auto py-4 pb-32 xl:py-6 xl:pb-6">
+                  <div className="space-y-8 md:max-xl:mx-auto md:max-xl:grid md:max-xl:w-full md:max-xl:max-w-6xl md:max-xl:grid-cols-[minmax(0,1.15fr)_minmax(300px,0.85fr)] md:max-xl:auto-rows-min md:max-xl:items-start md:max-xl:gap-6 md:max-xl:space-y-0">
+                    <section className="min-w-0 space-y-3 md:max-xl:col-start-1 md:max-xl:row-start-1">
                       <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">考生答案</p>
                       <div className="rounded-xl border border-border/50 bg-muted/10 p-4 shadow-sm">
                         {!hasAnswerText && !hasAnswerAttachment ? (
@@ -2150,7 +2374,9 @@ export function GradingCenterPage() {
                           <div className="space-y-4">
                             {hasAnswerText ? (
                               candidateDetail?.question_type === "code" ? (
-                                <CodeBlock code={candidateDetail.student_answer_raw} language="python" />
+                                <div className="min-w-0 max-w-full overflow-x-auto">
+                                  <CodeBlock code={candidateDetail.student_answer_raw} language="python" />
+                                </div>
                               ) : (
                                 <p className="text-sm leading-relaxed text-foreground/90">
                                   <LatexText>
@@ -2192,8 +2418,31 @@ export function GradingCenterPage() {
                       </div>
                     </section>
 
+                    <section className="min-w-0 space-y-3 border-t border-border/70 pt-4 md:max-xl:col-start-2 md:max-xl:row-start-1 md:max-xl:rounded-lg md:max-xl:border md:max-xl:bg-muted/10 md:max-xl:p-4 xl:hidden">
+                      <div className="flex items-center justify-between gap-3">
+                        <label htmlFor="manual-score-compact" className="text-sm font-medium">人工评分</label>
+                        <span className="text-xs text-muted-foreground">满分 {candidateDetail?.max_score ?? "-"}</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <Input
+                          id="manual-score-compact"
+                          type="number"
+                          inputMode="decimal"
+                          min={0}
+                          max={candidateDetail?.max_score}
+                          value={manualScore}
+                          onChange={(event) => updateManualScore(event.target.value)}
+                          className="h-11 w-32 text-base"
+                          aria-describedby={autoScoreReason ? "score-compact-hint" : undefined}
+                        />
+                        <span className="text-sm text-muted-foreground">/ {candidateDetail?.max_score ?? "-"}</span>
+                        {candidateDetail?.suggested_score != null ? <span className="ml-auto text-xs text-muted-foreground">AI 建议 {candidateDetail.suggested_score}</span> : null}
+                      </div>
+                      {autoScoreReason ? <p id="score-compact-hint" className="text-xs text-muted-foreground">{autoScoreReason}</p> : null}
+                    </section>
+
                     {candidateDetail?.student_feedback || candidateDetail?.teacher_feedback_reply ? (
-                      <section className="space-y-3">
+                      <section className="min-w-0 space-y-3 md:max-xl:col-start-1 md:max-xl:row-start-2">
                         <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">学生反馈</p>
                         <div className="rounded-xl border border-border/50 bg-muted/10 p-4 shadow-sm">
                           <div className="flex flex-col gap-3">
@@ -2222,7 +2471,7 @@ export function GradingCenterPage() {
                       </section>
                     ) : null}
 
-                    <section className="space-y-4">
+                    <section className="min-w-0 space-y-4 md:max-xl:col-start-2 md:max-xl:row-start-2">
                       <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">LLM 评分意见</p>
                       {loadingCandidate ? (
                         <div className="rounded-lg border border-dashed border-border px-4 py-8 text-sm text-muted-foreground">
@@ -2240,7 +2489,7 @@ export function GradingCenterPage() {
                                 <Brain className="h-4 w-4 text-primary" />
                                 AI 评分详情
                               </div>
-                              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                              <div className="mt-4 grid gap-3 xl:grid-cols-2">
                                 {candidateDetail.feedback.dimensions.map((dim) => (
                                   <div key={dim.name} className="rounded-xl bg-background p-4">
                                     <div className="flex items-center justify-between text-sm font-medium">
@@ -2412,7 +2661,7 @@ export function GradingCenterPage() {
             <footer
               aria-label="按题目阅卷操作"
               data-testid="question-grading-actions"
-              className="sticky bottom-0 z-20 flex shrink-0 flex-col gap-2 border-t border-border bg-background px-4 py-4"
+              className="sticky bottom-0 z-20 hidden shrink-0 flex-col gap-2 border-t border-border bg-background px-4 py-4 xl:flex"
             >
               {reportError ? (
                 <p role="alert" className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -2457,11 +2706,34 @@ export function GradingCenterPage() {
         </section>
       </main>
 
+      {compactPanel === "work" && hasVisibleQuestions && !showFollowUpWorkspace ? (
+        <footer className="z-20 shrink-0 border-t border-border bg-background px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] xl:hidden" aria-label="移动端阅卷操作">
+          {reportError ? <p role="alert" className="mb-2 rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">{reportError}</p> : null}
+          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-2">
+            <Button
+              variant="outline"
+              className="h-11"
+              disabled={actionLoading !== null || (gradingMode === "question" ? activeCandidateIndex <= 0 : currentCellIndex <= 0)}
+              onClick={() => gradingMode === "question" ? handleStepCandidate(-1) : stepCandidateQuestion(-1)}
+            >
+              上一项
+            </Button>
+            <Button
+              className="h-11"
+              disabled={actionLoading !== null || !selectedTaskId || !candidateDetail || loadingCandidate}
+              onClick={() => void handleConfirmScoreSmart()}
+            >
+              {actionLoading === "manual" || actionLoading === "confirm" ? "提交中…" : hasNextCompactItem ? "确认并下一项" : "确认分数"}
+            </Button>
+          </div>
+        </footer>
+      ) : null}
+
       {gradingMode === "candidate" && !showPaperView && hasVisibleQuestions ? (
         <footer
           aria-label="按考生阅卷操作"
           data-testid="candidate-grading-actions"
-          className="sticky bottom-0 z-20 flex shrink-0 flex-col gap-2 border-t border-border bg-background px-4 py-4"
+          className="sticky bottom-0 z-20 hidden shrink-0 flex-col gap-2 border-t border-border bg-background px-4 py-4 xl:flex"
         >
           {reportError ? (
             <p role="alert" className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">

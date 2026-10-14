@@ -534,6 +534,8 @@ export function buildImportableQuestions(drafts: QuestionImportDraft[], question
         source: "imported" as const,
         tag_ids: [],
         knowledge_point_ids: draft.suggested_knowledge_points?.map((kp) => kp.id) ?? [],
+        // 题干原文标注的知识点名称：后端入库后按名称匹配课程知识点树。
+        recognized_knowledge_points: draft.recognized_knowledge_points ?? [],
         question_bank_id: questionBankId,
       };
     });
@@ -1164,6 +1166,8 @@ interface JsonQuestion {
   analysis?: string;
   difficulty?: number | string;
   score?: number;
+  // 题干原文标注的知识点名称（尚未匹配到题库知识点）。
+  knowledge_point_names?: unknown;
   images?: JsonQuestionImage[];
 }
 
@@ -1217,6 +1221,33 @@ function mapJsonImages(images: JsonQuestionImage[]): QuestionImportImageInput[] 
     page: img.page,
     alt: img.description || img.filename || "题目图片",
   }));
+}
+
+/** JSON 题目的知识点名称上限：与题库导出的标注保持一致（后端匹配时最多挂 3 个）。 */
+const MAX_JSON_KNOWLEDGE_POINT_NAMES = 6;
+
+/**
+ * 解析 JSON 题目里的知识点名称。
+ *
+ * 支持数组，也支持用 、，；/| 等分隔的字符串；去重后最多保留 6 个。
+ * 这些名称是「原文标注」，入库时由后端按名称匹配知识点树。
+ */
+export function parseJsonKnowledgePointNames(value: unknown): string[] {
+  const rawItems: unknown[] = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/[、,，;；/|｜\n]/)
+      : [];
+  const names: string[] = [];
+  for (const raw of rawItems) {
+    if (raw === null || raw === undefined) continue;
+    if (typeof raw !== "string" && typeof raw !== "number") continue;
+    const name = String(raw).trim();
+    if (!name || names.includes(name)) continue;
+    names.push(name);
+    if (names.length >= MAX_JSON_KNOWLEDGE_POINT_NAMES) break;
+  }
+  return names;
 }
 
 export function structuredJsonText(rawText: string): string | null {
@@ -1332,6 +1363,9 @@ export function parseJsonQuestions(
           ? { answer_html: item.answer.html } : {}),
       analysis: typeof item.analysis === "string" ? item.analysis : null,
       difficulty,
+      recognized_knowledge_points: parseJsonKnowledgePointNames(
+        item.knowledge_point_names,
+      ),
       ...(typeof item.score === "number" && item.score > 0 ? { score: item.score } : {}),
       images: mapJsonImages(images),
       segment_source: "client-json",
@@ -1357,9 +1391,36 @@ export function draftNeedsAnalysis(draft: QuestionImportDraft): boolean {
   return !draft.analysis?.trim();
 }
 
-/** 草稿是否缺少知识点。 */
+/**
+ * 草稿是否缺少知识点。
+ *
+ * JSON 题库导入（segment_source = "client-json"）带的 knowledge_point_names 是权威标注，
+ * 入库时按名称匹配知识点树，不算缺失——否则「仅补齐缺失」会把整批题目都当成缺知识点
+ * 而重复调模型。文档识别出的名称只是线索，仍然算缺失、仍要完善。
+ */
 export function draftNeedsKnowledge(draft: QuestionImportDraft): boolean {
-  return (draft.suggested_knowledge_points?.length ?? 0) === 0;
+  if ((draft.suggested_knowledge_points?.length ?? 0) > 0) return false;
+  const hasRecognizedNames = (draft.recognized_knowledge_points?.length ?? 0) > 0;
+  if (draft.segment_source === "client-json" && hasRecognizedNames) return false;
+  return true;
+}
+
+/**
+ * 待导入题目是否都已经关联好知识点。
+ *
+ * 都关联了（suggested_knowledge_points 非空）时，入库就不必再排后台 AI 匹配：
+ * 既省一次模型调用，也避免 AI 按内容"猜"出与用户已确认不一致的知识点。
+ * 只要有一道没关联（走名称匹配/AI 补），就必须照常排匹配任务。
+ */
+export function allImportableDraftsHaveKnowledge(drafts: QuestionImportDraft[]): boolean {
+  const importable = drafts.filter(
+    (draft) =>
+      draft.review_status === "approved" && getBlockingImportIssues(draft).length === 0,
+  );
+  return (
+    importable.length > 0 &&
+    importable.every((draft) => (draft.suggested_knowledge_points?.length ?? 0) > 0)
+  );
 }
 
 /**

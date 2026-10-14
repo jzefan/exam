@@ -1,7 +1,7 @@
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen } from "@/test/test-utils";
+import { render, screen, within } from "@/test/test-utils";
 
 import { Layout } from "./layout";
 
@@ -61,5 +61,26 @@ describe("Layout operations navigation", () => {
     );
 
     expect(screen.queryByText("运营管理")).not.toBeInTheDocument();
+  });
+
+  it("gives teachers four stable mobile destinations", () => {
+    useGetIdentityMock.mockReturnValue({
+      data: { name: "Teacher", primary_org: { role_name: "teacher" } },
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/dashboard"]}>
+        <Routes>
+          <Route element={<Layout />}>
+            <Route path="/dashboard" element={<div>dashboard</div>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const navigation = screen.getByRole("navigation", { name: "教师主要导航" });
+    expect(within(navigation).getAllByRole("link")).toHaveLength(4);
+    expect(within(navigation).getByRole("link", { name: "课程" })).toHaveAttribute("href", "/courses");
+    expect(within(navigation).getByRole("link", { name: "学生" })).toHaveAttribute("href", "/students");
   });
 });

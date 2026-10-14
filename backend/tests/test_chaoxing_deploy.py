@@ -51,6 +51,7 @@ def deployment(tmp_path):
     (app / "current").symlink_to(previous)
     release = tmp_path / "release"
     (release / "deploy/nginx").mkdir(parents=True)
+    (release / "frontend/public").mkdir(parents=True)
     (release / "deploy/nginx/default.conf.template").write_text("backend=__BACKEND_SLOT__ frontend=__FRONTEND_SLOT__\n")
     archive = tmp_path / "release.tar.gz"
     with tarfile.open(archive, "w:gz") as f:
@@ -86,7 +87,21 @@ elif 'up' in a and 'backend_green' in a and os.environ.get('FAIL_AT') == 'interr
     )
     docker.chmod(0o755)
     curl = binary / "curl"
-    curl.write_text('#!/bin/sh\n[ "${FAIL_AT:-}" != smoke ]\n')
+    curl.write_text(
+        "#!/bin/sh\n"
+        + r"""
+case "$*" in
+  *__release.json*)
+    if [ "${FAIL_AT:-}" = release ]; then
+      printf '{"release_id":"old","source_sha256":"old"}'
+    else
+      printf '{"release_id":"%s","source_sha256":"%s"}' "$DEPLOY_SOURCE_SHA256" "$DEPLOY_SOURCE_SHA256"
+    fi
+    ;;
+esac
+[ "${FAIL_AT:-}" != smoke ]
+"""
+    )
     curl.chmod(0o755)
     # Keep the harness portable on macOS; real deployment runs these on Linux.
     hostname = binary / "hostname"
@@ -109,6 +124,7 @@ elif 'up' in a and 'backend_green' in a and os.environ.get('FAIL_AT') == 'interr
             "DEPLOY_PORT": "3036",
             "DEPLOY_PRUNE_IMAGES": "0",
             "DEPLOY_PRUNE_BUILDER": "0",
+            "DEPLOY_SOURCE_SHA256": "a" * 64,
             "EVENTS": str(events),
             "FAIL_AT": fail,
             "OLD_MODE": old,
@@ -224,4 +240,20 @@ def test_app_builds_frontend_before_interrupting_backend(deployment):
     result, calls = run(target="app")
     assert result.returncode == 0, result.stderr
     assert index(calls, "build", "frontend_blue") < index(calls, "stop", "backend_blue")
+    source_sha = "a" * 64
+    expected_release = json.dumps(
+        {"release_id": source_sha, "source_sha256": source_sha}, separators=(",", ":")
+    ) + "\n"
+    assert (nginx.parent.parent / "current/frontend/public/__release.json").read_text() == expected_release
     assert not any("build" in c and "frontend_green" in c for c in calls)
+
+
+def test_app_fails_and_rolls_back_if_live_frontend_is_not_the_built_release(deployment):
+    run, _, nginx, app, previous = deployment
+    result, calls = run(target="app", fail="release")
+
+    assert result.returncode != 0
+    assert "Frontend release verification failed" in result.stderr
+    assert index(calls, "up", "frontend_green") < index(calls, "exec", "nginx", "nginx", "-s", "reload")
+    assert (nginx / "active_frontend_slot").read_text().strip() == "blue"
+    assert (app / "current").resolve() == previous

@@ -4452,7 +4452,7 @@ async def _set_question_matched_course_knowledge_points(
     candidates: list[KnowledgePoint],
     root_knowledge_point_id: uuid.UUID,
 ) -> bool:
-    matched_ids = await match_knowledge_points_with_ai(question_data, candidates)
+    matched_ids = await _match_course_knowledge_points(question_data, candidates)
     existing_ids = [
         kp.id for kp in question.knowledge_points if kp.id != root_knowledge_point_id
     ]
@@ -4611,6 +4611,79 @@ async def _load_root_descendant_knowledge_points(
     return result
 
 
+_MAX_MATCHED_COURSE_KNOWLEDGE_POINTS = 3
+# 知识点名称前面的章节编号，如 "1.3.2 互联网的核心部分" 里的 "1.3.2 "。
+_KNOWLEDGE_POINT_NAME_PREFIX_RE = re.compile(
+    r"^[\s（(【\[]*(?:[0-9]+(?:\.[0-9]+)*|[一二三四五六七八九十]+)[\s、.．,，:：)）】\]]+"
+)
+
+
+def _normalize_knowledge_point_name(name: object) -> str:
+    """归一化知识点名称：丢掉章节编号、空白与大小写差异。
+
+    题库导出的名称带章节号（"1.3.2 互联网的核心部分"），知识树节点往往只有
+    纯名称，两边都归一化后才能按名称对上。
+    """
+    text = str(name or "").strip()
+    if not text:
+        return ""
+    text = _KNOWLEDGE_POINT_NAME_PREFIX_RE.sub("", text)
+    return re.sub(r"\s+", "", text).casefold()
+
+
+def _unique_knowledge_point_names(names: list[str] | None) -> list[str]:
+    """归一化并去重题干标注的知识点名称。"""
+    return list(
+        dict.fromkeys(
+            key
+            for key in (_normalize_knowledge_point_name(name) for name in names or [])
+            if key
+        )
+    )
+
+
+def match_knowledge_point_ids_by_name(
+    names: list[str] | None, candidates: list[KnowledgePoint]
+) -> list[uuid.UUID]:
+    """按名称匹配候选知识点，只认「唯一命中」的名称。
+
+    同名节点可能出现在不同章节（如 "协议"），仅凭名称无法判断题目归属哪一章，
+    这类歧义名称留给 AI 按题目内容判断。
+    """
+    wanted = _unique_knowledge_point_names(names)
+    if not wanted or not candidates:
+        return []
+    ids_by_name: dict[str, list[uuid.UUID]] = {}
+    for candidate in candidates:
+        key = _normalize_knowledge_point_name(candidate.name)
+        if key:
+            ids_by_name.setdefault(key, []).append(candidate.id)
+    matched: list[uuid.UUID] = []
+    for key in wanted:
+        ids = ids_by_name.get(key) or []
+        if len(ids) == 1 and ids[0] not in matched:
+            matched.append(ids[0])
+    return matched
+
+
+async def _match_course_knowledge_points(
+    question: QuestionCreate, candidates: list[KnowledgePoint]
+) -> list[uuid.UUID]:
+    """题干标注了知识点时按名称匹配，剩余的再交给 AI。
+
+    标注的名称全部唯一命中就不再调大模型，避免按题目内容「猜」出标注之外的知识点；
+    有没对上或同名歧义时才让模型结合题目内容补判。
+    """
+    recognized = list(question.recognized_knowledge_points or [])
+    wanted = _unique_knowledge_point_names(recognized)
+    name_matched = match_knowledge_point_ids_by_name(recognized, candidates)
+    if wanted and len(name_matched) >= len(wanted):
+        return name_matched[:_MAX_MATCHED_COURSE_KNOWLEDGE_POINTS]
+    ai_matched = await match_knowledge_points_with_ai(question, candidates, recognized)
+    merged = list(dict.fromkeys([*name_matched, *ai_matched]))
+    return merged[:_MAX_MATCHED_COURSE_KNOWLEDGE_POINTS]
+
+
 def _keyword_score(text: str, keywords: set[str]) -> int:
     """Count how many normalized keywords appear in the given text."""
     if not text or not keywords:
@@ -4633,7 +4706,9 @@ def _extract_question_keywords(question: QuestionCreate) -> set[str]:
 
 
 async def match_knowledge_points_with_ai(
-    question: QuestionCreate, candidates: list[KnowledgePoint]
+    question: QuestionCreate,
+    candidates: list[KnowledgePoint],
+    recognized_names: list[str] | None = None,
 ) -> list[uuid.UUID]:
     """Use AI to pick the most relevant knowledge points; returns ids (possibly empty)."""
     if not candidates:
@@ -4660,6 +4735,13 @@ async def match_knowledge_points_with_ai(
     else:
         filtered = list(candidates)
 
+    # 题干标注的名称即使没进关键词候选，也要留下来让模型判断（其中同名歧义的只能靠模型）。
+    filtered_ids = {kp.id for kp in filtered}
+    by_id = {kp.id: kp for kp in candidates}
+    for kp_id in match_knowledge_point_ids_by_name(recognized_names, candidates):
+        if kp_id not in filtered_ids:
+            filtered.append(by_id[kp_id])
+
     candidates_payload = [
         {
             "id": str(kp.id),
@@ -4676,13 +4758,15 @@ async def match_knowledge_points_with_ai(
 题目标题：{question.title}
 题目内容：{content_text[:1500]}
 选项：{json.dumps(question.options or {}, ensure_ascii=False)}
+原文标注知识点：{"、".join(recognized_names or []) or "（无）"}
 候选知识点（JSON 列表）：
 {json.dumps(candidates_payload, ensure_ascii=False)}
 
 要求：
 1. 从候选中选出 0 到 3 个最相关的知识点；若没有明显相关的，返回空数组。
-2. 只能使用候选 id，不要编造新 id。
-3. 只返回合法 JSON，字段为 matched_ids: string[]。
+2. 题目标注了原文知识点时，优先选名称与原文标注一致或最接近的候选。
+3. 只能使用候选 id，不要编造新 id。
+4. 只返回合法 JSON，字段为 matched_ids: string[]。
 """.strip()
 
     try:
@@ -4712,7 +4796,7 @@ async def match_and_create_import_question(
 ) -> tuple[Question, list[KnowledgePoint]]:
     """Match knowledge points under the root knowledge point via AI, then create the question."""
     candidates = await _load_root_descendant_knowledge_points(db, root_knowledge_point_id)
-    matched_ids = await match_knowledge_points_with_ai(question_data, candidates)
+    matched_ids = await _match_course_knowledge_points(question_data, candidates)
     question_payload = question_data.model_copy(
         update={
             "knowledge_point_ids": list({*question_data.knowledge_point_ids, *matched_ids}),
@@ -4834,6 +4918,7 @@ async def save_generated_questions_to_default_course_bank(
 def _build_enhance_kp_candidates(
     all_candidates: list[KnowledgePoint],
     keywords: set[str],
+    recognized_names: list[str] | None = None,
 ) -> list[dict]:
     """Pre-filter and format KP candidates for the enhance AI prompt."""
     MAX_CANDIDATES = 25
@@ -4849,6 +4934,13 @@ def _build_enhance_kp_candidates(
         filtered = [kp for _, kp in scored[:MAX_CANDIDATES]]
     else:
         filtered = list(all_candidates)
+
+    # 题干标注的知识点必须留在候选里，否则模型即使认出来也返回不了对应 id。
+    filtered_ids = {kp.id for kp in filtered}
+    by_id = {kp.id: kp for kp in all_candidates}
+    for kp_id in match_knowledge_point_ids_by_name(recognized_names, all_candidates):
+        if kp_id not in filtered_ids:
+            filtered.append(by_id[kp_id])
 
     return [
         {
@@ -4915,6 +5007,7 @@ async def _enhance_single_draft(
         prompt = f"""你是教研助手。给你一道题目和候选知识点，请只完成知识点匹配：
 
 - 从候选知识点列表中选择与题目内容最相关的 0-3 个知识点。
+- 题目如果标注了原文知识点，优先匹配名称与原文知识点一致或最接近的候选知识点。
 - 只能使用候选 id，不要编造。
 - 若没有明显相关的，返回空数组。
 - 不要补全或修改答案、解析。
@@ -4924,6 +5017,7 @@ async def _enhance_single_draft(
 选项：{options_str or "（无）"}
 当前答案：{draft.answer_text or "（无）"}
 当前解析：{draft.analysis or "（无）"}
+原文标注知识点：{"、".join(draft.recognized_knowledge_points) or "（无）"}
 候选知识点（JSON 列表）：
 {json.dumps(candidates_json, ensure_ascii=False)}
 
@@ -5161,7 +5255,9 @@ async def enhance_import_drafts(
             keywords = _extract_keywords_from_text(
                 f"{draft.content_text} {' '.join(draft.options.values()) if draft.options else ''}"
             )
-            kp_candidates = _build_enhance_kp_candidates(candidates, keywords)
+            kp_candidates = _build_enhance_kp_candidates(
+                candidates, keywords, draft.recognized_knowledge_points
+            )
             return await _enhance_single_draft(draft, kp_candidates, candidates_map, mode=mode)
 
     return await asyncio.gather(*(process_one(d) for d in drafts))
@@ -5188,7 +5284,9 @@ async def enhance_import_drafts_stream(
             keywords = _extract_keywords_from_text(
                 f"{draft.content_text} {' '.join(draft.options.values()) if draft.options else ''}"
             )
-            kp_candidates = _build_enhance_kp_candidates(candidates, keywords)
+            kp_candidates = _build_enhance_kp_candidates(
+                candidates, keywords, draft.recognized_knowledge_points
+            )
             result = await _enhance_single_draft(draft, kp_candidates, candidates_map, mode=mode)
             return index, result
 

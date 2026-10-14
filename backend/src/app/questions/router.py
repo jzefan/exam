@@ -810,7 +810,7 @@ async def import_bulk_create_job_endpoint(
     await db.flush()
     await db.commit()
 
-    if result.created_question_ids:
+    if result.created_question_ids and not data.skip_knowledge_matching:
         background_tasks.add_task(
             process_question_import_job,
             job_id=job.id,
@@ -819,6 +819,7 @@ async def import_bulk_create_job_endpoint(
             questions=[question.model_dump() for question in result.created_questions],
         )
     else:
+        # skip_knowledge_matching 时题目已自带知识点（created 为 0 也属正常完成），直接收尾。
         job.status = QuestionImportJobStatus.COMPLETED
         job.completed_at = datetime.now(timezone.utc)
         await db.commit()

@@ -32,4 +32,20 @@ describe("UserDropdown", () => {
 
     expect(screen.getByRole("menuitem", { name: /考生管理/ })).toBeInTheDocument();
   });
+
+  it("shows teachers how to add the app to the home screen", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <UserDropdown name="Teacher" role="teacher" persona="teacher" onLogout={vi.fn()} />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Teacher/ }));
+    await user.click(screen.getByRole("menuitem", { name: "添加到主屏幕" }));
+
+    expect(screen.getByRole("dialog", { name: "添加到主屏幕" })).toBeInTheDocument();
+    expect(screen.getByText(/iPhone Safari/)).toBeInTheDocument();
+    expect(screen.getByText(/Android Chrome/)).toBeInTheDocument();
+  });
 });

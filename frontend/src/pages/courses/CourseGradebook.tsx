@@ -395,7 +395,7 @@ export function CourseGradebook({
           <CardTitle>成绩概览</CardTitle>
           <CardDescription>{semesterLabel} · 当前筛选范围</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-8 p-6 lg:grid-cols-[minmax(180px,0.8fr)_minmax(260px,1fr)_minmax(280px,1.2fr)]">
+        <CardContent className="grid gap-6 p-4 sm:p-6 lg:grid-cols-[minmax(180px,0.8fr)_minmax(260px,1fr)_minmax(280px,1.2fr] lg:gap-8">
           <div className="flex flex-col justify-center border-b border-border pb-6 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-8">
             <span className="text-sm text-muted-foreground">综合成绩平均分</span>
             <div className="mt-2 flex items-end gap-2">
@@ -410,7 +410,7 @@ export function CourseGradebook({
             </div>
           </div>
 
-          <div className="flex items-center gap-6">
+          <div className="flex flex-wrap items-center gap-4 sm:gap-6">
             <div className="relative size-32 shrink-0 rounded-full p-3" style={distributionStyle}>
               <div className="flex size-full flex-col items-center justify-center rounded-full bg-card">
                 <span className="text-2xl font-semibold tabular-nums">{visibleStudents.length}</span>
@@ -455,9 +455,9 @@ export function CourseGradebook({
             <CardTitle>成绩明细</CardTitle>
             <CardDescription>人工录入值会覆盖系统成绩，但不会修改原考试答卷。</CardDescription>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
             <Select value={selectedClassId} onValueChange={setSelectedClassId}>
-              <SelectTrigger className="h-9 w-[180px]">
+              <SelectTrigger className="h-9 w-full sm:w-[180px]">
                 <SelectValue placeholder="选择班级" />
               </SelectTrigger>
               <SelectContent>
@@ -471,7 +471,7 @@ export function CourseGradebook({
                 </SelectGroup>
               </SelectContent>
             </Select>
-            <div className="relative w-[230px]">
+            <div className="relative w-full sm:w-[230px]">
               <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={query}

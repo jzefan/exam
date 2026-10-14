@@ -129,6 +129,8 @@ class QuestionCreate(BaseModel):
     tag_ids: list[uuid.UUID] = Field(default_factory=list)
     knowledge_point_ids: list[uuid.UUID] = Field(default_factory=list)
     question_bank_id: uuid.UUID | None = None
+    # 题干原文标注的知识点名称：仅用于导入后按名称匹配知识点，不落库。
+    recognized_knowledge_points: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def require_code_answer(self) -> "QuestionCreate":
@@ -389,6 +391,9 @@ class QuestionImportBulkCreateJobRequest(BaseModel):
     questions: list[QuestionCreate] = Field(min_length=1, max_length=5000)
     root_knowledge_point_id: uuid.UUID | None = None
     course_id: uuid.UUID | None = Field(default=None, deprecated=True)
+    # 前端已给每道题关联好知识点时置位：仍然入库，但不再排后台 AI 知识点匹配任务。
+    # 保留该开关是为了不影响"落默认题库 + 重复题补挂课程根"这两个非匹配副作用。
+    skip_knowledge_matching: bool = False
 
     @model_validator(mode="after")
     def normalize_root_knowledge_point_id(self) -> "QuestionImportBulkCreateJobRequest":

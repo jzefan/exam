@@ -29,6 +29,7 @@ export const inboxFixture: GradingInboxResponse = {
       exam_id: EXAM_ID,
       exam_label: EXAM_LABEL,
       exam_date: EXAM_DATE,
+      pending_submission_count: 2,
       questions: [
         {
           question_key: `${EXAM_ID}::q-1`,
@@ -234,6 +235,14 @@ export function createGradingApiHandler() {
 
     if (method === "POST" && /^\/grading\/tasks\/[^/]+\/viewed$/.test(path)) {
       return { viewed: true };
+    }
+
+    if (method === "POST" && /^\/grading\/tasks\/[^/]+\/manual-score$/.test(path)) {
+      return { score_total: JSON.parse(String(init?.body ?? "{}")).score_total };
+    }
+
+    if (method === "POST" && /^\/grading\/tasks\/[^/]+\/confirm$/.test(path)) {
+      return { status: "已确认", grading_status: "reviewed" };
     }
 
     throw new Error(`Unhandled grading request: ${method} ${path}`);

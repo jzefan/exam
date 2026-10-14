@@ -1185,6 +1185,7 @@ async def get_grading_inbox(
                 "exam_id": locator["exam_id"],
                 "exam_label": locator["exam_label"],
                 "exam_date": task.updated_at.isoformat(),
+                "pending_submission_ids": set(),
                 "questions": {},
             },
         )
@@ -1212,6 +1213,10 @@ async def get_grading_inbox(
             question_entry["completed_count"] += 1
         else:
             question_entry["pending_count"] += 1
+            # 同一考生的多道待阅题只占一份答卷；任务已筛选为最新提交。
+            exam_entry["pending_submission_ids"].add(
+                locator["student_id"] or locator["candidate_code"] or str(task.id)
+            )
         if task.updated_at.isoformat() > question_entry["latest_updated_at"]:
             question_entry["latest_updated_at"] = task.updated_at.isoformat()
 
@@ -1220,6 +1225,7 @@ async def get_grading_inbox(
             "exam_id": exam["exam_id"],
             "exam_label": exam["exam_label"],
             "exam_date": exam["exam_date"],
+            "pending_submission_count": len(exam["pending_submission_ids"]),
             "questions": sorted(
                 exam["questions"].values(),
                 key=lambda item: item["latest_updated_at"],

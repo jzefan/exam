@@ -173,6 +173,125 @@ async def test_course_knowledge_match_does_not_fallback_to_root(
 
 
 @pytest.mark.asyncio
+async def test_course_knowledge_match_uses_recognized_names_without_ai(
+    db_session, monkeypatch
+) -> None:
+    teacher = await _create_teacher(db_session, username="knowledge-match-by-name")
+    root = KnowledgePoint(
+        name="计算机网络（谢希仁 第8版）",
+        owner_id=teacher.id,
+        visibility=VisibilityScope.PRIVATE,
+    )
+    bank = QuestionBank(
+        name="计算机网络-题库", owner_id=teacher.id, visibility=VisibilityScope.PRIVATE
+    )
+    db_session.add_all([root, bank])
+    await db_session.flush()
+    child = KnowledgePoint(
+        name="互联网的核心部分",
+        parent_id=root.id,
+        owner_id=teacher.id,
+        visibility=VisibilityScope.PRIVATE,
+    )
+    question = Question(
+        type=QuestionType.CHOICE,
+        title="ARPANET 采用的核心交换技术是（ ）。",
+        content={"text": "ARPANET 采用的核心交换技术是（ ）。"},
+        options={"A": "电路交换", "B": "分组交换"},
+        answer={"correct": "B"},
+        analysis=None,
+        difficulty=2,
+        score=1,
+        source=QuestionSource.IMPORTED,
+        owner_id=teacher.id,
+        created_by=teacher.id,
+        question_bank=bank,
+        knowledge_points=[root],
+    )
+    db_session.add_all([child, question])
+    await db_session.flush()
+
+    async def fail_ai(*_args, **_kwargs):
+        raise AssertionError("名称唯一命中时不应再调用大模型")
+
+    monkeypatch.setattr("app.questions.service.match_knowledge_points_with_ai", fail_ai)
+
+    question_data = _question_create(question).model_copy(
+        update={"recognized_knowledge_points": ["1.3.2 互联网的核心部分"]}
+    )
+    matched = await _set_question_matched_course_knowledge_points(
+        db_session,
+        question=question,
+        question_data=question_data,
+        candidates=[child],
+        root_knowledge_point_id=root.id,
+    )
+
+    assert matched is True
+    assert {kp.id for kp in question.knowledge_points} == {child.id}
+
+
+@pytest.mark.asyncio
+async def test_course_knowledge_match_skips_ambiguous_recognized_name(
+    db_session, monkeypatch
+) -> None:
+    teacher = await _create_teacher(db_session, username="knowledge-match-ambiguous")
+    root = KnowledgePoint(
+        name="计算机网络（谢希仁 第8版）",
+        owner_id=teacher.id,
+        visibility=VisibilityScope.PRIVATE,
+    )
+    bank = QuestionBank(
+        name="计算机网络-题库", owner_id=teacher.id, visibility=VisibilityScope.PRIVATE
+    )
+    db_session.add_all([root, bank])
+    await db_session.flush()
+    # 同名节点散落在不同章节，光靠名称无法判断归属，只能交给大模型按内容判断。
+    child_a = KnowledgePoint(
+        name="协议", parent_id=root.id, owner_id=teacher.id, visibility=VisibilityScope.PRIVATE
+    )
+    child_b = KnowledgePoint(
+        name="协议", parent_id=root.id, owner_id=teacher.id, visibility=VisibilityScope.PRIVATE
+    )
+    question = Question(
+        type=QuestionType.CHOICE,
+        title="不能靠名称定位的题目",
+        content={"text": "这道题的章节归属不明确。"},
+        options={"A": "A", "B": "B"},
+        answer={"correct": "A"},
+        analysis=None,
+        difficulty=3,
+        score=10,
+        source=QuestionSource.IMPORTED,
+        owner_id=teacher.id,
+        created_by=teacher.id,
+        question_bank=bank,
+        knowledge_points=[root],
+    )
+    db_session.add_all([child_a, child_b, question])
+    await db_session.flush()
+
+    async def fake_match(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr("app.questions.service.match_knowledge_points_with_ai", fake_match)
+
+    question_data = _question_create(question).model_copy(
+        update={"recognized_knowledge_points": ["协议"]}
+    )
+    matched = await _set_question_matched_course_knowledge_points(
+        db_session,
+        question=question,
+        question_data=question_data,
+        candidates=[child_a, child_b],
+        root_knowledge_point_id=root.id,
+    )
+
+    assert matched is False
+    assert question.knowledge_points == []
+
+
+@pytest.mark.asyncio
 async def test_course_complete_knowledge_endpoint_defaults_to_all_questions(
     client: AsyncClient,
     db_session,

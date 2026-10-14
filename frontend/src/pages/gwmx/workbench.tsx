@@ -97,7 +97,7 @@ export function GwmxWorkbench() {
             <h2 className="text-sm font-semibold text-foreground">最近编辑的岗位</h2>
             <button
               type="button"
-              className="text-xs text-primary hover:underline"
+              className="cursor-pointer text-xs text-primary hover:underline"
               onClick={() => navigate("/gwmx/job-models")}
             >
               全部岗位 <ArrowRight className="inline h-3 w-3" />
@@ -117,13 +117,14 @@ export function GwmxWorkbench() {
                 <li key={m.id}>
                   <button
                     type="button"
+                    disabled={!m.current_version_id}
                     onClick={() => {
                       if (!m.current_version_id) return
                       navigate(
                         `/gwmx/job-models/${m.id}/versions/${m.current_version_id}/editor`,
                       )
                     }}
-                    className="flex w-full items-center gap-3 rounded-md border border-border bg-background px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-primary/[0.02]"
+                    className="flex w-full cursor-pointer items-center gap-3 rounded-md border border-border bg-background px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-primary/[0.02] disabled:cursor-default disabled:hover:border-border disabled:hover:bg-background"
                   >
                     <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
                       <Briefcase className="h-4 w-4" />
@@ -250,7 +251,7 @@ function QuickAction({
     <button
       type="button"
       onClick={onClick}
-      className="flex w-full items-center gap-3 rounded-md border border-border bg-background p-3 text-left transition-all hover:border-primary/40 hover:shadow-sm"
+      className="flex w-full cursor-pointer items-center gap-3 rounded-md border border-border bg-background p-3 text-left transition-all hover:border-primary/40 hover:shadow-sm"
     >
       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground">
         {icon}

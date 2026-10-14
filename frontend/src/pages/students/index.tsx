@@ -1,9 +1,10 @@
 import { useGetIdentity, usePermissions } from "@refinedev/core";
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Plus, Upload, Search, FileSpreadsheet, X, Info, Users, CheckCircle2, AlertCircle, Trash2, KeyRound } from "lucide-react";
+import { Plus, Upload, Search, FileSpreadsheet, X, Info, Users, CheckCircle2, AlertCircle, Trash2, KeyRound, ChevronDown, ChevronRight, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Table,
   TableBody,
@@ -32,6 +33,7 @@ import { apiRequest } from "@/pages/grading/api";
 import { useToast } from "@/hooks/use-toast";
 import { getPersonaCopy } from "@/lib/persona-copy";
 import { cn } from "@/lib/utils";
+import { useMediaQuery } from "@/hooks/use-viewport";
 import {
   buildStudentBatchImportItems,
   parseStudentImportFile,
@@ -73,11 +75,20 @@ export default function StudentManagementPage() {
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [studentsLoadError, setStudentsLoadError] = useState(false);
   const [importing, setImporting] = useState(false);
   const [resettingStudentId, setResettingStudentId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const isCompact = useMediaQuery("(max-width: 1199px)");
+  const isPhone = useMediaQuery("(max-width: 767px)");
+  const [isClassPickerOpen, setIsClassPickerOpen] = useState(false);
+  const [isManagingClasses, setIsManagingClasses] = useState(false);
+  const [classSearchTerm, setClassSearchTerm] = useState("");
+  const [activeStudentId, setActiveStudentId] = useState<string | null>(null);
+  const [isSelecting, setIsSelecting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasLoadedStudentsRef = useRef(false);
+  const studentRequestIdRef = useRef(0);
   const { toast } = useToast();
 
   const [isAddDialogOpen, setIsAddAddDialogOpen] = useState(false);
@@ -105,6 +116,7 @@ export default function StudentManagementPage() {
   };
 
   const fetchStudents = useCallback(async () => {
+    const requestId = ++studentRequestIdRef.current;
     if (hasLoadedStudentsRef.current) {
       setIsRefreshing(true);
     } else {
@@ -118,17 +130,25 @@ export default function StudentManagementPage() {
             ? "/rbac/students?unassigned=true"
             : `/rbac/students?class_id=${selectedClassId}`;
       const data = await apiRequest<Student[]>(url);
-      setStudents(data);
-      hasLoadedStudentsRef.current = true;
+      if (requestId === studentRequestIdRef.current) {
+        setStudents(data);
+        setStudentsLoadError(false);
+        hasLoadedStudentsRef.current = true;
+      }
     } catch {
-      toast({
-        title: "加载失败",
-        description: `无法获取${copy.person}列表`,
-        variant: "destructive",
-      });
+      if (requestId === studentRequestIdRef.current) {
+        setStudentsLoadError(true);
+        toast({
+          title: "加载失败",
+          description: `无法获取${copy.person}列表`,
+          variant: "destructive",
+        });
+      }
     } finally {
-      setLoading(false);
-      setIsRefreshing(false);
+      if (requestId === studentRequestIdRef.current) {
+        setLoading(false);
+        setIsRefreshing(false);
+      }
     }
   }, [selectedClassId, toast, copy.person]);
 
@@ -162,11 +182,14 @@ export default function StudentManagementPage() {
     try {
       await apiRequest(`/rbac/students/classes/${id}`, { method: "DELETE" });
       toast({ title: "已删除" });
-      if (selectedClassId === id) setSelectedClassId("all");
-      fetchClasses();
-      void fetchStudents();
+      if (selectedClassId === id) {
+        changeClass("all");
+      } else {
+        void fetchStudents();
+      }
+      void fetchClasses();
     } catch {
-      // ignore delete failures here; existing UI keeps current state
+      toast({ title: "删除失败", description: `无法删除${copy.group}，请稍后重试`, variant: "destructive" });
     }
   };
 
@@ -244,6 +267,28 @@ export default function StudentManagementPage() {
     filteredStudents.length > 0 && filteredStudents.every((student) => selectedStudentIds.includes(student.id));
   const selectedVisibleCount = filteredStudents.filter((student) => selectedStudentIds.includes(student.id)).length;
   const showOwnershipColumn = role === "platform_admin";
+  const activeStudent = students.find((student) => student.id === activeStudentId) ?? null;
+  const currentScopeLabel = selectedClassId === "all"
+    ? copy.allPeople
+    : selectedClassId === "unassigned"
+      ? copy.unassignedGroup
+      : selectedClassName ?? copy.group;
+  const matchingClasses = classes.filter((item) => item.name.toLocaleLowerCase().includes(classSearchTerm.trim().toLocaleLowerCase()));
+
+  const changeClass = (scope: StudentFilterScope) => {
+    setSelectedClassId(scope);
+    setSelectedStudentIds([]);
+    setIsSelecting(false);
+    setActiveStudentId(null);
+    setIsClassPickerOpen(false);
+    setIsManagingClasses(false);
+    setClassSearchTerm("");
+  };
+
+  const updateSearchTerm = (value: string) => {
+    setSearchTerm(value);
+    setSelectedStudentIds([]);
+  };
 
   useEffect(() => {
     setSelectedStudentIds((current) => current.filter((id) => students.some((student) => student.id === id)));
@@ -270,8 +315,9 @@ export default function StudentManagementPage() {
       return;
     }
     const isBatch = studentIds.length > 1;
+    const action = role === "platform_admin" ? "删除账号" : `从我的${copy.person}中移除`;
     const confirmed = window.confirm(
-      isBatch ? `确定要批量删除这 ${studentIds.length} 个${copy.person}吗？` : `确定要删除这个${copy.person}吗？`
+      isBatch ? `确定要将这 ${studentIds.length} 个${copy.person}${action}吗？` : `确定要将这名${copy.person}${action}吗？`
     );
     if (!confirmed) {
       return;
@@ -284,7 +330,9 @@ export default function StudentManagementPage() {
           body: JSON.stringify({ student_ids: studentIds }),
         });
         toast({
-          title: result.failed_count === 0 ? "批量删除成功" : "批量删除已完成",
+          title: result.failed_count === 0
+            ? (showOwnershipColumn ? "批量删除成功" : "批量移除成功")
+            : (showOwnershipColumn ? "批量删除已完成" : "批量移除已完成"),
           description:
             result.failed_count === 0
               ? `已处理 ${result.success_count} 个${copy.person}。`
@@ -293,13 +341,15 @@ export default function StudentManagementPage() {
         });
       } else {
         await apiRequest(`/rbac/students/${studentIds[0]}`, { method: "DELETE" });
-        toast({ title: "删除成功", description: `${copy.person}已移除。` });
+        toast({ title: showOwnershipColumn ? "删除成功" : "移除成功", description: showOwnershipColumn ? `${copy.person}账号已删除。` : `${copy.person}已从我的${copy.person}中移除。` });
       }
       setSelectedStudentIds((current) => current.filter((id) => !studentIds.includes(id)));
+      setActiveStudentId(null);
+      setIsSelecting(false);
       await fetchStudents();
     } catch (error: unknown) {
       toast({
-        title: "删除失败",
+        title: showOwnershipColumn ? "删除失败" : "移除失败",
         description: error instanceof Error ? error.message : "请稍后重试",
         variant: "destructive",
       });
@@ -340,18 +390,18 @@ export default function StudentManagementPage() {
   };
 
   return (
-    <div className="flex h-full min-h-0 gap-0 overflow-hidden">
+    <div className="flex min-h-0 flex-1 gap-0 overflow-hidden xl:h-full">
       {/* Left Sidebar: Classes */}
-      <aside className="w-64 border-r border-border/60 bg-muted/10 flex flex-col">
+      {!isCompact && <aside className="flex w-64 shrink-0 flex-col border-r border-border/60 bg-muted/10">
         <div className="p-4 border-b border-border/60 flex items-center justify-between">
           <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground/70">{copy.group}列表</h2>
-          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setIsAddClassDialogOpen(true)}>
+          <Button variant="ghost" size="icon" aria-label={`新建${copy.group}`} onClick={() => setIsAddClassDialogOpen(true)}>
             <Plus className="h-4 w-4" />
           </Button>
         </div>
-        <nav className="flex-1 overflow-y-auto p-2 space-y-1">
+        <nav className="flex-1 overflow-y-auto p-2">
           <button
-            onClick={() => setSelectedClassId("all")}
+            onClick={() => changeClass("all")}
             className={cn(
               "flex w-full items-center gap-2 px-3 py-2 text-sm rounded-md transition-colors",
               selectedClassId === "all" ? "bg-primary text-primary-foreground" : "hover:bg-muted"
@@ -361,7 +411,7 @@ export default function StudentManagementPage() {
             <span>{copy.allPeople}</span>
           </button>
           <button
-            onClick={() => setSelectedClassId("unassigned")}
+            onClick={() => changeClass("unassigned")}
             className={cn(
               "flex w-full items-center gap-2 px-3 py-2 text-sm rounded-md transition-colors",
               selectedClassId === "unassigned" ? "bg-primary text-primary-foreground" : "hover:bg-muted"
@@ -373,7 +423,7 @@ export default function StudentManagementPage() {
           {classes.map((c) => (
             <div key={c.id} className="group relative">
               <button
-                onClick={() => setSelectedClassId(c.id)}
+                onClick={() => changeClass(c.id)}
                 className={cn(
                   "flex w-full items-center gap-2 px-3 py-2 text-sm rounded-md transition-colors pr-8",
                   selectedClassId === c.id ? "bg-primary text-primary-foreground" : "hover:bg-muted"
@@ -384,19 +434,20 @@ export default function StudentManagementPage() {
               </button>
               <button
                 onClick={() => handleDeleteClass(c.id, c.name)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:bg-destructive/10 rounded"
+                aria-label={`删除${copy.group} ${c.name}`}
+                className="absolute right-1 top-1/2 -translate-y-1/2 flex size-8 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:outline-2 focus-visible:outline-ring"
               >
                 <X className="h-3 w-3 m-auto" />
               </button>
             </div>
           ))}
         </nav>
-      </aside>
+      </aside>}
 
       {/* Main Content: Student List */}
-      <main className="flex-1 flex flex-col min-w-0 bg-background">
-        <div className="p-6 space-y-6 overflow-y-auto">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <main className="flex min-w-0 flex-1 flex-col bg-background">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-6 pt-4 xl:gap-6 xl:p-6">
+          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center sm:gap-4">
             <div>
               <h1 className="text-base font-bold tracking-tight">
                 {selectedClassId === "all"
@@ -405,21 +456,31 @@ export default function StudentManagementPage() {
                     ? copy.unassignedPeople
                     : selectedClassName}
               </h1>
-              <p className="text-sm text-muted-foreground">
+              <p className="hidden text-sm text-muted-foreground xl:block">
                 管理{copy.person}账号，新建账号初始密码默认为手机号；重置密码时优先使用{copy.persona === "teacher" ? "学号" : "编号"}，无{copy.persona === "teacher" ? "学号" : "编号"}则使用账号。
               </p>
             </div>
             <div className="flex items-center gap-2">
-              <Button variant="outline" onClick={() => setIsImportDialogOpen(true)}>
+              {!isPhone && <Button variant="outline" onClick={() => setIsImportDialogOpen(true)}>
                 <Upload className="w-4 h-4 mr-2" />
                 批量导入
-              </Button>
-              <Button onClick={() => setIsAddAddDialogOpen(true)}>
+              </Button>}
+              <Button size={isCompact ? "sm" : "default"} onClick={() => setIsAddAddDialogOpen(true)}>
                 <Plus className="w-4 h-4 mr-2" />
                 添加{copy.person}
               </Button>
             </div>
           </div>
+
+          {isCompact && <div className="flex items-center gap-2">
+            <Button variant="outline" className="min-h-11 min-w-0 flex-1 justify-between font-normal" onClick={() => setIsClassPickerOpen(true)}>
+              <span className="truncate">{copy.group}：{currentScopeLabel}</span>
+              <ChevronDown className="shrink-0" />
+            </Button>
+            <Button variant="outline" className="min-h-11 shrink-0" onClick={() => { setIsSelecting((current) => !current); setSelectedStudentIds([]); }}>
+              {isSelecting ? "取消" : "选择"}
+            </Button>
+          </div>}
 
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -427,11 +488,16 @@ export default function StudentManagementPage() {
               className="pl-10"
               placeholder={`搜索姓名、手机号或${copy.persona === "teacher" ? "学号" : "编号"}...`}
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => updateSearchTerm(e.target.value)}
             />
           </div>
 
-          <div className="flex items-center justify-between gap-3">
+          {studentsLoadError && <Alert variant="destructive" className="flex items-center justify-between gap-3">
+            <div className="min-w-0"><AlertTitle>列表加载失败</AlertTitle><AlertDescription>无法获取{copy.person}列表，{hasLoadedStudentsRef.current ? "下方仍显示上次结果。" : "请重试。"}</AlertDescription></div>
+            <Button variant="outline" size="sm" className="shrink-0" onClick={() => void fetchStudents()}>重新加载</Button>
+          </Alert>}
+
+          {(!studentsLoadError || hasLoadedStudentsRef.current) && (!isCompact || isSelecting) && <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Checkbox
                 aria-label={`全选当前列表${copy.person}`}
@@ -444,13 +510,37 @@ export default function StudentManagementPage() {
             {selectedStudentIds.length > 0 ? (
               <Button variant="destructive" size="sm" onClick={() => void deleteStudents(selectedStudentIds)}>
                 <Trash2 className="mr-2 h-4 w-4" />
-                批量删除
+                {showOwnershipColumn ? "批量删除" : "批量移除"}
               </Button>
             ) : null}
-          </div>
+          </div>}
 
-          <div className="border rounded-xl bg-card overflow-hidden shadow-sm">
-            <Table>
+          {studentsLoadError && !hasLoadedStudentsRef.current ? null : isCompact ? <div className="min-w-0">
+            {loading ? <p className="py-12 text-center text-sm text-muted-foreground">正在加载...</p> :
+              filteredStudents.length === 0 ? <p className="py-12 text-center text-sm text-muted-foreground">未找到匹配的{copy.person}。</p> :
+                filteredStudents.map((student) => <div key={student.id} className="flex min-h-18 items-center gap-3 border-b border-border/70 px-1 last:border-b-0">
+                  {isSelecting && <Checkbox
+                    aria-label={`选择 ${student.full_name}`}
+                    checked={selectedStudentIds.includes(student.id)}
+                    onCheckedChange={() => toggleStudentSelection(student.id)}
+                  />}
+                  <button
+                    type="button"
+                    className="flex min-h-18 min-w-0 flex-1 items-center justify-between gap-3 py-3 text-left"
+                    onClick={() => isSelecting ? toggleStudentSelection(student.id) : setActiveStudentId(student.id)}
+                    aria-label={isSelecting ? `选择 ${student.full_name}` : `查看 ${student.full_name}`}
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-medium">{student.full_name}</span>
+                      <span className="mt-1 block truncate text-xs text-muted-foreground">
+                        {student.student_id || student.username} · {student.class_name || copy.unassignedGroup}
+                      </span>
+                    </span>
+                    {!isSelecting && <ChevronRight className="shrink-0 text-muted-foreground" aria-hidden="true" />}
+                  </button>
+                </div>)}
+          </div> : <div className="min-w-0 overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+            <Table className={cn(showOwnershipColumn ? "min-w-[980px]" : "min-w-[860px]", "[&_th]:whitespace-nowrap")}>
               <TableHeader className="bg-muted/30">
                 <TableRow>
                   <TableHead className="w-[56px]">
@@ -480,11 +570,11 @@ export default function StudentManagementPage() {
                           onCheckedChange={() => toggleStudentSelection(student.id)}
                         />
                       </TableCell>
-                      <TableCell className="font-semibold text-foreground/80">{student.full_name}</TableCell>
-                      <TableCell className="text-muted-foreground font-mono text-xs">{student.phone || student.username}</TableCell>
-                      <TableCell className="text-muted-foreground">{student.student_id || "-"}</TableCell>
+                      <TableCell className="whitespace-nowrap font-semibold text-foreground/80">{student.full_name}</TableCell>
+                      <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground">{student.phone || student.username}</TableCell>
+                      <TableCell className="whitespace-nowrap text-muted-foreground">{student.student_id || "-"}</TableCell>
                       <TableCell>
-                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-muted text-[10px] font-medium text-muted-foreground">
+                        <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
                           {student.class_name || "未分配"}
                         </span>
                       </TableCell>
@@ -520,11 +610,11 @@ export default function StudentManagementPage() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            aria-label={`删除 ${student.full_name}`}
+                            aria-label={`${showOwnershipColumn ? "删除" : "移除"} ${student.full_name}`}
                             className="text-destructive hover:text-destructive"
                             onClick={() => void deleteStudents([student.id])}
                           >
-                            删除
+                            {showOwnershipColumn ? "删除" : "移除"}
                           </Button>
                         </div>
                       </TableCell>
@@ -533,14 +623,79 @@ export default function StudentManagementPage() {
                 )}
               </TableBody>
             </Table>
-          </div>
+          </div>}
         </div>
       </main>
 
+      {isCompact && <Dialog open={isClassPickerOpen} onOpenChange={(open) => { setIsClassPickerOpen(open); if (!open) { setIsManagingClasses(false); setClassSearchTerm(""); } }}>
+        <DialogContent className="top-0 flex h-dvh max-h-dvh flex-col gap-0 translate-y-0 rounded-none border-0 p-0 shadow-none sm:rounded-none md:top-1/2 md:h-auto md:max-h-[80vh] md:translate-y-[-50%] md:rounded-xl md:border md:p-6">
+          <DialogHeader className="shrink-0 border-b border-border px-4 pb-3 pt-5 text-left md:border-0 md:p-0">
+            {isManagingClasses && <Button variant="ghost" size="sm" className="mb-2 w-fit px-0" onClick={() => setIsManagingClasses(false)}><ArrowLeft /> 返回选择</Button>}
+            <DialogTitle>{isManagingClasses ? `管理${copy.group}` : `选择${copy.group}`}</DialogTitle>
+            <DialogDescription className="sr-only">{isManagingClasses ? `管理当前可访问的${copy.group}` : `搜索并切换当前列表的${copy.group}范围`}</DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 pt-3 md:p-0">
+            {isManagingClasses ? <>
+              <div className="divide-y divide-border/70 rounded-md border border-border/70">
+                {classes.map((item) => <div key={item.id} className="flex min-h-12 items-center justify-between gap-3 px-3">
+                  <span className="min-w-0 truncate text-sm">{item.name}</span>
+                  <Button variant="ghost" size="sm" className="shrink-0 text-destructive hover:text-destructive" onClick={() => void handleDeleteClass(item.id, item.name)}><Trash2 /> 删除</Button>
+                </div>)}
+                {classes.length === 0 && <p className="px-3 py-4 text-sm text-muted-foreground">暂无{copy.group}</p>}
+              </div>
+              <Button variant="outline" className="mt-4 w-full" onClick={() => { setIsClassPickerOpen(false); setIsManagingClasses(false); setIsAddClassDialogOpen(true); }}><Plus /> 新建{copy.group}</Button>
+            </> : <>
+            <div className="relative mb-3">
+              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input aria-label={`搜索${copy.group}`} className="pl-9" placeholder={`搜索${copy.group}`} value={classSearchTerm} onChange={(event) => setClassSearchTerm(event.target.value)} />
+            </div>
+            <div className="flex flex-col divide-y divide-border/70 rounded-md border border-border/70">
+              {[
+                { id: "all", name: copy.allPeople },
+                { id: "unassigned", name: copy.unassignedGroup },
+                ...matchingClasses,
+              ].map((item) => <div key={item.id} className="flex min-h-12 items-center gap-1 px-1">
+                <button type="button" className="min-h-12 min-w-0 flex-1 truncate px-3 text-left text-sm" onClick={() => changeClass(item.id)} aria-current={selectedClassId === item.id ? "true" : undefined}>
+                  {item.name}
+                  {selectedClassId === item.id && <span className="ml-2 text-xs text-muted-foreground">当前</span>}
+                </button>
+              </div>)}
+              {matchingClasses.length === 0 && classSearchTerm.trim() && <p className="px-4 py-3 text-sm text-muted-foreground">没有匹配的{copy.group}</p>}
+            </div>
+            <Button variant="ghost" className="mt-4 w-full text-muted-foreground" onClick={() => { setClassSearchTerm(""); setIsManagingClasses(true); }}>管理{copy.group}</Button>
+            </>}
+          </div>
+        </DialogContent>
+      </Dialog>}
+
+      {isCompact && <Dialog open={activeStudentId !== null} onOpenChange={(open) => { if (!open) setActiveStudentId(null); }}>
+        <DialogContent className="top-0 flex h-dvh max-h-dvh flex-col gap-0 translate-y-0 rounded-none border-0 p-0 shadow-none sm:rounded-none md:top-1/2 md:h-auto md:max-h-[80vh] md:translate-y-[-50%] md:rounded-xl md:border md:p-6">
+          {activeStudent && <>
+            <DialogHeader className="shrink-0 border-b border-border px-4 pb-4 pt-5 text-left md:border-0 md:p-0">
+              <Button variant="ghost" size="sm" className="mb-3 w-fit px-0" onClick={() => setActiveStudentId(null)}><ArrowLeft /> 返回列表</Button>
+              <DialogTitle>{activeStudent.full_name}</DialogTitle>
+              <DialogDescription>{activeStudent.class_name || copy.unassignedGroup}</DialogDescription>
+            </DialogHeader>
+            <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 py-5 md:p-0">
+              <dl className="divide-y divide-border/70 rounded-lg border border-border/70 px-4 text-sm">
+                <div className="flex justify-between gap-3 py-3"><dt className="text-muted-foreground">{copy.persona === "teacher" ? "学号" : "编号"}</dt><dd className="break-all text-right">{activeStudent.student_id || "未填写"}</dd></div>
+                <div className="flex justify-between gap-3 py-3"><dt className="text-muted-foreground">账号</dt><dd className="break-all text-right">{activeStudent.phone || activeStudent.username}</dd></div>
+                <div className="flex justify-between gap-3 py-3"><dt className="text-muted-foreground">状态</dt><dd>{activeStudent.is_active ? "正常" : "已停用"}</dd></div>
+                {showOwnershipColumn && <div className="flex justify-between gap-3 py-3"><dt className="text-muted-foreground">归属</dt><dd>{activeStudent.owner_teacher_id === null ? "未分配" : `我的${copy.person}`}</dd></div>}
+              </dl>
+              <div className="flex flex-col gap-2">
+                <Button variant="outline" className="min-h-11 justify-start" disabled={resettingStudentId === activeStudent.id} onClick={() => void resetStudentPassword(activeStudent)}><KeyRound /> {resettingStudentId === activeStudent.id ? "重置中" : "重置密码"}</Button>
+                <Button variant="ghost" className="min-h-11 justify-start text-destructive hover:text-destructive" onClick={() => void deleteStudents([activeStudent.id])}><Trash2 /> {role === "platform_admin" ? "删除账号" : `移除${copy.person}`}</Button>
+              </div>
+            </div>
+          </>}
+        </DialogContent>
+      </Dialog>}
+
       {/* Dialogs: Add Student, Import, Add Class, Import Result */}
       <Dialog open={isAddClassDialogOpen} onOpenChange={setIsAddClassDialogOpen}>
-        <DialogContent className="sm:max-w-[400px]">
-          <form onSubmit={handleAddClass}>
+        <DialogContent className="top-0 flex max-h-dvh min-h-dvh flex-col gap-0 translate-y-0 overflow-y-auto rounded-none p-5 sm:rounded-none md:top-1/2 md:min-h-0 md:translate-y-[-50%] md:max-w-[400px] md:rounded-xl md:p-6">
+          <form onSubmit={handleAddClass} className="flex min-h-[calc(100dvh-2.5rem)] flex-col md:min-h-0">
             <DialogHeader><DialogTitle>新建{copy.group}</DialogTitle></DialogHeader>
             <div className="py-4">
               <Label htmlFor="className">{copy.group}名称</Label>
@@ -553,14 +708,14 @@ export default function StudentManagementPage() {
                 required
               />
             </div>
-            <DialogFooter><Button type="submit">确认创建</Button></DialogFooter>
+            <DialogFooter className="mt-auto pb-[env(safe-area-inset-bottom)]"><Button type="submit">确认创建</Button></DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
 
       <Dialog open={isAddDialogOpen} onOpenChange={setIsAddAddDialogOpen}>
-        <DialogContent className="sm:max-w-[425px]">
-          <form onSubmit={handleAddStudent}>
+        <DialogContent className="top-0 flex max-h-dvh min-h-dvh flex-col gap-0 translate-y-0 overflow-y-auto rounded-none p-5 sm:rounded-none md:top-1/2 md:min-h-0 md:translate-y-[-50%] md:max-w-[425px] md:rounded-xl md:p-6">
+          <form onSubmit={handleAddStudent} className="flex min-h-[calc(100dvh-2.5rem)] flex-col md:min-h-0">
             <DialogHeader><DialogTitle>添加新{copy.person}</DialogTitle></DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
@@ -585,7 +740,7 @@ export default function StudentManagementPage() {
                 </Select>
               </div>
             </div>
-            <DialogFooter><Button type="submit">确认添加</Button></DialogFooter>
+            <DialogFooter className="mt-auto pb-[env(safe-area-inset-bottom)]"><Button type="submit">确认添加</Button></DialogFooter>
           </form>
         </DialogContent>
       </Dialog>

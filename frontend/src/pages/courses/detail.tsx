@@ -74,7 +74,9 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -769,12 +771,12 @@ function MaterialsTab({
             return (
               <div
                 key={material.id}
-                className="flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-2.5"
+                className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card px-3 py-2.5 sm:flex-nowrap"
               >
                 <div className="flex size-9 shrink-0 items-center justify-center rounded-md border border-border bg-muted text-muted-foreground">
                   {materialIcon(material.resource_type, material.url)}
                 </div>
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0 flex-1 basis-[calc(100%-48px)] sm:basis-auto">
                   <p className="truncate text-sm font-medium text-foreground">
                     {material.title}
                   </p>
@@ -811,11 +813,12 @@ function MaterialsTab({
                     ) : null}
                   </div>
                 </div>
+                <div className="ml-12 flex w-[calc(100%-48px)] min-w-0 items-center justify-end gap-1 sm:ml-0 sm:w-auto sm:shrink-0">
                 {canWrite && canGenerate ? (
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="rounded-full bg-[oklch(0.95_0.02_260)] text-[oklch(0.42_0.07_260)] hover:bg-[oklch(0.93_0.03_260)] hover:text-[oklch(0.36_0.08_260)]"
+                    className="hidden rounded-full bg-[oklch(0.95_0.02_260)] text-[oklch(0.42_0.07_260)] hover:bg-[oklch(0.93_0.03_260)] hover:text-[oklch(0.36_0.08_260)] sm:inline-flex"
                     onClick={() => onGenerateFrom(material)}
                   >
                     <Sparkles size={14} className="mr-1.5" />
@@ -935,6 +938,7 @@ function MaterialsTab({
                     </DropdownMenuContent>
                   </DropdownMenu>
                 ) : null}
+                </div>
               </div>
             );
           })}
@@ -2991,7 +2995,7 @@ function CourseKnowledgeNodeDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="left-auto right-0 top-0 flex h-dvh max-h-dvh w-[min(620px,94vw)] max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-none border-l bg-card p-0 shadow-[-20px_0_60px_hsl(var(--primary)/0.16)] sm:rounded-none [&>button]:hidden">
+      <DialogContent className="left-auto right-0 top-0 flex h-dvh max-h-dvh w-screen max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-none border-l bg-card p-0 shadow-[-20px_0_60px_hsl(var(--primary)/0.16)] sm:w-[min(620px,94vw)] sm:rounded-none [&>button]:hidden">
         {!node ? null : (
           <Tabs defaultValue="profile" className="flex min-h-0 flex-1 flex-col">
             <DialogHeader className="space-y-0 px-6 pt-[22px] text-left">
@@ -3745,7 +3749,7 @@ function KnowledgeTreeRow({
           "flex items-center gap-1.5 rounded-md px-3 py-2 hover:bg-muted",
           hasChildren && "cursor-pointer select-none",
         )}
-        style={{ paddingLeft: 12 + depth * 22 }}
+        style={{ paddingLeft: 12 + Math.min(depth, 4) * 16 }}
         onClick={hasChildren ? () => setExpanded((value) => !value) : undefined}
       >
         <button
@@ -3767,7 +3771,7 @@ function KnowledgeTreeRow({
         </span>
         <span
           className={cn(
-            "min-w-0 truncate text-sm text-foreground",
+            "min-w-0 flex-1 truncate text-sm text-foreground sm:flex-none",
             depth === 0 && "font-serif font-semibold",
           )}
         >
@@ -3776,7 +3780,7 @@ function KnowledgeTreeRow({
         {linkedAssignments.length > 0 ? (
           <button
             type="button"
-            className="inline-flex shrink-0 items-center gap-1 rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 font-sans text-[11px] font-semibold text-primary transition hover:border-primary/45 hover:bg-primary/15"
+            className="hidden shrink-0 items-center gap-1 rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 font-sans text-[11px] font-semibold text-primary transition hover:border-primary/45 hover:bg-primary/15 sm:inline-flex"
             title={`查看「${node.name}」相关练习`}
             onClick={(event) => {
               event.stopPropagation();
@@ -3787,7 +3791,34 @@ function KnowledgeTreeRow({
             练习 {linkedAssignments.length}
           </button>
         ) : null}
-        <span className="flex-1" />
+        <span className="hidden flex-1 sm:block" />
+        {(node.question_count > 0 || node.material_count > 0 || linkedAssignments.length > 0 || canWrite) && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-9 shrink-0 sm:hidden"
+                aria-label={`更多目录操作：${node.name}`}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <MoreHorizontal size={18} />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-40">
+              {node.question_count > 0 && <DropdownMenuItem onClick={() => onViewQuestions(node)}>查看题目 ({node.question_count})</DropdownMenuItem>}
+              {node.material_count > 0 && <DropdownMenuItem onClick={() => onViewMaterials(node)}>查看资料 ({node.material_count})</DropdownMenuItem>}
+              {linkedAssignments.length > 0 && <DropdownMenuItem onClick={() => onViewAssignments(node)}>相关练习 ({linkedAssignments.length})</DropdownMenuItem>}
+              {canWrite && isChapter && node.material_count > 0 && <DropdownMenuItem onClick={() => onGenerateFromMaterials(node)}>生成题目</DropdownMenuItem>}
+              {canWrite && isChapter && <DropdownMenuItem onClick={() => onUploadMaterial(node)}>上传资料</DropdownMenuItem>}
+              {canWrite && isChapter && <DropdownMenuItem onClick={() => onPublishAssignment(node)}>发布练习</DropdownMenuItem>}
+              {canWrite && <DropdownMenuItem onClick={() => onOpenNode(node.id)}>编辑知识点</DropdownMenuItem>}
+              {canDelete && <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => onRequestDelete(node)}>删除知识点</DropdownMenuItem>}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+        <div className="hidden sm:contents">
         {isChapter ? (
           <>
             {node.question_count > 0 ? (
@@ -3943,6 +3974,7 @@ function KnowledgeTreeRow({
             <Trash2 size={14} />
           </Button>
         ) : null}
+        </div>
       </div>
       {hasChildren && expanded
         ? node.children.map((child) => (
@@ -4008,17 +4040,17 @@ function KnowledgeTab({
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
-        <span className="text-xs text-muted-foreground">
+        <span className="hidden text-xs text-muted-foreground sm:inline">
           默认展示到章节层，点击章节可展开下级知识点
         </span>
         <div className="flex-1" />
         {canWrite ? (
           <>
-            <Button variant="outline" size="sm" onClick={onOpenEditor}>
+            <Button variant="outline" size="sm" className="hidden sm:inline-flex" onClick={onOpenEditor}>
               <Edit3 size={14} className="mr-1.5" />
               编辑目录
             </Button>
-            <DropdownMenu>
+            <div className="hidden sm:block"><DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm">
                   <Sparkles size={14} className="mr-1.5" />
@@ -4040,7 +4072,7 @@ function KnowledgeTab({
                   从书名中获取目录
                 </DropdownMenuItem>
               </DropdownMenuContent>
-            </DropdownMenu>
+            </DropdownMenu></div>
             <Button size="sm" onClick={onOpenAddNode}>
               <Plus size={14} className="mr-1.5" />
               新增
@@ -4049,13 +4081,31 @@ function KnowledgeTab({
               <Button
                 variant="outline"
                 size="sm"
-                className="text-destructive hover:text-destructive"
+                className="hidden text-destructive hover:text-destructive sm:inline-flex"
                 onClick={onClearAll}
               >
                 <Trash2 size={14} className="mr-1.5" />
                 清除全部
               </Button>
             ) : null}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="sm:hidden">
+                  <MoreHorizontal size={16} className="mr-1" />
+                  更多
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuItem onClick={onOpenEditor}>编辑目录</DropdownMenuItem>
+                <DropdownMenuItem onClick={onOpenImport}>从 Excel 文件导入</DropdownMenuItem>
+                <DropdownMenuItem onClick={onOpenCatalogPhoto}>书籍目录拍照导入</DropdownMenuItem>
+                <DropdownMenuItem onClick={onOpenCatalogWeb}>从书名中获取目录</DropdownMenuItem>
+                {hasChildren && <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={onClearAll}>清除全部</DropdownMenuItem>
+                </>}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </>
         ) : (
           <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground">
@@ -4230,7 +4280,7 @@ function KnowledgeEditorTreeNode({
           <span
             className={cn(
               "flex shrink-0 items-center gap-0.5",
-              selected ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100",
+              selected ? "opacity-100" : "opacity-100 xl:opacity-0 xl:group-hover:opacity-100 focus-within:opacity-100",
             )}
           >
             <button
@@ -4362,7 +4412,7 @@ function KnowledgeTreeEditorPage({
       {!tree ? (
         <EmptyPanel icon={<Layers3 size={22} />} title="暂无课程目录" />
       ) : (
-        <div className="grid min-h-[560px] grid-cols-1 gap-4 lg:grid-cols-[minmax(240px,0.8fr)_minmax(0,1.6fr)]">
+              <div className="grid min-h-[560px] grid-cols-1 gap-4 xl:grid-cols-[minmax(240px,0.8fr)_minmax(0,1.6fr)]">
           <section className="flex min-h-0 flex-col rounded-xl border border-border bg-card">
             <div className="border-b border-border px-4 py-3">
               <h2 className="text-sm font-semibold text-foreground">知识树</h2>
@@ -4584,7 +4634,7 @@ export function CourseDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const initialTab = ((): CourseTab => {
     const t = searchParams.get("tab");
     return t === "materials" ||
@@ -4599,6 +4649,26 @@ export function CourseDetailPage() {
       : "knowledge";
   })();
   const [activeTab, setActiveTab] = useState<CourseTab>(initialTab);
+  const urlTab = searchParams.get("tab");
+  useEffect(() => {
+    if (
+      urlTab === "materials" || urlTab === "exams" ||
+      urlTab === "assignments" || urlTab === "questions" ||
+      urlTab === "knowledge" || urlTab === "papers" ||
+      urlTab === "statistics" || urlTab === "manage"
+    ) {
+      setActiveTab(urlTab);
+    }
+  }, [urlTab]);
+
+  const changeTab = useCallback((tab: CourseTab) => {
+    setActiveTab(tab);
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set("tab", tab);
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
   // 题库列表的「出题技能种子」徽标数据（question_id -> 技能列表）。
   const [seedUsage, setSeedUsage] = useState<SeedUsageMap>({});
   // 班级名映射（id -> 名称），用于「班级」模块展示本课程各学期关联的班级。
@@ -4654,7 +4724,20 @@ export function CourseDetailPage() {
   const [associatingMaterial, setAssociatingMaterial] = useState(false);
   const [semesters, setSemesters] = useState<CourseSemester[]>([]);
   const [activeSemesterId, setActiveSemesterId] =
-    useState<string>(ALL_SEMESTERS);
+    useState<string>(() => searchParams.get("semester") ?? ALL_SEMESTERS);
+  const urlSemester = searchParams.get("semester");
+  useEffect(() => {
+    setActiveSemesterId(urlSemester ?? ALL_SEMESTERS);
+  }, [urlSemester]);
+  const changeSemester = useCallback((semesterId: string) => {
+    setActiveSemesterId(semesterId);
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      if (semesterId === ALL_SEMESTERS) next.delete("semester");
+      else next.set("semester", semesterId);
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
   const [newSemesterOpen, setNewSemesterOpen] = useState(false);
   const [associateClassesOpen, setAssociateClassesOpen] = useState(false);
   const [classStudentsTarget, setClassStudentsTarget] = useState<SemesterClassCard | null>(null);
@@ -6161,9 +6244,9 @@ export function CourseDetailPage() {
   const handleViewAssignmentsForKnowledgeNode = useCallback(
     (node: CourseKnowledgeNode) => {
       setAssignmentFilterNodeId(node.id);
-      setActiveTab("assignments");
+      changeTab("assignments");
     },
-    [],
+    [changeTab],
   );
 
   const handleViewMaterialsForKnowledgeNode = useCallback(
@@ -6209,17 +6292,17 @@ export function CourseDetailPage() {
   const handleViewQuestionsForKnowledgeNode = useCallback(
     (node: CourseKnowledgeNode) => {
       setQuestionFilterNodeId(node.id);
-      setActiveTab("questions");
+      changeTab("questions");
     },
-    [],
+    [changeTab],
   );
 
   const handleViewQuestionsForMaterial = useCallback(
     (material: TeacherCourseMaterial) => {
       setQuestionFilterNodeId(material.node_id);
-      setActiveTab("questions");
+      changeTab("questions");
     },
-    [],
+    [changeTab],
   );
 
   const handleGenerateQuestionsFromNodeMaterials = useCallback(
@@ -6549,8 +6632,7 @@ export function CourseDetailPage() {
       if (!id) return;
       const targetTab: CourseTab =
         category === "exam" ? "exams" : "assignments";
-      setActiveTab(targetTab);
-      navigate(`/courses/${id}?tab=${targetTab}`, { replace: true });
+      changeTab(targetTab);
       await Promise.all([
         category === "exam"
           ? listCourseExams(id, semesterFilter).then(setExams)
@@ -6558,7 +6640,7 @@ export function CourseDetailPage() {
         getTeacherCourse(id, semesterFilter).then(setCourse),
       ]);
     },
-    [id, navigate, semesterFilter],
+    [changeTab, id, semesterFilter],
   );
 
   const handleConfirmCloseExam = useCallback(async () => {
@@ -6664,9 +6746,9 @@ export function CourseDetailPage() {
   );
 
   return (
-    <div className="flex h-full min-h-0 bg-background">
+    <div className="flex h-full min-h-0 min-w-0 bg-background">
       {/* ===== 左侧栏：课程标识 + AI 入口 + 功能导航 + 教学待办 ===== */}
-      <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-card">
+      <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-card xl:flex">
         <div className="border-b border-border px-4 py-4">
           <div className="flex items-center gap-2.5">
             <Button
@@ -6735,7 +6817,7 @@ export function CourseDetailPage() {
               <button
                 key={key}
                 type="button"
-                onClick={() => setActiveTab(key)}
+                onClick={() => changeTab(key)}
                 className={cn(
                   "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium transition-colors",
                   activeTab === key
@@ -6781,7 +6863,7 @@ export function CourseDetailPage() {
             semester,
             ...current.filter((item) => item.id !== semester.id),
           ]);
-          setActiveSemesterId(semester.id);
+          changeSemester(semester.id);
         }}
       />
 
@@ -7291,33 +7373,99 @@ export function CourseDetailPage() {
 
       {/* ===== 右侧：学期顶栏 + 滚动内容 ===== */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="shrink-0 border-b border-border bg-card px-6 py-3">
-          <div className="flex items-center gap-3">
-            <div className="flex shrink-0 items-center gap-2 text-sm font-medium">
+        <div className="shrink-0 border-b border-border bg-card px-4 py-3 sm:px-6">
+          <div className="flex min-w-0 items-center gap-3 xl:hidden">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-9 shrink-0"
+              aria-label="返回我的课程"
+              onClick={() => navigate("/courses")}
+            >
+              <ArrowLeft size={18} />
+            </Button>
+            <div className="min-w-0 flex-1">
+              <h1 className="truncate text-sm font-semibold text-foreground">{course.name}</h1>
+              <p className="truncate text-xs text-muted-foreground">
+                {formatKnowledgeDisplayPath(course.display_path)}
+              </p>
+            </div>
+            {course.can_write ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button type="button" variant="ghost" size="icon" className="size-9 shrink-0" aria-label="课程操作">
+                    <MoreHorizontal size={18} />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => navigate(`/courses/${id}/question-skills`)}>
+                    <Sparkles size={15} className="mr-2" />智能出题
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => navigate(`/courses/${id}/question-skills`, { state: { createSkill: true } })}>
+                    <Wand2 size={15} className="mr-2" />创建出题技能
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => setNewSemesterOpen(true)}>
+                    <CalendarRange size={15} className="mr-2" />新建学期
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : null}
+          </div>
+          <div className="mt-2.5 flex min-w-0 items-center gap-2 xl:mt-0 xl:gap-3">
+            <div className="hidden shrink-0 items-center gap-2 text-sm font-medium xl:flex">
               <CalendarRange size={16} className="text-muted-foreground" />
               <span>学期</span>
             </div>
-            <Select value={activeSemesterId} onValueChange={setActiveSemesterId}>
-              <SelectTrigger className="h-9 w-[220px] text-sm">
+            <Select value={activeTab} onValueChange={(value) => changeTab(value as CourseTab)}>
+              <SelectTrigger aria-label="课程功能" className="h-10 min-w-0 flex-1 text-sm sm:max-w-[240px] xl:hidden">
+                <SelectValue placeholder="选择课程功能" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectLabel>教学</SelectLabel>
+                  <SelectItem value="exams">考试</SelectItem>
+                  <SelectItem value="assignments">练习</SelectItem>
+                </SelectGroup>
+                <SelectGroup>
+                  <SelectLabel>资源</SelectLabel>
+                  <SelectItem value="knowledge">目录</SelectItem>
+                  <SelectItem value="materials">资料</SelectItem>
+                  <SelectItem value="questions">题目</SelectItem>
+                  <SelectItem value="papers">试卷</SelectItem>
+                </SelectGroup>
+                <SelectGroup>
+                  <SelectLabel>学情与管理</SelectLabel>
+                  <SelectItem value="statistics">统计</SelectItem>
+                  <SelectItem value="manage">管理</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Select value={activeSemesterId} onValueChange={changeSemester}>
+              <SelectTrigger aria-label="选择学期" className="h-10 min-w-0 flex-1 text-sm sm:max-w-[220px] xl:h-9 xl:flex-none">
                 <SelectValue placeholder="选择学期" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={ALL_SEMESTERS}>全部学期</SelectItem>
-                {semesters.map((semester) => (
-                  <SelectItem key={semester.id} value={semester.id}>
-                    {semester.name}
-                  </SelectItem>
-                ))}
+                <SelectGroup>
+                  <SelectItem value={ALL_SEMESTERS}>全部学期</SelectItem>
+                  {semesters.map((semester) => (
+                    <SelectItem key={semester.id} value={semester.id}>
+                      {semester.name}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
               </SelectContent>
             </Select>
-            <span className="text-xs text-muted-foreground">
+            <span className="hidden text-xs text-muted-foreground 2xl:inline">
               题目跟课程走；练习 / 考试按学期归档
             </span>
-            <div className="flex-1" />
+            <div className="hidden flex-1 sm:block" />
             {course.can_write ? (
               <Button
                 variant="outline"
                 size="sm"
+                className="hidden shrink-0 sm:inline-flex"
                 onClick={() => setNewSemesterOpen(true)}
               >
                 <Plus size={14} className="mr-1.5" />
@@ -7327,7 +7475,7 @@ export function CourseDetailPage() {
           </div>
         </div>
 
-        <main className="min-w-0 flex-1 overflow-y-auto p-6">
+        <main className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4 sm:p-6">
           {course.is_deleted ? (
             <div className="mb-5 rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
               这门课程已删除。当前仅支持查看课程资料、考试、练习、题目和课程目录，不能新增、编辑或删除内容。
@@ -7382,7 +7530,7 @@ export function CourseDetailPage() {
             ) : (
               <Tabs
                 value={activeTab}
-                onValueChange={(value) => setActiveTab(value as CourseTab)}
+                onValueChange={(value) => changeTab(value as CourseTab)}
               >
               {/* 导航已移到左侧栏，这里只保留各模块内容面板。 */}
               <TabsContent value="materials" className="mt-0">

@@ -458,9 +458,9 @@ export function CourseMasteryAnalytics({
               列均值看全班薄弱点，行均值看学生整体掌握，交叉低分区定位补课对象。
             </CardDescription>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
             <Select value={selectedClassId} onValueChange={setSelectedClassId}>
-              <SelectTrigger className="h-9 w-[180px]">
+              <SelectTrigger className="h-9 w-full sm:w-[180px]">
                 <SelectValue placeholder="选择班级" />
               </SelectTrigger>
               <SelectContent>
@@ -474,7 +474,7 @@ export function CourseMasteryAnalytics({
                 </SelectGroup>
               </SelectContent>
             </Select>
-            <div className="relative w-[230px]">
+            <div className="relative w-full sm:w-[230px]">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={query}

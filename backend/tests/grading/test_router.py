@@ -828,6 +828,19 @@ async def test_grading_inbox_endpoint_returns_exam_grouped_questions(admin_clien
             "role_binding_version": 1,
         },
     )
+    await admin_client.post(
+        "/api/grading/tasks",
+        json={
+            "source_type": "exam_submission",
+            "source_business_id": "exam-java-midterm:essay-q4:A-102",
+            "question_type": "short_answer",
+            "question_content": "说明接口设计原则。",
+            "max_score": 20,
+            "knowledge_tags": [],
+            "student_answer_raw": "明确输入输出",
+            "role_binding_version": 1,
+        },
+    )
     create_response = await admin_client.post(
         "/api/grading/tasks",
         json={
@@ -857,8 +870,9 @@ async def test_grading_inbox_endpoint_returns_exam_grouped_questions(admin_clien
     exam = payload["exams"][0]
     assert exam["exam_id"] == "exam-java-midterm"
     assert exam["exam_label"] == "Java Midterm"
-    assert len(exam["questions"]) == 1
-    question = exam["questions"][0]
+    assert exam["pending_submission_count"] == 1  # A-102 有两道待阅题，只算一份答卷
+    assert len(exam["questions"]) == 2
+    question = next(item for item in exam["questions"] if item["question_id"] == "essay-q3")
     assert question["question_id"] == "essay-q3"
     assert question["question_label"] == "主观题 3"
     assert question["pending_count"] == 1

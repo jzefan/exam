@@ -171,6 +171,7 @@ class GradingInboxExamGroupRead(BaseModel):
     exam_id: str | None = None
     exam_label: str
     exam_date: str
+    pending_submission_count: int
     questions: list[GradingInboxQuestionRead] = Field(default_factory=list)
 
 

@@ -36,8 +36,10 @@ export default defineConfig({
       },
       devOptions: { enabled: false },
       manifest: {
+        id: "/",
         name: "智评线考试",
         short_name: "智评线",
+        lang: "zh-CN",
         start_url: "/",
         display: "standalone",
         scope: "/",

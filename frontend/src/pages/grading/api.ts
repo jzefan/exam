@@ -30,6 +30,8 @@ export interface GradingInboxExamGroup {
   exam_id: string | null;
   exam_label: string;
   exam_date: string;
+  /** 有至少一道待阅主观题的考生答卷数，同一考生在本场考试只计一次。 */
+  pending_submission_count: number;
   questions: GradingInboxQuestionItem[];
 }
 
@@ -297,6 +299,16 @@ function getAuthHeaders() {
   };
 }
 
+export class GradingApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "GradingApiError";
+    this.status = status;
+  }
+}
+
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, {
     ...init,
@@ -308,7 +320,7 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || `请求失败: ${response.status}`);
+    throw new GradingApiError(text || `请求失败: ${response.status}`, response.status);
   }
 
   if (response.status === 204 || response.headers.get("content-length") === "0") {

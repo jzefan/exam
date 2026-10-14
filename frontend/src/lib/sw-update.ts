@@ -5,24 +5,32 @@
  * an explicit update flow a freshly deployed version stays in the SW "waiting"
  * state until every tab is closed, so users keep seeing the old build until they
  * manually (hard-)refresh. This module detects a new version and auto-reloads to
- * it — except while a student is taking an exam, where an unsolicited reload
- * could disrupt answering (the codebase deliberately avoids clientsClaim for the
- * same reason). The pending update is applied as soon as the user leaves the
- * exam page.
+ * it — except during an exam or while a teacher is grading an answer, where an
+ * unsolicited reload could discard work (the codebase deliberately avoids
+ * clientsClaim for the same reason). The pending update is applied when the
+ * user returns to a safe page and the next update check runs.
  */
 
-// 正在答题/考试的路径：此时绝不自动重载，等离开后再更新。
+// 正在答题或阅卷的路径：此时绝不自动重载，等离开后再更新。
 const EXAM_PATH = /^\/student\/exam\//;
 
 function onExamPath(): boolean {
   return EXAM_PATH.test(window.location.pathname);
 }
 
+function inCriticalWorkflow(): boolean {
+  return onExamPath() || window.location.pathname === "/grading";
+}
+
 let pendingWorker: ServiceWorker | null = null;
 let reloaded = false;
 
-function reloadOnce() {
+function reloadOnce(worker: ServiceWorker) {
   if (reloaded) return;
+  if (inCriticalWorkflow()) {
+    pendingWorker = worker;
+    return;
+  }
   reloaded = true;
   window.location.reload();
 }
@@ -30,20 +38,20 @@ function reloadOnce() {
 /** 让新 SW 接管（skipWaiting），激活后重载到最新版本。 */
 function activateAndReload(worker: ServiceWorker) {
   if (worker.state === "activated") {
-    reloadOnce();
+    reloadOnce(worker);
     return;
   }
   worker.addEventListener("statechange", () => {
-    if (worker.state === "activated") reloadOnce();
+    if (worker.state === "activated") reloadOnce(worker);
   });
   // sw.ts 已监听该消息并调用 self.skipWaiting()。
   worker.postMessage({ type: "SKIP_WAITING" });
 }
 
-/** 有挂起的新版本且当前不在考试页时，应用更新。 */
+/** 有挂起的新版本且当前不在答题或阅卷操作中时，应用更新。 */
 function maybeApplyUpdate() {
   if (!pendingWorker || reloaded) return;
-  if (onExamPath()) return; // 答题期间推迟
+  if (inCriticalWorkflow()) return;
   const worker = pendingWorker;
   pendingWorker = null;
   activateAndReload(worker);

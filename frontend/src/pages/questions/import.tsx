@@ -75,6 +75,7 @@ import type {
   QuestionImportTableInput,
 } from "./import-types";
 import {
+  allImportableDraftsHaveKnowledge,
   applySourceDraftEdits,
   buildImportableQuestions,
   buildStandardImportTemplate,
@@ -809,6 +810,8 @@ export function QuestionImportPage() {
       )
       .map((draft) => draft.draft_id);
     const bankId = questionBankId === "__none__" ? null : questionBankId;
+    // 题目都已关联知识点时，不再排后台 AI 匹配（省一次模型调用，也避免 AI 改写已确认的关联）。
+    const skipKnowledgeMatching = allImportableDraftsHaveKnowledge(importDrafts);
     const baseQuestions = buildImportableQuestions(importDrafts, bankId);
     // 从课程进入导入时，给每道题带上课程根知识点，确保即使选「暂不关联」，
     // 题目也会归到本课程，出现在课程详情的题目列表中。
@@ -840,6 +843,7 @@ export function QuestionImportPage() {
               body: JSON.stringify({
                 questions,
                 root_knowledge_point_id: rootKnowledgePointId,
+                skip_knowledge_matching: skipKnowledgeMatching,
               }),
             },
           )
@@ -859,6 +863,8 @@ export function QuestionImportPage() {
           : null;
       const importJobId =
         rootKnowledgePointId && importedCount > 0 ? responseJobId : null;
+      // 跳过匹配时后台没有知识点识别任务，也就没有进度可轮询。
+      const knowledgeJobId = skipKnowledgeMatching ? null : importJobId;
       if (failedCount === 0) {
         const successfulIds = new Set(importableDraftIds);
         setDrafts((current) =>
@@ -897,9 +903,9 @@ export function QuestionImportPage() {
         created: importedCount,
         existing: existingCount,
         failed: failedCount,
-        importJobId,
+        importJobId: knowledgeJobId,
       });
-      if (rootKnowledgePointId) {
+      if (rootKnowledgePointId && !skipKnowledgeMatching) {
         if (importedCount > 0 && responseJobId) {
           setActiveImportJobId(responseJobId);
           persistQuestionImportJobId(responseJobId);
@@ -977,6 +983,7 @@ export function QuestionImportPage() {
     let analysesCompleted = 0;
     let doubtsFlagged = 0;
     let kpsMatched = 0;
+    let enhanceFailed = false;
 
     try {
       const token = localStorage.getItem("access_token");
@@ -1095,6 +1102,7 @@ export function QuestionImportPage() {
         }
       }
     } catch (error) {
+      enhanceFailed = true;
       setEnhanceOverlay({
         status: "error",
         modeLabel,
@@ -1106,6 +1114,21 @@ export function QuestionImportPage() {
       window.setTimeout(() => setEnhanceOverlay(null), 3000);
     } finally {
       setEnhancing(false);
+      // 一个知识点都没匹配上时明确说原因，别让「点了没反应」变成无头案。
+      if (
+        !enhanceFailed &&
+        enhanceModeNeedsKnowledgePoint(enhanceMode) &&
+        kpsMatched === 0 &&
+        targets.length > 0
+      ) {
+        toast({
+          title: "没有匹配到任何知识点",
+          description: selectedKp
+            ? `「${selectedKp.name}」下面没有可关联的子知识点，或与这些题目都对不上。换一棵带知识点的课程再导入即可。`
+            : "请先选择一个带子知识点的父知识点。",
+          variant: "destructive",
+        });
+      }
       if (!courseEnhanceKnowledgePoint) setEnhanceSelectedKPs([]);
     }
   };

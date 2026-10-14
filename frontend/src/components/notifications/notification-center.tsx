@@ -102,7 +102,7 @@ export function NotificationCenter() {
 
         <Separator />
 
-        <ScrollArea className="max-h-[26rem]">
+        <ScrollArea className="h-[min(26rem,calc(100dvh-8rem))] overscroll-contain">
           <div className="p-2">
             {loading && notifications.length === 0 ? (
               <div className="flex min-h-40 items-center justify-center px-4 py-10 text-sm text-muted-foreground">

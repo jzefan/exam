@@ -18,6 +18,7 @@ import { apiRequest } from "@/pages/grading/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { IcpRecordLink } from "@/components/icp-record-link";
 import { getPersonaCopy } from "@/lib/persona-copy";
+import { TeacherDashboard } from "./teacher-dashboard";
 
 interface DashboardStats {
   total_candidates: number;
@@ -101,7 +102,7 @@ function QuickAction({
       type="button"
       data-onboarding={dataOnboarding}
       onClick={onClick}
-      className="flex w-full items-center gap-3 sm:gap-4 rounded-lg border border-border bg-card p-3 sm:p-4 text-left transition-all hover:border-primary/55 hover:bg-primary/[0.015] hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="flex w-full cursor-pointer items-center gap-3 sm:gap-4 rounded-lg border border-border bg-card p-3 sm:p-4 text-left transition-all hover:border-primary/55 hover:bg-primary/[0.015] hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <div className="h-9 w-9 rounded-lg bg-muted flex items-center justify-center shrink-0 text-foreground">
         {icon}
@@ -131,6 +132,7 @@ export function Dashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!role || role === "teacher") return;
     void apiRequest<DashboardStats>("/analytics/dashboard-stats")
       .then((data) => {
         setStats(data);
@@ -141,7 +143,11 @@ export function Dashboard() {
       .finally(() => {
         setLoading(false);
       });
-  }, []);
+  }, [role]);
+
+  if (role === "teacher") {
+    return <TeacherDashboard name={identity?.name ?? "老师"} />;
+  }
 
   const greeting = (() => {
     const h = new Date().getHours();
