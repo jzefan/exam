@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { Search, Check, Upload, Plus, Users, ChevronDown } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -41,6 +41,13 @@ interface ImportResult {
   errors: string[];
 }
 
+/** 课程学期在选择器里的轻量视图：选中一个学期即勾选它关联班级下的全部学生。 */
+export interface StudentSemesterOption {
+  id: string;
+  name: string;
+  classIds: string[];
+}
+
 export function ClassStudentSelector({
   selectedIds,
   onChange,
@@ -48,6 +55,8 @@ export function ClassStudentSelector({
   emptySummaryText = "还没有选择对象，可以优先按班级选择，导入和手动添加作为补充方式。",
   defaultSupplementCollapsed = false,
   defaultClassIds,
+  semesterOptions,
+  onSemesterChange,
 }: {
   selectedIds: string[];
   onChange: (ids: string[]) => void;
@@ -59,6 +68,16 @@ export function ClassStudentSelector({
    * 用于从课程详情进入创建考试/练习时，自动带入当前学期关联班级。
    */
   defaultClassIds?: string[];
+  /**
+   * 本课程的学期列表（只含已关联班级的学期）。传入后在班级选择上方多出
+   * 「按学期选择」一行，点学期即选中该学期关联班级下的全部学生。
+   */
+  semesterOptions?: StudentSemesterOption[];
+  /**
+   * 用户点/取消学期按钮时上报当前目标学期（取消时上报 null）。
+   * 宿主用它决定发布时把作业归档到哪个学期；没选过就用宿主自己的默认学期。
+   */
+  onSemesterChange?: (semesterId: string | null) => void;
 }) {
   const [supplementMode, setSupplementMode] = useState<SupplementMode>("import");
   const [isSupplementCollapsed, setIsSupplementCollapsed] = useState(defaultSupplementCollapsed);
@@ -240,6 +259,39 @@ export function ClassStudentSelector({
         ]
       : []),
   ];
+
+  // 只保留真正关联了班级的学期；人数依赖 students 异步到达，故随 users 一起重算。
+  const semesterGroups = useMemo(
+    () =>
+      (semesterOptions ?? [])
+        .map((option) => {
+          const classIdSet = new Set(option.classIds ?? []);
+          const studentIds = users
+            .filter((user) => user.class_id && classIdSet.has(user.class_id))
+            .map((user) => user.id);
+          return {
+            id: option.id,
+            name: option.name,
+            classCount: classIdSet.size,
+            studentIds,
+          };
+        })
+        .filter((group) => group.classCount > 0),
+    [semesterOptions, users],
+  );
+
+  const toggleSemesterGroup = (semesterId: string, studentIds: string[]) => {
+    if (studentIds.length === 0) return;
+    if (studentIds.every((id) => selectedSet.has(id))) {
+      const removeSet = new Set(studentIds);
+      onChange(selectedIds.filter((id) => !removeSet.has(id)));
+      // 取消该学期 → 回到宿主默认学期
+      onSemesterChange?.(null);
+      return;
+    }
+    onChange([...new Set([...selectedIds, ...studentIds])]);
+    onSemesterChange?.(semesterId);
+  };
 
   useEffect(() => {
     const fullName = manualForm.full_name.trim();
@@ -496,6 +548,60 @@ export function ClassStudentSelector({
       ) : (
         <div className="rounded-xl bg-muted/30 px-4 py-3 text-xs text-muted-foreground">
           {emptySummaryText}
+        </div>
+      )}
+
+      {/* 学期是快速入口，不随学生列表折叠：否则自动带入班级后学期行会跟着消失，
+          同一个弹窗在不同入口进来就长得不一样。 */}
+      {semesterGroups.length > 0 && (
+        <div data-testid="semester-picker" className="flex flex-col gap-1">
+          <p className="text-sm font-semibold text-foreground">按学期选择</p>
+          <p className="text-xs text-muted-foreground">
+            选中学期即自动勾选该学期关联班级的全部学生，再点一次取消。
+          </p>
+          <div className="mt-1 flex flex-wrap gap-2">
+            {semesterGroups.map((group) => {
+              const allSelected =
+                group.studentIds.length > 0 &&
+                group.studentIds.every((id) => selectedSet.has(id));
+              return (
+                <button
+                  key={group.id}
+                  type="button"
+                  aria-pressed={allSelected}
+                  onClick={() => toggleSemesterGroup(group.id, group.studentIds)}
+                  className={cn(
+                    "flex min-w-0 items-center gap-2 rounded-lg border bg-background px-3 py-2 text-left transition-colors hover:bg-muted/50",
+                    allSelected ? "border-primary bg-primary/5" : "border-border",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "flex size-4 shrink-0 items-center justify-center rounded border transition-colors",
+                      allSelected
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-input",
+                    )}
+                  >
+                    {allSelected && <Check className="size-3" />}
+                  </span>
+                  <span className="min-w-0">
+                    <span
+                      className={cn(
+                        "block truncate text-sm font-medium",
+                        allSelected && "text-primary",
+                      )}
+                    >
+                      {group.name}
+                    </span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {group.classCount} 个班级 · {group.studentIds.length} 人
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
 

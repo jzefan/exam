@@ -13,7 +13,7 @@ from typing import Any
 import httpx
 import pdfplumber
 from docx import Document
-from sqlalchemy import Select, and_, delete, func, or_, select
+from sqlalchemy import Select, and_, delete, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -831,7 +831,16 @@ def paper_base_query() -> Select:
 def paper_scope_query(user: User, is_admin: bool) -> Select:
     query = paper_base_query()
     if not is_admin:
-        query = query.where(teacher_owned_resource_filter(Paper, user.id))
+        course_base_paper = and_(
+            Paper.root_knowledge_point_id.is_not(None),
+            Paper.is_reusable.is_(True),
+            exists().where(
+                KnowledgePoint.id == Paper.root_knowledge_point_id,
+                KnowledgePoint.owner_id == Paper.owner_id,
+                KnowledgePoint.deleted_at.is_(None),
+            ),
+        )
+        query = query.where(or_(teacher_owned_resource_filter(Paper, user.id), course_base_paper))
     return query
 
 

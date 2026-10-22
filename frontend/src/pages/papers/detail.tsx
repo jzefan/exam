@@ -118,6 +118,7 @@ import {
   PaperQuickPublishDialog,
   type PaperQuickPublishMode,
 } from "./quick-publish-dialog";
+import type { StudentSemesterOption } from "@/pages/exams/components/ClassStudentSelector";
 
 const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {
   choice: "选择题",
@@ -141,6 +142,7 @@ type PaperDetailNavState = {
   courseKpId?: string;
   courseSemesterId?: string;
   defaultClassIds?: string[];
+  courseSemesters?: StudentSemesterOption[];
   courseQuestionBankName?: string;
   knowledgePointOptions?: PaperKnowledgePointOption[];
   publishExamSuccessTo?: string;
@@ -1478,6 +1480,7 @@ export function PaperDetailPage() {
           courseKpId={navState.courseKpId}
           courseSemesterId={navState.courseSemesterId}
           defaultClassIds={navState.defaultClassIds}
+          semesterOptions={navState.courseSemesters}
           onOpenChange={(next) => {
             if (!next) setQuickPublishMode(null);
           }}

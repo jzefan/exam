@@ -24,7 +24,10 @@ import { useToast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
 import { getDefaultScore } from "@/lib/question-defaults";
 import { getPublishedExamStatus } from "@/pages/exams/components/exam-form-utils";
-import { ClassStudentSelector } from "@/pages/exams/components/ClassStudentSelector";
+import {
+  ClassStudentSelector,
+  type StudentSemesterOption,
+} from "@/pages/exams/components/ClassStudentSelector";
 import type { QuestionType } from "@/types";
 
 import {
@@ -106,6 +109,8 @@ export interface SmartPracticeChatDialogProps {
   courseKpId: string;
   courseSemesterId: string | null;
   defaultClassIds?: string[];
+  /** 本课程的学期列表；传入后可选学期一键选中该学期关联班级的学生。 */
+  semesterOptions?: StudentSemesterOption[];
   knowledgeOptions: SmartPracticeKnowledgeOption[];
   initialKnowledgePointId?: string | null;
   onPublished?: (examId: string) => void | Promise<void>;
@@ -118,6 +123,7 @@ export function SmartPracticeChatDialog({
   courseKpId,
   courseSemesterId,
   defaultClassIds,
+  semesterOptions,
   knowledgeOptions,
   initialKnowledgePointId = null,
   onPublished,
@@ -128,6 +134,8 @@ export function SmartPracticeChatDialog({
   const [input, setInput] = useState("");
   const [title, setTitle] = useState(() => defaultPracticeTitle(courseName));
   const [studentIds, setStudentIds] = useState<string[]>([]);
+  // 「按学期选择」里点中的学期；没点过就沿用课程默认学期。
+  const [semesterOverride, setSemesterOverride] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -478,7 +486,8 @@ export function SmartPracticeChatDialog({
         question_ids: questionIds,
         student_ids: studentIds,
         course_kp_id: knowledgePointId,
-        course_semester_id: courseSemesterId ?? undefined,
+        // 按学期选了学生就归档到该学期，否则用课程默认学期。
+        course_semester_id: semesterOverride ?? courseSemesterId ?? undefined,
       });
 
       toast({
@@ -674,6 +683,8 @@ export function SmartPracticeChatDialog({
                 emptySummaryText="请选择学生"
                 defaultSupplementCollapsed
                 defaultClassIds={defaultClassIds}
+                semesterOptions={semesterOptions}
+                onSemesterChange={setSemesterOverride}
               />
             </div>
           </ScrollArea>

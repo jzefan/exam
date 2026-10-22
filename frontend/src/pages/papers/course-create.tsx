@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   Check,
   ChevronRight,
@@ -60,9 +60,12 @@ import {
   getCourseKnowledgeTree,
   getTeacherCourse,
   listCourseQuestions,
+  listCourseSemesters,
   type CourseKnowledgeNode,
+  type CourseSemester,
   type TeacherCourseDetail,
 } from "@/pages/courses/api";
+import type { StudentSemesterOption } from "@/pages/exams/components/ClassStudentSelector";
 import type {
   IKnowledgePoint,
   IPaperDetail,
@@ -434,6 +437,9 @@ async function streamGenerateCourseQuestions({
 
 export function CoursePaperCreatePage() {
   const { id: courseId } = useParams<{ id: string }>();
+  const location = useLocation();
+  // 从课程详情进入时带着当前选中的学期，用于组卷后发布时默认带入该学期班级。
+  const navState = (location.state ?? {}) as { courseSemesterId?: string | null };
   const navigate = useNavigate();
   const { toast } = useToast();
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -441,6 +447,7 @@ export function CoursePaperCreatePage() {
 
   const [course, setCourse] = useState<TeacherCourseDetail | null>(null);
   const [tree, setTree] = useState<CourseKnowledgeNode | null>(null);
+  const [semesters, setSemesters] = useState<CourseSemester[]>([]);
   const [questions, setQuestions] = useState<IQuestion[]>([]);
   const [banks, setBanks] = useState<IQuestionBank[]>([]);
   const [allTags, setAllTags] = useState<ITag[]>([]);
@@ -564,6 +571,24 @@ export function CoursePaperCreatePage() {
 
   const rootKnowledgePointId = tree?.id ?? courseId ?? null;
   const defaultBackTo = courseId ? `/courses/${courseId}?tab=papers` : "/courses";
+  // 组卷后跳试卷详情时要带着学期信息，否则「发布练习」弹窗没有按学期选学生的入口。
+  const semesterStudentOptions = useMemo<StudentSemesterOption[]>(
+    () =>
+      semesters
+        .map((semester) => ({
+          id: semester.id,
+          name: semester.name,
+          classIds: semester.class_ids ?? [],
+        }))
+        .filter((option) => option.classIds.length > 0),
+    [semesters],
+  );
+  const activeSemesterClassIds = useMemo(() => {
+    if (!navState.courseSemesterId) return [];
+    return (
+      semesters.find((semester) => semester.id === navState.courseSemesterId)?.class_ids ?? []
+    );
+  }, [navState.courseSemesterId, semesters]);
   const courseBankName = courseQuestionBankName(course?.name);
   const courseBank = useMemo(
     () => banks.find((bank) => bank.name === courseBankName) ?? null,
@@ -676,15 +701,25 @@ export function CoursePaperCreatePage() {
       getTeacherCourse(courseId),
       getCourseKnowledgeTree(courseId),
       listCourseQuestions(courseId),
+      listCourseSemesters(courseId),
       apiRequest<IQuestionBank[]>("/question-banks?_start=0&_end=1000"),
       apiRequest<ITag[]>("/tags?_start=0&_end=1000"),
       apiRequest<IKnowledgePoint[]>("/knowledge-points?_start=0&_end=1000"),
     ])
-      .then(([courseValue, treeValue, questionValue, bankValue, tagValue, knowledgeValue]) => {
+      .then(([
+        courseValue,
+        treeValue,
+        questionValue,
+        semesterValue,
+        bankValue,
+        tagValue,
+        knowledgeValue,
+      ]) => {
         if (cancelled) return;
         setCourse(courseValue);
         setTree(treeValue);
         setQuestions(questionValue);
+        setSemesters(semesterValue);
         setBanks(bankValue);
         setAllTags(tagValue);
         setKnowledgePoints(knowledgeValue);
@@ -956,6 +991,18 @@ export function CoursePaperCreatePage() {
           backLabel: "返回课程详情",
           courseOrigin: true,
           courseKpId: rootKnowledgePointId ?? undefined,
+          // 组卷页不经过试卷列表，落地页要自己给：在试卷详情里发布练习/考试后回课程对应 tab。
+          publishExamSuccessTo: `/courses/${courseId}?tab=exams`,
+          publishPracticeSuccessTo: `/courses/${courseId}?tab=assignments`,
+          ...(navState.courseSemesterId
+            ? { courseSemesterId: navState.courseSemesterId }
+            : {}),
+          ...(activeSemesterClassIds.length
+            ? { defaultClassIds: activeSemesterClassIds }
+            : {}),
+          ...(semesterStudentOptions.length
+            ? { courseSemesters: semesterStudentOptions }
+            : {}),
         },
       });
     } catch (error) {

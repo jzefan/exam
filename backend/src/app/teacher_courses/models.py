@@ -12,7 +12,7 @@ table is created automatically by ``Base.metadata.create_all`` on startup.
 import uuid
 from datetime import date
 
-from sqlalchemy import JSON, Date, ForeignKey, Index, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, JSON, Date, ForeignKey, Index, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.common.data_visibility import OwnerMixin
@@ -89,3 +89,44 @@ class ExamSemesterAssignment(Base, TimestampMixin):
     )
 
     semester: Mapped[CourseSemester] = relationship("CourseSemester", lazy="joined")
+
+
+class CourseShareLink(BaseModel):
+    """Short-link publication record for a course."""
+
+    __tablename__ = "course_share_links"
+
+    course_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("knowledge_points.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    share_code: Mapped[str] = mapped_column(String(32), unique=True, nullable=False, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    settings: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+    __table_args__ = (
+        Index("ix_course_share_links_course_id_active", "course_id", "is_active"),
+    )
+
+
+class CourseUserWorkspace(BaseModel):
+    """User-specific course workspace and optional password protection."""
+
+    __tablename__ = "course_user_workspaces"
+
+    course_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("knowledge_points.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    workspace_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    alias_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("course_id", "user_id", name="uq_course_user_workspace"),
+        Index("ix_course_user_workspaces_course_key", "course_id", "workspace_key"),
+    )

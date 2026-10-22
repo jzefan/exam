@@ -90,7 +90,7 @@ import type {
 } from "@/types";
 
 import { QuestionSelector } from "./components/QuestionSelector";
-import { ClassStudentSelector } from "./components/ClassStudentSelector";
+import { ClassStudentSelector, type StudentSemesterOption } from "./components/ClassStudentSelector";
 import { ExamQuestionActions } from "./components/ExamQuestionActions";
 import {
   calculateDurationMinutes,
@@ -413,6 +413,7 @@ export function PracticeCreate() {
     initialStep?: number;
     courseOrigin?: boolean;
     defaultClassIds?: string[];
+    courseSemesters?: StudentSemesterOption[];
   };
   const { toast } = useToast();
   const { mutate: create, mutation } = useCreate();
@@ -501,6 +502,8 @@ export function PracticeCreate() {
   const [isManualQuestionFullscreen, setIsManualQuestionFullscreen] =
     useState(false);
   const [studentIds, setStudentIds] = useState<string[]>([]);
+  // 「按学期选择」里点中的学期；没点过就沿用课程默认学期。
+  const [semesterOverride, setSemesterOverride] = useState<string | null>(null);
   const [publicLinkEnabled, setPublicLinkEnabled] = useState(false);
   const [durationMinutes, setDurationMinutes] = useState(60);
   const [startImmediately, setStartImmediately] = useState(true);
@@ -2292,8 +2295,9 @@ export function PracticeCreate() {
         values: {
           ...values,
           ...(navState.courseKpId ? { course_kp_id: navState.courseKpId } : {}),
-          ...(navState.courseSemesterId
-            ? { course_semester_id: navState.courseSemesterId }
+          // 第 3 步按学期选了学生，就归档到那个学期；否则用课程默认学期。
+          ...((semesterOverride ?? navState.courseSemesterId)
+            ? { course_semester_id: semesterOverride ?? navState.courseSemesterId }
             : {}),
         },
       },
@@ -3495,6 +3499,12 @@ export function PracticeCreate() {
                   emptySummaryText="还没有选择发布对象，可以优先按班级选择，导入和手动添加作为补充方式。"
                   defaultClassIds={
                     isEditMode ? undefined : navState.defaultClassIds
+                  }
+                  semesterOptions={
+                    isEditMode ? undefined : navState.courseSemesters
+                  }
+                  onSemesterChange={
+                    isEditMode ? undefined : setSemesterOverride
                   }
                 />
                 <div className="mt-4 flex flex-col gap-3 rounded-2xl bg-primary/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">

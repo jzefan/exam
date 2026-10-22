@@ -3,14 +3,17 @@
 The course concept here intentionally reuses root knowledge points.
 """
 
+import secrets
 import uuid
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+
+from app.auth.security import hash_password, verify_password
 
 from app.auth.dependencies import CurrentUser, user_has_role
 from app.auth.models import User
@@ -44,7 +47,9 @@ from app.rbac.models import Class, Role, TeacherStudent, UserOrganization
 from app.teacher_courses.models import (
     CourseGradeWeight,
     CourseSemester,
+    CourseShareLink,
     CourseStudentGrade,
+    CourseUserWorkspace,
     ExamSemesterAssignment,
 )
 from app.teacher_courses.schemas import (
@@ -65,8 +70,11 @@ from app.teacher_courses.schemas import (
     CourseSemesterClassesUpdate,
     CourseSemesterCreate,
     CourseSemesterResponse,
+    CourseShareLinkResponse,
     CourseStudentGradeUpdate,
     CourseStudentGradeUpdateResponse,
+    CourseWorkspacePasswordSetRequest,
+    CourseWorkspaceSecurityResponse,
     ExamSemesterArchiveRequest,
     TeacherCourseAssignmentScoreCell,
     TeacherCourseAssignmentScoreColumn,
@@ -243,7 +251,20 @@ async def _get_visible_course(
         .where(*conditions)
     )
     if not is_admin:
-        stmt = stmt.where(teacher_visible_resource_filter(KnowledgePoint, user.id))
+        has_share_or_ws = or_(
+            teacher_visible_resource_filter(KnowledgePoint, user.id),
+            exists().where(
+                CourseShareLink.course_id == KnowledgePoint.id,
+                CourseShareLink.is_active.is_(True),
+                CourseShareLink.deleted_at.is_(None),
+            ),
+            exists().where(
+                CourseUserWorkspace.course_id == KnowledgePoint.id,
+                CourseUserWorkspace.user_id == user.id,
+                CourseUserWorkspace.deleted_at.is_(None),
+            ),
+        )
+        stmt = stmt.where(has_share_or_ws)
     row = (await db.execute(stmt)).one_or_none()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Course not found")
@@ -286,13 +307,23 @@ async def _course_counts(
             Question.question_bank_id == default_bank.id,
         )
         if not is_admin:
-            question_stmt = question_stmt.where(teacher_owned_resource_filter(Question, user.id))
+            question_stmt = question_stmt.where(
+                or_(Question.owner_id == course.owner_id, Question.owner_id == user.id)
+            )
         question_count = await db.scalar(question_stmt) or 0
 
     material_stmt = select(func.count(LearningResource.id)).where(
         LearningResource.node_type == "kp",
         LearningResource.node_id.in_(subtree_ids),
     )
+    if not is_admin:
+        material_stmt = material_stmt.where(
+            or_(
+                LearningResource.uploaded_by == course.owner_id,
+                LearningResource.uploaded_by.is_(None),
+                LearningResource.uploaded_by == user.id,
+            )
+        )
 
     # An exam belongs to the course when either pinned to the course directory
     # subtree or via question knowledge-point links into that subtree.
@@ -550,11 +581,12 @@ def _build_course_summary(
         is_major_direct=_is_major_direct(direction),
         owner_id=course.owner_id,
         visibility=course.visibility,
-        can_write=can_write_owned_resource(
+        can_write=not is_deleted,
+        is_owner=can_write_owned_resource(
             is_platform_admin=is_admin,
             current_user_id=user.id,
             owner_id=course.owner_id,
-        ) and not is_deleted,
+        ),
         updated_at=course.updated_at,
         deleted_at=course.deleted_at,
         is_deleted=is_deleted,
@@ -593,11 +625,12 @@ async def _course_summary(
         is_major_direct=_is_major_direct(direction),
         owner_id=course.owner_id,
         visibility=course.visibility,
-        can_write=can_write_owned_resource(
+        can_write=not is_deleted,
+        is_owner=can_write_owned_resource(
             is_platform_admin=is_admin,
             current_user_id=user.id,
             owner_id=course.owner_id,
-        ) and not is_deleted,
+        ),
         updated_at=course.updated_at,
         deleted_at=course.deleted_at,
         is_deleted=is_deleted,
@@ -769,8 +802,16 @@ async def list_teacher_course_materials(course_id: uuid.UUID, db: DB, user: Curr
             LearningResource.node_type == "kp",
             LearningResource.node_id.in_(select(subtree.c.id)),
         )
-        .order_by(LearningResource.created_at.desc())
     )
+    if not is_admin:
+        stmt = stmt.where(
+            or_(
+                LearningResource.uploaded_by == course.owner_id,
+                LearningResource.uploaded_by.is_(None),
+                LearningResource.uploaded_by == user.id,
+            )
+        )
+    stmt = stmt.order_by(LearningResource.created_at.desc())
     rows = (await db.execute(stmt)).all()
     return [
         TeacherCourseMaterial(
@@ -1129,7 +1170,7 @@ async def list_teacher_course_questions(
         .limit(limit)
     )
     if not is_admin:
-        stmt = stmt.where(teacher_owned_resource_filter(Question, user.id))
+        stmt = stmt.where(or_(Question.owner_id == course.owner_id, Question.owner_id == user.id))
     questions = (await db.execute(stmt)).scalars().unique().all()
     return [await _build_question_response(db, question) for question in questions]
 
@@ -1224,7 +1265,7 @@ async def list_teacher_course_questions_paginated(
         Question.question_bank_id == default_bank.id,
     ]
     if not is_admin:
-        conditions.append(teacher_owned_resource_filter(Question, user.id))
+        conditions.append(or_(Question.owner_id == course.owner_id, Question.owner_id == user.id))
     if types:
         conditions.append(Question.type.in_(types))
 
@@ -1261,7 +1302,7 @@ async def list_teacher_course_questions_paginated(
         Question.question_bank_id == default_bank.id,
     ]
     if not is_admin:
-        type_conditions.append(teacher_owned_resource_filter(Question, user.id))
+        type_conditions.append(or_(Question.owner_id == course.owner_id, Question.owner_id == user.id))
     if kp_filter:
         type_conditions.append(question_knowledge_points.c.knowledge_point_id.in_(select(subtree.c.id)))
     type_where = and_(*type_conditions)
@@ -1611,14 +1652,19 @@ async def list_course_semesters(
     course_id: uuid.UUID, db: DB, user: CurrentUser
 ) -> list[CourseSemesterResponse]:
     is_admin = await _is_course_admin(db, user)
-    await _get_visible_course(db, course_id, user=user, is_admin=is_admin, include_deleted=True)
+    course, *_ = await _get_visible_course(db, course_id, user=user, is_admin=is_admin, include_deleted=True)
     stmt = (
         select(CourseSemester)
         .where(CourseSemester.course_id == course_id, CourseSemester.deleted_at.is_(None))
-        .order_by(
-            CourseSemester.start_date.desc().nullslast(),
-            CourseSemester.created_at.desc(),
-        )
+    )
+    if not is_admin:
+        if course.owner_id != user.id:
+            stmt = stmt.where(CourseSemester.owner_id == user.id)
+        else:
+            stmt = stmt.where(CourseSemester.owner_id == course.owner_id)
+    stmt = stmt.order_by(
+        CourseSemester.start_date.desc().nullslast(),
+        CourseSemester.created_at.desc(),
     )
     semesters = (await db.execute(stmt)).scalars().all()
     return [
@@ -1640,8 +1686,8 @@ async def create_course_semester(
 ) -> CourseSemesterResponse:
     is_admin = await _is_course_admin(db, user)
     course, *_ = await _get_visible_course(db, course_id, user=user, is_admin=is_admin)
-    if not is_admin and course.owner_id != user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权为该课程新建学期")
+    if course.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="课程已删除，无法新建学期")
 
     name = payload.name.strip()
     if not name:
@@ -1652,6 +1698,7 @@ async def create_course_semester(
     dupe_stmt = select(CourseSemester.id).where(
         CourseSemester.course_id == course_id,
         CourseSemester.name == name,
+        CourseSemester.owner_id == user.id,
         CourseSemester.deleted_at.is_(None),
     )
     if (await db.execute(dupe_stmt)).scalar_one_or_none() is not None:
@@ -1689,8 +1736,6 @@ async def update_course_semester_classes(
     """更新某个学期关联的班级（从学生管理的班级列表里选择）。"""
     is_admin = await _is_course_admin(db, user)
     course, *_ = await _get_visible_course(db, course_id, user=user, is_admin=is_admin)
-    if not is_admin and course.owner_id != user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权修改该课程的学期")
 
     stmt = select(CourseSemester).where(
         CourseSemester.id == semester_id,
@@ -1700,6 +1745,9 @@ async def update_course_semester_classes(
     semester = (await db.execute(stmt)).scalar_one_or_none()
     if semester is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="学期不存在")
+
+    if not is_admin and semester.owner_id != user.id and course.owner_id != user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权修改该课程的学期")
 
     semester.class_ids = [str(class_id) for class_id in payload.class_ids]
     await db.commit()
@@ -2708,3 +2756,213 @@ async def archive_exam_to_semester(
     if matched is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="考试不在课程范围")
     return matched
+
+
+def _generate_share_code() -> str:
+    return secrets.token_hex(4)
+
+
+@router.post("/{course_id}/publish-link", response_model=CourseShareLinkResponse)
+async def create_course_publish_link(
+    course_id: uuid.UUID,
+    request: Request,
+    db: DB,
+    user: CurrentUser,
+) -> CourseShareLinkResponse:
+    is_admin = await _is_course_admin(db, user)
+    course = await db.get(KnowledgePoint, course_id)
+    if course is None or course.parent_id is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="课程不存在")
+    if not is_admin and course.owner_id != user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有课程所有者可以发布课程短链接")
+    if course.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="课程已删除，无法发布短链接")
+
+    stmt = (
+        select(CourseShareLink)
+        .where(
+            CourseShareLink.course_id == course_id,
+            CourseShareLink.deleted_at.is_(None),
+        )
+        .order_by(CourseShareLink.created_at.desc())
+        .limit(1)
+    )
+    link = (await db.execute(stmt)).scalar_one_or_none()
+    if link is None:
+        link = CourseShareLink(
+            course_id=course_id,
+            share_code=_generate_share_code(),
+            is_active=True,
+            created_by=user.id,
+            settings={},
+        )
+        db.add(link)
+    else:
+        link.is_active = True
+    await db.commit()
+    await db.refresh(link)
+
+    base_url = str(request.base_url).rstrip("/")
+    share_url = f"{base_url}/c/{link.share_code}"
+    return CourseShareLinkResponse(
+        id=link.id,
+        course_id=link.course_id,
+        share_code=link.share_code,
+        share_url=share_url,
+        is_active=link.is_active,
+        created_at=link.created_at,
+    )
+
+
+@router.get("/{course_id}/publish-link", response_model=CourseShareLinkResponse | None)
+async def get_course_publish_link(
+    course_id: uuid.UUID,
+    request: Request,
+    db: DB,
+    user: CurrentUser,
+) -> CourseShareLinkResponse | None:
+    is_admin = await _is_course_admin(db, user)
+    await _get_visible_course(db, course_id, user=user, is_admin=is_admin, include_deleted=True)
+
+    stmt = (
+        select(CourseShareLink)
+        .where(
+            CourseShareLink.course_id == course_id,
+            CourseShareLink.is_active.is_(True),
+            CourseShareLink.deleted_at.is_(None),
+        )
+        .order_by(CourseShareLink.created_at.desc())
+        .limit(1)
+    )
+    link = (await db.execute(stmt)).scalar_one_or_none()
+    if link is None:
+        return None
+
+    base_url = str(request.base_url).rstrip("/")
+    share_url = f"{base_url}/c/{link.share_code}"
+    return CourseShareLinkResponse(
+        id=link.id,
+        course_id=link.course_id,
+        share_code=link.share_code,
+        share_url=share_url,
+        is_active=link.is_active,
+        created_at=link.created_at,
+    )
+
+
+@router.delete("/{course_id}/publish-link", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_course_publish_link(
+    course_id: uuid.UUID,
+    db: DB,
+    user: CurrentUser,
+) -> None:
+    is_admin = await _is_course_admin(db, user)
+    course = await db.get(KnowledgePoint, course_id)
+    if course is None or course.parent_id is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="课程不存在")
+    if not is_admin and course.owner_id != user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权操作该课程发布短链接")
+
+    stmt = select(CourseShareLink).where(
+        CourseShareLink.course_id == course_id,
+        CourseShareLink.deleted_at.is_(None),
+    )
+    links = (await db.execute(stmt)).scalars().all()
+    for link in links:
+        link.is_active = False
+    await db.commit()
+    return None
+
+
+@router.get("/{course_id}/workspace-security", response_model=CourseWorkspaceSecurityResponse)
+async def get_course_workspace_security(
+    course_id: uuid.UUID,
+    db: DB,
+    user: CurrentUser,
+) -> CourseWorkspaceSecurityResponse:
+    is_admin = await _is_course_admin(db, user)
+    await _get_visible_course(db, course_id, user=user, is_admin=is_admin, include_deleted=True)
+
+    stmt = select(CourseUserWorkspace).where(
+        CourseUserWorkspace.course_id == course_id,
+        CourseUserWorkspace.user_id == user.id,
+        CourseUserWorkspace.deleted_at.is_(None),
+    ).limit(1)
+    ws = (await db.execute(stmt)).scalar_one_or_none()
+    has_pwd = bool(ws and ws.password_hash)
+    return CourseWorkspaceSecurityResponse(
+        has_password=has_pwd,
+        alias_name=ws.alias_name if ws else user.full_name,
+        workspace_key=ws.workspace_key if ws else None,
+    )
+
+
+@router.post("/{course_id}/workspace-security/password", response_model=CourseWorkspaceSecurityResponse)
+async def set_course_workspace_password(
+    course_id: uuid.UUID,
+    payload: CourseWorkspacePasswordSetRequest,
+    db: DB,
+    user: CurrentUser,
+) -> CourseWorkspaceSecurityResponse:
+    is_admin = await _is_course_admin(db, user)
+    await _get_visible_course(db, course_id, user=user, is_admin=is_admin)
+
+    pwd = payload.password.strip()
+    if not pwd:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="密码不能为空")
+
+    stmt = select(CourseUserWorkspace).where(
+        CourseUserWorkspace.course_id == course_id,
+        CourseUserWorkspace.user_id == user.id,
+        CourseUserWorkspace.deleted_at.is_(None),
+    ).limit(1)
+    ws = (await db.execute(stmt)).scalar_one_or_none()
+    if ws is None:
+        ws = CourseUserWorkspace(
+            course_id=course_id,
+            user_id=user.id,
+            workspace_key=uuid.uuid4().hex,
+            password_hash=hash_password(pwd),
+            alias_name=payload.alias_name.strip() if payload.alias_name else user.full_name,
+        )
+        db.add(ws)
+    else:
+        if ws.password_hash and payload.old_password:
+            if not verify_password(payload.old_password, ws.password_hash):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="原密码不正确")
+        ws.password_hash = hash_password(pwd)
+        if payload.alias_name:
+            ws.alias_name = payload.alias_name.strip()
+
+    if user.username.startswith("c_") or getattr(user, "user_type", None) == "external_guest":
+        user.password_hash = ws.password_hash
+
+    await db.commit()
+    await db.refresh(ws)
+    return CourseWorkspaceSecurityResponse(
+        has_password=True,
+        alias_name=ws.alias_name,
+        workspace_key=ws.workspace_key,
+    )
+
+
+@router.delete("/{course_id}/workspace-security/password", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_course_workspace_password(
+    course_id: uuid.UUID,
+    db: DB,
+    user: CurrentUser,
+) -> None:
+    is_admin = await _is_course_admin(db, user)
+    await _get_visible_course(db, course_id, user=user, is_admin=is_admin)
+
+    stmt = select(CourseUserWorkspace).where(
+        CourseUserWorkspace.course_id == course_id,
+        CourseUserWorkspace.user_id == user.id,
+        CourseUserWorkspace.deleted_at.is_(None),
+    ).limit(1)
+    ws = (await db.execute(stmt)).scalar_one_or_none()
+    if ws is not None:
+        ws.password_hash = None
+        await db.commit()
+    return None
+

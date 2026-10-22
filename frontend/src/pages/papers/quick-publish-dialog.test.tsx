@@ -8,17 +8,35 @@ vi.mock("@/pages/exams/components/ClassStudentSelector", () => ({
   ClassStudentSelector: ({
     onChange,
     defaultClassIds,
+    semesterOptions,
+    onSemesterChange,
   }: {
     onChange: (ids: string[]) => void;
     defaultClassIds?: string[];
+    semesterOptions?: { id: string; name: string; classIds: string[] }[];
+    onSemesterChange?: (semesterId: string | null) => void;
   }) => (
-    <button
-      type="button"
-      data-default-class-ids={defaultClassIds?.join(",") ?? ""}
-      onClick={() => onChange(["student-1"])}
-    >
-      选择学生
-    </button>
+    <div>
+      <button
+        type="button"
+        data-default-class-ids={defaultClassIds?.join(",") ?? ""}
+        onClick={() => onChange(["student-1"])}
+      >
+        选择学生
+      </button>
+      {(semesterOptions ?? []).map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          onClick={() => onSemesterChange?.(option.id)}
+        >
+          {`选中学期 ${option.name}`}
+        </button>
+      ))}
+      <button type="button" onClick={() => onSemesterChange?.(null)}>
+        取消学期选择
+      </button>
+    </div>
   ),
 }));
 
@@ -90,4 +108,61 @@ describe("PaperQuickPublishDialog", () => {
       });
     },
   );
+
+  it("archives to the semester picked in the picker instead of the course default", async () => {
+    const user = userEvent.setup();
+    vi.mocked(paperApiRequest).mockResolvedValue({ id: "exam-1" });
+
+    render(
+      <PaperQuickPublishDialog
+        open
+        mode="practice"
+        paper={paper}
+        courseKpId="course-1"
+        courseSemesterId="semester-1"
+        semesterOptions={[
+          { id: "semester-1", name: "第1学期", classIds: ["class-1"] },
+          { id: "semester-2", name: "第2学期", classIds: ["class-2"] },
+        ]}
+        onOpenChange={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "选择学生" }));
+    await user.click(screen.getByRole("button", { name: "选中学期 第2学期" }));
+    await user.click(screen.getByRole("button", { name: "发布练习" }));
+
+    await waitFor(() => expect(paperApiRequest).toHaveBeenCalled());
+    const [, init] = vi.mocked(paperApiRequest).mock.calls[0];
+    expect(JSON.parse(String(init?.body)).course_semester_id).toBe("semester-2");
+  });
+
+  it("falls back to the course default semester when the picker semester is cleared", async () => {
+    const user = userEvent.setup();
+    vi.mocked(paperApiRequest).mockResolvedValue({ id: "exam-1" });
+
+    render(
+      <PaperQuickPublishDialog
+        open
+        mode="practice"
+        paper={paper}
+        courseKpId="course-1"
+        courseSemesterId="semester-1"
+        semesterOptions={[
+          { id: "semester-1", name: "第1学期", classIds: ["class-1"] },
+          { id: "semester-2", name: "第2学期", classIds: ["class-2"] },
+        ]}
+        onOpenChange={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "选择学生" }));
+    await user.click(screen.getByRole("button", { name: "选中学期 第2学期" }));
+    await user.click(screen.getByRole("button", { name: "取消学期选择" }));
+    await user.click(screen.getByRole("button", { name: "发布练习" }));
+
+    await waitFor(() => expect(paperApiRequest).toHaveBeenCalled());
+    const [, init] = vi.mocked(paperApiRequest).mock.calls[0];
+    expect(JSON.parse(String(init?.body)).course_semester_id).toBe("semester-1");
+  });
 });

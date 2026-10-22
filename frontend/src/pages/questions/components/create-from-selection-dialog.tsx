@@ -16,7 +16,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { ClassStudentSelector } from "@/pages/exams/components/ClassStudentSelector";
+import {
+  ClassStudentSelector,
+  type StudentSemesterOption,
+} from "@/pages/exams/components/ClassStudentSelector";
 import { getPublishedExamStatus } from "@/pages/exams/components/exam-form-utils";
 
 export type CreateFromSelectionCategory = "exam" | "practice";
@@ -41,6 +44,8 @@ export interface CreateFromSelectionDialogProps {
   courseSemesterId?: string | null;
   /** 当前学期已关联的班级；打开时默认选中这些班级下的学生。 */
   defaultClassIds?: string[];
+  /** 本课程的学期列表；传入后可选学期一键选中该学期关联班级的学生。 */
+  semesterOptions?: StudentSemesterOption[];
   /** 默认类型，默认为练习（老师日常场景更常见）。 */
   defaultCategory?: CreateFromSelectionCategory;
   /** 名称的默认值，通常由宿主生成，例如 "2026-05-11 练习"。 */
@@ -98,6 +103,7 @@ export function CreateFromSelectionDialog({
   courseKpId,
   courseSemesterId,
   defaultClassIds,
+  semesterOptions,
   defaultCategory = "practice",
   defaultTitle = "",
 }: CreateFromSelectionDialogProps) {
@@ -106,6 +112,8 @@ export function CreateFromSelectionDialog({
   const [title, setTitle] = useState(defaultTitle);
   const [description, setDescription] = useState("");
   const [studentIds, setStudentIds] = useState<string[]>([]);
+  // 「按学期选择」里点中的学期；没点过就沿用课程默认学期。
+  const [semesterOverride, setSemesterOverride] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   // 每次打开时以 props 为准刷新默认值，避免上次残留。
@@ -156,7 +164,8 @@ export function CreateFromSelectionDialog({
         question_ids: selected.map((q) => q.id),
         student_ids: studentIds,
         course_kp_id: courseKpId ?? undefined,
-        course_semester_id: courseSemesterId ?? undefined,
+        // 按学期选了学生就归档到该学期，否则用课程默认学期。
+        course_semester_id: semesterOverride ?? courseSemesterId ?? undefined,
       };
 
       const response = await apiClient.post<{ id: string }>("/api/exams", payload);
@@ -258,6 +267,8 @@ export function CreateFromSelectionDialog({
             }
             defaultSupplementCollapsed
             defaultClassIds={defaultClassIds}
+            semesterOptions={semesterOptions}
+            onSemesterChange={setSemesterOverride}
           />
 
           {selected.length === 0 ? (

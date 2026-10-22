@@ -35,6 +35,7 @@ from app.notifications.router import router as notifications_router
 from app.operations.router import router as operations_router
 from app.papers.router import router as papers_router
 from app.teacher_courses.router import router as teacher_courses_router
+from app.teacher_courses.public_router import router as course_share_public_router
 from app.question_gen_templates.router import course_templates_router, template_router
 from app.knowledge_extract.router import router as knowledge_extract_router
 from app.course_kb.router import router as course_kb_router
@@ -69,7 +70,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.chaoxing.credentials import ChaoxingCredential  # noqa: F401
     from app.exams.invitation_models import ExamInvitation, ExamPublicLink  # noqa: F401
     from app.papers.models import Paper, PaperImportSession, PaperQuestion  # noqa: F401
-    from app.teacher_courses.models import CourseSemester, ExamSemesterAssignment  # noqa: F401
+    from app.teacher_courses.models import (  # noqa: F401
+        CourseSemester,
+        CourseShareLink,
+        CourseUserWorkspace,
+        ExamSemesterAssignment,
+    )
     from app.models import Base
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -164,6 +170,7 @@ app.include_router(ai_generate_router, prefix="/api/questions/ai-generate", tags
 app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"])
 app.include_router(papers_router, prefix="/api/papers", tags=["papers"])
 app.include_router(teacher_courses_router, prefix="/api/teacher/courses", tags=["teacher-courses"])
+app.include_router(course_share_public_router, prefix="/api")
 app.include_router(course_templates_router)
 app.include_router(template_router)
 app.include_router(knowledge_extract_router)

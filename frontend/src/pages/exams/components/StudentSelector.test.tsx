@@ -246,4 +246,59 @@ describe("StudentSelector", () => {
 
     expect(onChange).toHaveBeenCalledWith(["student-1"]);
   });
+
+  it("selects every student of the picked semester and deselects them on the second click", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <ClassStudentSelector
+        selectedIds={[]}
+        onChange={onChange}
+        semesterOptions={[
+          { id: "sem-1", name: "2025-2026-1", classIds: ["class-1", "class-2"] },
+          { id: "sem-2", name: "2025-2026-2", classIds: ["class-2"] },
+        ]}
+      />,
+    );
+
+    const semesterButton = await screen.findByRole("button", { name: /2025-2026-1/ });
+    expect(semesterButton).toHaveTextContent("2 个班级 · 2 人");
+    expect(screen.getByRole("button", { name: /2025-2026-2/ })).toHaveTextContent(
+      "1 个班级 · 1 人",
+    );
+
+    await user.click(semesterButton);
+    expect(onChange).toHaveBeenLastCalledWith(["student-1", "student-2"]);
+  });
+
+  it("removes only the clicked semester's students when it is already fully selected", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <ClassStudentSelector
+        selectedIds={["student-1", "student-2"]}
+        onChange={onChange}
+        semesterOptions={[{ id: "sem-2", name: "2025-2026-2", classIds: ["class-2"] }]}
+      />,
+    );
+
+    const semesterButton = await screen.findByRole("button", { name: /2025-2026-2/ });
+    expect(semesterButton).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(semesterButton);
+    expect(onChange).toHaveBeenLastCalledWith(["student-1"]);
+  });
+
+  it("hides the semester row when no semester has classes", async () => {
+    render(
+      <ClassStudentSelector
+        selectedIds={[]}
+        onChange={vi.fn()}
+        semesterOptions={[{ id: "sem-3", name: "未关联班级", classIds: [] }]}
+      />,
+    );
+
+    await screen.findByTestId("student-picker");
+    expect(screen.queryByTestId("semester-picker")).not.toBeInTheDocument();
+  });
 });

@@ -83,6 +83,8 @@ export function ExamCreate() {
   const [searchParams] = useSearchParams();
   const { mutate: create, mutation } = useCreate();
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // 第 3 步「按学期选择」点中的学期；没点过就沿用课程默认学期。
+  const [semesterOverride, setSemesterOverride] = useState<string | null>(null);
   const [initialValues, setInitialValues] = useState<ExamFormValues>(() => ({
     ...createInitialForm(),
     title: navState.courseName
@@ -231,8 +233,9 @@ export function ExamCreate() {
           question_mode: submitValues.question_mode,
           question_items: submitValues.question_items,
           ...(navState.courseKpId ? { course_kp_id: navState.courseKpId } : {}),
-          ...(navState.courseSemesterId
-            ? { course_semester_id: navState.courseSemesterId }
+          // 选学生时按学期选了，就归档到那个学期；否则用课程默认学期。
+          ...((semesterOverride ?? navState.courseSemesterId)
+            ? { course_semester_id: semesterOverride ?? navState.courseSemesterId }
             : {}),
         },
       },
@@ -291,6 +294,7 @@ export function ExamCreate() {
       initialStep={wizardInitialStep}
       defaultAutoBankName={wizardDefaultBankName}
       defaultBankName={wizardDefaultBankName}
+      onSemesterChange={setSemesterOverride}
     />
   );
 }

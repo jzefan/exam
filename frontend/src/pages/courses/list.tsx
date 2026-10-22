@@ -5,6 +5,7 @@ import {
   ClipboardList,
   FileText,
   LibraryBig,
+  Link2,
   ListChecks,
   LoaderCircle,
   Lock,
@@ -35,6 +36,7 @@ import {
   type TeacherCourseSummary,
 } from "./api";
 import { NewCourseDialog } from "./NewCourseDialog";
+import { CoursePublishDialog } from "./CoursePublishDialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -82,13 +84,16 @@ function CountChip({
 function CourseCard({
   course,
   onDelete,
+  onPublish,
 }: {
   course: TeacherCourseSummary;
   onDelete?: (course: TeacherCourseSummary) => void;
+  onPublish?: (course: TeacherCourseSummary) => void;
 }) {
   const navigate = useNavigate();
   const showMajorLabel = course.major_name != null;
   const isDeleted = course.is_deleted;
+  const canPublish = !isDeleted && (course.is_owner ?? course.can_write);
 
   return (
     <Card
@@ -132,31 +137,60 @@ function CourseCard({
             </span>
           </div>
         </div>
-        {!isDeleted && course.can_write && onDelete ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-9 shrink-0 text-muted-foreground"
-                aria-label={`更多课程操作：${course.name}`}
-                onClick={(event) => event.stopPropagation()}
-              >
-                <MoreHorizontal size={18} />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                className="text-destructive focus:text-destructive"
-                onClick={() => onDelete(course)}
-              >
-                <Trash2 size={15} className="mr-2" />
-                删除课程
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        ) : null}
+        <div className="flex items-center gap-1 shrink-0">
+          {canPublish && onPublish ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-9 shrink-0 text-muted-foreground hover:text-foreground"
+              aria-label={`发布短链接：${course.name}`}
+              title="发布短链接"
+              onClick={(event) => {
+                event.stopPropagation();
+                onPublish(course);
+              }}
+            >
+              <Link2 size={16} />
+            </Button>
+          ) : null}
+          {!isDeleted && (course.is_owner ?? course.can_write) && onDelete ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-9 shrink-0 text-muted-foreground"
+                  aria-label={`更多课程操作：${course.name}`}
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <MoreHorizontal size={18} />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {canPublish && onPublish ? (
+                  <DropdownMenuItem
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onPublish(course);
+                    }}
+                  >
+                    <Link2 size={15} className="mr-2" />
+                    发布短链接
+                  </DropdownMenuItem>
+                ) : null}
+                <DropdownMenuItem
+                  className="text-destructive focus:text-destructive"
+                  onClick={() => onDelete(course)}
+                >
+                  <Trash2 size={15} className="mr-2" />
+                  删除课程
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
+        </div>
       </div>
       <CardHeader className="hidden p-4 pb-2 md:block">
         <div className="flex min-h-5 items-center gap-2">
@@ -182,7 +216,25 @@ function CourseCard({
             </Badge>
           )}
           {!course.can_write && <Lock size={12} className="text-muted-foreground/70" />}
-          {!isDeleted && course.can_write && onDelete ? (
+          {canPublish && onPublish ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="发布短链接"
+              title="发布短链接"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onPublish(course);
+              }}
+            >
+              <Link2 size={13} />
+              <span>短链接</span>
+            </Button>
+          ) : null}
+          {!isDeleted && (course.is_owner ?? course.can_write) && onDelete ? (
             <Button
               type="button"
               variant="ghost"
@@ -271,6 +323,8 @@ export function CourseListPage() {
   const [courseToDelete, setCourseToDelete] =
     useState<TeacherCourseSummary | null>(null);
   const [deletingCourse, setDeletingCourse] = useState(false);
+  const [publishingCourse, setPublishingCourse] =
+    useState<TeacherCourseSummary | null>(null);
 
   useEffect(() => {
     let ignore = false;
@@ -398,6 +452,15 @@ export function CourseListPage() {
         }}
       />
 
+      <CoursePublishDialog
+        courseId={publishingCourse?.id ?? ""}
+        courseName={publishingCourse?.name ?? ""}
+        open={publishingCourse !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setPublishingCourse(null);
+        }}
+      />
+
       <AlertDialog
         open={courseToDelete !== null}
         onOpenChange={(next) => {
@@ -469,6 +532,7 @@ export function CourseListPage() {
                       key={course.id}
                       course={course}
                       onDelete={setCourseToDelete}
+                      onPublish={setPublishingCourse}
                     />
                   ))}
                 </div>

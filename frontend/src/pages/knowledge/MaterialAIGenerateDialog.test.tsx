@@ -16,13 +16,28 @@ vi.mock("@/hooks/use-toast", () => ({
 vi.mock("@/pages/exams/components/ClassStudentSelector", () => ({
   ClassStudentSelector: ({
     onChange,
+    semesterOptions,
+    onSemesterChange,
   }: {
     selectedIds: string[];
     onChange: (ids: string[]) => void;
+    semesterOptions?: { id: string; name: string; classIds: string[] }[];
+    onSemesterChange?: (semesterId: string | null) => void;
   }) => (
-    <button type="button" onClick={() => onChange(["student-1", "student-2"])}>
-      选择学生
-    </button>
+    <div>
+      <button type="button" onClick={() => onChange(["student-1", "student-2"])}>
+        选择学生
+      </button>
+      {(semesterOptions ?? []).map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          onClick={() => onSemesterChange?.(option.id)}
+        >
+          {`选中学期 ${option.name}`}
+        </button>
+      ))}
+    </div>
   ),
 }));
 
@@ -188,6 +203,69 @@ describe("MaterialAIGenerateDialog", () => {
     });
     expect(onSaved).toHaveBeenCalledTimes(1);
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("archives the generated practice to the picked semester and keeps the course context", async () => {
+    const user = userEvent.setup();
+    const onOpenChange = vi.fn();
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/questions/ai-generate/stream")) {
+        return buildGenerateStreamResponse();
+      }
+      if (url.includes("/api/questions/save-generated-to-course-bank")) {
+        return {
+          ok: true,
+          json: async () => ({ created: 1, created_question_ids: ["q-created-1"] }),
+        } as Response;
+      }
+      if (url.includes("/api/exams")) {
+        return { ok: true, json: async () => ({ id: "exam-1" }) } as Response;
+      }
+      return { ok: false, json: async () => ({ detail: "unexpected request" }) } as Response;
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderDialog({
+      onOpenChange,
+      courseKpId: "course-1",
+      courseSemesterId: "semester-1",
+      semesterOptions: [
+        { id: "semester-1", name: "第1学期", classIds: ["class-1"] },
+        { id: "semester-2", name: "第2学期", classIds: ["class-2"] },
+      ],
+    });
+
+    await user.click(screen.getByRole("button", { name: "开始生成" }));
+    await screen.findByText("生成题目 1");
+
+    await user.click(screen.getByRole("button", { name: "生成练习" }));
+    await user.click(screen.getByRole("button", { name: "选择学生" }));
+    // 弹窗里改选第 2 学期：练习应归档到它，而不是课程默认学期
+    await user.click(screen.getByRole("button", { name: "选中学期 第2学期" }));
+    await user.click(screen.getByRole("button", { name: "发布练习" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/exams",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const examRequestCalls = fetchMock.mock.calls as unknown as Array<[
+      RequestInfo | URL,
+      RequestInit | undefined,
+    ]>;
+    const examRequestCall = examRequestCalls.find(([url]) => String(url).includes("/api/exams"));
+    const examBody = JSON.parse(String(examRequestCall?.[1]?.body));
+    expect(examBody).toMatchObject({
+      category: "practice",
+      course_kp_id: "course-1",
+      course_semester_id: "semester-2",
+      student_ids: ["student-1", "student-2"],
+    });
   });
 
   it("shows publish failure and keeps dialogs open when save succeeds but created_question_ids is empty", async () => {

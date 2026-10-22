@@ -13,7 +13,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { ClassStudentSelector } from "@/pages/exams/components/ClassStudentSelector";
+import {
+  ClassStudentSelector,
+  type StudentSemesterOption,
+} from "@/pages/exams/components/ClassStudentSelector";
 import { getPublishedExamStatus } from "@/pages/exams/components/exam-form-utils";
 import type { IPaperDetail } from "@/types";
 
@@ -29,6 +32,8 @@ interface PaperQuickPublishDialogProps {
   courseKpId?: string;
   courseSemesterId?: string;
   defaultClassIds?: string[];
+  /** 本课程的学期列表；传入后可选学期一键选中该学期关联班级的学生。 */
+  semesterOptions?: StudentSemesterOption[];
   onPublished?: (examId: string) => void;
 }
 
@@ -48,6 +53,7 @@ export function PaperQuickPublishDialog({
   courseKpId,
   courseSemesterId,
   defaultClassIds,
+  semesterOptions,
   onPublished,
 }: PaperQuickPublishDialogProps) {
   const { toast } = useToast();
@@ -60,12 +66,15 @@ export function PaperQuickPublishDialog({
 
   const [title, setTitle] = useState(defaultTitle);
   const [studentIds, setStudentIds] = useState<string[]>([]);
+  // 用户在「按学期选择」里点中的学期；没点过就用课程默认学期。
+  const [semesterOverride, setSemesterOverride] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setTitle(defaultTitle);
     setStudentIds([]);
+    setSemesterOverride(null);
   }, [open, defaultTitle]);
 
   const canSubmit =
@@ -99,7 +108,10 @@ export function PaperQuickPublishDialog({
         question_ids: paper.questions.map((item) => item.question_id),
         student_ids: studentIds,
         ...(courseKpId ? { course_kp_id: courseKpId } : {}),
-        ...(courseSemesterId ? { course_semester_id: courseSemesterId } : {}),
+        // 弹窗里按学期选了学生，就归档到那个学期；否则用课程默认学期。
+        ...(semesterOverride ?? courseSemesterId
+          ? { course_semester_id: semesterOverride ?? courseSemesterId }
+          : {}),
       };
 
       const created = await paperApiRequest<{ id: string }>("/exams", {
@@ -166,6 +178,8 @@ export function PaperQuickPublishDialog({
             }
             defaultSupplementCollapsed
             defaultClassIds={defaultClassIds}
+            semesterOptions={semesterOptions}
+            onSemesterChange={setSemesterOverride}
           />
         </div>
 

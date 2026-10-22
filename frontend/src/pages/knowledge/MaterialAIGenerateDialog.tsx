@@ -19,6 +19,7 @@ import {
   GeneratedAssignmentDialog,
   type GeneratedAssignmentDialogSubmitPayload,
 } from "@/pages/knowledge/GeneratedAssignmentDialog";
+import type { StudentSemesterOption } from "@/pages/exams/components/ClassStudentSelector";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -167,6 +168,12 @@ export interface MaterialAIGenerateDialogProps {
   targetQuestionBankName?: string;
   /** 当前学期已关联的班级；发布生成练习时默认选中这些班级下的学生。 */
   defaultClassIds?: string[];
+  /** 课程根知识点 id；发布时把练习归属到该课程。 */
+  courseKpId?: string;
+  /** 课程当前学期；未在弹窗里另选学期时，练习归档到该学期。 */
+  courseSemesterId?: string | null;
+  /** 本课程的学期列表；传入后可选学期一键选中该学期关联班级的学生。 */
+  semesterOptions?: StudentSemesterOption[];
   /** 触发刷新相关题目列表 */
   onSaved?: () => void;
 }
@@ -263,6 +270,9 @@ export function MaterialAIGenerateDialog({
   materialLoadError = null,
   targetQuestionBankName = DEFAULT_TARGET_QUESTION_BANK_NAME,
   defaultClassIds,
+  courseKpId,
+  courseSemesterId,
+  semesterOptions,
   onSaved,
 }: MaterialAIGenerateDialogProps) {
   const navigate = useNavigate();
@@ -634,7 +644,7 @@ export function MaterialAIGenerateDialog({
   ]);
 
   const handleGeneratedAssignmentSubmit = useCallback(
-    async ({ title, studentIds }: GeneratedAssignmentDialogSubmitPayload) => {
+    async ({ title, studentIds, semesterId }: GeneratedAssignmentDialogSubmitPayload) => {
       setIsSaving(true);
       try {
         const saveOutcome = await buildAndSaveSelectedQuestions("发布练习失败");
@@ -663,6 +673,11 @@ export function MaterialAIGenerateDialog({
             question_mode: "manual",
             question_ids: createdQuestionIds,
             student_ids: studentIds,
+            // 归属课程与学期：弹窗里另选了学期就按它，否则用课程当前学期。
+            ...(courseKpId ? { course_kp_id: courseKpId } : {}),
+            ...((semesterId ?? courseSemesterId)
+              ? { course_semester_id: semesterId ?? courseSemesterId }
+              : {}),
           }),
         });
 
@@ -690,7 +705,7 @@ export function MaterialAIGenerateDialog({
         setIsSaving(false);
       }
     },
-    [buildAndSaveSelectedQuestions, toast],
+    [buildAndSaveSelectedQuestions, courseKpId, courseSemesterId, toast],
   );
 
   const closeCreatedAssignmentDialog = useCallback(() => {
@@ -1146,6 +1161,7 @@ export function MaterialAIGenerateDialog({
         defaultTitle={generatedAssignmentDefaultTitle}
         questionCount={selectedCount}
         defaultClassIds={defaultClassIds}
+        semesterOptions={semesterOptions}
         onOpenChange={setShowGeneratedAssignmentDialog}
         onSubmit={handleGeneratedAssignmentSubmit}
       />

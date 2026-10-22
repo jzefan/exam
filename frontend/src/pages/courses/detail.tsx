@@ -31,6 +31,7 @@ import {
   FileText,
   FilePlus2,
   Layers3,
+  KeyRound,
   Link2,
   ListChecks,
   LoaderCircle,
@@ -172,11 +173,14 @@ import { AddLinkDialog } from "./AddLinkDialog";
 import { NewSemesterDialog } from "./NewSemesterDialog";
 import { AssociateClassesDialog } from "./AssociateClassesDialog";
 import { ClassStudentsDialog } from "./ClassStudentsDialog";
+import { CoursePublishDialog } from "./CoursePublishDialog";
+import { CoursePasswordDialog } from "./CoursePasswordDialog";
 import { GradeWeightPanel } from "./GradeWeightPanel";
 import { CourseGradebook } from "./CourseGradebook";
 import { CourseMasteryAnalytics } from "./CourseMasteryAnalytics";
 import { KnowledgeFilterTreeMenu } from "./knowledge-filter-tree-menu";
 import { PaperListBody } from "@/pages/papers/PaperListBody";
+import type { StudentSemesterOption } from "@/pages/exams/components/ClassStudentSelector";
 import {
   ExamCard,
   ExamCardEmptyState,
@@ -2163,6 +2167,7 @@ function QuestionsTab({
   courseName,
   courseSemesterId,
   courseSemester,
+  semesterOptions,
   targetCourseKpId = courseId,
   knowledgeFilterOptions,
   knowledgeFilterNodeId,
@@ -2192,6 +2197,8 @@ function QuestionsTab({
   courseName: string;
   courseSemesterId: string | null;
   courseSemester: CourseSemester | null;
+  /** 课程全部学期（已关联班级）；「发布考试」后选学生时可一键按学期选择。 */
+  semesterOptions?: StudentSemesterOption[];
   targetCourseKpId?: string;
   knowledgeFilterOptions: Array<{
     id: string;
@@ -2432,6 +2439,9 @@ function QuestionsTab({
                       : {}),
                     ...(courseSemester?.class_ids?.length
                       ? { defaultClassIds: courseSemester.class_ids }
+                      : {}),
+                    ...(semesterOptions?.length
+                      ? { courseSemesters: semesterOptions }
                       : {}),
                   },
                 });
@@ -2759,6 +2769,7 @@ function QuestionsTab({
         courseKpId={targetCourseKpId}
         courseSemesterId={courseSemesterId}
         defaultClassIds={courseSemester?.class_ids}
+        semesterOptions={semesterOptions}
         onPublished={(_, category) => {
           void onPublishedExamOrAssignment(category);
         }}
@@ -2772,6 +2783,7 @@ function QuestionsTab({
         courseKpId={targetCourseKpId}
         courseSemesterId={courseSemesterId}
         defaultClassIds={courseSemester?.class_ids}
+        semesterOptions={semesterOptions}
         selectedQuestionIds={[...selected]}
         knowledgeOptions={knowledgeFilterOptions.map((option) => ({
           id: option.id,
@@ -4739,11 +4751,13 @@ export function CourseDetailPage() {
     }, { replace: true });
   }, [setSearchParams]);
   const [newSemesterOpen, setNewSemesterOpen] = useState(false);
+  const [publishDialogOpen, setPublishDialogOpen] = useState(false);
+  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
   const [associateClassesOpen, setAssociateClassesOpen] = useState(false);
   const [classStudentsTarget, setClassStudentsTarget] = useState<SemesterClassCard | null>(null);
   const [classToRemove, setClassToRemove] = useState<SemesterClassCard | null>(null);
   const [removingClassKey, setRemovingClassKey] = useState<string | null>(null);
-  const [manageSubTab, setManageSubTab] = useState<"classes" | "weights">("classes");
+  const [manageSubTab, setManageSubTab] = useState<"classes" | "weights" | "security">("classes");
   const [statisticsSubTab, setStatisticsSubTab] = useState<"grades" | "mastery">("grades");
   const [semesterHintDismissed, setSemesterHintDismissed] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
@@ -4859,6 +4873,18 @@ export function CourseDetailPage() {
       ? null
       : (semesters.find((semester) => semester.id === activeSemesterId) ??
         null);
+  // 选学生用的学期选项：只保留已关联班级的学期，点学期即选中其班级下的学生。
+  const semesterStudentOptions = useMemo<StudentSemesterOption[]>(
+    () =>
+      semesters
+        .map((semester) => ({
+          id: semester.id,
+          name: semester.name,
+          classIds: semester.class_ids ?? [],
+        }))
+        .filter((option) => option.classIds.length > 0),
+    [semesters],
+  );
   const selectedSemesterLabel =
     activeSemesterId === ALL_SEMESTERS
       ? "全部学期"
@@ -6403,6 +6429,8 @@ export function CourseDetailPage() {
           ...(selectedSemester?.class_ids?.length
             ? { defaultClassIds: selectedSemester.class_ids }
             : {}),
+          // 带上课程全部学期（含班级关联），第 3 步选学生时可直接按学期一键选择。
+          courseSemesters: semesterStudentOptions,
           ...(options?.knowledgePointId
             ? {
                 knowledgePointId: options.knowledgePointId,
@@ -6425,7 +6453,7 @@ export function CourseDetailPage() {
         },
       });
     },
-    [course?.name, exams, id, navigate, semesterFilter, selectedSemester],
+    [course?.name, exams, id, navigate, semesterFilter, selectedSemester, semesterStudentOptions],
   );
 
   const handlePublishAssignmentForKnowledgeNode = useCallback(
@@ -6867,6 +6895,20 @@ export function CourseDetailPage() {
         }}
       />
 
+      <CoursePublishDialog
+        courseId={course.id}
+        courseName={course.name}
+        open={publishDialogOpen}
+        onOpenChange={setPublishDialogOpen}
+      />
+
+      <CoursePasswordDialog
+        courseId={course.id}
+        courseName={course.name}
+        open={passwordDialogOpen}
+        onOpenChange={setPasswordDialogOpen}
+      />
+
       <AssociateClassesDialog
         courseId={course.id}
         semesters={semesters}
@@ -7009,6 +7051,7 @@ export function CourseDetailPage() {
         courseKpId={assignmentFilterNode?.id ?? tree?.id ?? id ?? ""}
         courseSemesterId={semesterFilter}
         defaultClassIds={selectedSemester?.class_ids}
+        semesterOptions={semesterStudentOptions}
         knowledgeOptions={questionKnowledgeFilterOptions.map((option) => ({
           id: option.id,
           name: option.name,
@@ -7406,6 +7449,15 @@ export function CourseDetailPage() {
                     <Wand2 size={15} className="mr-2" />创建出题技能
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
+                  {course.is_owner ? (
+                    <DropdownMenuItem onClick={() => setPublishDialogOpen(true)}>
+                      <Link2 size={15} className="mr-2" />发布短链接
+                    </DropdownMenuItem>
+                  ) : null}
+                  <DropdownMenuItem onClick={() => setPasswordDialogOpen(true)}>
+                    <KeyRound size={15} className="mr-2" />工作区密码
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={() => setNewSemesterOpen(true)}>
                     <CalendarRange size={15} className="mr-2" />新建学期
                   </DropdownMenuItem>
@@ -7461,6 +7513,26 @@ export function CourseDetailPage() {
               题目跟课程走；练习 / 考试按学期归档
             </span>
             <div className="hidden flex-1 sm:block" />
+            {course.is_owner ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="hidden shrink-0 sm:inline-flex"
+                onClick={() => setPublishDialogOpen(true)}
+              >
+                <Link2 size={14} className="mr-1.5" />
+                发布短链接
+              </Button>
+            ) : null}
+            <Button
+              variant="outline"
+              size="sm"
+              className="hidden shrink-0 sm:inline-flex"
+              onClick={() => setPasswordDialogOpen(true)}
+            >
+              <KeyRound size={14} className="mr-1.5" />
+              工作区密码
+            </Button>
             {course.can_write ? (
               <Button
                 variant="outline"
@@ -7697,6 +7769,7 @@ export function CourseDetailPage() {
                       courseName={course.name}
                       courseSemesterId={semesterFilter}
                       courseSemester={selectedSemester}
+                      semesterOptions={semesterStudentOptions}
                       targetCourseKpId={questionFilterNode?.id ?? id ?? ""}
                       knowledgeFilterOptions={questionKnowledgeFilterOptions}
                       knowledgeFilterNodeId={questionFilterNodeId}
@@ -7775,6 +7848,7 @@ export function CourseDetailPage() {
                     ...(selectedSemester?.class_ids?.length
                       ? { defaultClassIds: selectedSemester.class_ids }
                       : {}),
+                    courseSemesters: semesterStudentOptions,
                     publishExamSuccessTo: `/courses/${id}?tab=exams`,
                     publishPracticeSuccessTo: `/courses/${id}?tab=assignments`,
                   }}
@@ -7791,6 +7865,9 @@ export function CourseDetailPage() {
                                 courseOrigin: true,
                                 rootKnowledgePointId: tree?.id ?? id,
                                 rootKnowledgePointName: course.name,
+                                ...(semesterFilter
+                                  ? { courseSemesterId: semesterFilter }
+                                  : {}),
                               },
                             })
                           }
@@ -7810,6 +7887,9 @@ export function CourseDetailPage() {
                                 courseOrigin: true,
                                 rootKnowledgePointId: tree?.id ?? id,
                                 rootKnowledgePointName: course.name,
+                                ...(semesterFilter
+                                  ? { courseSemesterId: semesterFilter }
+                                  : {}),
                               },
                             })
                           }
@@ -7873,6 +7953,7 @@ export function CourseDetailPage() {
                     [
                       ["classes", "班级管理"],
                       ["weights", "成绩权重"],
+                      ["security", "分享与密码"],
                     ] as const
                   ).map(([key, label]) => (
                     <button
@@ -7977,8 +8058,65 @@ export function CourseDetailPage() {
                       </div>
                     )}
                   </div>
-                ) : (
+                ) : manageSubTab === "weights" ? (
                   <GradeWeightPanel courseId={id ?? ""} canWrite={course.can_write} />
+                ) : (
+                  <div className="space-y-4">
+                    <p className="text-sm text-muted-foreground">
+                      课程公开发布与个人工作区独立密码配置
+                    </p>
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <div className="rounded-lg border border-border bg-card p-5">
+                        <div className="flex items-center gap-3">
+                          <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                            <Link2 size={20} />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <h4 className="text-sm font-semibold">课程短链接发布</h4>
+                            <p className="mt-0.5 text-xs text-muted-foreground">
+                              生成短链接供用户或学生直接进入课程
+                            </p>
+                          </div>
+                        </div>
+                        <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+                          发布后用户无需复杂注册即可访问本课程的基础资料、题库与试卷，并可自主创建学期、班级和练习。
+                        </p>
+                        <div className="mt-4">
+                          {course.is_owner ? (
+                            <Button size="sm" variant="outline" onClick={() => setPublishDialogOpen(true)}>
+                              <Link2 size={14} className="mr-1.5" />
+                              管理短链接
+                            </Button>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">仅课程创建者可配置短链接发布</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="rounded-lg border border-border bg-card p-5">
+                        <div className="flex items-center gap-3">
+                          <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                            <KeyRound size={20} />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <h4 className="text-sm font-semibold">个人工作区密码</h4>
+                            <p className="mt-0.5 text-xs text-muted-foreground">
+                              设置或修改你在本课程的专属访问密码
+                            </p>
+                          </div>
+                        </div>
+                        <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+                          密码仅对当前用户的工作区生效，其他用户无法查看或修改。设置后每次直接通过短链接进入需验证该密码。
+                        </p>
+                        <div className="mt-4">
+                          <Button size="sm" variant="outline" onClick={() => setPasswordDialogOpen(true)}>
+                            <KeyRound size={14} className="mr-1.5" />
+                            配置密码
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 )}
               </TabsContent>
               </Tabs>
@@ -8042,6 +8180,9 @@ export function CourseDetailPage() {
             materialLoadError={materialAiGenerateState.materialLoadError}
             targetQuestionBankName={courseQuestionBankName(course.name)}
             defaultClassIds={selectedSemester?.class_ids}
+            courseKpId={tree?.id ?? id ?? ""}
+            courseSemesterId={semesterFilter}
+            semesterOptions={semesterStudentOptions}
             onSaved={() => {
               if (id) {
                 void Promise.all([

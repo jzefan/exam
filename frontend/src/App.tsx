@@ -64,6 +64,9 @@ const Dashboard = lazyNamed(() => import("./pages/dashboard"), "Dashboard");
 const KnowledgeManagementPage = lazyNamed(() => import("./pages/knowledge"), "KnowledgeManagementPage");
 const CourseListPage = lazyNamed(() => import("./pages/courses/list"), "CourseListPage");
 const CourseDetailPage = lazyNamed(() => import("./pages/courses/detail"), "CourseDetailPage");
+const CourseShareEntryPage = lazy(
+  () => import("./pages/courses/CourseShareEntryPage"),
+);
 const QuestionGenTemplatesPage = lazyNamed(
   () => import("./pages/courses/question-gen-templates"),
   "QuestionGenTemplatesPage",
@@ -239,7 +242,9 @@ function App() {
           >
             <Suspense fallback={<RouteFallback />}>
               <Routes>
-                {/* External candidate routes — public, no application shell */}
+                {/* External candidate and public course share routes — public, no application shell */}
+                <Route path="/c/:shareCode" element={<CourseShareEntryPage />} />
+                <Route path="/course-share/:shareCode" element={<CourseShareEntryPage />} />
                 <Route path="/exam-invite" element={<CandidateLanding />} />
                 <Route path="/exam-public" element={<CandidatePublicLanding />} />
                 <Route path="/exam-invite/take/:examId" element={<GuestExamTakePage />} />

@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 
-import { ClassStudentSelector } from "@/pages/exams/components/ClassStudentSelector";
+import {
+  ClassStudentSelector,
+  type StudentSemesterOption,
+} from "@/pages/exams/components/ClassStudentSelector";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,6 +20,8 @@ import { Label } from "@/components/ui/label";
 export interface GeneratedAssignmentDialogSubmitPayload {
   title: string;
   studentIds: string[];
+  /** 「按学期选择」里点中的学期（没点过为 null），由宿主决定归档到哪个学期。 */
+  semesterId?: string | null;
 }
 
 interface GeneratedAssignmentDialogProps {
@@ -24,6 +29,8 @@ interface GeneratedAssignmentDialogProps {
   defaultTitle: string;
   questionCount: number;
   defaultClassIds?: string[];
+  /** 本课程的学期列表；传入后可选学期一键选中该学期关联班级的学生。 */
+  semesterOptions?: StudentSemesterOption[];
   onOpenChange: (open: boolean) => void;
   onSubmit: (payload: GeneratedAssignmentDialogSubmitPayload) => Promise<void>;
 }
@@ -33,11 +40,14 @@ export function GeneratedAssignmentDialog({
   defaultTitle,
   questionCount,
   defaultClassIds,
+  semesterOptions,
   onOpenChange,
   onSubmit,
 }: GeneratedAssignmentDialogProps) {
   const [title, setTitle] = useState(defaultTitle);
   const [studentIds, setStudentIds] = useState<string[]>([]);
+  // 「按学期选择」里点中的学期；没点过就沿用课程默认学期。
+  const [semesterOverride, setSemesterOverride] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
@@ -60,6 +70,7 @@ export function GeneratedAssignmentDialog({
       await onSubmit({
         title: title.trim(),
         studentIds,
+        semesterId: semesterOverride,
       });
     } finally {
       setIsSubmitting(false);
@@ -92,6 +103,8 @@ export function GeneratedAssignmentDialog({
             emptySummaryText="请选择至少一名学生发布练习。"
             defaultSupplementCollapsed
             defaultClassIds={defaultClassIds}
+            semesterOptions={semesterOptions}
+            onSemesterChange={setSemesterOverride}
           />
         </div>
 

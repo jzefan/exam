@@ -71,7 +71,7 @@ import {
 import { ExamQuestionActions } from "./ExamQuestionActions";
 import { PositionSelector } from "./PositionSelector";
 import { QuestionSelector } from "./QuestionSelector";
-import { ClassStudentSelector } from "./ClassStudentSelector";
+import { ClassStudentSelector, type StudentSemesterOption } from "./ClassStudentSelector";
 import { apiRequest } from "@/pages/grading/api";
 import { validateTypeAllocation } from "@/pages/questions/ai-generate-utils";
 import type {
@@ -119,6 +119,8 @@ export interface ExamWizardFormProps {
   initialStep?: number;
   defaultBankName?: string;
   defaultAutoBankName?: string;
+  /** 第 3 步「按学期选择」点中的学期，由宿主决定归档到哪个学期。 */
+  onSemesterChange?: (semesterId: string | null) => void;
 }
 
 type StepId = "basic" | "questions" | "students" | "settings";
@@ -370,6 +372,7 @@ export function ExamWizardForm({
   initialStep = 0,
   defaultBankName,
   defaultAutoBankName,
+  onSemesterChange,
 }: ExamWizardFormProps) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -386,6 +389,7 @@ export function ExamWizardForm({
     initialStep?: number;
     courseOrigin?: boolean;
     defaultClassIds?: string[];
+    courseSemesters?: StudentSemesterOption[];
   };
   const { toast } = useToast();
 
@@ -3751,6 +3755,12 @@ export function ExamWizardForm({
                     defaultSupplementCollapsed
                     defaultClassIds={
                       mode === "create" ? navState.defaultClassIds : undefined
+                    }
+                    semesterOptions={
+                      mode === "create" ? navState.courseSemesters : undefined
+                    }
+                    onSemesterChange={
+                      mode === "create" ? onSemesterChange : undefined
                     }
                   />
                 )}

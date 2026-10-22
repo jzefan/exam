@@ -38,6 +38,7 @@ import type {
   QuestionType,
 } from "@/types";
 import { QuestionSelector } from "@/pages/exams/components/QuestionSelector";
+import type { StudentSemesterOption } from "@/pages/exams/components/ClassStudentSelector";
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
 import {
   QuestionEditFormContent,
@@ -65,6 +66,8 @@ type PaperDetailNavState = {
   courseKpId?: string;
   courseSemesterId?: string;
   defaultClassIds?: string[];
+  /** 本课程的学期列表；进入试卷详情后可一键按学期选中学生。 */
+  courseSemesters?: StudentSemesterOption[];
   publishExamSuccessTo?: string;
   publishPracticeSuccessTo?: string;
 };

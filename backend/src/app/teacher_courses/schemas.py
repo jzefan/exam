@@ -231,6 +231,7 @@ class TeacherCourseSummary(BaseModel):
     updated_at: datetime
     deleted_at: datetime | None = None
     is_deleted: bool = False
+    is_owner: bool = False
 
 
 class TeacherCourseDetail(TeacherCourseSummary):
@@ -355,3 +356,52 @@ class CourseKnowledgeNode(BaseModel):
     question_count: int = 0
     material_count: int = 0
     children: list["CourseKnowledgeNode"] = Field(default_factory=list)
+
+
+class CourseShareLinkResponse(BaseModel):
+    id: uuid.UUID
+    course_id: uuid.UUID
+    share_code: str
+    share_url: str
+    is_active: bool
+    created_at: datetime
+
+
+class CourseSharePublicPreviewResponse(BaseModel):
+    course_id: uuid.UUID
+    share_code: str
+    course_name: str
+    description: str | None = None
+    major_name: str | None = None
+    creator_name: str | None = None
+    stats: dict[str, int] = Field(default_factory=dict)
+
+
+class CourseShareEnterRequest(BaseModel):
+    workspace_key: str | None = None
+    password: str | None = None
+    alias_name: str | None = None
+
+
+class CourseShareEnterResponse(BaseModel):
+    requires_password: bool = False
+    access_token: str | None = None
+    token_type: str = "bearer"
+    workspace_key: str | None = None
+    course_id: uuid.UUID
+    course_name: str
+    alias_name: str | None = None
+    has_password: bool = False
+    user: dict | None = None
+
+
+class CourseWorkspaceSecurityResponse(BaseModel):
+    has_password: bool
+    alias_name: str | None = None
+    workspace_key: str | None = None
+
+
+class CourseWorkspacePasswordSetRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=128)
+    old_password: str | None = None
+    alias_name: str | None = None

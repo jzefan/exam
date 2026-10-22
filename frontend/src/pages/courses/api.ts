@@ -43,6 +43,7 @@ export interface TeacherCourseSummary {
   updated_at: string;
   deleted_at: string | null;
   is_deleted: boolean;
+  is_owner?: boolean;
 }
 
 export interface TeacherCourseDetail extends TeacherCourseSummary {
@@ -638,3 +639,108 @@ export function reorderCourseKnowledgePoint(
 }
 
 export { exportExam, type ExamExportFormat } from "@/lib/exam-export";
+
+export interface CourseShareLinkResponse {
+  id: string;
+  course_id: string;
+  share_code: string;
+  share_url: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface CourseSharePublicPreviewResponse {
+  course_id: string;
+  share_code: string;
+  course_name: string;
+  description: string | null;
+  major_name: string | null;
+  creator_name: string | null;
+  stats: {
+    knowledge_point_count: number;
+    material_count: number;
+    question_count: number;
+    paper_count: number;
+  };
+}
+
+export interface CourseShareEnterResponse {
+  requires_password: boolean;
+  access_token: string | null;
+  token_type: string;
+  workspace_key: string | null;
+  course_id: string;
+  course_name: string;
+  alias_name: string | null;
+  has_password: boolean;
+  user: {
+    id: string;
+    full_name: string;
+    username: string;
+  } | null;
+}
+
+export interface CourseWorkspaceSecurityResponse {
+  has_password: boolean;
+  alias_name: string | null;
+  workspace_key: string | null;
+}
+
+export function getCoursePublishLink(courseId: string) {
+  return apiRequest<CourseShareLinkResponse | null>(`/teacher/courses/${courseId}/publish-link`);
+}
+
+export function createCoursePublishLink(courseId: string) {
+  return apiRequest<CourseShareLinkResponse>(`/teacher/courses/${courseId}/publish-link`, {
+    method: "POST",
+  });
+}
+
+export function revokeCoursePublishLink(courseId: string) {
+  return apiRequest<void>(`/teacher/courses/${courseId}/publish-link`, {
+    method: "DELETE",
+  });
+}
+
+export function getCourseWorkspaceSecurity(courseId: string) {
+  return apiRequest<CourseWorkspaceSecurityResponse>(`/teacher/courses/${courseId}/workspace-security`);
+}
+
+export function setCourseWorkspacePassword(
+  courseId: string,
+  payload: { password: string; old_password?: string; alias_name?: string },
+) {
+  return apiRequest<CourseWorkspaceSecurityResponse>(
+    `/teacher/courses/${courseId}/workspace-security/password`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export function clearCourseWorkspacePassword(courseId: string) {
+  return apiRequest<void>(`/teacher/courses/${courseId}/workspace-security/password`, {
+    method: "DELETE",
+  });
+}
+
+export function getCourseSharePublicPreview(shareCode: string) {
+  return apiRequest<CourseSharePublicPreviewResponse>(`/public/course-share/${encodeURIComponent(shareCode)}`);
+}
+
+export function enterCourseShare(
+  shareCode: string,
+  payload?: { workspace_key?: string; password?: string; alias_name?: string },
+) {
+  return apiRequest<CourseShareEnterResponse>(
+    `/public/course-share/${encodeURIComponent(shareCode)}/enter`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload ?? {}),
+    },
+  );
+}
+
