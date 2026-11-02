@@ -225,3 +225,35 @@ describe("QuestionPreviewCard", () => {
     expect(option("B. 服务端发送 ACK").className).not.toContain("text-primary");
   });
 });
+
+describe("QuestionPreviewCard · 表格与图片", () => {
+  const tableQuestion: IQuestion = {
+    ...sampleQuestion,
+    id: "question-table",
+    type: "short_answer",
+    title: "路由表",
+    content: {
+      text: "路由器 B 的路由表如下",
+      html: '<p>路由器 B 的路由表如下</p><table><thead><tr><th>目的网络</th><th>距离</th></tr></thead><tbody><tr><td>N1</td><td>7</td></tr></tbody></table><p><img src="/api/uploads/files/topo.png" alt="拓扑图"></p>',
+    },
+    options: null,
+    answer: { points: ["略"] },
+  };
+
+  it("题干里的表格按表格渲染，并带上统一样式类", () => {
+    const { container } = render(
+      <QuestionPreviewCard question={tableQuestion} defaultExpanded />,
+    );
+
+    const table = container.querySelector("table.question-table");
+    expect(table).not.toBeNull();
+    expect(table?.textContent).toContain("目的网络");
+    expect(table?.textContent).toContain("N1");
+  });
+
+  it("题干里的图片仍然渲染成可点击预览的图片", () => {
+    render(<QuestionPreviewCard question={tableQuestion} defaultExpanded />);
+
+    expect(screen.getByRole("button", { name: "预览图片：拓扑图" })).toBeInTheDocument();
+  });
+});

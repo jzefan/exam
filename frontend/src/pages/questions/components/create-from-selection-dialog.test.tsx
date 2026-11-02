@@ -38,6 +38,8 @@ function setup(props: {
   defaultTitle?: string;
   defaultCategory?: "exam" | "practice";
   defaultClassIds?: string[];
+  sourceLabel?: string;
+  showCategorySwitch?: boolean;
 }) {
   const onOpenChange = vi.fn();
   const onPublished = vi.fn();
@@ -51,6 +53,8 @@ function setup(props: {
       defaultTitle={props.defaultTitle ?? "2026-05-11 练习"}
       defaultCategory={props.defaultCategory}
       defaultClassIds={props.defaultClassIds}
+      sourceLabel={props.sourceLabel}
+      showCategorySwitch={props.showCategorySwitch}
     />,
   );
   return { ...utils, onOpenChange, onPublished, user };
@@ -78,6 +82,16 @@ describe("CreateFromSelectionDialog", () => {
     expect(screen.getByRole("tab", { name: /练习/ })).toHaveAttribute("aria-selected", "true");
     await user.click(screen.getByRole("tab", { name: /正式考试/ }));
     expect(screen.getByRole("tab", { name: /正式考试/ })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("锁定练习类型时隐藏类型切换并使用来源文案", () => {
+    setup({ defaultCategory: "practice", sourceLabel: "整个题库", showCategorySwitch: false });
+
+    expect(
+      screen.getByRole("heading", { name: "从整个题库发布练习" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /正式考试/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /发布练习/ })).toBeInTheDocument();
   });
 
   it("没有选题或标题为空时，提交按钮禁用", () => {

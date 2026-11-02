@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import JSZip from "jszip";
 
 import type { QuestionImportDraft } from "./import-types";
 import {
   allImportableDraftsHaveKnowledge,
+  applyZipImageUrls,
   buildAnswerPayload,
   buildImportableQuestions,
   draftNeedsAnalysis,
@@ -14,6 +16,7 @@ import {
   isMultiChoiceDraft,
   parseJsonKnowledgePointNames,
   parseJsonQuestions,
+  extractQuestionImportPayload,
   selectEnhanceTargets,
 } from "./import-utils";
 
@@ -258,5 +261,232 @@ describe("allImportableDraftsHaveKnowledge · 是否跳过后台知识点匹配"
 
   it("没有可导入题目时返回 false", () => {
     expect(allImportableDraftsHaveKnowledge([])).toBe(false);
+  });
+});
+
+describe("applyZipImageUrls · ZIP 图片回填", () => {
+  const uploads = [
+    {
+      image_id: "zip-img-a-png",
+      url: "https://cdn.example.com/u/a.png",
+      order: 1,
+      alt: "a.png",
+    },
+  ];
+
+  it("把 content_html 里指向 ZIP 的 <img src> 换成上传后的地址", () => {
+    const draft = makeDraft({
+      draft_id: "json-1",
+      content_html:
+        '<p>题干</p><p><img src="/api/uploads/files/a.png" alt="原卷配图"></p>',
+      images: [
+        {
+          image_id: "json-img-a-png-0",
+          url: "/api/uploads/files/a.png",
+          order: 1,
+          alt: "原卷配图",
+        },
+      ],
+    });
+
+    const result = applyZipImageUrls([draft], uploads);
+
+    expect(result.drafts[0].content_html).toContain(
+      'src="https://cdn.example.com/u/a.png"',
+    );
+    expect(result.drafts[0].images?.[0].url).toBe("https://cdn.example.com/u/a.png");
+    expect(result.missing).toEqual([]);
+    expect(result.resolvedNames.has("a.png")).toBe(true);
+  });
+
+  it("ZIP 里没有这张图时保留原地址并报缺失", () => {
+    const draft = makeDraft({
+      draft_id: "json-2",
+      content_html: '<p><img src="images/b.png" alt="原卷配图"></p>',
+      images: [
+        { image_id: "json-img-b-png-0", url: "images/b.png", order: 1, alt: "原卷配图" },
+      ],
+    });
+
+    const result = applyZipImageUrls([draft], uploads);
+
+    expect(result.drafts[0].content_html).toContain('src="images/b.png"');
+    expect(result.missing).toEqual(["b.png"]);
+  });
+
+  it("没有上传任何图片时原样返回，不误报缺失", () => {
+    const draft = makeDraft({
+      draft_id: "json-3",
+      content_html: '<p><img src="/api/uploads/files/c.png" alt="图"></p>',
+    });
+
+    const result = applyZipImageUrls([draft], []);
+
+    expect(result.drafts[0]).toBe(draft);
+    expect(result.missing).toEqual([]);
+  });
+
+  it("同时替换 answer_html 里的图片", () => {
+    const draft = makeDraft({
+      draft_id: "json-4",
+      answer_html: '<p><img src="images/a.png" alt="答案图"></p>',
+    });
+
+    const result = applyZipImageUrls([draft], uploads);
+
+    expect(result.drafts[0].answer_html).toContain(
+      'src="https://cdn.example.com/u/a.png"',
+    );
+  });
+});
+
+describe("extractQuestionImportPayload · ZIP（JSON + images 相对路径）", () => {
+  it("按 content.images / 题干 html 里的文件名从 ZIP 取图上传", async () => {
+    const zip = new JSZip();
+    zip.file(
+      "questions.json",
+      JSON.stringify({
+        questions: [
+          {
+            type: "essay",
+            content: {
+              text: "有一小型校园网的网络结构如图。",
+              html:
+                '<p>有一小型校园网的网络结构如图。</p><p style="margin:12px 0"><img src="/api/uploads/files/topo.png" alt="原卷配图"></p>',
+              images: [
+                {
+                  image_id: "topo",
+                  url: "/api/uploads/files/topo.png",
+                  order: 0,
+                  page: 3,
+                  alt: "原卷配图",
+                },
+              ],
+            },
+            answer: { points: ["略"] },
+          },
+        ],
+      }),
+    );
+    zip.file("images/topo.png", new Uint8Array([137, 80, 78, 71]));
+    const zipFile = new File([await zip.generateAsync({ type: "blob" })], "第4章.zip", {
+      type: "application/zip",
+    });
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ url: "https://cdn.example.com/u/topo.png" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const payload = await extractQuestionImportPayload(zipFile);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(payload.images).toHaveLength(1);
+      expect(payload.images[0].alt).toBe("topo.png");
+      expect(payload.images[0].url).toBe("https://cdn.example.com/u/topo.png");
+
+      const parsed = parseJsonQuestions(payload.rawText);
+      const resolved = applyZipImageUrls(parsed.drafts, payload.images);
+      expect(resolved.drafts[0].content_html).toContain(
+        'src="https://cdn.example.com/u/topo.png"',
+      );
+      expect(resolved.missing).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("ZIP 里缺图时不中断导入，草稿保留原地址并被标记缺失", async () => {
+    const zip = new JSZip();
+    zip.file(
+      "questions.json",
+      JSON.stringify([
+        {
+          type: "short_answer",
+          content: {
+            text: "如图所示。",
+            html: '<p>如图所示。</p><img src="images/missing.png" alt="原卷配图">',
+          },
+          answer: { points: ["略"] },
+        },
+      ]),
+    );
+    const zipFile = new File([await zip.generateAsync({ type: "blob" })], "q.zip", {
+      type: "application/zip",
+    });
+
+    vi.stubGlobal("fetch", vi.fn());
+    try {
+      const payload = await extractQuestionImportPayload(zipFile);
+      expect(payload.images).toEqual([]);
+
+      const parsed = parseJsonQuestions(payload.rawText);
+      const resolved = applyZipImageUrls(parsed.drafts, payload.images);
+      expect(resolved.missing).toEqual([]); // 没上传任何图片时不做缺失判定
+      expect(resolved.drafts[0].content_html).toContain('src="images/missing.png"');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("parseJsonQuestions · 表格", () => {
+  it("content.tables 的二维数组渲染成 <table> 并拼进题干 html", () => {
+    const { drafts } = parseJsonQuestions(
+      JSON.stringify([
+        {
+          type: "short_answer",
+          content: {
+            text: "路由器 B 的路由表如下",
+            tables: [[["目的网络", "距离"], ["N1", "7"], ["N2", "2"]]],
+          },
+          answer: { points: ["略"] },
+        },
+      ]),
+    );
+
+    const html = drafts[0].content_html ?? "";
+    expect(html).toContain("<table");
+    expect(html).toContain("目的网络");
+    expect(html).toContain("N1");
+    expect(html).toContain("路由器 B 的路由表如下");
+  });
+
+  it("支持 {rows: [...]} 形状，且 table 单元格走 HTML 转义", () => {
+    const { drafts } = parseJsonQuestions(
+      JSON.stringify([
+        {
+          type: "short_answer",
+          content: { text: "见下表", tables: [{ rows: [["A<B"], ["1&2"]] }] },
+          answer: { points: ["略"] },
+        },
+      ]),
+    );
+
+    const html = drafts[0].content_html ?? "";
+    expect(html).toContain("<table");
+    expect(html).toContain("A&lt;B");
+    expect(html).toContain("1&amp;2");
+  });
+
+  it("题干 html 里已有 <table> 时不再重复追加", () => {
+    const { drafts } = parseJsonQuestions(
+      JSON.stringify([
+        {
+          type: "short_answer",
+          content: {
+            text: "见下表",
+            html: "<p>见下表</p><table><tr><td>已有</td></tr></table>",
+            tables: [[["重复"]]],
+          },
+          answer: { points: ["略"] },
+        },
+      ]),
+    );
+
+    const html = drafts[0].content_html ?? "";
+    expect(html.match(/<table/g)?.length).toBe(1);
+    expect(html).not.toContain("重复");
   });
 });

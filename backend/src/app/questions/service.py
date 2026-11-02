@@ -4,8 +4,10 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 import mimetypes
 import re
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import Any
@@ -14,6 +16,7 @@ from datetime import datetime, timezone
 
 import httpx
 from sqlalchemy import Select, and_, func, or_, select
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -52,6 +55,9 @@ from app.questions.schemas import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 @dataclass
 class BulkCreateQuestionsResult:
     created_question_ids: list[uuid.UUID]
@@ -59,6 +65,7 @@ class BulkCreateQuestionsResult:
     existing: int = 0
     existing_question_ids: list[uuid.UUID] = None  # type: ignore[assignment]
     failed: int = 0
+    enriched: int = 0
 
     def __post_init__(self) -> None:
         if self.existing_question_ids is None:
@@ -3945,22 +3952,43 @@ async def recognize_imported_question(raw_text: str) -> QuestionImportRecognizeR
     )
 
 
+_SIGNATURE_SCORE_PATTERN = re.compile(r"(?:本题|共|每空)?\s*\d+(?:\.\d+)?\s*分")
+_SIGNATURE_NOISE_PATTERN = re.compile(r"[^0-9a-z\u4e00-\u9fff.+\-/]+")
+
+
 def _normalize_question_signature_text(value: object) -> str:
+    """归一化题干/选项文本，用于判断「是不是同一道题」。
+
+    全半角、大小写、空白、标点、分值标注（「（10 分）」）都不参与比较，
+    否则同一道题从不同来源导入时会因为「MAC 地址」/「MAC地址」、
+    「（ ）」/「( )」、「（8 分）」/「（6 分）」这类差异漏判成新题。
+    数字、小数点、正负号与连字符保留：避免把「1.5」与「15」、「A+B」与「A-B」误合并。
+    """
     if value is None:
         return ""
-    return re.sub(r"\s+", " ", str(value)).strip().lower()
+    text = unicodedata.normalize("NFKC", str(value)).lower()
+    text = _SIGNATURE_SCORE_PATTERN.sub("", text)
+    return _SIGNATURE_NOISE_PATTERN.sub("", text)
 
 
 def _question_duplicate_signature(data: QuestionCreate | Question) -> str:
     content = data.content if isinstance(data.content, dict) else {}
     content_text = content.get("text") or content.get("html") or json.dumps(content, ensure_ascii=False, sort_keys=True)
     options = data.options or {}
-    normalized_options = json.dumps(options, ensure_ascii=False, sort_keys=True)
+    if isinstance(options, dict):
+        # 只比较选项文本集合：选项顺序不同（正确答案字母随之变化）仍算同一道题。
+        normalized_options = "\u0001".join(
+            sorted(_normalize_question_signature_text(value) for value in options.values())
+        )
+    else:
+        normalized_options = _normalize_question_signature_text(
+            json.dumps(options, ensure_ascii=False, sort_keys=True)
+        )
     return "|".join(
         [
             data.type.value if hasattr(data.type, "value") else str(data.type),
             _normalize_question_signature_text(content_text),
-            _normalize_question_signature_text(normalized_options),
+            normalized_options,
         ]
     )
 
@@ -4005,6 +4033,86 @@ async def _merge_question_knowledge_points(
         question.knowledge_points = [*question.knowledge_points, *new_kps]
 
 
+_IMAGE_SRC_PATTERN = re.compile(r"<img\b[^>]*?\bsrc\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
+
+
+def _question_image_sources(content: object) -> list[str]:
+    """取出题干里引用到的图片地址（html 里的 <img src> + content.images[].url）。"""
+    if not isinstance(content, dict):
+        return []
+    sources: list[str] = []
+    html = content.get("html")
+    if isinstance(html, str):
+        sources.extend(_IMAGE_SRC_PATTERN.findall(html))
+    images = content.get("images")
+    if isinstance(images, list):
+        for image in images:
+            if isinstance(image, dict):
+                url = image.get("url")
+                if isinstance(url, str) and url.strip():
+                    sources.append(url.strip())
+    return [source for source in sources if source]
+
+
+def _uploaded_image_available(url: str) -> bool:
+    """`/api/uploads/files/x.png` 这类地址要看文件是否真的存在；外链一律视为可用。"""
+    prefix = "/api/uploads/files/"
+    if not url.startswith(prefix):
+        return True
+    from app.uploads.router import UPLOAD_DIR
+
+    name = url[len(prefix) :].split("?")[0].split("#")[0]
+    if not name or "/" in name or ".." in name:
+        return False
+    return (UPLOAD_DIR / name).is_file()
+
+
+def _content_has_usable_image(content: object) -> bool:
+    return any(_uploaded_image_available(source) for source in _question_image_sources(content))
+
+
+def _should_upgrade_duplicate_media(existing: Question, incoming: QuestionCreate) -> bool:
+    """重复题目里，旧题没图（或图挂了）、新题带图时才用新内容覆盖。"""
+    if not _question_image_sources(incoming.content):
+        return False
+    return not _content_has_usable_image(existing.content)
+
+
+async def _upgrade_duplicate_question_media(
+    db: AsyncSession,
+    duplicates: list[tuple[uuid.UUID, QuestionCreate]],
+) -> int:
+    """重导题库时，老题目可能是「没图/图挂了」的那一版：用这次的内容补上图片。
+
+    只换题干里的 html 与 images（新版本 = 有图的那版），不动 text/answer，
+    以免改动已用于考试的题目正文；旧题已有可用图片、或新题也没图时不动，
+    避免把人工改过的题目覆盖掉。返回补图的条数。
+    """
+    if not duplicates:
+        return 0
+    question_ids = {existing_id for existing_id, _ in duplicates}
+    rows = await db.execute(select(Question).where(Question.id.in_(question_ids)))
+    by_id = {question.id: question for question in rows.scalars().all()}
+    upgraded = 0
+    for existing_id, incoming in duplicates:
+        existing = by_id.get(existing_id)
+        if existing is None or existing.deleted_at is not None:
+            continue
+        if not _should_upgrade_duplicate_media(existing, incoming):
+            continue
+        incoming_content = incoming.content if isinstance(incoming.content, dict) else {}
+        merged_content = dict(existing.content or {})
+        if isinstance(incoming_content.get("html"), str):
+            merged_content["html"] = incoming_content["html"]
+        if isinstance(incoming_content.get("images"), list):
+            merged_content["images"] = incoming_content["images"]
+        existing.content = merged_content
+        upgraded += 1
+    if upgraded:
+        await db.flush()
+    return upgraded
+
+
 async def bulk_create_questions(
     db: AsyncSession, questions: list[QuestionCreate], user_id: uuid.UUID
 ) -> BulkCreateQuestionsResult:
@@ -4014,6 +4122,8 @@ async def bulk_create_questions(
     created_questions: list[QuestionCreate] = []
     existing_question_ids: list[uuid.UUID] = []
     existing = 0
+    failed = 0
+    duplicate_pairs: list[tuple[uuid.UUID, QuestionCreate]] = []
 
     for data in questions:
         signature = _question_duplicate_signature(data)
@@ -4021,19 +4131,31 @@ async def bulk_create_questions(
         if existing_id is not None:
             existing += 1
             existing_question_ids.append(existing_id)
+            duplicate_pairs.append((existing_id, data))
             # 重复题目：把本次携带的知识点合并进已有题目，使其出现在对应课程/知识点列表中。
             await _merge_question_knowledge_points(db, existing_id, data.knowledge_point_ids)
             continue
-        question = await create_question(db, data, user_id)
+        try:
+            # 每题一个 SAVEPOINT：单行写库失败只算这一行失败，不拖垮整批已成功的题。
+            async with db.begin_nested():
+                question = await create_question(db, data, user_id)
+        except (IntegrityError, SQLAlchemyError) as exc:
+            logger.warning("Skipped a question that failed to insert (%s): %s", data.type, exc)
+            failed += 1
+            continue
         created_question_ids.append(question.id)
         created_questions.append(data)
         existing_map[signature] = question.id
+
+    enriched = await _upgrade_duplicate_question_media(db, duplicate_pairs)
 
     return BulkCreateQuestionsResult(
         created_question_ids=created_question_ids,
         created_questions=created_questions,
         existing=existing,
         existing_question_ids=existing_question_ids,
+        failed=failed,
+        enriched=enriched,
     )
 
 
@@ -4045,9 +4167,16 @@ async def bulk_create_questions_fast(
     A single `db.add_all(2000+)` + `db.flush()` can exhaust the PostgreSQL
     statement timeout or OOM uvicorn under heavy load. Splitting into batches
     of 500 keeps each flush small and predictable.
+
+    同一份文件里重复出现的题目也要挡住：`Question.id` 显式赋值，批次内重复
+    才能在 flush 之前就认出来（列默认值要到 flush 才生成，之前是 None）。
+    批次写库失败时回退成逐条重试，坏行计入 failed，其余照常入库。
     """
     BATCH_SIZE = 500
-    existing_signatures = await _existing_question_signatures(db, user_id)
+    # signature -> 已存在（或本批已创建）题目 id；本批尚未 flush 的记 None
+    signature_ids: dict[str, uuid.UUID | None] = dict(
+        await _existing_question_signatures(db, user_id)
+    )
     tag_ids = {tag_id for data in questions for tag_id in data.tag_ids}
     knowledge_point_ids = {
         knowledge_point_id for data in questions for knowledge_point_id in data.knowledge_point_ids
@@ -4067,32 +4196,73 @@ async def bulk_create_questions_fast(
     all_created_inputs: list[QuestionCreate] = []
     all_existing = 0
     all_existing_ids: list[uuid.UUID] = []
+    all_failed = 0
+    # 在本批内被判定重复、但对应题目还没 flush 出 id 的签名，flush 后再补上 id
+    deferred_existing_signatures: list[str] = []
+    # 重复题「补图」候选：老题可能是没图的那一版
+    duplicate_pairs: list[tuple[uuid.UUID, QuestionCreate]] = []
+    deferred_duplicate_pairs: list[tuple[str, QuestionCreate]] = []
 
     batch_questions: list[Question] = []
     batch_inputs: list[QuestionCreate] = []
+    batch_signatures: list[str] = []
 
     async def _flush_batch() -> None:
-        nonlocal all_created_ids, all_created_inputs
+        nonlocal all_failed
         if not batch_questions:
             return
-        db.add_all(batch_questions)
-        await db.flush()
-        all_created_ids.extend(q.id for q in batch_questions)
-        all_created_inputs.extend(batch_inputs)
+        pending = list(zip(batch_questions, batch_inputs, batch_signatures))
         batch_questions.clear()
         batch_inputs.clear()
+        batch_signatures.clear()
+        try:
+            async with db.begin_nested():
+                db.add_all([question for question, _, _ in pending])
+                await db.flush()
+        except SQLAlchemyError as exc:
+            logger.warning(
+                "Batch insert of %d questions failed, retrying row by row: %s", len(pending), exc
+            )
+            for question, data, signature in pending:
+                if question in db:
+                    db.expunge(question)
+                try:
+                    async with db.begin_nested():
+                        db.add(question)
+                        await db.flush()
+                except (IntegrityError, SQLAlchemyError) as row_exc:
+                    logger.warning("Skipped a question that failed to insert (%s): %s", data.type, row_exc)
+                    if question in db:
+                        db.expunge(question)
+                    signature_ids.pop(signature, None)
+                    all_failed += 1
+                    continue
+                signature_ids[signature] = question.id
+                all_created_ids.append(question.id)
+                all_created_inputs.append(data)
+            return
+        for question, data, signature in pending:
+            signature_ids[signature] = question.id
+            all_created_ids.append(question.id)
+            all_created_inputs.append(data)
 
     for data in questions:
         signature = _question_duplicate_signature(data)
 
-        # Skip duplicates (already in DB or in current batch)
-        existing_id = existing_signatures.get(signature)
-        if existing_id is not None:
+        # 与库内题目或本批前面的题目重复：跳过，不再入库。
+        if signature in signature_ids:
             all_existing += 1
-            all_existing_ids.append(existing_id)
+            known_id = signature_ids[signature]
+            if known_id is not None:
+                all_existing_ids.append(known_id)
+                duplicate_pairs.append((known_id, data))
+            else:
+                deferred_existing_signatures.append(signature)
+                deferred_duplicate_pairs.append((signature, data))
             continue
 
         question = Question(
+            id=uuid.uuid4(),
             type=data.type,
             title=data.title,
             content=data.content,
@@ -4117,18 +4287,33 @@ async def bulk_create_questions_fast(
 
         batch_questions.append(question)
         batch_inputs.append(data)
-        existing_signatures[signature] = question.id  # id assigned at flush
+        batch_signatures.append(signature)
+        signature_ids[signature] = None
 
         if len(batch_questions) >= BATCH_SIZE:
             await _flush_batch()
 
     await _flush_batch()  # flush remainder
 
+    for signature in deferred_existing_signatures:
+        resolved_id = signature_ids.get(signature)
+        if resolved_id is not None:
+            all_existing_ids.append(resolved_id)
+
+    for signature, data in deferred_duplicate_pairs:
+        resolved_id = signature_ids.get(signature)
+        if resolved_id is not None:
+            duplicate_pairs.append((resolved_id, data))
+
+    all_enriched = await _upgrade_duplicate_question_media(db, duplicate_pairs)
+
     return BulkCreateQuestionsResult(
         created_question_ids=all_created_ids,
         created_questions=all_created_inputs,
         existing=all_existing,
-        existing_question_ids=all_existing_ids,
+        existing_question_ids=list(dict.fromkeys(all_existing_ids)),
+        failed=all_failed,
+        enriched=all_enriched,
     )
 
 

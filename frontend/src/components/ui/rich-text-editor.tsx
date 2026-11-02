@@ -3,6 +3,7 @@ import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import Image from "@tiptap/extension-image";
 import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
+import { TableKit } from "@tiptap/extension-table";
 import { Markdown } from "tiptap-markdown";
 import { createLowlight, common } from "lowlight";
 import { useRef, useCallback } from "react";
@@ -16,7 +17,15 @@ import {
   ImageIcon,
   FileCode,
   Sigma,
+  Table as TableIcon,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
 const lowlight = createLowlight(common);
@@ -87,6 +96,14 @@ export function RichTextEditor({
       Placeholder.configure({ placeholder }),
       Image.configure({ inline: false, allowBase64: false }),
       CodeBlockLowlight.configure({ lowlight }),
+      // 表格：题目 JSON / 文档里常带路由表、子网划分表，没有表格扩展时
+      // tiptap 解析会把 <table> 整段丢掉，保存即丢数据。
+      TableKit.configure({
+        table: {
+          resizable: false,
+          HTMLAttributes: { class: "question-table" },
+        },
+      }),
       Markdown.configure({
         html: true,
         transformPastedText: true,
@@ -217,6 +234,67 @@ export function RichTextEditor({
         >
           <Sigma size={14} />
         </ToolbarButton>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              title="表格"
+              className={cn(
+                "p-1.5 rounded text-sm transition-colors",
+                editor.isActive("table")
+                  ? "bg-foreground text-background"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
+            >
+              <TableIcon size={14} />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-40">
+            <DropdownMenuItem
+              onSelect={() =>
+                editor
+                  .chain()
+                  .focus()
+                  .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
+                  .run()
+              }
+            >
+              插入 3×3 表格
+            </DropdownMenuItem>
+            {editor.isActive("table") ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={() => editor.chain().focus().addRowAfter().run()}
+                >
+                  下方插入行
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => editor.chain().focus().addColumnAfter().run()}
+                >
+                  右侧插入列
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => editor.chain().focus().deleteRow().run()}
+                >
+                  删除当前行
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => editor.chain().focus().deleteColumn().run()}
+                >
+                  删除当前列
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={() => editor.chain().focus().deleteTable().run()}
+                >
+                  删除表格
+                </DropdownMenuItem>
+              </>
+            ) : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* Hidden file input for image upload */}

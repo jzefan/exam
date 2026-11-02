@@ -58,16 +58,41 @@ export function renderLatex(text: string): string {
 }
 
 /**
+ * 给题目 HTML 里的表格补上统一样式类。
+ *
+ * 题目正文在题库、课程、作答、考后查看、阅卷等处由不同组件渲染，
+ * 但都走 `renderLatexInHtml`；在这里统一打标记，就能保证表格在各处都带边框、
+ * 窄屏可横向滚动，不依赖每个容器各自写一遍 `prose` 表样式。
+ */
+export function decorateQuestionHtml(html: string): string {
+  if (typeof html !== "string" || !html || !/<table/i.test(html)) return html;
+  return html.replace(/<table(\s[^>]*)?>/gi, (_match: string, attrs: string | undefined) => {
+    const attributes = attrs ?? "";
+    if (/class\s*=/i.test(attributes)) {
+      return `<table${attributes.replace(
+        /class\s*=\s*(["'])([^"']*)\1/i,
+        (_m, quote: string, value: string) =>
+          /\bquestion-table\b/.test(value)
+            ? `class=${quote}${value}${quote}`
+            : `class=${quote}${value} question-table${quote}`,
+      )}>`;
+    }
+    return `<table${attributes} class="question-table">`;
+  });
+}
+
+/**
  * Render LaTeX formulas within HTML content.
  * Processes text nodes only, so formulas are decoded from HTML entities and tags/attributes stay intact.
  */
 export function renderLatexInHtml(html: string): string {
   if (typeof html !== "string" || !html) return "";
-  if (!new RegExp(LATEX_RE.source).test(html)) return html;
+  const decorated = decorateQuestionHtml(html);
+  if (!new RegExp(LATEX_RE.source).test(decorated)) return decorated;
 
   if (typeof document === "undefined") {
     const matcher = new RegExp(LATEX_RE.source, "g");
-    return html.replace(/(<[^>]+>)|([^<]+)/g, (_match, tag: string | undefined, text: string | undefined) => {
+    return decorated.replace(/(<[^>]+>)|([^<]+)/g, (_match, tag: string | undefined, text: string | undefined) => {
       if (tag) return tag;
       if (!text) return "";
       return text.replace(matcher, renderFormula);
@@ -75,7 +100,7 @@ export function renderLatexInHtml(html: string): string {
   }
 
   const template = document.createElement("template");
-  template.innerHTML = html;
+  template.innerHTML = decorated;
   const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
   const textNodes: Text[] = [];
   let node = walker.nextNode();

@@ -88,9 +88,11 @@ import {
   emptyImportSummary,
   exceedsBackendImportLimits,
   extractQuestionImportPayload,
+  applyZipImageUrls,
   generateImportQuestionTitle,
   getNextDraftIdAfterRemoval,
   getBlockingImportIssues,
+  imageBasename,
   isEligibleForFastImport,
   isMissingAnswerIssue,
   parseInlineExamQuestions,
@@ -149,6 +151,7 @@ type ImportResultSummary = {
   created: number;
   existing: number;
   failed: number;
+  enriched: number;
   importJobId: string | null;
 };
 
@@ -397,33 +400,28 @@ export function QuestionImportPage() {
           drafts = result.drafts;
           parseLabel = "JSON 规则解析";
 
-          // ZIP 图片按文件名替换 JSON 草稿中的占位地址，支持数组与 questions 包装对象。
-          const urlByFilename = new Map(
-            (docPayload.images ?? []).map((image) => [image.alt, image.url]),
-          );
-          if (docPayload.images && docPayload.images.length > 0) {
-            drafts = drafts.map((draft) => ({
-              ...draft,
-              images: draft.images?.map((image) => ({
-                ...image,
-                url: urlByFilename.get(image.url) ?? image.url,
-              })),
-            }));
-          }
+          // ZIP 图片按文件名回填到草稿；题干 html 里的 <img src> 必须一起替换，
+          // 否则预览和入库后的题干都是破图。
+          const zipResolution = applyZipImageUrls(drafts, docPayload.images ?? []);
+          drafts = zipResolution.drafts;
 
           const unresolvedImages = result.unresolvedImages.filter(
-            (image) => !urlByFilename.has(image.filename ?? ""),
-          );
-          unresolvedImageCount = unresolvedImages.length;
-          if (unresolvedImages.length > 0) {
-            setJsonImageWarnings(
-              unresolvedImages.map(
-                (img) => `图片 "${img.filename}" 未上传，建议使用 ZIP 打包上传（JSON + images 文件夹）`,
+            (image) =>
+              !zipResolution.resolvedNames.has(
+                imageBasename(image.filename).toLowerCase(),
               ),
-            );
-          } else {
-            setJsonImageWarnings([]);
-          }
+          );
+          const imageWarnings = [
+            ...unresolvedImages.map(
+              (img) =>
+                `图片 "${img.filename}" 未上传，建议使用 ZIP 打包上传（JSON + images 文件夹）`,
+            ),
+            ...zipResolution.missing.map(
+              (name) => `图片 "${name}" 未能从 ZIP 中取到，题干里会显示为破图`,
+            ),
+          ];
+          unresolvedImageCount = imageWarnings.length;
+          setJsonImageWarnings(imageWarnings);
         } catch {
           // Fall through to other parsers
         }
@@ -903,6 +901,7 @@ export function QuestionImportPage() {
         created: importedCount,
         existing: existingCount,
         failed: failedCount,
+        enriched: response.enriched ?? 0,
         importJobId: knowledgeJobId,
       });
       if (rootKnowledgePointId && !skipKnowledgeMatching) {
@@ -918,11 +917,8 @@ export function QuestionImportPage() {
           });
         }
       }
-      // 从课程详情等来源进入时，导入成功后回到来源页（如课程的题目 tab）。
-      const returnTo = navState.successTo ?? navState.backTo;
-      if (returnTo && failedCount === 0 && importedCount > 0) {
-        navigate(returnTo);
-      }
+      // 导入完成后统一由结果弹窗的「查看题目」决定去哪（课程题目 tab / 题库管理），
+      // 这里不再自动跳转，否则从课程进入时看不到成功/重复/失败的统计。
     } catch (error) {
       setParseError(error instanceof Error ? error.message : "导入失败");
     } finally {
@@ -1136,6 +1132,12 @@ export function QuestionImportPage() {
   const goToQuestionListAfterImport = () => {
     const importJobId = importResult?.importJobId;
     setImportResult(null);
+    // 从课程进来导入的，回到该课程的题目 tab；题库页进来的才去题库管理。
+    const returnTo = navState.successTo ?? navState.backTo;
+    if (returnTo) {
+      navigate(returnTo);
+      return;
+    }
     navigate(
       importJobId ? `/questions?import_job_id=${importJobId}` : "/questions",
     );
@@ -1673,30 +1675,50 @@ export function QuestionImportPage() {
       >
         <AlertDialogContent className="max-w-2xl">
           <AlertDialogHeader>
-            <AlertDialogTitle>选择主知识点</AlertDialogTitle>
+            <AlertDialogTitle>
+              {navState.courseKpId ? "导入到当前课程" : "选择主知识点"}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              选择后，系统会从这个主知识点下的子知识中为题目自动匹配知识点；也可以暂不关联。
+              {navState.courseKpId
+                ? "题目会归入当前课程，知识点只在这门课的知识树里匹配；也可以暂不关联。"
+                : "选择后，系统会从这个主知识点下的子知识中为题目自动匹配知识点；也可以暂不关联。"}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="flex flex-col gap-3 py-2">
-            <KnowledgePointSelector
-              fetcher={(path, options) =>
-                questionApiFetch(`/api${path}`, options)
-              }
-              selectedKnowledgePoints={selectedRootKnowledgePoints}
-              onSelectedKnowledgePointsChange={setSelectedRootKnowledgePoints}
-              storageKey="question-import-root-knowledge-recent-keywords"
-              label="主知识点"
-              triggerLabel="搜索或展开知识图谱选择主知识点"
-              popoverSide="bottom"
-              popoverContentStyle={{
-                maxHeight: "min(340px, calc(100dvh - 360px))",
-              }}
-              selectionTarget="root"
-              selectionMode="single"
-              showUsageShortcuts={false}
-            />
-            {selectedRootKnowledgePoints[0] ? (
+            {navState.courseKpId ? (
+              // 从课程进入时主知识点已锁定为该课程：不再让用户在全部知识点里挑，
+              // 匹配范围就是这门课的知识树。
+              <div className="space-y-1.5">
+                <Label>主知识点</Label>
+                <div className="rounded-xl border border-primary/10 bg-primary/5 px-3 py-2">
+                  <p className="text-sm font-bold text-foreground">
+                    {courseEnhanceKnowledgePoint?.name ?? "当前课程"}
+                  </p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    当前课程 · 只在这门课的知识树中匹配知识点
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <KnowledgePointSelector
+                fetcher={(path, options) =>
+                  questionApiFetch(`/api${path}`, options)
+                }
+                selectedKnowledgePoints={selectedRootKnowledgePoints}
+                onSelectedKnowledgePointsChange={setSelectedRootKnowledgePoints}
+                storageKey="question-import-root-knowledge-recent-keywords"
+                label="主知识点"
+                triggerLabel="搜索或展开知识图谱选择主知识点"
+                popoverSide="bottom"
+                popoverContentStyle={{
+                  maxHeight: "min(340px, calc(100dvh - 360px))",
+                }}
+                selectionTarget="root"
+                selectionMode="single"
+                showUsageShortcuts={false}
+              />
+            )}
+            {!navState.courseKpId && selectedRootKnowledgePoints[0] ? (
               <p className="rounded-xl border border-primary/10 bg-primary/5 px-3 py-2 text-xs font-medium text-muted-foreground">
                 将从「{selectedRootKnowledgePoints[0].name}
                 」下的子知识点中自动匹配。
@@ -1720,7 +1742,7 @@ export function QuestionImportPage() {
               disabled={importing}
               onClick={() => void skipRootKnowledgePointAndImport()}
             >
-              暂不关联
+              {navState.courseKpId ? "不做匹配" : "暂不关联"}
             </Button>
             <AlertDialogAction
               disabled={!selectedRootKnowledgePointId || importing}
@@ -1871,7 +1893,7 @@ export function QuestionImportPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>题目导入完成</AlertDialogTitle>
             <AlertDialogDescription>
-              本次导入已处理完成，系统会带你回到题目列表查看结果。
+              相同题目不会重复入库；旧题缺图的，会用这次导入的图片补上。
             </AlertDialogDescription>
           </AlertDialogHeader>
           {importResult ? (
@@ -1885,16 +1907,21 @@ export function QuestionImportPage() {
                 </p>
               </div>
               <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-center">
-                <p className="text-xs font-bold text-emerald-700">成功入库</p>
+                <p className="text-xs font-bold text-emerald-700">成功</p>
                 <p className="mt-2 text-2xl font-black text-emerald-600">
                   {importResult.created}
                 </p>
               </div>
               <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 text-center">
-                <p className="text-xs font-bold text-amber-700">数据库已存在</p>
+                <p className="text-xs font-bold text-amber-700">重复跳过</p>
                 <p className="mt-2 text-2xl font-black text-amber-600">
                   {importResult.existing}
                 </p>
+                {importResult.enriched > 0 ? (
+                  <p className="mt-1 text-[11px] font-medium text-amber-700">
+                    其中 {importResult.enriched} 条补齐了图片
+                  </p>
+                ) : null}
               </div>
               <div className="rounded-2xl border border-red-100 bg-red-50 p-4 text-center">
                 <p className="text-xs font-bold text-red-700">失败</p>
@@ -1911,9 +1938,10 @@ export function QuestionImportPage() {
                 goToQuestionListAfterImport();
               }}
             >
-              查看题目列表
-            </AlertDialogAction>
-          </AlertDialogFooter>
+              {navState.successTo || navState.backTo
+                ? "查看课程题目"
+                : "查看题目列表"}
+            </AlertDialogAction>          </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </div>

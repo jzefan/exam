@@ -271,7 +271,7 @@ export function QuestionSelector({
     Boolean(target.closest("button,a,input,textarea,select,[role='button'],[data-no-card-toggle='true']"));
 
   const renderFilters = () => (
-    <div className="grid gap-2 lg:grid-cols-[minmax(280px,1fr)_minmax(160px,220px)_minmax(140px,180px)_minmax(180px,240px)]">
+    <div className="grid gap-2 lg:grid-cols-[minmax(180px,2.8fr)_minmax(120px,1.5fr)_minmax(100px,1.1fr)_minmax(120px,1.7fr)]">
       <div className="relative min-w-0">
         <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
         <Input
@@ -290,7 +290,7 @@ export function QuestionSelector({
           setPage(1);
         }}
       >
-        <SelectTrigger className="h-9 w-full" aria-label="按题库筛选">
+        <SelectTrigger className="h-9 w-full min-w-0" aria-label="按题库筛选">
           <SelectValue placeholder="全部题库" />
         </SelectTrigger>
         <SelectContent>
@@ -312,7 +312,7 @@ export function QuestionSelector({
           setPage(1);
         }}
       >
-        <SelectTrigger className="h-9 w-full" aria-label="按题型筛选">
+        <SelectTrigger className="h-9 w-full min-w-0" aria-label="按题型筛选">
           <SelectValue placeholder="全部题型" />
         </SelectTrigger>
         <SelectContent>
@@ -332,7 +332,7 @@ export function QuestionSelector({
             setPage(1);
           }}
         >
-          <SelectTrigger className="h-9 w-full" aria-label="按知识点筛选">
+          <SelectTrigger className="h-9 w-full min-w-0" aria-label="按知识点筛选">
             <SelectValue placeholder="全部知识点" />
           </SelectTrigger>
           <SelectContent>

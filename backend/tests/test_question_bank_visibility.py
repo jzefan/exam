@@ -639,7 +639,7 @@ async def test_teacher_bulk_create_allows_owned_bank_and_unbanked_questions(
     )
 
     assert response.status_code == 201
-    assert response.json() == {"created": 2, "existing": 0, "failed": 0}
+    assert response.json() == {"created": 2, "existing": 0, "failed": 0, "enriched": 0}
 
     created_questions = (
         await db_session.execute(
@@ -717,7 +717,7 @@ async def test_teacher_bulk_create_reports_existing_duplicate_questions(
     )
 
     assert response.status_code == 201
-    assert response.json() == {"created": 1, "existing": 1, "failed": 0}
+    assert response.json() == {"created": 1, "existing": 1, "failed": 0, "enriched": 0}
 
 
 @pytest.mark.asyncio
@@ -1153,6 +1153,303 @@ async def test_bulk_reimport_merges_knowledge_points_into_existing(
     kp_ids = {kp.id for kp in questions[0].knowledge_points}
     assert course_kp_id in kp_ids
     assert other_kp_id in kp_ids
+
+
+@pytest.mark.asyncio
+async def test_import_skips_duplicates_inside_the_same_batch(
+    client: AsyncClient, db_session, monkeypatch
+) -> None:
+    """同一批导入里重复出现的题目只入库一次，其余计入 existing。"""
+    org = await _create_org_with_question_roles(db_session)
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-batch-dupe",
+        email="teacher-batch-dupe@example.com",
+        full_name="Teacher Batch Dupe",
+    )
+    major = Major(name="CS BatchDupe", description=None)
+    db_session.add(major)
+    await db_session.flush()
+    direction = Direction(major_id=major.id, name="App", description=None)
+    db_session.add(direction)
+    await db_session.flush()
+    root_knowledge_point = KnowledgePoint(
+        name="Batch Dupe Course",
+        direction_id=direction.id,
+        parent_id=None,
+        owner_id=teacher.id,
+        visibility=VisibilityScope.PRIVATE,
+    )
+    db_session.add(root_knowledge_point)
+    await db_session.commit()
+
+    async def noop_process_question_import_job(**_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "app.questions.router.process_question_import_job",
+        noop_process_question_import_job,
+    )
+
+    def short_answer(text: str) -> dict:
+        return {
+            "type": "short_answer",
+            "title": "Batch Dupe Q",
+            "content": {"text": text},
+            "options": None,
+            "answer": {"points": ["answer"]},
+            "analysis": None,
+            "difficulty": 2,
+            "score": 5,
+            "tag_ids": [],
+            "knowledge_point_ids": [],
+            "question_bank_id": None,
+        }
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    response = await client.post(
+        "/api/questions/import/bulk-create-job",
+        json={
+            "root_knowledge_point_id": str(root_knowledge_point.id),
+            "questions": [
+                short_answer("Describe the sliding window protocol"),
+                short_answer("Describe the sliding window protocol"),
+                short_answer("Describe the go-back-N protocol"),
+            ],
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["created"] == 2
+    assert body["existing"] == 1
+    assert body["failed"] == 0
+
+
+@pytest.mark.asyncio
+async def test_import_treats_formatting_variants_as_the_same_question(
+    client: AsyncClient, db_session, monkeypatch
+) -> None:
+    """空白、全半角标点、分值标注不同，仍判为同一道题，不重复入库。"""
+    org = await _create_org_with_question_roles(db_session)
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-format-dupe",
+        email="teacher-format-dupe@example.com",
+        full_name="Teacher Format Dupe",
+    )
+    major = Major(name="CS FormatDupe", description=None)
+    db_session.add(major)
+    await db_session.flush()
+    direction = Direction(major_id=major.id, name="App", description=None)
+    db_session.add(direction)
+    await db_session.flush()
+    root_knowledge_point = KnowledgePoint(
+        name="Format Dupe Course",
+        direction_id=direction.id,
+        parent_id=None,
+        owner_id=teacher.id,
+        visibility=VisibilityScope.PRIVATE,
+    )
+    db_session.add(root_knowledge_point)
+    await db_session.commit()
+
+    async def noop_process_question_import_job(**_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "app.questions.router.process_question_import_job",
+        noop_process_question_import_job,
+    )
+
+    def choice(text: str, options: dict, correct: str) -> dict:
+        return {
+            "type": "choice",
+            "title": "MAC 地址",
+            "content": {"text": text},
+            "options": options,
+            "answer": {"correct": correct},
+            "analysis": None,
+            "difficulty": 1,
+            "score": 2,
+            "tag_ids": [],
+            "knowledge_point_ids": [],
+            "question_bank_id": None,
+        }
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    response = await client.post(
+        "/api/questions/import/bulk-create-job",
+        json={
+            "root_knowledge_point_id": str(root_knowledge_point.id),
+            "questions": [
+                choice(
+                    "MAC 地址通常存储在计算机的（ ）。（2 分）",
+                    {"A": "网卡上", "B": "内存中", "C": "高速缓存中", "D": "硬盘上"},
+                    "A",
+                ),
+                choice(
+                    "MAC地址通常存储在计算机的( )。",
+                    {"A": "网卡上", "B": "内存中", "C": "高速缓存中", "D": "硬盘上"},
+                    "A",
+                ),
+            ],
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["created"] == 1
+    assert body["existing"] == 1
+    assert body["failed"] == 0
+
+
+
+@pytest.mark.asyncio
+async def test_reimport_fills_missing_image_into_existing_question(
+    client: AsyncClient, db_session
+) -> None:
+    """重复题目里，旧题的图挂了、新题带图 → 用新内容补上图片，而不是整条丢弃。"""
+    org = await _create_org_with_question_roles(db_session)
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-image-upgrade",
+        email="teacher-image-upgrade@example.com",
+        full_name="Teacher Image Upgrade",
+    )
+    existing = Question(
+        type=QuestionType.SHORT_ANSWER,
+        title="配图题",
+        content={
+            "text": "如图所示，请说明该网络的结构。",
+            "html": '<p>如图所示，请说明该网络的结构。</p><img src="/api/uploads/files/gone.png">',
+        },
+        options=None,
+        answer={"points": ["略"]},
+        analysis=None,
+        difficulty=2,
+        score=5,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+        question_bank_id=None,
+    )
+    db_session.add(existing)
+    await db_session.commit()
+    question_id = existing.id
+    teacher_id = teacher.id
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    response = await client.post(
+        "/api/questions/bulk",
+        json={
+            "questions": [
+                {
+                    "type": "short_answer",
+                    "title": "配图题",
+                    "content": {
+                        "text": "如图所示，请说明该网络的结构。",
+                        "html": '<p>如图所示，请说明该网络的结构。</p><img src="/api/uploads/files/fresh.png">',
+                        "images": [{"image_id": "fresh", "url": "/api/uploads/files/fresh.png"}],
+                    },
+                    "options": None,
+                    "answer": {"points": ["略"]},
+                    "analysis": None,
+                    "difficulty": 2,
+                    "score": 5,
+                    "tag_ids": [],
+                    "knowledge_point_ids": [],
+                    "question_bank_id": None,
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json() == {"created": 0, "existing": 1, "failed": 0, "enriched": 1}
+
+    db_session.expire_all()
+    updated = await db_session.scalar(select(Question).where(Question.id == question_id))
+    assert "fresh.png" in updated.content["html"]
+    rows = await db_session.execute(
+        select(Question).where(Question.owner_id == teacher_id, Question.deleted_at.is_(None))
+    )
+    assert len(rows.scalars().all()) == 1
+
+
+@pytest.mark.asyncio
+async def test_reimport_keeps_existing_image_when_it_is_available(
+    client: AsyncClient, db_session
+) -> None:
+    """旧题的图片文件确实存在时不做覆盖，避免把人工改过的题目冲掉。"""
+    from app.uploads.router import UPLOAD_DIR
+
+    org = await _create_org_with_question_roles(db_session)
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-image-keep",
+        email="teacher-image-keep@example.com",
+        full_name="Teacher Image Keep",
+    )
+    uploaded = UPLOAD_DIR / "keep-image-test.png"
+    uploaded.write_bytes(b"png")
+    try:
+        existing = Question(
+            type=QuestionType.SHORT_ANSWER,
+            title="配图题",
+            content={
+                "text": "如图所示，请说明该网络的结构。",
+                "html": '<p>如图所示，请说明该网络的结构。</p><img src="/api/uploads/files/keep-image-test.png">',
+            },
+            options=None,
+            answer={"points": ["略"]},
+            analysis=None,
+            difficulty=2,
+            score=5,
+            created_by=teacher.id,
+            owner_id=teacher.id,
+            question_bank_id=None,
+        )
+        db_session.add(existing)
+        await db_session.commit()
+        question_id = existing.id
+
+        client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+        response = await client.post(
+            "/api/questions/bulk",
+            json={
+                "questions": [
+                    {
+                        "type": "short_answer",
+                        "title": "配图题",
+                        "content": {
+                            "text": "如图所示，请说明该网络的结构。",
+                            "html": '<p>如图所示，请说明该网络的结构。</p><img src="/api/uploads/files/other.png">',
+                        },
+                        "options": None,
+                        "answer": {"points": ["略"]},
+                        "analysis": None,
+                        "difficulty": 2,
+                        "score": 5,
+                        "tag_ids": [],
+                        "knowledge_point_ids": [],
+                        "question_bank_id": None,
+                    }
+                ]
+            },
+        )
+
+        assert response.status_code == 201, response.text
+        assert response.json() == {"created": 0, "existing": 1, "failed": 0, "enriched": 0}
+
+        db_session.expire_all()
+        unchanged = await db_session.scalar(select(Question).where(Question.id == question_id))
+        assert "keep-image-test.png" in unchanged.content["html"]
+    finally:
+        uploaded.unlink(missing_ok=True)
 
 
 @pytest.mark.asyncio

@@ -65,6 +65,97 @@ D. 深圳
 `;
 }
 
+// 与后端 /api/uploads/image 允许的类型保持一致（png/jpeg/gif/webp），
+// 其他格式上传只会拿到 400，不如直接当缺失处理。
+const ZIP_IMAGE_EXTENSION = /\.(png|jpe?g|gif|webp)$/i;
+/** ZIP 内图片并发上传数：太多会打爆连接，太少会让大章节等很久。 */
+const ZIP_UPLOAD_CONCURRENCY = 4;
+
+/** 取路径里的文件名（去掉目录、查询串与锚点）。 */
+export function imageBasename(value: string | null | undefined): string {
+  if (!value) return "";
+  const withoutQuery = value.split(/[?#]/)[0];
+  const segments = withoutQuery.split(/[\\/]/);
+  return (segments[segments.length - 1] ?? "").trim();
+}
+
+function imageMimeType(fileName: string): string {
+  const ext = imageBasename(fileName).split(".").pop()?.toLowerCase() ?? "";
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+  if (ext === "gif") return "image/gif";
+  if (ext === "webp") return "image/webp";
+  return "image/png";
+}
+
+export interface ZipImageResolution {
+  drafts: QuestionImportDraft[];
+  /** 草稿里引用了、但 ZIP 里找不到的图片文件名。 */
+  missing: string[];
+  /** ZIP 里已上传的图片文件名（小写，便于比对是否已解析）。 */
+  resolvedNames: Set<string>;
+}
+
+/**
+ * 把草稿里指向 ZIP 内图片的地址（`images/x.png`、`/api/uploads/files/x.png` 等）
+ * 替换成上传后拿到的可访问地址。
+ *
+ * 预览与入库都走 `content_html`，所以 html 里的 `<img src>` 必须一起替换，
+ * 否则题干文字正常、图片仍然是破图。
+ */
+export function applyZipImageUrls(
+  drafts: QuestionImportDraft[],
+  uploaded: QuestionImportImageInput[],
+): ZipImageResolution {
+  const urlByBasename = new Map<string, string>();
+  const resolvedNames = new Set<string>();
+  for (const image of uploaded) {
+    const name = imageBasename(image.alt || image.url).toLowerCase();
+    if (name) {
+      urlByBasename.set(name, image.url);
+      resolvedNames.add(name);
+    }
+    const urlName = imageBasename(image.url).toLowerCase();
+    if (urlName && !urlByBasename.has(urlName)) {
+      urlByBasename.set(urlName, image.url);
+      resolvedNames.add(urlName);
+    }
+  }
+
+  const missing = new Set<string>();
+  // 没有从 ZIP 上传到任何图片时保持原样，避免把服务器上本来就有的图片误报成缺失。
+  if (uploaded.length === 0) {
+    return { drafts, missing: [], resolvedNames };
+  }
+  const resolve = (value: string | null | undefined): string | undefined =>
+    urlByBasename.get(imageBasename(value).toLowerCase());
+  const isExternal = (value: string) => /^(https?:|data:|blob:)/i.test(value);
+
+  const rewriteHtml = (html: string): string =>
+    html.replace(/(<img\b[^>]*?\bsrc\s*=\s*)(["'])([^"']+)\2/gi, (match, prefix: string, quote: string, src: string) => {
+      const url = resolve(src);
+      return url ? `${prefix}${quote}${url}${quote}` : match;
+    });
+
+  const nextDrafts = drafts.map((draft) => {
+    const images = (draft.images ?? []).map((image) => {
+      const url = resolve(image.url) ?? resolve(image.alt);
+      if (url) return { ...image, url };
+      if (image.url && !isExternal(image.url)) {
+        missing.add(imageBasename(image.url) || imageBasename(image.alt) || image.url);
+      }
+      return image;
+    });
+    return {
+      ...draft,
+      images,
+      ...(draft.content_html ? { content_html: rewriteHtml(draft.content_html) } : {}),
+      ...(draft.answer_html ? { answer_html: rewriteHtml(draft.answer_html) } : {}),
+    };
+  });
+
+  return { drafts: nextDrafts, missing: Array.from(missing), resolvedNames };
+}
+
 export async function extractQuestionImportPayload(file: File): Promise<{
   rawText: string;
   sourceFormat: "pdf" | "docx" | "md" | "json" | "zip";
@@ -87,7 +178,8 @@ export async function extractQuestionImportPayload(file: File): Promise<{
     const jsonFile = zip.files[jsonFiles[0]];
     const jsonText = await jsonFile.async("text");
 
-    // Find and upload images referenced in the JSON
+    // 找出 JSON 引用到的图片（content.images / images 声明 + html 内联 <img>），
+    // 按文件名到 ZIP 里取文件上传，后续由 applyZipImageUrls 回填到草稿。
     const images: QuestionImportImageInput[] = [];
     try {
       const parsed = JSON.parse(jsonText);
@@ -96,51 +188,70 @@ export async function extractQuestionImportPayload(file: File): Promise<{
         : Array.isArray((parsed as Record<string, unknown>)?.questions)
           ? ((parsed as Record<string, unknown>).questions as unknown[])
           : [parsed];
-      const referencedImages: Array<{ filename: string }> = [];
+
+      // ZIP 内的图片文件：按文件名（小写）索引，允许放在任意目录下
+      const zipImageFiles = new Map<string, string>();
+      for (const entryName of Object.keys(zip.files)) {
+        const entry = zip.files[entryName];
+        if (!entry || entry.dir || entryName.startsWith("__MACOSX")) continue;
+        if (!ZIP_IMAGE_EXTENSION.test(entryName)) continue;
+        const key = imageBasename(entryName).toLowerCase();
+        if (key && !zipImageFiles.has(key)) zipImageFiles.set(key, entryName);
+      }
+
+      const references = new Set<string>();
+      const addReference = (raw: unknown) => {
+        if (typeof raw !== "string") return;
+        const key = imageBasename(raw).toLowerCase();
+        if (key) references.add(key);
+      };
+
       for (const item of items) {
         if (!item || typeof item !== "object") continue;
         const q = item as Record<string, unknown>;
-        if (q.images && Array.isArray(q.images)) {
-          for (const img of q.images as Array<{ filename?: string }>) {
-            if (img.filename && !referencedImages.some((r) => r.filename === img.filename)) {
-              referencedImages.push(img as { filename: string });
-            }
+        const content = isJsonRecord(q.content) ? q.content : null;
+        const declared: unknown[] = [
+          ...(Array.isArray(q.images) ? q.images : []),
+          ...(content && Array.isArray(content.images) ? content.images : []),
+        ];
+        for (const img of declared) {
+          if (!isJsonRecord(img)) continue;
+          addReference(img.filename);
+          addReference(img.url);
+          addReference(img.path);
+        }
+        for (const html of [q.content_html, content?.html, q.answer_html]) {
+          if (typeof html !== "string") continue;
+          for (const match of html.matchAll(/<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/gi)) {
+            addReference(match[1]);
           }
         }
       }
-      // Match images in ZIP by filename (search in root, images/, imgs/, pics/)
-      for (const ref of referencedImages) {
-        const candidates = [
-          ref.filename,
-          `images/${ref.filename}`,
-          `imgs/${ref.filename}`,
-          `pics/${ref.filename}`,
-        ];
-        let found: string | null = null;
-        for (const candidate of candidates) {
-          if (zip.files[candidate] && !zip.files[candidate].dir) {
-            found = candidate;
-            break;
-          }
-        }
-        if (!found) {
-          // Try fuzzy match: any file with the same name anywhere in the zip
-          found = Object.keys(zip.files).find(
-            (name) =>
-              !zip.files[name].dir &&
-              (name.endsWith(`/${ref.filename}`) || name === ref.filename),
-          ) || null;
-        }
-        if (found) {
-          const imageData = await zip.files[found].async("base64");
-          const ext = ref.filename.split(".").pop()?.toLowerCase() || "png";
-          const mime = ext === "jpg" || ext === "jpeg" ? "image/jpeg" : ext === "gif" ? "image/gif" : ext === "webp" ? "image/webp" : "image/png";
-          const url = await uploadImportedImage(imageData, mime);
+
+      const pendingNames = Array.from(references).filter((key) => zipImageFiles.has(key));
+      // 一个章节可能有上百张图，串行上传太慢；单张失败也不能拖垮整批。
+      for (let start = 0; start < pendingNames.length; start += ZIP_UPLOAD_CONCURRENCY) {
+        const chunk = pendingNames.slice(start, start + ZIP_UPLOAD_CONCURRENCY);
+        const uploaded = await Promise.all(
+          chunk.map(async (key) => {
+            const zipPath = zipImageFiles.get(key);
+            if (!zipPath) return null;
+            try {
+              const imageData = await zip.files[zipPath].async("base64");
+              const url = await uploadImportedImage(imageData, imageMimeType(zipPath));
+              return { key, name: imageBasename(zipPath), url };
+            } catch {
+              return null;
+            }
+          }),
+        );
+        for (const item of uploaded) {
+          if (!item) continue;
           images.push({
-            image_id: `zip-img-${ref.filename.replace(/[^a-zA-Z0-9]/g, "-")}`,
-            url,
+            image_id: `zip-img-${item.key.replace(/[^a-z0-9]/gi, "-")}`,
+            url: item.url,
             order: images.length + 1,
-            alt: ref.filename,
+            alt: item.name,
           });
         }
       }
@@ -1155,7 +1266,13 @@ interface JsonQuestion {
   id?: string | number;
   type?: string;
   question_type?: string;
-  content?: string | { text?: string; html?: string; description?: string };
+  content?: string | {
+    text?: string;
+    html?: string;
+    description?: string;
+    images?: JsonQuestionImage[];
+    tables?: unknown;
+  };
   content_text?: string;
   content_html?: string;
   title?: string;
@@ -1169,6 +1286,7 @@ interface JsonQuestion {
   // 题干原文标注的知识点名称（尚未匹配到题库知识点）。
   knowledge_point_names?: unknown;
   images?: JsonQuestionImage[];
+  tables?: unknown;
 }
 
 const JSON_TYPE_MAP: Record<string, QuestionType> = {
@@ -1263,6 +1381,40 @@ export function structuredJsonText(rawText: string): string | null {
   }
 }
 
+/** 把 JSON 里的表格（二维数组 / {rows: [...]}）渲染成 HTML 表格。 */
+function normalizeJsonTableRows(table: unknown): string[][] {
+  const toRow = (row: unknown): string[] =>
+    Array.isArray(row) ? row.map((cell) => String(cell ?? "").trim()) : [];
+  if (Array.isArray(table)) {
+    return table.map(toRow).filter((row) => row.length > 0);
+  }
+  if (isJsonRecord(table) && Array.isArray(table.rows)) {
+    return (table.rows as unknown[]).map(toRow).filter((row) => row.length > 0);
+  }
+  return [];
+}
+
+export function buildJsonTablesHtml(tables: unknown): string {
+  if (!Array.isArray(tables) || tables.length === 0) return "";
+  const rendered: string[] = [];
+  for (const table of tables) {
+    const rows = normalizeJsonTableRows(table);
+    if (rows.length === 0) continue;
+    const hasHeader = rows.length > 1;
+    const head = hasHeader
+      ? `<thead><tr>${rows[0].map((cell) => `<th>${escapeHtml(cell)}</th>`).join("")}</tr></thead>`
+      : "";
+    const bodyRows = hasHeader ? rows.slice(1) : rows;
+    const body = bodyRows.length
+      ? `<tbody>${bodyRows
+          .map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`)
+          .join("")}</tbody>`
+      : "";
+    rendered.push(`<table class="question-table">${head}${body}</table>`);
+  }
+  return rendered.join("");
+}
+
 export function parseJsonQuestions(
   jsonText: string,
 ): { drafts: QuestionImportDraft[]; unresolvedImages: JsonQuestionImage[] } {
@@ -1286,6 +1438,11 @@ export function parseJsonQuestions(
     const contentHtml = typeof item.content_html === "string"
       ? item.content_html
       : typeof content?.html === "string" ? content.html : undefined;
+    // 表格：既支持题干 html 里自带的 <table>，也支持 JSON 把表格单独放在
+    // tables / content.tables 里（二维数组或 {rows: [...]}）。
+    const tablesHtml = contentHtml && /<table/i.test(contentHtml)
+      ? ""
+      : buildJsonTablesHtml(item.tables ?? content?.tables);
     const contentText = [
       item.content_text,
       typeof item.content === "string" ? item.content : undefined,
@@ -1327,11 +1484,19 @@ export function parseJsonQuestions(
       : buildJsonAnswerPayload(resolvedType, item.answer) ??
         (typeof item.answer_html === "string" ? htmlToImportText(item.answer_html).trim() : null);
 
-    const images = Array.isArray(item.images)
-      ? item.images.filter((image): image is JsonQuestionImage =>
-          isJsonRecord(image) && (typeof image.filename === "string" || typeof image.url === "string"),
-        )
-      : [];
+    // 图片可能写在顶层 images，也可能按 QuestionCreate 形状写在 content.images 里。
+    const declaredImages = [
+      ...(Array.isArray(item.images) ? item.images : []),
+      ...(content && Array.isArray(content.images) ? (content.images as unknown[]) : []),
+    ].filter((image): image is JsonQuestionImage =>
+      isJsonRecord(image) && (typeof image.filename === "string" || typeof image.url === "string"),
+    );
+    const images = declaredImages.filter(
+      (image, index) =>
+        declaredImages.findIndex(
+          (other) => (other.filename || other.url) === (image.filename || image.url),
+        ) === index,
+    );
     unresolvedImages.push(...images.filter((image) => image.filename && !image.url));
 
     const issues: string[] = [];
@@ -1355,7 +1520,13 @@ export function parseJsonQuestions(
         : generateImportQuestionTitle(contentText),
       type: resolvedType,
       content_text: contentText,
-      ...(contentHtml ? { content_html: contentHtml } : {}),
+      ...(contentHtml || tablesHtml
+        ? {
+            content_html: contentHtml
+              ? `${contentHtml}${tablesHtml}`
+              : `${buildImportContentHtml(contentText, mapJsonImages(images))}${tablesHtml}`,
+          }
+        : {}),
       options: Object.keys(options).length >= 2 ? options : null,
       answer_text: answerText,
       ...(typeof item.answer_html === "string" ? { answer_html: item.answer_html } :

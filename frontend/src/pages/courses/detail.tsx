@@ -108,6 +108,7 @@ import {
 import {
   CreateFromSelectionDialog,
   type CreateFromSelectionCategory,
+  type SelectedQuestionSummary,
 } from "@/pages/questions/components/create-from-selection-dialog";
 import { SmartPracticeDialog } from "./SmartPracticeDialog";
 import { SmartPracticeChatDialog } from "./SmartPracticeChatDialog";
@@ -155,6 +156,7 @@ import {
   listCourseAssignments,
   listCourseExams,
   listCourseMaterials,
+  listCourseQuestions,
   listCourseQuestionsPaginated,
   listCourseSemesters,
   reorderCourseKnowledgePoint,
@@ -2229,6 +2231,12 @@ function QuestionsTab({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [createFromSelectionOpen, setCreateFromSelectionOpen] = useState(false);
   const [smartPracticeOpen, setSmartPracticeOpen] = useState(false);
+  const [wholeBankPracticeOpen, setWholeBankPracticeOpen] = useState(false);
+  const [wholeBankPracticeQuestions, setWholeBankPracticeQuestions] = useState<
+    SelectedQuestionSummary[]
+  >([]);
+  const [wholeBankPracticeLoading, setWholeBankPracticeLoading] =
+    useState(false);
   const [knowledgeCompleting, setKnowledgeCompleting] = useState(false);
   const [allQuestionsExpanded, setAllQuestionsExpanded] = useState(false);
   const [knowledgeFilterOpen, setKnowledgeFilterOpen] = useState(false);
@@ -2363,42 +2371,88 @@ function QuestionsTab({
     }
   };
 
+  const handlePublishWholeBankPractice = async () => {
+    if (wholeBankPracticeLoading) return;
+    setWholeBankPracticeLoading(true);
+    try {
+      // 「整个题库」不跟随当前知识点/题型/搜索筛选，取课程全部题目。
+      const allQuestions = await listCourseQuestions(courseId);
+      if (allQuestions.length === 0) {
+        toast({ title: "题库暂无题目" });
+        return;
+      }
+      setWholeBankPracticeQuestions(
+        allQuestions.map((question) => ({
+          id: question.id,
+          type: question.type,
+          score: question.score,
+        })),
+      );
+      setWholeBankPracticeOpen(true);
+    } catch (err) {
+      toast({
+        title: "题库加载失败",
+        description: err instanceof Error ? err.message : "请稍后重试",
+        variant: "destructive",
+      });
+    } finally {
+      setWholeBankPracticeLoading(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
-        <div className="flex-1" />
-        <div className="relative min-w-[220px] flex-1 sm:max-w-[280px] lg:flex-none">
-          <Search
-            size={15}
-            className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/70"
-          />
-          <Input
-            value={query}
-            onChange={(event) => onQueryChange(event.target.value)}
-            placeholder="搜索题目..."
-            className="h-9 pl-9"
-          />
-        </div>
         {canWrite ? (
           <>
-            {showClearAllQuestions && questions.length > 0 ? (
-              <Button
-                variant="outline"
-                size="sm"
-                className="text-destructive hover:text-destructive"
-                onClick={onClearAllQuestions}
-              >
-                <Trash2 size={14} className="mr-1.5" />
-                清除
-              </Button>
-            ) : null}
+            <Button
+              size="sm"
+              onClick={() =>
+                navigate("/questions/create", {
+                  state: {
+                    backTo: `/courses/${courseId}?tab=questions`,
+                    backLabel: "返回课程详情",
+                    successTo: `/courses/${courseId}?tab=questions`,
+                    courseKpId: targetCourseKpId,
+                  },
+                })
+              }
+            >
+              <Plus size={14} className="mr-1.5" />
+              创建题目
+            </Button>
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setSmartPracticeOpen(true)}
+              onClick={() =>
+                navigate("/questions/import", {
+                  state: {
+                    backTo: `/courses/${courseId}?tab=questions`,
+                    backLabel: "返回课程详情",
+                    successTo: `/courses/${courseId}?tab=questions`,
+                    courseKpId: targetCourseKpId,
+                    courseName,
+                  },
+                })
+              }
             >
-              <Sparkles size={14} className="mr-1.5" />
-              智能创建练习
+              <Upload size={14} className="mr-1.5" />
+              导入
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={knowledgeCompleting || questions.length === 0}
+              onClick={handleCompleteKnowledge}
+            >
+              {knowledgeCompleting ? (
+                <LoaderCircle size={14} className="mr-1.5 animate-spin" />
+              ) : (
+                <Wand2 size={14} className="mr-1.5" />
+              )}
+              {selectedQuestionCount > 0
+                ? `补全知识点(${selectedQuestionCount})`
+                : "补全知识点"}
             </Button>
             <Button
               variant="outline"
@@ -2450,55 +2504,40 @@ function QuestionsTab({
               <ClipboardList size={14} className="mr-1.5" />
               发布考试
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={knowledgeCompleting || questions.length === 0}
-              onClick={handleCompleteKnowledge}
-            >
-              {knowledgeCompleting ? (
-                <LoaderCircle size={14} className="mr-1.5 animate-spin" />
-              ) : (
-                <Wand2 size={14} className="mr-1.5" />
-              )}
-              {selectedQuestionCount > 0
-                ? `补全知识点(${selectedQuestionCount})`
-                : "补全知识点"}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() =>
-                navigate("/questions/import", {
-                  state: {
-                    backTo: `/courses/${courseId}?tab=questions`,
-                    backLabel: "返回课程详情",
-                    successTo: `/courses/${courseId}?tab=questions`,
-                    courseKpId: targetCourseKpId,
-                    courseName,
-                  },
-                })
-              }
-            >
-              <Upload size={14} className="mr-1.5" />
-              导入
-            </Button>
-            <Button
-              size="sm"
-              onClick={() =>
-                navigate("/questions/create", {
-                  state: {
-                    backTo: `/courses/${courseId}?tab=questions`,
-                    backLabel: "返回课程详情",
-                    successTo: `/courses/${courseId}?tab=questions`,
-                    courseKpId: targetCourseKpId,
-                  },
-                })
-              }
-            >
-              <Plus size={14} className="mr-1.5" />
-              创建题目
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={wholeBankPracticeLoading}
+                >
+                  {wholeBankPracticeLoading ? (
+                    <LoaderCircle
+                      size={14}
+                      className="mr-1.5 animate-spin"
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <FilePlus2 size={14} className="mr-1.5" aria-hidden="true" />
+                  )}
+                  发布练习
+                  <ChevronDown size={13} className="ml-1.5" aria-hidden="true" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuItem onClick={() => setSmartPracticeOpen(true)}>
+                  <Sparkles size={14} className="mr-2" />
+                  智能创建练习
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={wholeBankPracticeLoading}
+                  onClick={() => void handlePublishWholeBankPractice()}
+                >
+                  <ListChecks size={14} className="mr-2" />
+                  整个题库作为练习
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </>
         ) : (
           <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground">
@@ -2506,6 +2545,29 @@ function QuestionsTab({
             只读
           </span>
         )}
+        <div className="relative min-w-[220px] flex-1 sm:max-w-[280px] lg:flex-none">
+          <Search
+            size={15}
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/70"
+          />
+          <Input
+            value={query}
+            onChange={(event) => onQueryChange(event.target.value)}
+            placeholder="搜索题目..."
+            className="h-9 pl-9"
+          />
+        </div>
+        {canWrite && showClearAllQuestions && questions.length > 0 ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="ml-auto text-destructive hover:text-destructive"
+            onClick={onClearAllQuestions}
+          >
+            <Trash2 size={14} className="mr-1.5" />
+            清除
+          </Button>
+        ) : null}
       </div>
       {canWrite && questions.length > 0 ? (
         <div className="flex flex-wrap items-center gap-3">
@@ -2767,6 +2829,23 @@ function QuestionsTab({
         }))}
         defaultTitle={defaultCreateTitle}
         courseKpId={targetCourseKpId}
+        courseSemesterId={courseSemesterId}
+        defaultClassIds={courseSemester?.class_ids}
+        semesterOptions={semesterOptions}
+        onPublished={(_, category) => {
+          void onPublishedExamOrAssignment(category);
+        }}
+      />
+
+      <CreateFromSelectionDialog
+        open={wholeBankPracticeOpen}
+        onOpenChange={setWholeBankPracticeOpen}
+        selected={wholeBankPracticeQuestions}
+        defaultTitle={defaultCreateTitle}
+        defaultCategory="practice"
+        showCategorySwitch={false}
+        sourceLabel="整个题库"
+        courseKpId={courseId}
         courseSemesterId={courseSemesterId}
         defaultClassIds={courseSemester?.class_ids}
         semesterOptions={semesterOptions}
@@ -7449,15 +7528,6 @@ export function CourseDetailPage() {
                     <Wand2 size={15} className="mr-2" />创建出题技能
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  {course.is_owner ? (
-                    <DropdownMenuItem onClick={() => setPublishDialogOpen(true)}>
-                      <Link2 size={15} className="mr-2" />发布短链接
-                    </DropdownMenuItem>
-                  ) : null}
-                  <DropdownMenuItem onClick={() => setPasswordDialogOpen(true)}>
-                    <KeyRound size={15} className="mr-2" />工作区密码
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={() => setNewSemesterOpen(true)}>
                     <CalendarRange size={15} className="mr-2" />新建学期
                   </DropdownMenuItem>
@@ -7513,26 +7583,6 @@ export function CourseDetailPage() {
               题目跟课程走；练习 / 考试按学期归档
             </span>
             <div className="hidden flex-1 sm:block" />
-            {course.is_owner ? (
-              <Button
-                variant="outline"
-                size="sm"
-                className="hidden shrink-0 sm:inline-flex"
-                onClick={() => setPublishDialogOpen(true)}
-              >
-                <Link2 size={14} className="mr-1.5" />
-                发布短链接
-              </Button>
-            ) : null}
-            <Button
-              variant="outline"
-              size="sm"
-              className="hidden shrink-0 sm:inline-flex"
-              onClick={() => setPasswordDialogOpen(true)}
-            >
-              <KeyRound size={14} className="mr-1.5" />
-              工作区密码
-            </Button>
             {course.can_write ? (
               <Button
                 variant="outline"

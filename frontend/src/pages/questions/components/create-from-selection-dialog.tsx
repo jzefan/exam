@@ -50,6 +50,10 @@ export interface CreateFromSelectionDialogProps {
   defaultCategory?: CreateFromSelectionCategory;
   /** 名称的默认值，通常由宿主生成，例如 "2026-05-11 练习"。 */
   defaultTitle?: string;
+  /** 题目来源文案，用于标题，例如「已选题目」「整个题库」。 */
+  sourceLabel?: string;
+  /** 为 false 时锁定为默认类型，不展示练习/考试切换。 */
+  showCategorySwitch?: boolean;
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -106,6 +110,8 @@ export function CreateFromSelectionDialog({
   semesterOptions,
   defaultCategory = "practice",
   defaultTitle = "",
+  sourceLabel = "已选题目",
+  showCategorySwitch = true,
 }: CreateFromSelectionDialogProps) {
   const { toast } = useToast();
   const [category, setCategory] = useState<CreateFromSelectionCategory>(defaultCategory);
@@ -199,7 +205,7 @@ export function CreateFromSelectionDialog({
         <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <FilePlus2 className="h-5 w-5 text-primary" />
-            从已选题目{isExam ? "创建考试" : "发布练习"}
+            从{sourceLabel}{isExam ? "创建考试" : "发布练习"}
           </DialogTitle>
           <DialogDescription>
             共 {selected.length} 道题目{typesSummary ? `（${typesSummary}）` : ""}，总分{" "}
@@ -211,29 +217,31 @@ export function CreateFromSelectionDialog({
         </DialogHeader>
 
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto">
-          <div className="space-y-2">
-            <Label>类型</Label>
-            <Tabs
-              value={category}
-              onValueChange={(value) => setCategory(value as CreateFromSelectionCategory)}
-            >
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="practice">
-                  <NotebookPen data-icon className="h-4 w-4" />
-                  练习
-                </TabsTrigger>
-                <TabsTrigger value="exam">
-                  <GraduationCap data-icon className="h-4 w-4" />
-                  正式考试
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
-            <p className="text-xs text-muted-foreground">
-              {category === "practice"
-                ? "日常布置的练习，可按知识点反馈学习情况。"
-                : "正式评测场景，默认不立即公开成绩，支持时间和切屏限制。"}
-            </p>
-          </div>
+          {showCategorySwitch ? (
+            <div className="space-y-2">
+              <Label>类型</Label>
+              <Tabs
+                value={category}
+                onValueChange={(value) => setCategory(value as CreateFromSelectionCategory)}
+              >
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="practice">
+                    <NotebookPen data-icon className="h-4 w-4" />
+                    练习
+                  </TabsTrigger>
+                  <TabsTrigger value="exam">
+                    <GraduationCap data-icon className="h-4 w-4" />
+                    正式考试
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
+              <p className="text-xs text-muted-foreground">
+                {category === "practice"
+                  ? "日常布置的练习，可按知识点反馈学习情况。"
+                  : "正式评测场景，默认不立即公开成绩，支持时间和切屏限制。"}
+              </p>
+            </div>
+          ) : null}
 
           <div className="space-y-2">
             <Label htmlFor="create-from-selection-title">名称</Label>

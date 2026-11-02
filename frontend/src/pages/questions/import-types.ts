@@ -77,6 +77,8 @@ export interface QuestionImportBulkCreateJobResponse {
   created: number;
   existing: number;
   failed: number;
+  /** 重复题里「旧题缺图、这次补上了」的条数（已包含在 existing 内）。 */
+  enriched?: number;
   status: QuestionImportJobStatus;
 }
 
@@ -84,6 +86,7 @@ export interface QuestionBulkCreateResponse {
   created: number;
   existing: number;
   failed: number;
+  enriched?: number;
 }
 
 export interface QuestionImportJobResponse {

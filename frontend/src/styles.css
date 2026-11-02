@@ -1469,3 +1469,53 @@ pre.rounded-md {
     color: hsl(var(--muted-foreground));
   }
 }
+
+/* 题目正文里的表格：题库、课程题目、作答、考后查看、阅卷共用同一套样式。
+   表格本身作为滚动容器（GitHub markdown 同款做法），窄屏时不撑破布局。
+   重复写类名是为了压过 @tailwindcss/typography 的 .prose table 规则。 */
+.question-table.question-table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.question-table.question-table th,
+.question-table.question-table td {
+  border: 1px solid hsl(var(--border));
+  padding: 0.4rem 0.65rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.question-table.question-table thead th {
+  background-color: hsl(var(--muted));
+  font-weight: 600;
+}
+
+.question-table.question-table caption {
+  caption-side: bottom;
+  padding-top: 0.35rem;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8rem;
+}
+
+.question-table.question-table img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* 编辑器里的表格保持正常 table 布局（ProseMirror 用它做光标/选区），
+   横向滚动交给 tiptap 自己的 .tableWrapper。 */
+.tiptap .question-table.question-table {
+  display: table;
+  width: 100%;
+}
+
+.tiptap .tableWrapper {
+  overflow-x: auto;
+}

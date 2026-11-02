@@ -104,3 +104,31 @@ describe("QuestionRenderer", () => {
     expect(screen.getByPlaceholderText("填写第 2 空")).toBeInTheDocument();
   });
 });
+
+describe("QuestionRenderer · 题干表格", () => {
+  it("选择题题干里的表格按表格渲染并带统一样式类", () => {
+    const { container } = render(
+      <QuestionRenderer
+        question={{
+          question_id: "choice-table",
+          order: 0,
+          score: 5,
+          type: "choice",
+          title: "路由表",
+          content: {
+            text: "根据下表选择正确答案",
+            html: '<p>根据下表选择正确答案</p><table><thead><tr><th>目的网络</th><th>下一跳</th></tr></thead><tbody><tr><td>N1</td><td>R2</td></tr></tbody></table>',
+          },
+          options: { A: "R1", B: "R2" },
+        }}
+        answer={{}}
+        onChange={vi.fn()}
+      />,
+    );
+
+    const table = container.querySelector("table.question-table");
+    expect(table).not.toBeNull();
+    expect(table?.textContent).toContain("N1");
+    expect(table?.textContent).toContain("R2");
+  });
+});

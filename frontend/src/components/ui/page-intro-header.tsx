@@ -8,11 +8,16 @@ import { Button } from "./button";
 
 interface PageIntroHeaderProps {
   title: string;
-  description: string;
+  description?: string;
   onBack?: () => void | Promise<void>;
   backLabel?: string;
   actions?: ReactNode;
   className?: string;
+  /**
+   * Single-line bar: hides the description and tightens vertical padding.
+   * Use on workspace pages whose columns start directly under the header.
+   */
+  compact?: boolean;
   fullBleed?: boolean;
   /**
    * Render as a plain full-width bar without the negative-margin breakout.
@@ -28,17 +33,26 @@ export function PageIntroHeader({
   backLabel,
   actions,
   className,
+  compact = false,
   embedded = false,
 }: PageIntroHeaderProps) {
   return (
     <div
       className={cn(
-        "flex min-h-12 items-center justify-between gap-4 border-b border-border bg-card px-4 py-3 sm:px-6",
+        "flex items-center justify-between gap-4 border-b border-border bg-card",
+        compact
+          ? "min-h-11 px-4 py-1.5 sm:px-6"
+          : "min-h-12 px-4 py-3 sm:px-6",
         embedded ? "w-full" : "relative left-1/2 -ml-[50vw] -mt-6 w-screen",
         className,
       )}
     >
-      <div className="flex min-w-0 items-center gap-4">
+      <div
+        className={cn(
+          "flex min-w-0 items-center",
+          compact ? "gap-2.5" : "gap-4",
+        )}
+      >
         {onBack && (
           <Button
             type="button"
@@ -46,7 +60,10 @@ export function PageIntroHeader({
             size="sm"
             onClick={onBack}
             aria-label={backLabel ?? "返回"}
-            className="size-8 shrink-0 rounded-lg p-0 transition-all hover:bg-muted"
+            className={cn(
+              "shrink-0 rounded-lg p-0 transition-all hover:bg-muted",
+              compact ? "size-7" : "size-8",
+            )}
           >
             <ArrowLeft className="h-4 w-4 text-muted-foreground" />
           </Button>
@@ -55,9 +72,11 @@ export function PageIntroHeader({
           <h1 className="font-serif text-sm font-semibold tracking-tight text-foreground lg:text-base">
             {title}
           </h1>
-          <p className="mt-0.5 max-w-[560px] text-xs leading-snug text-muted-foreground">
-            {description}
-          </p>
+          {!compact && description ? (
+            <p className="mt-0.5 max-w-[560px] text-xs leading-snug text-muted-foreground">
+              {description}
+            </p>
+          ) : null}
         </div>
       </div>
       {actions ? (

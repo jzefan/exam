@@ -721,7 +721,12 @@ async def bulk_create_questions_endpoint(
         request=request,
     )
     await db.commit()
-    return QuestionBulkCreateResponse(created=result.created, existing=result.existing, failed=result.failed)
+    return QuestionBulkCreateResponse(
+        created=result.created,
+        existing=result.existing,
+        failed=result.failed,
+        enriched=result.enriched,
+    )
 
 
 @questions_router.post(
@@ -828,6 +833,7 @@ async def import_bulk_create_job_endpoint(
         created=result.created,
         existing=result.existing,
         failed=result.failed,
+        enriched=result.enriched,
         status=job.status,
     )
 

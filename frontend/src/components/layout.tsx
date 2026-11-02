@@ -189,6 +189,8 @@ export function Layout() {
   // 岗位-课程图谱：整屏画布（React Flow），需要占满浏览器宽高、自管理布局。
   const isJobGraphPage = location.pathname === "/gwmx/job-models/graph";
   const isExamWorkflowPage =
+    location.pathname === "/exams/create" ||
+    location.pathname.startsWith("/exams/edit/") ||
     location.pathname === "/exams/practice/create" ||
     location.pathname.startsWith("/exams/practice/edit/") ||
     /^\/exams\/[^/]+\/view$/.test(location.pathname) ||

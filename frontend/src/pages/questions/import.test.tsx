@@ -1257,8 +1257,121 @@ describe("QuestionImportPage", () => {
 
     expect(await screen.findByText("题目导入完成")).toBeInTheDocument();
     expect(screen.getByText("本次导入")).toBeInTheDocument();
-    expect(screen.getByText("成功入库")).toBeInTheDocument();
+    expect(screen.getByText("成功")).toBeInTheDocument();
     expect(screen.getByText("失败")).toBeInTheDocument();
+  });
+
+  it("从课程进入导入时，主知识点锁定为该课程，不再列出全部知识点", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockJsonResponse({
+        mode: "smart",
+        summary: {
+          total: 1,
+          duplicates_removed: 0,
+          high_confidence: 1,
+          medium_confidence: 0,
+          low_confidence: 0,
+          issue_count: 0,
+          pending_review: 1,
+          approved: 0,
+          skipped: 0,
+          incomplete_choice_count: 0,
+          visual_retry_recommended: false,
+        },
+        drafts: [{ ...baseDraft, draft_id: "course-1", content_text: "题目一" }],
+      }),
+    );
+
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: "/questions/import",
+            state: {
+              courseKpId: "kp-course",
+              courseName: "计算机网络基础",
+              backTo: "/courses/kp-course",
+            },
+          },
+        ]}
+      >
+        <QuestionImportPage />
+      </MemoryRouter>,
+    );
+
+    const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
+    fireEvent.change(screen.getByTestId("question-import-file-input"), {
+      target: { files: [file] },
+    });
+
+    await screen.findByText("核对导入内容");
+    fireEvent.click(screen.getByRole("button", { name: "导入 1 道题目" }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("导入到当前课程")).toBeInTheDocument();
+    expect(within(dialog).getByText("计算机网络基础")).toBeInTheDocument();
+    // 课程上下文里不再出现全局知识点选择器
+    expect(
+      within(dialog).queryByText("搜索或展开知识图谱选择主知识点"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("从课程进入导入，完成后「查看课程题目」回到该课程题目 tab", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJsonResponse({
+          mode: "smart",
+          summary: {
+            total: 1,
+            duplicates_removed: 0,
+            high_confidence: 1,
+            medium_confidence: 0,
+            low_confidence: 0,
+            issue_count: 0,
+            pending_review: 1,
+            approved: 0,
+            skipped: 0,
+            incomplete_choice_count: 0,
+            visual_retry_recommended: false,
+          },
+          drafts: [{ ...baseDraft, draft_id: "course-import-1" }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJsonResponse({ created: 1, existing: 0, failed: 0 }),
+      );
+
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: "/questions/import",
+            state: {
+              courseKpId: "kp-course",
+              courseName: "计算机网络基础",
+              backTo: "/courses/kp-course?tab=questions",
+              successTo: "/courses/kp-course?tab=questions",
+            },
+          },
+        ]}
+      >
+        <QuestionImportPage />
+      </MemoryRouter>,
+    );
+
+    const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
+    fireEvent.change(screen.getByTestId("question-import-file-input"), {
+      target: { files: [file] },
+    });
+
+    await screen.findByText("核对导入内容");
+    fireEvent.click(screen.getByRole("button", { name: "导入 1 道题目" }));
+    fireEvent.click(await screen.findByRole("button", { name: "不做匹配" }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "查看课程题目" }));
+
+    expect(navigateMock).toHaveBeenCalledWith("/courses/kp-course?tab=questions");
   });
 
   it("removes all importable drafts only when bulk import has no failures", async () => {
@@ -1301,6 +1414,52 @@ describe("QuestionImportPage", () => {
 
     expect(await screen.findByText("题目导入完成")).toBeInTheDocument();
     expect(screen.queryByText("核对导入内容")).not.toBeInTheDocument();
+  });
+
+  it("重复题补齐图片时在结果里单独提示条数", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJsonResponse({
+          mode: "smart",
+          summary: {
+            total: 3,
+            duplicates_removed: 0,
+            high_confidence: 3,
+            medium_confidence: 0,
+            low_confidence: 0,
+            issue_count: 0,
+            pending_review: 3,
+            approved: 0,
+            skipped: 0,
+            incomplete_choice_count: 0,
+            visual_retry_recommended: false,
+          },
+          drafts: [
+            { ...baseDraft, draft_id: "en-1", content_text: "题目一" },
+            { ...baseDraft, draft_id: "en-2", content_text: "题目二" },
+            { ...baseDraft, draft_id: "en-3", content_text: "题目三" },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJsonResponse([]))
+      .mockResolvedValueOnce(
+        mockJsonResponse({ created: 1, existing: 2, failed: 0, enriched: 2 }),
+      );
+
+    renderImportPage();
+
+    const file = new File(["1. 单选题 示例"], "questions.md", { type: "text/markdown" });
+    fireEvent.change(screen.getByTestId("question-import-file-input"), {
+      target: { files: [file] },
+    });
+
+    await screen.findByText("核对导入内容");
+    fireEvent.click(screen.getByRole("button", { name: "导入 3 道题目" }));
+    fireEvent.click(await screen.findByRole("button", { name: "暂不关联" }));
+
+    expect(await screen.findByText("题目导入完成")).toBeInTheDocument();
+    expect(screen.getByText("重复跳过")).toBeInTheDocument();
+    expect(screen.getByText("其中 2 条补齐了图片")).toBeInTheDocument();
   });
 
   it("uses the selected question bank from the question list as the default import target", async () => {
@@ -1350,8 +1509,8 @@ describe("QuestionImportPage", () => {
     });
     expect(await screen.findByText("题目导入完成")).toBeInTheDocument();
     expect(screen.getByText("本次导入")).toBeInTheDocument();
-    expect(screen.getByText("成功入库")).toBeInTheDocument();
-    expect(screen.getByText("数据库已存在")).toBeInTheDocument();
+    expect(screen.getByText("成功")).toBeInTheDocument();
+    expect(screen.getByText("重复跳过")).toBeInTheDocument();
     expect(screen.getByText("失败")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "查看题目列表" }));

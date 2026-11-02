@@ -381,6 +381,8 @@ class QuestionBulkCreateResponse(BaseModel):
     created: int
     existing: int = 0
     failed: int = 0
+    # 重复题里「旧题缺图、这次补上了」的条数（仍然计入 existing）。
+    enriched: int = 0
 
 
 class SaveGeneratedToCourseBankResponse(QuestionBulkCreateResponse):
@@ -409,6 +411,7 @@ class QuestionImportBulkCreateJobResponse(BaseModel):
     created: int
     existing: int = 0
     failed: int = 0
+    enriched: int = 0
     status: QuestionImportJobStatus
 
 
