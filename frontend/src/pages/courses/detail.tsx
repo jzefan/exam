@@ -110,8 +110,8 @@ import {
   type CreateFromSelectionCategory,
   type SelectedQuestionSummary,
 } from "@/pages/questions/components/create-from-selection-dialog";
+import { PracticePublishMenu } from "./PracticePublishMenu";
 import { SmartPracticeDialog } from "./SmartPracticeDialog";
-import { SmartPracticeChatDialog } from "./SmartPracticeChatDialog";
 import type { QuestionImportJobResponse } from "@/pages/questions/import-types";
 import { isTerminalQuestionImportJobStatus } from "@/pages/questions/question-knowledge-recognition";
 import {
@@ -1939,6 +1939,8 @@ function ExamRows({
   onDelete,
   onGenerateMock,
   onSmartCreate,
+  onWholeBankPractice,
+  wholeBankPracticeLoading,
   onCreate,
   onExport,
   onExportGradingDetails,
@@ -1956,6 +1958,9 @@ function ExamRows({
   onDelete: (exam: TeacherCourseExam) => void;
   onGenerateMock?: (exam: TeacherCourseExam) => void;
   onSmartCreate?: () => void;
+  /** 「发布练习 → 本课程题库作为练习」。 */
+  onWholeBankPractice?: () => void;
+  wholeBankPracticeLoading?: boolean;
   onCreate: () => void;
   onExport?: (
     exam: TeacherCourseExam,
@@ -1997,12 +2002,13 @@ function ExamRows({
           </Button>
         ) : null}
         {kind === "assignment" && canWrite && onSmartCreate ? (
-          <Button variant="outline" size="sm" onClick={onSmartCreate}>
-            <Sparkles size={14} className="mr-1.5" />
-            智能练习
-          </Button>
-        ) : null}
-        {canWrite ? (
+          <PracticePublishMenu
+            onCreate={onCreate}
+            onSmartCreate={onSmartCreate}
+            onWholeBank={onWholeBankPractice ?? (() => undefined)}
+            loading={wholeBankPracticeLoading}
+          />
+        ) : canWrite ? (
           <Button size="sm" onClick={onCreate}>
             <Plus size={14} className="mr-1.5" />
             新建{kind === "exam" ? "考试" : "练习"}
@@ -2159,6 +2165,7 @@ function QuestionsTab({
   typeCounts,
   query,
   onQueryChange,
+  refreshing = false,
   selectedQuestionTypes,
   onSelectedQuestionTypesChange,
   page,
@@ -2180,6 +2187,7 @@ function QuestionsTab({
   showClearAllQuestions = true,
   seedUsage,
   onPublishedExamOrAssignment,
+  onCreatePractice,
   onClearAllQuestions,
   onQuestionDeleted,
   onKnowledgeCompleted,
@@ -2189,6 +2197,8 @@ function QuestionsTab({
   typeCounts: Partial<Record<QuestionType, number>>;
   query: string;
   onQueryChange: (query: string) => void;
+  /** 搜索/筛选触发的静默刷新，不替换整个列表，避免输入框被卸载。 */
+  refreshing?: boolean;
   selectedQuestionTypes: Set<QuestionType>;
   onSelectedQuestionTypesChange: (types: Set<QuestionType>) => void;
   page: number;
@@ -2219,6 +2229,8 @@ function QuestionsTab({
   onPublishedExamOrAssignment: (
     category: CreateFromSelectionCategory,
   ) => void | Promise<void>;
+  /** 「发布练习 → 新建练习」：进入多步向导。 */
+  onCreatePractice: () => void;
   onClearAllQuestions: () => void;
   onQuestionDeleted?: (questionId: string) => void;
   onKnowledgeCompleted?: () => void | Promise<void>;
@@ -2504,40 +2516,12 @@ function QuestionsTab({
               <ClipboardList size={14} className="mr-1.5" />
               发布考试
             </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={wholeBankPracticeLoading}
-                >
-                  {wholeBankPracticeLoading ? (
-                    <LoaderCircle
-                      size={14}
-                      className="mr-1.5 animate-spin"
-                      aria-hidden="true"
-                    />
-                  ) : (
-                    <FilePlus2 size={14} className="mr-1.5" aria-hidden="true" />
-                  )}
-                  发布练习
-                  <ChevronDown size={13} className="ml-1.5" aria-hidden="true" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-52">
-                <DropdownMenuItem onClick={() => setSmartPracticeOpen(true)}>
-                  <Sparkles size={14} className="mr-2" />
-                  智能创建练习
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={wholeBankPracticeLoading}
-                  onClick={() => void handlePublishWholeBankPractice()}
-                >
-                  <ListChecks size={14} className="mr-2" />
-                  整个题库作为练习
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <PracticePublishMenu
+              onCreate={onCreatePractice}
+              onSmartCreate={() => setSmartPracticeOpen(true)}
+              onWholeBank={() => void handlePublishWholeBankPractice()}
+              loading={wholeBankPracticeLoading}
+            />
           </>
         ) : (
           <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground">
@@ -2554,8 +2538,14 @@ function QuestionsTab({
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
             placeholder="搜索题目..."
-            className="h-9 pl-9"
+            className={cn("h-9 pl-9", refreshing && "pr-9")}
           />
+          {refreshing ? (
+            <LoaderCircle
+              size={14}
+              className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-muted-foreground/70"
+            />
+          ) : null}
         </div>
         {canWrite && showClearAllQuestions && questions.length > 0 ? (
           <Button
@@ -4488,8 +4478,8 @@ function KnowledgeTreeEditorPage({
   };
 
   return (
-    <div className="flex min-h-0 flex-col gap-5">
-      <div className="flex flex-wrap items-center gap-3">
+    <div className="flex min-h-0 flex-col gap-5 xl:h-full">
+      <div className="flex shrink-0 flex-wrap items-center gap-3">
         <Button type="button" variant="ghost" size="sm" className="-ml-2" onClick={onBack}>
           <ArrowLeft size={15} className="mr-1.5" />
           返回目录
@@ -4503,7 +4493,7 @@ function KnowledgeTreeEditorPage({
       {!tree ? (
         <EmptyPanel icon={<Layers3 size={22} />} title="暂无课程目录" />
       ) : (
-              <div className="grid min-h-[560px] grid-cols-1 gap-4 xl:grid-cols-[minmax(240px,0.8fr)_minmax(0,1.6fr)]">
+              <div className="grid min-h-[560px] grid-cols-1 gap-4 xl:min-h-0 xl:flex-1 xl:grid-rows-[minmax(0,1fr)] xl:grid-cols-[minmax(240px,0.8fr)_minmax(0,1.6fr)]">
           <section className="flex min-h-0 flex-col rounded-xl border border-border bg-card">
             <div className="border-b border-border px-4 py-3">
               <h2 className="text-sm font-semibold text-foreground">知识树</h2>
@@ -4527,7 +4517,7 @@ function KnowledgeTreeEditorPage({
             </div>
           </section>
 
-          <section className="rounded-xl border border-border bg-card p-5">
+          <section className="h-full min-h-0 overflow-y-auto rounded-xl border border-border bg-card p-5">
             {!selectedNode ? (
               <EmptyPanel icon={<BookOpen size={22} />} title="请选择知识点" />
             ) : (
@@ -4852,6 +4842,14 @@ export function CourseDetailPage() {
   const [assignmentScoreSummaryOpen, setAssignmentScoreSummaryOpen] =
     useState(false);
   const [smartAssignmentOpen, setSmartAssignmentOpen] = useState(false);
+  // 「发布练习 → 本课程题库作为练习」：整库题目加载完再打开创建对话框。
+  const [assignmentWholeBankOpen, setAssignmentWholeBankOpen] = useState(false);
+  const [assignmentWholeBankQuestions, setAssignmentWholeBankQuestions] =
+    useState<SelectedQuestionSummary[]>([]);
+  const [assignmentWholeBankLoading, setAssignmentWholeBankLoading] =
+    useState(false);
+  // 「试卷」页签的智能创建（预览时可逐题改分值）。
+  const [smartPaperOpen, setSmartPaperOpen] = useState(false);
   const [assignmentScoreSummaryLoading, setAssignmentScoreSummaryLoading] =
     useState(false);
   const [assignmentScoreSummary, setAssignmentScoreSummary] =
@@ -4897,12 +4895,24 @@ export function CourseDetailPage() {
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [tabLoading, setTabLoading] = useState<CourseTab | null>(null);
+  // 题目列表的「静默刷新」状态：搜索/筛选/翻页时只转小圈，不替换整个 Tab，
+  // 否则输入框会被卸载，用户表现为「能输入但按退格没反应」。
+  const [questionsRefreshing, setQuestionsRefreshing] = useState(false);
+  const questionsLoadedRef = useRef(false);
+  const questionRequestIdRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const restoredKnowledgeNodeIdRef = useRef<string | null>(null);
 
   const loadQuestions = useCallback(async () => {
     if (!id) return;
-    setTabLoading("questions");
+    const requestId = ++questionRequestIdRef.current;
+    // 首次进入题目 Tab 才用整块 loading 占位；之后的搜索/筛选/翻页就地刷新。
+    const blocking = !questionsLoadedRef.current;
+    if (blocking) {
+      setTabLoading("questions");
+    } else {
+      setQuestionsRefreshing(true);
+    }
     try {
       const res = await listCourseQuestionsPaginated(id, {
         page: questionPage,
@@ -4914,17 +4924,23 @@ export function CourseDetailPage() {
             : undefined,
         q: questionQuery.trim() || undefined,
       });
+      if (requestId !== questionRequestIdRef.current) return;
+      questionsLoadedRef.current = true;
       setQuestions(res.items);
       setQuestionTotal(res.total);
       setQuestionTypeCounts(res.type_counts);
     } catch (err) {
+      if (requestId !== questionRequestIdRef.current) return;
       toast({
         title: "题目加载失败",
         description: err instanceof Error ? err.message : "请稍后重试",
         variant: "destructive",
       });
     } finally {
-      setTabLoading((current) => (current === "questions" ? null : current));
+      if (requestId === questionRequestIdRef.current) {
+        setTabLoading((current) => (current === "questions" ? null : current));
+        setQuestionsRefreshing(false);
+      }
     }
   }, [
     id,
@@ -4944,6 +4960,34 @@ export function CourseDetailPage() {
     if (!id || activeTab !== "questions") return;
     void loadQuestions();
   }, [id, activeTab, loadQuestions]);
+
+  const handlePublishAssignmentWholeBank = async () => {
+    if (!id || assignmentWholeBankLoading) return;
+    setAssignmentWholeBankLoading(true);
+    try {
+      const questions = await listCourseQuestions(id);
+      if (questions.length === 0) {
+        toast({ title: "题库暂无题目" });
+        return;
+      }
+      setAssignmentWholeBankQuestions(
+        questions.map((question) => ({
+          id: question.id,
+          type: question.type,
+          score: question.score,
+        })),
+      );
+      setAssignmentWholeBankOpen(true);
+    } catch (err) {
+      toast({
+        title: "题库加载失败",
+        description: err instanceof Error ? err.message : "请稍后重试",
+        variant: "destructive",
+      });
+    } finally {
+      setAssignmentWholeBankLoading(false);
+    }
+  };
 
   const semesterFilter =
     activeSemesterId === ALL_SEMESTERS ? null : activeSemesterId;
@@ -7123,22 +7167,71 @@ export function CourseDetailPage() {
         onRefresh={loadAssignmentScoreSummary}
       />
 
-      <SmartPracticeChatDialog
+      <SmartPracticeDialog
         open={smartAssignmentOpen}
         onOpenChange={setSmartAssignmentOpen}
+        courseId={id ?? ""}
         courseName={course.name}
         courseKpId={assignmentFilterNode?.id ?? tree?.id ?? id ?? ""}
         courseSemesterId={semesterFilter}
         defaultClassIds={selectedSemester?.class_ids}
         semesterOptions={semesterStudentOptions}
+        selectedQuestionIds={[]}
         knowledgeOptions={questionKnowledgeFilterOptions.map((option) => ({
           id: option.id,
           name: option.name,
           path: option.path,
         }))}
+        knowledgeTree={tree}
         initialKnowledgePointId={assignmentFilterNodeId}
         onPublished={async () => {
           await handlePublishedFromSelection("practice");
+        }}
+      />
+
+      <CreateFromSelectionDialog
+        open={assignmentWholeBankOpen}
+        onOpenChange={setAssignmentWholeBankOpen}
+        selected={assignmentWholeBankQuestions}
+        defaultTitle={`${course.name}-练习`}
+        defaultCategory="practice"
+        showCategorySwitch={false}
+        sourceLabel="本课程题库"
+        courseKpId={id ?? ""}
+        courseSemesterId={semesterFilter}
+        defaultClassIds={selectedSemester?.class_ids}
+        semesterOptions={semesterStudentOptions}
+        onPublished={(_, category) => {
+          void handlePublishedFromSelection(category);
+        }}
+      />
+
+      <SmartPracticeDialog
+        target="paper"
+        open={smartPaperOpen}
+        onOpenChange={setSmartPaperOpen}
+        courseId={id ?? ""}
+        courseName={course.name}
+        courseKpId={tree?.id ?? id ?? ""}
+        courseSemesterId={semesterFilter}
+        selectedQuestionIds={[]}
+        knowledgeOptions={paperKnowledgePointOptions.map((option) => ({
+          id: option.id,
+          name: option.name,
+          path: option.path,
+        }))}
+        knowledgeTree={tree}
+        onPaperCreated={(paperId) => {
+          navigate(`/papers/${paperId}`, {
+            state: {
+              backTo: `/courses/${id}?tab=papers`,
+              backLabel: "返回课程详情",
+              courseOrigin: true,
+              courseKpId: tree?.id ?? id,
+              publishExamSuccessTo: `/courses/${id}?tab=exams`,
+              publishPracticeSuccessTo: `/courses/${id}?tab=assignments`,
+            },
+          });
         }}
       />
 
@@ -7767,6 +7860,10 @@ export function CourseDetailPage() {
                       onClose={(exam) => setExamToClose(exam)}
                       onDelete={(exam) => setExamToDelete(exam)}
                       onSmartCreate={() => setSmartAssignmentOpen(true)}
+                      onWholeBankPractice={() =>
+                        void handlePublishAssignmentWholeBank()
+                      }
+                      wholeBankPracticeLoading={assignmentWholeBankLoading}
                       onCreate={() =>
                         goCreateExamOrAssignment("assignment", {
                           mainKnowledgePointId: tree?.id,
@@ -7809,8 +7906,16 @@ export function CourseDetailPage() {
                       typeCounts={questionTypeCounts}
                       query={questionQuery}
                       onQueryChange={setQuestionQuery}
+                      refreshing={questionsRefreshing}
                       selectedQuestionTypes={questionSelectedTypes}
                       onSelectedQuestionTypesChange={setQuestionSelectedTypes}
+                      onCreatePractice={() =>
+                        goCreateExamOrAssignment("assignment", {
+                          mainKnowledgePointId: tree?.id,
+                          mainKnowledgePointName: course?.name,
+                          defaultBankName: courseQuestionBankName(course?.name),
+                        })
+                      }
                       page={questionPage}
                       onPageChange={setQuestionPage}
                       pageSize={questionPageSize}
@@ -7905,6 +8010,14 @@ export function CourseDetailPage() {
                   rightSlot={
                     course.can_write ? (
                       <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setSmartPaperOpen(true)}
+                        >
+                          <Sparkles size={14} className="mr-1.5" />
+                          智能创建试卷
+                        </Button>
                         <Button
                           size="sm"
                           onClick={() =>

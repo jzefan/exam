@@ -4746,15 +4746,17 @@ async def link_existing_questions_to_course(
     db: AsyncSession,
     question_ids: list[uuid.UUID],
     root_knowledge_point: KnowledgePoint,
-) -> int:
-    """重复导入时，把已存在的题目重新关联到课程根知识点。
+    default_bank: QuestionBank | None = None,
+) -> tuple[int, int]:
+    """重复导入时，把已存在的题目补挂到课程根知识点，并归入课程题库。
 
-    课程题目列表按「课程根知识点及其子树」聚合，所以已在课程子树内的题目无需再关联，
-    其余（例如之前导入到题库但没挂到本课程的）补挂到课程根，使其出现在课程题目列表中。
-    返回新关联的题目数。
+    课程题目列表按课程默认题库聚合，所以重复题若还停在「无题库」状态，
+    仅补知识点仍然不会出现在课程里——这类题顺手落到课程题库。
+    已经归属其它题库的重复题不动（避免把别的题库的题搬走）。
+    返回 (新挂到课程的题数, 归入课程题库的题数)。
     """
     if not question_ids:
-        return 0
+        return 0, 0
     descendants = await _load_root_descendant_knowledge_points(db, root_knowledge_point.id)
     subtree_ids = {root_knowledge_point.id, *(kp.id for kp in descendants)}
     rows = await db.execute(
@@ -4763,12 +4765,16 @@ async def link_existing_questions_to_course(
         .options(selectinload(Question.knowledge_points))
     )
     linked = 0
+    adopted = 0
     for question in rows.scalars().unique().all():
+        if default_bank is not None and question.question_bank_id is None:
+            question.question_bank_id = default_bank.id
+            adopted += 1
         if any(kp.id in subtree_ids for kp in question.knowledge_points):
             continue  # 已在课程下，无需重复关联
         question.knowledge_points = [*question.knowledge_points, root_knowledge_point]
         linked += 1
-    return linked
+    return linked, adopted
 
 
 async def _load_root_descendant_knowledge_points(

@@ -3725,7 +3725,7 @@ export function ExamWizardForm({
                       <CircleAlert className="mt-0.5 size-4 shrink-0 text-primary" />
                       <p className="text-sm leading-6 text-foreground">
                         使用公开链接后，无需提前录入考生名单。外部考生通过链接进入，
-                        <span className="font-semibold">填写姓名和手机号</span>
+                        <span className="font-semibold">填写姓名、学号和手机号</span>
                         即可参加考试。发布后系统自动生成专属链接。
                       </p>
                     </div>
@@ -3764,7 +3764,7 @@ export function ExamWizardForm({
                             </span>
                             <span className="flex items-center gap-2">
                               <CheckCircle2 className="size-3.5 text-primary" />
-                              考生自行填写姓名和手机号完成身份确认
+                              考生自行填写姓名、学号和手机号完成身份确认
                             </span>
                             <span className="flex items-center gap-2">
                               <CheckCircle2 className="size-3.5 text-primary" />

@@ -152,6 +152,8 @@ type ImportResultSummary = {
   existing: number;
   failed: number;
   enriched: number;
+  /** 重复题里被归入本课程题库的条数。 */
+  adopted: number;
   importJobId: string | null;
 };
 
@@ -788,6 +790,7 @@ export function QuestionImportPage() {
 
   const runImportWithRootKnowledgePoint = async (
     rootKnowledgePointId: string | null,
+    options: { skipKnowledgeMatching?: boolean } = {},
   ) => {
     const importDrafts = drafts.map((draft) =>
       isEligibleForFastImport(draft)
@@ -809,7 +812,9 @@ export function QuestionImportPage() {
       .map((draft) => draft.draft_id);
     const bankId = questionBankId === "__none__" ? null : questionBankId;
     // 题目都已关联知识点时，不再排后台 AI 匹配（省一次模型调用，也避免 AI 改写已确认的关联）。
-    const skipKnowledgeMatching = allImportableDraftsHaveKnowledge(importDrafts);
+    const skipKnowledgeMatching =
+      options.skipKnowledgeMatching ||
+      allImportableDraftsHaveKnowledge(importDrafts);
     const baseQuestions = buildImportableQuestions(importDrafts, bankId);
     // 从课程进入导入时，给每道题带上课程根知识点，确保即使选「暂不关联」，
     // 题目也会归到本课程，出现在课程详情的题目列表中。
@@ -902,6 +907,7 @@ export function QuestionImportPage() {
         existing: existingCount,
         failed: failedCount,
         enriched: response.enriched ?? 0,
+        adopted: response.adopted ?? 0,
         importJobId: knowledgeJobId,
       });
       if (rootKnowledgePointId && !skipKnowledgeMatching) {
@@ -935,7 +941,10 @@ export function QuestionImportPage() {
 
   const skipRootKnowledgePointAndImport = async () => {
     setRootKnowledgePointDialogOpen(false);
-    await runImportWithRootKnowledgePoint(null);
+    await runImportWithRootKnowledgePoint(navState.courseKpId ?? null, {
+      // 不做知识点匹配，但仍然要落到课程题库，否则题目会变成「无题库」而不出现在课程里。
+      skipKnowledgeMatching: true,
+    });
   };
 
   const openEnhanceDialog = (mode: EnhanceDraftMode) => {
@@ -1920,6 +1929,11 @@ export function QuestionImportPage() {
                 {importResult.enriched > 0 ? (
                   <p className="mt-1 text-[11px] font-medium text-amber-700">
                     其中 {importResult.enriched} 条补齐了图片
+                  </p>
+                ) : null}
+                {importResult.adopted > 0 ? (
+                  <p className="mt-1 text-[11px] font-medium text-amber-700">
+                    其中 {importResult.adopted} 条已归入本课程题库
                   </p>
                 ) : null}
               </div>

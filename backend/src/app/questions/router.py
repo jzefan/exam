@@ -790,10 +790,12 @@ async def import_bulk_create_job_endpoint(
     await _ensure_can_read_knowledge_points(db, list(knowledge_point_ids), user, is_admin)
 
     # 题目随课程进入时未显式选题库的，落入该主知识（课程）对应的默认题库。
+    # 题库按课程归属人建库，和课程题目列表（按 course.owner_id 找题库）保持一致。
     root_kp = await db.get(KnowledgePoint, root_knowledge_point_id)
-    if root_kp is not None and any(q.question_bank_id is None for q in data.questions):
+    default_bank = None
+    if root_kp is not None:
         default_bank = await get_or_create_root_knowledge_question_bank(
-            db, user_id=user.id, root_knowledge_point=root_kp
+            db, user_id=root_kp.owner_id or user.id, root_knowledge_point=root_kp
         )
         data.questions = [
             q if q.question_bank_id is not None else q.model_copy(update={"question_bank_id": default_bank.id})
@@ -808,8 +810,11 @@ async def import_bulk_create_job_endpoint(
     result = await bulk_create_questions_fast(db, data.questions, user.id)
     # 重复导入：已存在于题库的题目（被去重跳过创建）若还没挂到本课程，补挂到课程根，
     # 使其出现在课程题目列表中；已在课程子树内的则跳过。
+    adopted = 0
     if root_kp is not None and result.existing_question_ids:
-        await link_existing_questions_to_course(db, result.existing_question_ids, root_kp)
+        _, adopted = await link_existing_questions_to_course(
+            db, result.existing_question_ids, root_kp, default_bank
+        )
     job = await create_question_import_job(db, user_id=user.id, total_count=result.created)
     job.created_question_ids = [str(question_id) for question_id in result.created_question_ids]
     await db.flush()
@@ -834,6 +839,7 @@ async def import_bulk_create_job_endpoint(
         existing=result.existing,
         failed=result.failed,
         enriched=result.enriched,
+        adopted=adopted,
         status=job.status,
     )
 

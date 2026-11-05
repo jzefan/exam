@@ -247,7 +247,7 @@ export function ExamCreate() {
               await navigator.clipboard?.writeText(link.data.public_url).catch(() => undefined);
               toast({
                 title: "公开链接已生成",
-                description: "公开链接已复制，外部考生填写姓名和手机号后即可进入。",
+                description: "公开链接已复制，外部考生填写姓名、学号和手机号后即可进入。",
               });
             } catch (error) {
               toast({

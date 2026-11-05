@@ -7,6 +7,12 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { getQuestionDisplayTypeLabel } from "@/components/questions/question-preview-utils";
+import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 
 import type { ExamQuestionFormItem } from "./exam-form-utils";
 import type { PaperPreviewItem, QuestionTypeSummary } from "./paper-view-utils";
@@ -35,6 +41,7 @@ export function PaperScorePanel({
   description = "支持逐题微调，也可以按题型设置总分并均分到每题。",
   saveLabel = "保存分数",
   compact = false,
+  autoApply = false,
   onJumpToQuestion,
 }: {
   items: PaperPreviewItem[];
@@ -45,7 +52,7 @@ export function PaperScorePanel({
   questionTypeSummaries: QuestionTypeSummary[];
   typeScoreDrafts: Partial<Record<string, string>>;
   onTypeDraftChange: (type: string, value: string) => void;
-  onApplyTypeScore: (summary: QuestionTypeSummary) => void;
+  onApplyTypeScore: (summary: QuestionTypeSummary, value?: string) => void;
   totalScore: number;
   dirty: boolean;
   saving: boolean;
@@ -54,6 +61,8 @@ export function PaperScorePanel({
   description?: string;
   saveLabel?: string;
   compact?: boolean;
+  /** 输入题型总分后立即均分，不显示「均分 / 应用分数」按钮。 */
+  autoApply?: boolean;
   onJumpToQuestion?: (questionId: string) => void;
 }) {
   const itemMap = useMemo(
@@ -67,13 +76,6 @@ export function PaperScorePanel({
   const orderedItems = useMemo(
     () => questionItems.slice().sort((a, b) => a.order - b.order),
     [questionItems],
-  );
-  const displayIndexByQuestionId = useMemo(
-    () =>
-      new Map(
-        orderedItems.map((item, index) => [item.question_id, index + 1]),
-      ),
-    [orderedItems],
   );
   const jumpGroups = useMemo(
     () => buildQuestionJumpGroups(items, questionTypeSummaries),
@@ -101,6 +103,8 @@ export function PaperScorePanel({
   }) => {
     const item = scoreItemMap.get(questionId);
     if (!item) return null;
+    const previewItem = itemMap.get(questionId);
+    const indexLabel = String(displayIndex).padStart(2, "0");
     return (
       <div
         key={questionId}
@@ -109,15 +113,51 @@ export function PaperScorePanel({
           active && "border-primary/50 bg-primary/5",
         )}
       >
-        <Button
-          type="button"
-          variant={active ? "default" : "outline"}
-          className="h-10 px-0 text-sm tabular-nums"
-          onClick={() => onJumpToQuestion?.(questionId)}
-          aria-label={`跳转到第 ${displayIndex} 题`}
-        >
-          {String(displayIndex).padStart(2, "0")}
-        </Button>
+        {onJumpToQuestion ? (
+          <Button
+            type="button"
+            variant={active ? "default" : "outline"}
+            className={cn(
+              "h-10 px-0 text-sm tabular-nums",
+              !active && "bg-muted/60",
+            )}
+            onClick={() => onJumpToQuestion(questionId)}
+            aria-label={`跳转到第 ${displayIndex} 题`}
+          >
+            {indexLabel}
+          </Button>
+        ) : (
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant={active ? "default" : "outline"}
+                className={cn(
+                  "h-10 px-0 text-sm tabular-nums",
+                  !active && "bg-muted/60",
+                )}
+                aria-label={`查看第 ${displayIndex} 题`}
+              >
+                {indexLabel}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="start"
+              className="max-h-[60vh] w-[min(92vw,28rem)] overflow-y-auto p-2"
+            >
+              {previewItem ? (
+                <QuestionPreviewCard
+                  question={previewItem.question}
+                  scoreOverride={item.score_override}
+                />
+              ) : (
+                <p className="p-2 text-sm text-muted-foreground">
+                  题目信息不可用
+                </p>
+              )}
+            </PopoverContent>
+          </Popover>
+        )}
         <div className="flex min-w-0 items-center gap-1.5">
           <Input
             aria-label={`第 ${displayIndex} 题分数`}
@@ -211,28 +251,34 @@ export function PaperScorePanel({
                         min={0}
                         step="0.5"
                         value={typeScoreDrafts[typeKey] ?? ""}
-                        onChange={(event) =>
-                          onTypeDraftChange(typeKey, event.target.value)
-                        }
+                        onChange={(event) => {
+                          onTypeDraftChange(typeKey, event.target.value);
+                          if (autoApply) {
+                            onApplyTypeScore(
+                              group.summary,
+                              event.target.value,
+                            );
+                          }
+                        }}
                       />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => onApplyTypeScore(group.summary)}
-                      >
-                        均分
-                      </Button>
+                      {autoApply ? null : (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onApplyTypeScore(group.summary)}
+                        >
+                          均分
+                        </Button>
+                      )}
                     </div>
                   </div>
                   {expanded && (
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      {group.items.map((item) =>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                      {group.items.map((item, groupIndex) =>
                         renderScoreTile({
                           questionId: item.previewItem.question.id,
-                          displayIndex:
-                            displayIndexByQuestionId.get(item.previewItem.question.id) ??
-                            item.displayIndex,
+                          displayIndex: groupIndex + 1,
                         }),
                       )}
                     </div>
@@ -301,9 +347,11 @@ export function PaperScorePanel({
         </div>
       )}
 
-      <Button className="w-full" disabled={!dirty || saving} onClick={onSave}>
-        {saving ? "保存中..." : saveLabel}
-      </Button>
+      {autoApply ? null : (
+        <Button className="w-full" disabled={!dirty || saving} onClick={onSave}>
+          {saving ? "保存中..." : saveLabel}
+        </Button>
+      )}
     </section>
   );
 }

@@ -1071,6 +1071,95 @@ async def test_reimport_existing_question_relinks_to_course_root(
 
 
 @pytest.mark.asyncio
+async def test_reimport_unbanked_duplicate_adopts_into_course_bank(
+    client: AsyncClient, db_session, monkeypatch
+) -> None:
+    """之前导入到「无题库」的题，再从课程重复导入时应归入课程题库，否则课程里看不到它。"""
+    from app.questions.service import root_knowledge_question_bank_name
+
+    org = await _create_org_with_question_roles(db_session)
+    teacher = await _create_teacher(
+        db_session,
+        org.id,
+        username="teacher-adopt",
+        email="teacher-adopt@example.com",
+        full_name="Teacher Adopt",
+    )
+    major = Major(name="CS Adopt", description=None)
+    db_session.add(major)
+    await db_session.flush()
+    direction = Direction(major_id=major.id, name="App", description=None)
+    db_session.add(direction)
+    await db_session.flush()
+    root_knowledge_point = KnowledgePoint(
+        name="Adopt Course",
+        direction_id=direction.id,
+        parent_id=None,
+        owner_id=teacher.id,
+        visibility=VisibilityScope.PRIVATE,
+    )
+    db_session.add(root_knowledge_point)
+    await db_session.commit()
+
+    async def noop_process_question_import_job(**_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "app.questions.router.process_question_import_job",
+        noop_process_question_import_job,
+    )
+
+    client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
+    question = {
+        "type": "short_answer",
+        "title": "Unbanked Question",
+        "content": {"text": "Describe the OSI seven layers"},
+        "options": None,
+        "answer": {"points": ["physical/data link/network"]},
+        "analysis": None,
+        "difficulty": 2,
+        "score": 5,
+        "tag_ids": [],
+        "knowledge_point_ids": [],
+        "question_bank_id": None,
+    }
+
+    # 先按「不指定题库」导入，制造一道无题库的题（这正是问题现场）。
+    seed = await client.post("/api/questions/bulk", json={"questions": [question]})
+    assert seed.status_code == 201, seed.text
+    assert seed.json()["created"] == 1
+
+    # 再从课程重复导入：不新建，但要归入课程题库。
+    payload = {
+        "root_knowledge_point_id": str(root_knowledge_point.id),
+        "questions": [question],
+    }
+    reimport = await client.post("/api/questions/import/bulk-create-job", json=payload)
+    assert reimport.status_code == 201, reimport.text
+    body = reimport.json()
+    assert body["created"] == 0
+    assert body["existing"] == 1
+    assert body["adopted"] == 1
+
+    teacher_id = teacher.id
+    db_session.expire_all()
+    rows = await db_session.execute(
+        select(Question).where(Question.owner_id == teacher_id, Question.deleted_at.is_(None))
+    )
+    question_row = rows.scalars().unique().one()
+    bank = (
+        await db_session.execute(
+            select(QuestionBank).where(
+                QuestionBank.owner_id == teacher_id,
+                QuestionBank.name == root_knowledge_question_bank_name("Adopt Course"),
+            )
+        )
+    ).scalar_one_or_none()
+    assert bank is not None
+    assert question_row.question_bank_id == bank.id
+
+
+@pytest.mark.asyncio
 async def test_bulk_reimport_merges_knowledge_points_into_existing(
     client: AsyncClient, db_session
 ) -> None:

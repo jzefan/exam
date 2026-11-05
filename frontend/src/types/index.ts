@@ -271,6 +271,8 @@ export interface IExamStudent {
   full_name: string | null;
   username: string | null;
   phone?: string | null;
+  /** 学号：内部学生来自导入信息，公开链接考生来自进入时填写的信息。 */
+  student_no?: string | null;
   user_type?: string | null;
   started_at: string | null;
   submitted_at: string | null;

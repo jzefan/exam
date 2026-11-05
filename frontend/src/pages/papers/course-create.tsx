@@ -51,6 +51,11 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TooltipButton } from "@/components/ui/tooltip-button";
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
+import {
+  getQuestionDisplayType,
+  getQuestionDisplayTypeLabel,
+  questionDisplayTypeFullLabel,
+} from "@/components/questions/question-preview-utils";
 import { getQuestionTitle } from "@/components/questions/question-preview-utils";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -72,12 +77,13 @@ import type {
   IQuestion,
   IQuestionBank,
   ITag,
+  QuestionDisplayType,
   QuestionType,
 } from "@/types";
 
 type ManualQuestionType = QuestionType | "single_choice" | "multi_choice";
 type BasketView = "order" | "type";
-type SelectValueType = QuestionType | "all";
+type SelectValueType = QuestionDisplayType | "all";
 
 type CoursePaperDraft = {
   selectedIds: string[];
@@ -106,15 +112,6 @@ type FlatKnowledgeNode = {
 };
 
 const ALL_TYPES = "all";
-const QUESTION_TYPE_ORDER: Record<QuestionType, number> = {
-  choice: 0,
-  true_false: 1,
-  fill_in: 2,
-  short_answer: 3,
-  essay: 4,
-  code: 5,
-};
-
 const MANUAL_QUESTION_TYPES: Array<{ value: ManualQuestionType; label: string }> = [
   { value: "single_choice", label: "单选题" },
   { value: "multi_choice", label: "多选题" },
@@ -138,6 +135,16 @@ const QUESTION_TYPE_LABELS: Record<string, string> = {
 
 const QUESTION_TYPES: QuestionType[] = [
   "choice",
+  "true_false",
+  "fill_in",
+  "short_answer",
+  "essay",
+  "code",
+];
+
+const QUESTION_DISPLAY_TYPES: QuestionDisplayType[] = [
+  "single_choice",
+  "multi_choice",
   "true_false",
   "fill_in",
   "short_answer",
@@ -622,14 +629,17 @@ export function CoursePaperCreatePage() {
   );
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const selectedGroups = useMemo(() => {
-    const grouped = new Map<QuestionType, IQuestion[]>();
+    const grouped = new Map<QuestionDisplayType, IQuestion[]>();
     for (const question of selectedQuestionItems) {
-      const items = grouped.get(question.type) ?? [];
+      const displayType = getQuestionDisplayType(question);
+      if (!displayType) continue;
+      const items = grouped.get(displayType) ?? [];
       items.push(question);
-      grouped.set(question.type, items);
+      grouped.set(displayType, items);
     }
     return Array.from(grouped.entries()).sort(
-      ([a], [b]) => QUESTION_TYPE_ORDER[a] - QUESTION_TYPE_ORDER[b],
+      ([a], [b]) =>
+        QUESTION_DISPLAY_TYPES.indexOf(a) - QUESTION_DISPLAY_TYPES.indexOf(b),
     );
   }, [selectedQuestionItems]);
   const visibleQuestions = useMemo(() => {
@@ -640,7 +650,9 @@ export function CoursePaperCreatePage() {
         !activeKnowledgePointId ||
         activeKnowledgePointId === rootKnowledgePointId ||
         question.knowledge_points.some((kp) => activeDescendantIds.has(kp.id));
-      const typeMatch = typeFilter === ALL_TYPES || question.type === typeFilter;
+      const typeMatch =
+        typeFilter === ALL_TYPES ||
+        getQuestionDisplayType(question) === typeFilter;
       const searchMatch = !query || getQuestionSearchText(question).includes(query);
       return kpMatch && typeMatch && searchMatch;
     });
@@ -1159,7 +1171,7 @@ export function CoursePaperCreatePage() {
             </span>
             {showType ? (
               <Badge variant="outline" className="shrink-0">
-                {QUESTION_TYPE_LABELS[question.type] ?? question.type}
+                {getQuestionDisplayTypeLabel(question)}
               </Badge>
             ) : null}
           </button>
@@ -1279,9 +1291,9 @@ export function CoursePaperCreatePage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value={ALL_TYPES}>全部题型</SelectItem>
-                    {QUESTION_TYPES.map((type) => (
+                    {QUESTION_DISPLAY_TYPES.map((type) => (
                       <SelectItem key={type} value={type}>
-                        {QUESTION_TYPE_LABELS[type]}
+                        {questionDisplayTypeFullLabel[type]}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -1396,7 +1408,7 @@ export function CoursePaperCreatePage() {
                           <section key={type} className="flex flex-col gap-2">
                             <div className="flex items-center justify-between gap-2">
                               <p className="text-sm font-semibold text-foreground">
-                                {QUESTION_TYPE_LABELS[type] ?? type}
+                                {questionDisplayTypeFullLabel[type]}
                               </p>
                               <Badge variant="outline">{items.length} 题</Badge>
                             </div>

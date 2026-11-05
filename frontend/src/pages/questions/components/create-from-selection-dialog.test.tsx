@@ -140,4 +140,31 @@ describe("CreateFromSelectionDialog", () => {
     );
     expect(onPublished).toHaveBeenCalledWith("exam-123", "exam");
   });
+  it("未选学生时可通过公开链接发布", async () => {
+    const { user } = setup({ defaultCategory: "practice" });
+
+    const submitBtn = screen.getByRole("button", { name: /发布练习/ });
+    expect(submitBtn).toBeDisabled();
+
+    await user.click(screen.getByRole("checkbox", { name: "生成公开链接" }));
+    expect(screen.getByRole("button", { name: /发布练习/ })).toBeEnabled();
+  });
+
+  it("开启公开链接后创建练习并生成链接", async () => {
+    mockPost
+      .mockResolvedValueOnce({ data: { id: "exam-1" } })
+      .mockResolvedValueOnce({ data: { public_url: "https://example.com/exam-public?token=abc" } });
+    const { user, onPublished } = setup({ defaultCategory: "practice" });
+
+    await user.click(screen.getByRole("checkbox", { name: "生成公开链接" }));
+    await user.click(screen.getByRole("button", { name: /发布练习/ }));
+
+    expect(mockPost).toHaveBeenCalledWith(
+      "/api/exams",
+      expect.objectContaining({ category: "practice", student_ids: [] }),
+    );
+    expect(mockPost).toHaveBeenCalledWith("/api/exams/exam-1/public-link");
+    expect(onPublished).toHaveBeenCalledWith("exam-1", "practice");
+  });
+
 });

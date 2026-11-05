@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { IQuestion, QuestionType } from "@/types";
 
+import { getQuestionDisplayType } from "@/components/questions/question-preview-utils";
+
 import {
   ALL_DIFFICULTIES,
   buildSmartPracticeConversationPrompt,
@@ -105,6 +107,242 @@ describe("smart practice selection", () => {
         {},
       ),
     ).toEqual({ choice: 5, short_answer: 5 });
+  });
+
+  it("按题型配比时单选和多选分别取题", () => {
+    const source = [
+      question("s1", "choice", 3),
+      question("s2", "choice", 3),
+      { ...question("m1", "choice", 3), content: { text: "m1 数据结构多选题", multi: true } },
+      { ...question("m2", "choice", 3), content: { text: "m2 数据结构多选题", multi: true } },
+      question("t1", "true_false", 3),
+      question("f1", "fill_in", 3),
+    ];
+    const intent = parseSmartPracticePrompt(
+      "请从题库中选取单选题2道、多选题1道、判断题1道，综合难度。",
+      knowledgeOptions,
+      { count: 10, difficulty: 1, knowledgePointId: null },
+    );
+
+    expect(intent.count).toBe(4);
+    expect(intent.difficulty).toBe(ALL_DIFFICULTIES);
+    expect(intent.typeDistribution).toEqual({
+      single_choice: 2,
+      multi_choice: 1,
+      true_false: 1,
+    });
+
+    const picked = selectSmartPracticeQuestions(source, intent);
+    const counts = picked.reduce<Record<string, number>>((result, item) => {
+      const key = getQuestionDisplayType(item) ?? item.type;
+      result[key] = (result[key] ?? 0) + 1;
+      return result;
+    }, {});
+    expect(counts).toEqual({ single_choice: 2, multi_choice: 1, true_false: 1 });
+  });
+
+  describe("按比例出题", () => {
+    const chapterSource = () => [
+      ...Array.from({ length: 4 }, (_, index) =>
+        question(`a-c-${index}`, "choice", 3, "kp-a"),
+      ),
+      ...Array.from({ length: 2 }, (_, index) =>
+        question(`a-t-${index}`, "true_false", 3, "kp-a"),
+      ),
+      ...Array.from({ length: 2 }, (_, index) =>
+        question(`b-c-${index}`, "choice", 3, "kp-b"),
+      ),
+      ...Array.from({ length: 2 }, (_, index) =>
+        question(`b-t-${index}`, "true_false", 3, "kp-b"),
+      ),
+    ];
+    const chapterOptions = [
+      { id: "kp-a", name: "章节A", path: "课程 / 章节A" },
+      { id: "kp-b", name: "章节B", path: "课程 / 章节B" },
+    ];
+
+    it("章节题量 + 题型比例", () => {
+      const intent = parseSmartPracticePrompt(
+        "请从“数据结构”题库中选取10道题，按章节分配：章节A6题、章节B4题；题型比例：单选题60%、判断题40%。",
+        chapterOptions,
+        { count: 10, difficulty: ALL_DIFFICULTIES, knowledgePointId: null },
+      );
+
+      expect(intent.count).toBe(10);
+      expect(intent.chapters).toEqual([
+        { knowledgePointId: "kp-a", count: 6 },
+        { knowledgePointId: "kp-b", count: 4 },
+      ]);
+      expect(intent.typeWeights).toEqual([
+        { type: "single_choice", weight: 60 },
+        { type: "true_false", weight: 40 },
+      ]);
+
+      const picked = selectSmartPracticeQuestions(chapterSource(), intent);
+      expect(picked).toHaveLength(10);
+      expect(
+        picked.filter((item) => item.knowledge_points[0]?.id === "kp-a"),
+      ).toHaveLength(6);
+      expect(
+        picked.reduce<Record<string, number>>((counts, item) => {
+          counts[item.type] = (counts[item.type] ?? 0) + 1;
+          return counts;
+        }, {}),
+      ).toEqual({ choice: 6, true_false: 4 });
+    });
+
+    it("题型题量 + 章节比例", () => {
+      const intent = parseSmartPracticePrompt(
+        "请从“数据结构”题库中选取10道题，按题型数量：单选题6道、判断题4道；章节比例：章节A60%、章节B40%。",
+        chapterOptions,
+        { count: 10, difficulty: ALL_DIFFICULTIES, knowledgePointId: null },
+      );
+
+      expect(intent.typeDistribution).toEqual({
+        single_choice: 6,
+        true_false: 4,
+      });
+      expect(intent.chapters).toEqual([
+        { knowledgePointId: "kp-a", weight: 60 },
+        { knowledgePointId: "kp-b", weight: 40 },
+      ]);
+
+      const picked = selectSmartPracticeQuestions(chapterSource(), intent);
+      expect(picked).toHaveLength(10);
+      expect(
+        picked.filter((item) => item.knowledge_points[0]?.id === "kp-a"),
+      ).toHaveLength(6);
+      expect(
+        picked.reduce<Record<string, number>>((counts, item) => {
+          counts[item.type] = (counts[item.type] ?? 0) + 1;
+          return counts;
+        }, {}),
+      ).toEqual({ choice: 6, true_false: 4 });
+    });
+  });
+
+  it("按章节分配：章节题量 + 章节内各题型题量", () => {
+    const source = [
+      ...Array.from({ length: 5 }, (_, index) =>
+        question(`a-c-${index}`, "choice", 3, "kp-a"),
+      ),
+      ...Array.from({ length: 3 }, (_, index) => ({
+        ...question(`a-m-${index}`, "choice", 3, "kp-a"),
+        content: { text: `a-m-${index} 多选题`, multi: true },
+      })),
+      ...Array.from({ length: 2 }, (_, index) =>
+        question(`a-t-${index}`, "true_false", 3, "kp-a"),
+      ),
+      question("a-s-0", "short_answer", 3, "kp-a"),
+      ...Array.from({ length: 2 }, (_, index) =>
+        question(`b-c-${index}`, "choice", 3, "kp-b"),
+      ),
+      question("b-t-0", "true_false", 3, "kp-b"),
+    ];
+
+    const intent = parseSmartPracticePrompt(
+      "请从“数据结构”题库中按章节分配：章节A10道（单选题5道、多选题2道、判断题2道、简答题1道）；章节B3道（单选题2道、判断题1道）。",
+      [
+        { id: "kp-a", name: "章节A", path: "课程 / 章节A" },
+        { id: "kp-b", name: "章节B", path: "课程 / 章节B" },
+      ],
+      { count: 10, difficulty: ALL_DIFFICULTIES, knowledgePointId: null },
+    );
+
+    expect(intent.count).toBe(13);
+    expect(intent.chapters).toHaveLength(2);
+    expect(intent.chapters?.[0].typeCounts).toEqual({
+      single_choice: 5,
+      multi_choice: 2,
+      true_false: 2,
+      short_answer: 1,
+    });
+
+    const picked = selectSmartPracticeQuestions(source, intent);
+    expect(picked).toHaveLength(13);
+    expect(
+      picked.reduce<Record<string, number>>((counts, item) => {
+        const key = getQuestionDisplayType(item) ?? item.type;
+        counts[key] = (counts[key] ?? 0) + 1;
+        return counts;
+      }, {}),
+    ).toEqual({
+      single_choice: 7,
+      multi_choice: 2,
+      true_false: 3,
+      short_answer: 1,
+    });
+  });
+
+  it("按章节分配里的「整个课程」", () => {
+    const intent = parseSmartPracticePrompt(
+      "请从“数据结构”题库中按章节分配：整个课程10道（单选题6道、判断题4道）。",
+      [
+        { id: "kp-a", name: "章节A", path: "课程 / 章节A" },
+        { id: "kp-b", name: "章节B", path: "课程 / 章节B" },
+      ],
+      { count: 10, difficulty: ALL_DIFFICULTIES, knowledgePointId: null },
+    );
+
+    expect(intent.count).toBe(10);
+    expect(intent.chapters).toEqual([
+      {
+        knowledgePointId: "__whole_course__",
+        count: 10,
+        typeCounts: { single_choice: 6, true_false: 4 },
+      },
+    ]);
+  });
+
+  it("按题型分配：题型题量 + 题型下各章节题量", () => {
+    const source = [
+      ...Array.from({ length: 3 }, (_, index) =>
+        question(`a-c-${index}`, "choice", 3, "kp-a"),
+      ),
+      ...Array.from({ length: 3 }, (_, index) =>
+        question(`a-t-${index}`, "true_false", 3, "kp-a"),
+      ),
+      ...Array.from({ length: 5 }, (_, index) =>
+        question(`b-c-${index}`, "choice", 3, "kp-b"),
+      ),
+      ...Array.from({ length: 2 }, (_, index) =>
+        question(`c-c-${index}`, "choice", 3, "kp-c"),
+      ),
+    ];
+
+    const intent = parseSmartPracticePrompt(
+      "请从“数据结构”题库中按题型分配：单选题10道（章节A3道、章节B5道、章节C2道）；判断题3道（章节A3道）。",
+      [
+        { id: "kp-a", name: "章节A", path: "课程 / 章节A" },
+        { id: "kp-b", name: "章节B", path: "课程 / 章节B" },
+        { id: "kp-c", name: "章节C", path: "课程 / 章节C" },
+      ],
+      { count: 10, difficulty: ALL_DIFFICULTIES, knowledgePointId: null },
+    );
+
+    expect(intent.count).toBe(13);
+    expect(intent.typeGroups).toHaveLength(2);
+    expect(intent.typeGroups?.[0]).toEqual({
+      type: "single_choice",
+      chapterCounts: [
+        { knowledgePointId: "kp-a", count: 3 },
+        { knowledgePointId: "kp-b", count: 5 },
+        { knowledgePointId: "kp-c", count: 2 },
+      ],
+    });
+
+    const picked = selectSmartPracticeQuestions(source, intent);
+    expect(picked).toHaveLength(13);
+    expect(
+      picked.filter((item) => item.type === "true_false"),
+    ).toHaveLength(3);
+    expect(
+      picked.reduce<Record<string, number>>((counts, item) => {
+        counts[item.knowledge_points[0]?.id ?? ""] =
+          (counts[item.knowledge_points[0]?.id ?? ""] ?? 0) + 1;
+        return counts;
+      }, {}),
+    ).toEqual({ "kp-a": 6, "kp-b": 5, "kp-c": 2 });
   });
 
   it("严格按知识点和难度筛选并尽量均衡题型", () => {

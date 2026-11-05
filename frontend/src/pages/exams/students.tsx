@@ -125,7 +125,10 @@ export function ExamStudentsPage() {
     const keyword = searchText.trim().toLowerCase();
     if (!keyword) return students;
     return students.filter((student) =>
-      [student.full_name ?? "", student.username ?? "", student.phone ?? ""].join(" ").toLowerCase().includes(keyword),
+      [student.full_name ?? "", student.student_no ?? "", student.username ?? "", student.phone ?? ""]
+        .join(" ")
+        .toLowerCase()
+        .includes(keyword),
     );
   }, [searchText, students]);
 
@@ -276,7 +279,9 @@ export function ExamStudentsPage() {
                           </div>
                           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                             <Users className="h-3.5 w-3.5" />
-                            <span>{student.username || student.phone || "无学号"}</span>
+                            <span>
+                              {student.student_no || student.username || student.phone || "无学号"}
+                            </span>
                           </div>
                         </div>
 

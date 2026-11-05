@@ -65,7 +65,12 @@ async def test_public_link_redeem_creates_external_guest_and_assigns_exam(
 
     redeem_response = await client.post(
         "/api/exam-public/redeem",
-        json={"token": raw_token, "full_name": "外部考生", "phone": "13900001111"},
+        json={
+            "token": raw_token,
+            "full_name": "外部考生",
+            "phone": "13900001111",
+            "student_no": "20240001",
+        },
     )
 
     assert redeem_response.status_code == 200
@@ -80,6 +85,7 @@ async def test_public_link_redeem_creates_external_guest_and_assigns_exam(
         )
     ).scalar_one()
     assert guest.full_name == "外部考生"
+    assert guest.student_id == "20240001"
 
     exam_student = (
         await db_session.execute(
@@ -99,4 +105,82 @@ async def test_public_link_redeem_creates_external_guest_and_assigns_exam(
     )
     assert students_response.status_code == 200
     assert students_response.json()[0]["phone"] == "13900001111"
+    assert students_response.json()[0]["student_no"] == "20240001"
     assert students_response.json()[0]["user_type"] == "external_guest"
+
+
+@pytest.mark.asyncio
+async def test_public_link_redeem_requires_student_no(
+    client,
+    db_session: AsyncSession,
+) -> None:
+    _teacher, token, exam = await _setup_teacher_exam(db_session)
+
+    create_response = await client.post(
+        f"/api/exams/{exam.id}/public-link",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    raw_token = parse_qs(urlparse(create_response.json()["public_url"]).query)["token"][0]
+
+    missing_student_no = await client.post(
+        "/api/exam-public/redeem",
+        json={"token": raw_token, "full_name": "外部考生", "phone": "13900002222"},
+    )
+    assert missing_student_no.status_code == 422
+
+    blank_student_no = await client.post(
+        "/api/exam-public/redeem",
+        json={
+            "token": raw_token,
+            "full_name": "外部考生",
+            "phone": "13900002222",
+            "student_no": "   ",
+        },
+    )
+    assert blank_student_no.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_public_link_redeem_updates_guest_identity_on_reentry(
+    client,
+    db_session: AsyncSession,
+) -> None:
+    _teacher, token, exam = await _setup_teacher_exam(db_session)
+
+    create_response = await client.post(
+        f"/api/exams/{exam.id}/public-link",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    raw_token = parse_qs(urlparse(create_response.json()["public_url"]).query)["token"][0]
+
+    first = await client.post(
+        "/api/exam-public/redeem",
+        json={
+            "token": raw_token,
+            "full_name": "外部考生",
+            "phone": "13900003333",
+            "student_no": "20240001",
+        },
+    )
+    assert first.status_code == 200
+
+    second = await client.post(
+        "/api/exam-public/redeem",
+        json={
+            "token": raw_token,
+            "full_name": "外部考生改名",
+            "phone": "13900003333",
+            "student_no": "20240099",
+        },
+    )
+    assert second.status_code == 200
+    assert second.json()["candidate_name"] == "外部考生改名"
+
+    guests = (
+        await db_session.execute(
+            select(User).where(User.phone == "13900003333", User.user_type == "external_guest")
+        )
+    ).scalars().all()
+    assert len(guests) == 1
+    assert guests[0].full_name == "外部考生改名"
+    assert guests[0].student_id == "20240099"

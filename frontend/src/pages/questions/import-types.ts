@@ -79,6 +79,8 @@ export interface QuestionImportBulkCreateJobResponse {
   failed: number;
   /** 重复题里「旧题缺图、这次补上了」的条数（已包含在 existing 内）。 */
   enriched?: number;
+  /** 重复题里原本不属于任何题库、这次归入课程题库的条数（已包含在 existing 内）。 */
+  adopted?: number;
   status: QuestionImportJobStatus;
 }
 
@@ -87,6 +89,8 @@ export interface QuestionBulkCreateResponse {
   existing: number;
   failed: number;
   enriched?: number;
+  /** 仅课程导入（job 接口）会返回：重复题归入课程题库的条数。 */
+  adopted?: number;
 }
 
 export interface QuestionImportJobResponse {

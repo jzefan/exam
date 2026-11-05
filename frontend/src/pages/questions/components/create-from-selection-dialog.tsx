@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { FileCheck, FilePlus2, GraduationCap, Loader2, NotebookPen } from "lucide-react";
+import { FileCheck, FilePlus2, GraduationCap, Link2, Loader2, NotebookPen } from "lucide-react";
 import { isAxiosError } from "axios";
 
 import { apiClient } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -120,6 +121,8 @@ export function CreateFromSelectionDialog({
   const [studentIds, setStudentIds] = useState<string[]>([]);
   // 「按学期选择」里点中的学期；没点过就沿用课程默认学期。
   const [semesterOverride, setSemesterOverride] = useState<string | null>(null);
+  // 开启后不要求学生名单，改为生成公开链接给外部考生自助进入。
+  const [publicLinkEnabled, setPublicLinkEnabled] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   // 每次打开时以 props 为准刷新默认值，避免上次残留。
@@ -129,6 +132,7 @@ export function CreateFromSelectionDialog({
       setTitle(defaultTitle);
       setDescription("");
       setStudentIds([]);
+      setPublicLinkEnabled(false);
     }
   }, [open, defaultCategory, defaultTitle]);
 
@@ -136,7 +140,10 @@ export function CreateFromSelectionDialog({
   const totalScore = useMemo(() => sumScore(selected), [selected]);
   const trimmedTitle = title.trim();
   const canSubmit =
-    selected.length > 0 && trimmedTitle.length > 0 && studentIds.length > 0 && !submitting;
+    selected.length > 0 &&
+    trimmedTitle.length > 0 &&
+    (studentIds.length > 0 || publicLinkEnabled) &&
+    !submitting;
 
   const isExam = category === "exam";
   const submitLabel = isExam ? "创建考试" : "发布练习";
@@ -176,9 +183,28 @@ export function CreateFromSelectionDialog({
 
       const response = await apiClient.post<{ id: string }>("/api/exams", payload);
 
+      let publicUrl: string | null = null;
+      if (publicLinkEnabled) {
+        try {
+          const link = await apiClient.post<{ public_url: string }>(
+            `/api/exams/${response.data.id}/public-link`,
+          );
+          publicUrl = link.data.public_url;
+          await navigator.clipboard?.writeText(publicUrl).catch(() => undefined);
+        } catch (error) {
+          toast({
+            title: "公开链接生成失败",
+            description: extractErrorMessage(error, "已创建，请稍后在详情中重新生成公开链接。"),
+            variant: "destructive",
+          });
+        }
+      }
+
       toast({
         title: isExam ? "考试已创建" : "练习已发布",
-        description: `${trimmedTitle}（${studentIds.length} 名学生）`,
+        description: publicUrl
+          ? "公开链接已复制，外部考生填写姓名、学号和手机号后即可进入。"
+          : `${trimmedTitle}（${studentIds.length} 名学生）`,
       });
       onOpenChange(false);
       onPublished?.(response.data.id, category);
@@ -271,13 +297,35 @@ export function CreateFromSelectionDialog({
             onChange={setStudentIds}
             summaryLabel={isExam ? "名考生" : "名学生"}
             emptySummaryText={
-              isExam ? "请选择至少一名考生即可创建考试。" : "请选择至少一名学生即可发布练习。"
+              publicLinkEnabled
+                ? "未选择学生也可发布，外部考生通过公开链接进入。"
+                : isExam
+                  ? "请选择至少一名考生即可创建考试。"
+                  : "请选择至少一名学生即可发布练习。"
             }
             defaultSupplementCollapsed
             defaultClassIds={defaultClassIds}
             semesterOptions={semesterOptions}
             onSemesterChange={setSemesterOverride}
           />
+
+          <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border/70 bg-background px-4 py-3">
+            <Checkbox
+              checked={publicLinkEnabled}
+              onCheckedChange={(value) => setPublicLinkEnabled(value === true)}
+              aria-label="生成公开链接"
+              className="mt-0.5"
+            />
+            <span className="min-w-0">
+              <span className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+                <Link2 size={14} className="text-muted-foreground" />
+                生成公开链接
+              </span>
+              <span className="mt-0.5 block text-xs text-muted-foreground">
+                外部考生打开链接后填写姓名、学号和手机号即可进入{actionNoun}，无需学生账号。
+              </span>
+            </span>
+          </label>
 
           {selected.length === 0 ? (
             <p className="flex items-center gap-1.5 text-xs text-destructive">

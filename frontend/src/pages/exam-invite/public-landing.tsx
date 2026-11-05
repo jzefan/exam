@@ -26,6 +26,7 @@ export function CandidatePublicLanding() {
   const navigate = useNavigate();
   const token = useMemo(() => params.get("token")?.trim() ?? "", [params]);
   const [fullName, setFullName] = useState("");
+  const [studentNo, setStudentNo] = useState("");
   const [phone, setPhone] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(token ? null : "缺少公开链接令牌");
@@ -40,6 +41,10 @@ export function CandidatePublicLanding() {
       setError("请填写姓名");
       return;
     }
+    if (!studentNo.trim()) {
+      setError("请填写学号");
+      return;
+    }
     if (!phone.trim()) {
       setError("请填写手机号");
       return;
@@ -51,6 +56,7 @@ export function CandidatePublicLanding() {
       const response = await apiClient.post<RedeemResponse>("/api/exam-public/redeem", {
         token,
         full_name: fullName.trim(),
+        student_no: studentNo.trim(),
         phone: phone.trim(),
       });
       setGuestSession(response.data.access_token, response.data.exam_id);
@@ -68,7 +74,7 @@ export function CandidatePublicLanding() {
         <p className="text-sm font-medium text-primary">公开考试/练习链接</p>
         <h1 className="mt-3 text-3xl font-bold tracking-tight text-foreground">填写信息后进入</h1>
         <p className="mt-3 text-sm leading-6 text-muted-foreground">
-          请填写真实姓名和手机号，提交后即可进入对应考试或练习。
+          请填写真实姓名、学号和手机号，提交后即可进入对应考试或练习。
         </p>
 
         <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
@@ -79,6 +85,16 @@ export function CandidatePublicLanding() {
               value={fullName}
               onChange={(event) => setFullName(event.target.value)}
               placeholder="请输入姓名"
+              disabled={!token || submitting}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="public-candidate-student-no">学号</Label>
+            <Input
+              id="public-candidate-student-no"
+              value={studentNo}
+              onChange={(event) => setStudentNo(event.target.value)}
+              placeholder="请输入学号"
               disabled={!token || submitting}
             />
           </div>

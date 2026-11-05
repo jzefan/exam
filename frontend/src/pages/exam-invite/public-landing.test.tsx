@@ -33,6 +33,7 @@ describe("CandidatePublicLanding", () => {
     );
 
     await user.type(screen.getByLabelText("姓名"), "张三");
+    await user.type(screen.getByLabelText("学号"), "20240001");
     await user.type(screen.getByLabelText("手机号"), "13800138000");
     await user.click(screen.getByRole("button", { name: "进入考试/练习" }));
 
@@ -40,10 +41,33 @@ describe("CandidatePublicLanding", () => {
       expect(apiClient.post).toHaveBeenCalledWith("/api/exam-public/redeem", {
         token: "public-token",
         full_name: "张三",
+        student_no: "20240001",
         phone: "13800138000",
       });
     });
     expect(await screen.findByText("进入答题页")).toBeInTheDocument();
+  });
+
+  it("requires the student number before entering", async () => {
+    const user = userEvent.setup();
+    const { apiClient } = await import("@/lib/api");
+    vi.mocked(apiClient.post).mockClear();
+
+    render(
+      <MemoryRouter initialEntries={["/exam-public?token=public-token"]}>
+        <Routes>
+          <Route path="/exam-public" element={<CandidatePublicLanding />} />
+          <Route path="/exam-invite/take/:examId" element={<div>进入答题页</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.type(screen.getByLabelText("姓名"), "张三");
+    await user.type(screen.getByLabelText("手机号"), "13800138000");
+    await user.click(screen.getByRole("button", { name: "进入考试/练习" }));
+
+    expect(await screen.findByText("请填写学号")).toBeInTheDocument();
+    expect(apiClient.post).not.toHaveBeenCalled();
   });
 
   it("shows an error when token is missing", () => {

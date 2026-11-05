@@ -50,3 +50,4 @@ class PublicLinkRedeemRequest(BaseModel):
     token: str = Field(min_length=20)
     full_name: str = Field(min_length=1, max_length=100)
     phone: str = Field(min_length=5, max_length=20)
+    student_no: str = Field(min_length=1, max_length=50)

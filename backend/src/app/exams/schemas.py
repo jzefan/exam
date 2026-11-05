@@ -67,6 +67,8 @@ class ExamStudentResponse(BaseModel):
     full_name: str | None = None
     username: str | None = None
     phone: str | None = None
+    # 学号：内部学生来自导入的学号，公开链接考生来自填写的信息。
+    student_no: str | None = None
     user_type: str | None = None
     started_at: datetime | None = None
     submitted_at: datetime | None = None

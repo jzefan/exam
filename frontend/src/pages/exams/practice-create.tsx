@@ -2377,7 +2377,7 @@ export function PracticeCreate() {
           .catch(() => undefined);
         toast({
           title: "公开链接已生成",
-          description: "公开链接已复制，外部考生填写姓名和手机号后即可进入。",
+          description: "公开链接已复制，外部考生填写姓名、学号和手机号后即可进入。",
         });
       } catch (error) {
         toast({
@@ -3683,7 +3683,7 @@ export function PracticeCreate() {
                       公开链接
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      开启后，发布成功会生成一个公开链接。外部考生填写姓名和手机号后进入。
+                      开启后，发布成功会生成一个公开链接。外部考生填写姓名、学号和手机号后进入。
                     </p>
                   </div>
                   <Switch

@@ -412,6 +412,8 @@ class QuestionImportBulkCreateJobResponse(BaseModel):
     existing: int = 0
     failed: int = 0
     enriched: int = 0
+    # 重复题里原本不属于任何题库、这次顺手归入课程题库的条数（已包含在 existing 内）。
+    adopted: int = 0
     status: QuestionImportJobStatus
 
 

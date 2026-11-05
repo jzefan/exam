@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useList } from "@refinedev/core";
 import { useNavigate } from "react-router-dom";
-import { ChevronRight, Copy, Download, Eye, Loader2, Maximize2, Network, Pencil, Plus, RefreshCcw, Search, Sparkles, Trash2, X } from "lucide-react";
+import { Calculator, Copy, Download, Eye, ListPlus, Loader2, Network, Pencil, Plus, RefreshCcw, Search, ShoppingBasket, Sparkles, Trash2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { TooltipButton } from "@/components/ui/tooltip-button";
@@ -24,6 +24,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { exportPaper, type ExportPaperFormat } from "@/lib/exam-export";
 import type {
@@ -35,11 +41,17 @@ import type {
   IQuestionBank,
   ITag,
   PaperSourceType,
+  QuestionDisplayType,
   QuestionType,
 } from "@/types";
-import { QuestionSelector } from "@/pages/exams/components/QuestionSelector";
-import type { StudentSemesterOption } from "@/pages/exams/components/ClassStudentSelector";
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
+import {
+  getQuestionDisplayType,
+  getQuestionDisplayTypeLabel,
+  questionDisplayTypeFullLabel,
+} from "@/components/questions/question-preview-utils";
+import { cn } from "@/lib/utils";
+import type { StudentSemesterOption } from "@/pages/exams/components/ClassStudentSelector";
 import {
   QuestionEditFormContent,
   type QuestionEditSubmitValues,
@@ -52,6 +64,19 @@ import {
   type PaperDifficultyStrategy,
 } from "./api";
 import { PaperAIGenerateDialog } from "./ai-generate-dialog";
+import { PaperExpandDialog } from "./paper-expand-dialog";
+import { PaperScorePanel, type ScoreViewMode } from "@/pages/exams/components/PaperScorePanel";
+import {
+  buildPaperPreviewItems,
+  buildQuestionTypeSummaries,
+  type QuestionTypeSummary,
+} from "@/pages/exams/components/paper-view-utils";
+import type { ExamQuestionFormItem } from "@/pages/exams/components/exam-form-utils";
+import {
+  applyPaperTypeScoreAllocation,
+  buildPaperScoreItems,
+  totalPaperScore,
+} from "./paper-detail-score";
 
 const PAPER_SOURCE_LABELS: Record<PaperSourceType, string> = {
   manual: "手工",
@@ -90,19 +115,17 @@ const MANUAL_QUESTION_TYPES: Array<{ value: ManualQuestionType; label: string }>
   { value: "code", label: "编程题" },
 ];
 
-const QUESTION_TYPE_LABELS: Record<string, string> = {
-  choice: "选择题",
-  ...Object.fromEntries(MANUAL_QUESTION_TYPES.map((item) => [item.value, item.label])),
-};
+const BANK_PAGE_SIZE = 20;
 
-const QUESTION_TYPE_ORDER: Record<QuestionType, number> = {
-  choice: 0,
-  true_false: 1,
-  fill_in: 2,
-  short_answer: 3,
-  essay: 4,
-  code: 5,
-};
+const QUESTION_DISPLAY_TYPE_ORDER: QuestionDisplayType[] = [
+  "single_choice",
+  "multi_choice",
+  "true_false",
+  "fill_in",
+  "short_answer",
+  "essay",
+  "code",
+];
 
 function toBackendQuestionType(type: ManualQuestionType): QuestionType {
   return type === "single_choice" || type === "multi_choice" ? "choice" : type;
@@ -142,6 +165,9 @@ export function PaperListBody({
   const [sourceFilter, setSourceFilter] = useState<"all" | PaperSourceType>("all");
   const [busyPaperId, setBusyPaperId] = useState<string | null>(null);
   const [aiDialogPaper, setAiDialogPaper] = useState<IPaper | null>(null);
+  const [expandDialogPaper, setExpandDialogPaper] = useState<IPaper | null>(
+    null,
+  );
   const [editingPaper, setEditingPaper] = useState<IPaper | null>(null);
 
   const { query } = useList<IPaper>({
@@ -328,9 +354,18 @@ export function PaperListBody({
                             },
                           })
                         }
-                        tooltip="详情"
+                        tooltip="查看"
                       >
                         <Eye className="h-4 w-4" />
+                      </TooltipButton>
+                      <TooltipButton
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setEditingPaper(paper)}
+                        disabled={isBusy}
+                        tooltip="修改试卷"
+                      >
+                        <Pencil className="h-4 w-4" />
                       </TooltipButton>
                       {rootKnowledgePointId ? (
                         <TooltipButton
@@ -354,36 +389,97 @@ export function PaperListBody({
                           <Network className="h-4 w-4" />
                         </TooltipButton>
                       ) : null}
-                      <TooltipButton
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleCopy(paper)}
-                        disabled={isBusy}
-                        tooltip="复制"
-                      >
-                        <Copy className="h-4 w-4" />
-                      </TooltipButton>
-                      <TooltipButton
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setAiDialogPaper(paper)}
-                        disabled={isBusy || Boolean(paper.archived_at)}
-                        tooltip="AI 生成新试卷"
-                      >
-                        <Sparkles className="h-4 w-4" />
-                      </TooltipButton>
-                      {rootKnowledgePointId ? (
+                      <TooltipProvider delayDuration={150}>
                         <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              disabled={isBusy}
-                              aria-label="导出试卷"
-                            >
-                              <Download className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="inline-flex">
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    disabled={isBusy}
+                                    aria-label="生成试卷"
+                                  >
+                                    <Sparkles className="h-4 w-4" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent>生成试卷</TooltipContent>
+                          </Tooltip>
+                          <DropdownMenuContent align="end" className="w-56">
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <DropdownMenuItem
+                                  disabled={isBusy}
+                                  onSelect={() => handleCopy(paper)}
+                                >
+                                  <Copy className="mr-2 h-4 w-4" />
+                                  复制试卷
+                                </DropdownMenuItem>
+                              </TooltipTrigger>
+                              <TooltipContent side="left">
+                                复制当前试卷为一份新试卷，题目和分值保持不变
+                              </TooltipContent>
+                            </Tooltip>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <DropdownMenuItem
+                                  disabled={isBusy || Boolean(paper.archived_at)}
+                                  onSelect={() => setAiDialogPaper(paper)}
+                                >
+                                  <Sparkles className="mr-2 h-4 w-4" />
+                                  AI 生成新试卷
+                                </DropdownMenuItem>
+                              </TooltipTrigger>
+                              <TooltipContent side="left">
+                                用 AI 基于当前试卷重新生成一份新试卷
+                              </TooltipContent>
+                            </Tooltip>
+                            {courseQuestionBankName ? (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <DropdownMenuItem
+                                    disabled={
+                                      isBusy || Boolean(paper.archived_at)
+                                    }
+                                    onSelect={() =>
+                                      setExpandDialogPaper(paper)
+                                    }
+                                  >
+                                    <ListPlus className="mr-2 h-4 w-4" />
+                                    扩充生成试卷
+                                  </DropdownMenuItem>
+                                </TooltipTrigger>
+                                <TooltipContent side="left">
+                                  保留题目和知识点，扩充到指定题数后生成新试卷
+                                </TooltipContent>
+                              </Tooltip>
+                            ) : null}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TooltipProvider>
+                      {rootKnowledgePointId ? (
+                        <TooltipProvider delayDuration={150}>
+                        <DropdownMenu>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="inline-flex">
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    disabled={isBusy}
+                                    aria-label="导出试卷"
+                                  >
+                                    <Download className="h-4 w-4" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent>导出</TooltipContent>
+                          </Tooltip>
                           <DropdownMenuContent align="end" className="w-48">
                             <DropdownMenuLabel className="text-xs">导出 Word</DropdownMenuLabel>
                             <DropdownMenuItem onClick={() => handleExport(paper, "docx", true)}>
@@ -406,6 +502,7 @@ export function PaperListBody({
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
+                        </TooltipProvider>
                       ) : null}
                       <TooltipButton
                         variant="ghost"
@@ -452,21 +549,22 @@ export function PaperListBody({
           generatedPaperState={detailNavState}
         />
       ) : null}
+
+      {expandDialogPaper ? (
+        <PaperExpandDialog
+          open={Boolean(expandDialogPaper)}
+          onOpenChange={(open) => {
+            if (!open) setExpandDialogPaper(null);
+          }}
+          paper={expandDialogPaper}
+          courseQuestionBankName={courseQuestionBankName}
+          generatedPaperState={detailNavState}
+        />
+      ) : null}
     </div>
   );
 }
 
-function getPaperQuestionTitle(item: IPaperQuestion): string {
-  const question = item.question;
-  if (!question) return "题目已不存在";
-  if (question.title?.trim()) return question.title.trim();
-  const content = question.content as { text?: unknown } | string | null | undefined;
-  if (typeof content === "string" && content.trim()) return content.trim();
-  if (content && typeof content === "object" && typeof content.text === "string" && content.text.trim()) {
-    return content.text.trim();
-  }
-  return "未命名题目";
-}
 
 function getQuestionKnowledgePointIds(
   question: IQuestion,
@@ -490,7 +588,7 @@ function getQuestionPlainText(question: IQuestion): string {
 }
 
 function buildPaperReplacementPrompt(question: IQuestion, rootKnowledgePointName?: string | null): string {
-  const typeLabel = QUESTION_TYPE_LABELS[question.type] ?? question.type;
+  const typeLabel = getQuestionDisplayTypeLabel(question);
   const kpNames = (question.knowledge_points ?? []).map((kp) => kp.name).join("、") || rootKnowledgePointName || "当前课程";
   const content = getQuestionPlainText(question).slice(0, 500);
   return `请基于下面的原题生成一道替换题，要求保持同一课程、同一知识点范围、同一题型和接近难度。
@@ -666,20 +764,33 @@ function PaperEditDialog({
   );
   const [replacingQuestionId, setReplacingQuestionId] = useState<string | null>(null);
   const [recentlyReplacedQuestionId, setRecentlyReplacedQuestionId] = useState<string | null>(null);
-  // 左栏题型分组的展开状态：默认全部收起，点击题型标题展开/收起。
-  const [expandedTypes, setExpandedTypes] = useState<Set<string>>(() => new Set());
-
-  const toggleTypeExpanded = (type: string) => {
-    setExpandedTypes((prev) => {
-      const next = new Set(prev);
-      if (next.has(type)) {
-        next.delete(type);
-      } else {
-        next.add(type);
-      }
-      return next;
-    });
-  };
+  // 题库浏览：左侧题型、右侧题目；试卷篮展示当前试卷题目。
+  const [bankQuestions, setBankQuestions] = useState<IQuestion[]>([]);
+  const [bankLoading, setBankLoading] = useState(false);
+  const [bankType, setBankType] = useState<QuestionDisplayType | "all">("all");
+  const [bankSearch, setBankSearch] = useState("");
+  const [bankPage, setBankPage] = useState(1);
+  const [basketOpen, setBasketOpen] = useState(false);
+  const [scoreOpen, setScoreOpen] = useState(false);
+  const [scoreEdited, setScoreEdited] = useState(false);
+  const [scoreMode, setScoreMode] = useState<ScoreViewMode>("type");
+  const [scoreItems, setScoreItems] = useState<ExamQuestionFormItem[]>([]);
+  const [typeScoreDrafts, setTypeScoreDrafts] = useState<
+    Partial<Record<string, string>>
+  >({});
+  const [basketType, setBasketType] = useState<QuestionDisplayType | "all">(
+    "all",
+  );
+  const [removingIds, setRemovingIds] = useState<Set<string>>(() => new Set());
+  const [basketPulse, setBasketPulse] = useState(false);
+  const [flyChip, setFlyChip] = useState<{
+    x: number;
+    y: number;
+    dx: number;
+    dy: number;
+  } | null>(null);
+  const [flyActive, setFlyActive] = useState(false);
+  const basketButtonRef = useRef<HTMLButtonElement>(null);
 
   const { query: banksQuery } = useList<IQuestionBank>({
     resource: "question-banks",
@@ -705,6 +816,9 @@ function PaperEditDialog({
         if (cancelled) return;
         setDetail(value);
         setTitle(value.title);
+        setScoreItems(buildPaperScoreItems(value));
+        setTypeScoreDrafts({});
+        setScoreEdited(false);
         setSelectedIds(value.questions.map((item) => item.question_id));
       })
       .catch((error) => {
@@ -728,29 +842,7 @@ function PaperEditDialog({
     return new Map((detail?.questions ?? []).map((item) => [item.question_id, item]));
   }, [detail]);
 
-  const selectedQuestionItems = useMemo(
-    () =>
-      selectedIds
-        .map((id) => itemById.get(id) ?? pendingQuestionById.get(id))
-        .filter((item): item is IPaperQuestion => Boolean(item)),
-    [itemById, pendingQuestionById, selectedIds],
-  );
-  const selectedQuestionGroups = useMemo(() => {
-    const grouped = new Map<string, IPaperQuestion[]>();
-    for (const item of selectedQuestionItems) {
-      const key = item.question?.type ?? "unknown";
-      const list = grouped.get(key) ?? [];
-      list.push(item);
-      grouped.set(key, list);
-    }
-    return Array.from(grouped.entries()).sort(
-      ([a], [b]) =>
-        (QUESTION_TYPE_ORDER[a as QuestionType] ?? Number.MAX_SAFE_INTEGER) -
-        (QUESTION_TYPE_ORDER[b as QuestionType] ?? Number.MAX_SAFE_INTEGER),
-    );
-  }, [selectedQuestionItems]);
-  const existingSelectedCount = selectedIds.filter((id) => itemById.has(id)).length;
-  const newSelectedCount = Math.max(0, selectedIds.length - existingSelectedCount);
+
   const canAIAppend = Boolean(detail && detail.questions.length > 0 && !detail.archived_at);
   const courseBank =
     ensuredCourseBank ??
@@ -758,6 +850,275 @@ function PaperEditDialog({
       ? banks.find((bank) => bank.name === courseQuestionBankName)
       : null) ??
     null;
+
+  // 题库题目：课程题库下的全部题目，供左侧题型 + 右侧列表浏览。
+  useEffect(() => {
+    if (!courseBank?.id) {
+      setBankQuestions([]);
+      return;
+    }
+    let cancelled = false;
+    setBankLoading(true);
+    const params = new URLSearchParams({
+      _start: "0",
+      _end: "2000",
+      question_bank_id: courseBank.id,
+    });
+    paperApiRequest<IQuestion[]>(`/questions?${params}`)
+      .then((items) => {
+        if (!cancelled) setBankQuestions(items);
+      })
+      .catch(() => {
+        if (!cancelled) setBankQuestions([]);
+      })
+      .finally(() => {
+        if (!cancelled) setBankLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [courseBank?.id, selectorRefreshKey]);
+
+  const getBankQuestionText = (question: IQuestion) => {
+    const content = question.content as
+      | { text?: unknown }
+      | string
+      | null
+      | undefined;
+    const raw =
+      question.title?.trim() ||
+      (typeof content === "string"
+        ? content
+        : content && typeof content.text === "string"
+          ? content.text
+          : "");
+    return (
+      raw
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim() || "未命名题目"
+    );
+  };
+
+  const bankTypeRows = useMemo(() => {
+    const counts = new Map<QuestionDisplayType, number>();
+    for (const question of bankQuestions) {
+      const displayType = getQuestionDisplayType(question);
+      if (!displayType) continue;
+      counts.set(displayType, (counts.get(displayType) ?? 0) + 1);
+    }
+    return QUESTION_DISPLAY_TYPE_ORDER.filter((type) => counts.has(type)).map(
+      (type) => [type, counts.get(type)!] as const,
+    );
+  }, [bankQuestions]);
+
+  const filteredBankQuestions = useMemo(() => {
+    const keyword = bankSearch.trim().toLowerCase();
+    return bankQuestions.filter((question) => {
+      if (
+        bankType !== "all" &&
+        getQuestionDisplayType(question) !== bankType
+      ) {
+        return false;
+      }
+      if (!keyword) return true;
+      const knowledgeNames = (question.knowledge_points ?? [])
+        .map((point) => point.name)
+        .join(" ");
+      return `${getBankQuestionText(question)} ${knowledgeNames}`
+        .toLowerCase()
+        .includes(keyword);
+    });
+  }, [bankQuestions, bankSearch, bankType]);
+
+  useEffect(() => {
+    setBankPage(1);
+  }, [bankType, bankSearch]);
+
+  const bankPageCount = Math.max(
+    1,
+    Math.ceil(filteredBankQuestions.length / BANK_PAGE_SIZE),
+  );
+  const safeBankPage = Math.min(bankPage, bankPageCount);
+  const pagedBankQuestions = filteredBankQuestions.slice(
+    (safeBankPage - 1) * BANK_PAGE_SIZE,
+    safeBankPage * BANK_PAGE_SIZE,
+  );
+
+  // 试卷篮：当前试卷里的题目（含刚加入、还没保存的）。
+  const questionById = useMemo(() => {
+    const map = new Map<string, IQuestion>();
+    for (const item of detail?.questions ?? []) {
+      if (item.question) map.set(item.question_id, item.question);
+    }
+    for (const question of bankQuestions) map.set(question.id, question);
+    return map;
+  }, [bankQuestions, detail]);
+
+  const basketItems = useMemo(
+    () =>
+      selectedIds.map((id) => ({
+        id,
+        question: questionById.get(id) ?? null,
+      })),
+    [questionById, selectedIds],
+  );
+
+  // 设置分数：沿用试卷详情里的评分面板，面板数据跟随当前试卷题目。
+  const scoreItemById = useMemo(
+    () => new Map(scoreItems.map((item) => [item.question_id, item])),
+    [scoreItems],
+  );
+
+  const panelScoreItems: ExamQuestionFormItem[] = useMemo(
+    () =>
+      selectedIds.map((id, index) => {
+        const existing = scoreItemById.get(id);
+        const question = questionById.get(id);
+        return {
+          question_id: id,
+          order: index,
+          score_override: existing?.score_override ?? question?.score ?? 0,
+          source_exam_id: null,
+          source_question_id: null,
+        };
+      }),
+    [questionById, scoreItemById, selectedIds],
+  );
+
+  const scoreQuestions = useMemo(
+    () =>
+      selectedIds
+        .map((id) => questionById.get(id))
+        .filter((question): question is IQuestion => Boolean(question)),
+    [questionById, selectedIds],
+  );
+
+  const scorePreviewItems = useMemo(
+    () => buildPaperPreviewItems(panelScoreItems, scoreQuestions),
+    [panelScoreItems, scoreQuestions],
+  );
+
+  const scoreTypeSummaries = useMemo(
+    () => buildQuestionTypeSummaries(scorePreviewItems, { splitChoice: true }),
+    [scorePreviewItems],
+  );
+
+  const scoreTotal = totalPaperScore(panelScoreItems);
+
+  const handleQuestionScoreChange = (questionId: string, value: string) => {
+    const parsed = Number(value);
+    const nextScore = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+    setScoreItems((prev) => {
+      const map = new Map(prev.map((item) => [item.question_id, item]));
+      map.set(questionId, {
+        question_id: questionId,
+        order: itemById.get(questionId)?.order ?? map.size,
+        score_override: nextScore,
+        source_exam_id: null,
+        source_question_id: null,
+      });
+      return [...map.values()];
+    });
+    setScoreEdited(true);
+  };
+
+  const handleApplyTypeScore = (
+    summary: QuestionTypeSummary,
+    value?: string,
+  ) => {
+    const rawValue =
+      value ?? typeScoreDrafts[summary.key ?? summary.type] ?? "";
+    // 清空输入框时不要弹出错误提示。
+    if (String(rawValue).trim() === "") return;
+    const parsed = Number(rawValue);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      toast({
+        title: "题型总分无效",
+        description: "题型总分必须大于 0。",
+        variant: "destructive",
+      });
+      return;
+    }
+    setScoreItems((prev) => {
+      const next = applyPaperTypeScoreAllocation(
+        panelScoreItems,
+        summary,
+        parsed,
+      );
+      const map = new Map(prev.map((item) => [item.question_id, item]));
+      for (const item of next) map.set(item.question_id, item);
+      return [...map.values()];
+    });
+    setScoreEdited(true);
+  };
+
+  const basketTypeRows = useMemo(() => {
+    const counts = new Map<QuestionDisplayType, number>();
+    for (const item of basketItems) {
+      const displayType = item.question
+        ? getQuestionDisplayType(item.question)
+        : null;
+      if (!displayType) continue;
+      counts.set(displayType, (counts.get(displayType) ?? 0) + 1);
+    }
+    return QUESTION_DISPLAY_TYPE_ORDER.filter((type) => counts.has(type)).map(
+      (type) => [type, counts.get(type)!] as const,
+    );
+  }, [basketItems]);
+
+  const visibleBasketItems = basketItems.filter(
+    (item) =>
+      basketType === "all" ||
+      (item.question ? getQuestionDisplayType(item.question) : null) ===
+        basketType,
+  );
+
+  const flyToBasket = (fromEl: HTMLElement | null) => {
+    const target = basketButtonRef.current;
+    if (!fromEl || !target) return;
+    const from = fromEl.getBoundingClientRect();
+    const to = target.getBoundingClientRect();
+    const startX = from.left + from.width / 2 - 10;
+    const startY = from.top + from.height / 2 - 10;
+    const endX = to.left + to.width / 2 - 10;
+    const endY = to.top + to.height / 2 - 10;
+    setFlyChip({
+      x: startX,
+      y: startY,
+      dx: endX - startX,
+      dy: endY - startY,
+    });
+    setFlyActive(false);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => setFlyActive(true));
+    });
+    window.setTimeout(() => setFlyChip(null), 520);
+    setBasketPulse(true);
+    window.setTimeout(() => setBasketPulse(false), 500);
+  };
+
+  const removeWithAnimation = (questionId: string) => {
+    setRemovingIds((prev) => new Set(prev).add(questionId));
+    window.setTimeout(() => {
+      removeQuestion(questionId);
+      setRemovingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(questionId);
+        return next;
+      });
+    }, 180);
+  };
+
+  const toggleQuestion = (question: IQuestion, fromEl: HTMLElement | null) => {
+    if (selectedIds.includes(question.id)) {
+      removeWithAnimation(question.id);
+      return;
+    }
+    flyToBasket(fromEl);
+    updateSelectedIds([...selectedIds, question.id]);
+  };
+
   const manualQuestionDraft = detail
     ? createManualQuestionDraft({
         type: manualQuestionType,
@@ -848,16 +1209,21 @@ function PaperEditDialog({
         title: nextTitle,
         question_items: selectedIds.map((questionId, index) => {
           const existing = itemById.get(questionId) ?? pendingQuestionById.get(questionId);
+          const scored = scoreItemById.get(questionId);
           return {
             question_id: questionId,
             order: index,
-            score_override: existing?.score_override ?? null,
+            score_override:
+              scored?.score_override ?? existing?.score_override ?? null,
           };
         }),
       }),
     });
     setDetail(updated);
     setTitle(updated.title);
+    setScoreItems(buildPaperScoreItems(updated));
+    setTypeScoreDrafts({});
+    setScoreEdited(false);
     setSelectedIds(updated.questions.map((item) => item.question_id));
     setPendingQuestionById(new Map());
     return updated;
@@ -1202,7 +1568,7 @@ function PaperEditDialog({
         <DialogHeader className="shrink-0 space-y-1">
           <DialogTitle>修改试卷</DialogTitle>
           <DialogDescription className="text-xs">
-            可修改试卷名称、删除已有题目，也可以从课程题库选择或用 AI 生成题目加入当前试卷。
+            修改试卷名称，从课程题库增删题目；右侧「试卷篮」可随时查看当前试卷的题目。
           </DialogDescription>
         </DialogHeader>
 
@@ -1212,249 +1578,366 @@ function PaperEditDialog({
             正在加载试卷...
           </div>
         ) : detail ? (
-          <div className="grid min-h-0 flex-1 gap-5 overflow-hidden lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-            <section className="flex min-h-0 flex-col gap-4 overflow-hidden pr-1">
-              <div className="shrink-0 space-y-2">
-                <Label htmlFor="paper-edit-title">试卷名称</Label>
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              <Input
+                id="paper-edit-title"
+                className="h-9 w-full max-w-xs"
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                placeholder="请输入试卷名称"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setManualAddOpen(true)}
+              >
+                <Plus className="h-4 w-4" />
+                添加题目
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setScoreOpen(true)}
+              >
+                <Calculator className="h-4 w-4" />
+                设置分数
+              </Button>
+              {renderAIAppendPopover()}
+              <div className="relative ml-auto">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                 <Input
-                  id="paper-edit-title"
-                  value={title}
-                  onChange={(event) => setTitle(event.target.value)}
-                  placeholder="请输入试卷名称"
+                  className="h-9 w-52 pl-8"
+                  value={bankSearch}
+                  onChange={(event) => setBankSearch(event.target.value)}
+                  placeholder="搜索题目"
+                  aria-label="搜索题库题目"
                 />
               </div>
+              <Button
+                ref={basketButtonRef}
+                type="button"
+                size="sm"
+                className={cn(
+                  "shrink-0 transition-shadow",
+                  basketPulse && "ring-2 ring-primary/50",
+                )}
+                onClick={() => setBasketOpen(true)}
+              >
+                <ShoppingBasket className="h-4 w-4" />
+                试卷篮
+                <span className="ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-white/25 px-1.5 text-xs font-semibold tabular-nums">
+                  {selectedIds.length}
+                </span>
+              </Button>
+            </div>
 
-              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/60 bg-muted/10">
-                <div className="flex shrink-0 items-center justify-between border-b border-border/60 px-3 py-2">
-                  <div className="flex min-w-0 items-baseline gap-2">
-                    <p className="shrink-0 text-sm font-semibold text-foreground">当前试卷题目</p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      已选 {selectedIds.length} 题
-                      {newSelectedCount > 0 ? `，其中 ${newSelectedCount} 题将在保存后加入` : ""}
-                    </p>
-                  </div>
-                  <Button
+            <div className="grid min-h-0 flex-1 gap-3 overflow-hidden md:grid-cols-[168px_minmax(0,1fr)]">
+              <aside className="flex min-h-0 flex-col gap-0.5 overflow-y-auto rounded-xl border border-border/60 p-1.5">
+                <button
+                  type="button"
+                  onClick={() => setBankType("all")}
+                  className={cn(
+                    "flex items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors",
+                    bankType === "all"
+                      ? "bg-primary/10 font-medium text-primary"
+                      : "text-muted-foreground hover:bg-muted",
+                  )}
+                >
+                  <span>全部题型</span>
+                  <span className="text-xs tabular-nums">{bankQuestions.length}</span>
+                </button>
+                {bankTypeRows.map(([type, count]) => (
+                  <button
+                    key={type}
                     type="button"
-                    variant="ghost"
-                    size="sm"
-                    disabled={selectedIds.length === 0}
-                    onClick={() => setSelectedIds([])}
+                    onClick={() => setBankType(type)}
+                    className={cn(
+                      "flex items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors",
+                      bankType === type
+                        ? "bg-primary/10 font-medium text-primary"
+                        : "text-muted-foreground hover:bg-muted",
+                    )}
                   >
-                    清空
-                  </Button>
+                    <span className="truncate">
+                      {questionDisplayTypeFullLabel[type]}
+                    </span>
+                    <span className="text-xs tabular-nums">{count}</span>
+                  </button>
+                ))}
+              </aside>
+
+              <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border/60">
+                <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/60 px-3 py-2 text-xs text-muted-foreground">
+                  <span className="truncate">
+                    {bankType === "all"
+                      ? "全部题型"
+                      : questionDisplayTypeFullLabel[bankType]}
+                    {" · "}
+                    {filteredBankQuestions.length} 题
+                  </span>
+                  <span className="shrink-0">点「加入 / 已加入」增删</span>
                 </div>
-                <div className="min-h-0 flex-1 overflow-y-auto">
-                  {selectedQuestionItems.length === 0 ? (
-                    <div className="px-4 py-10 text-center text-sm text-muted-foreground">
-                      暂无已选题目，可从右侧题库选择。
+                <div className="min-h-0 flex-1 overflow-y-auto p-2">
+                  {bankLoading ? (
+                    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      正在加载题库...
+                    </div>
+                  ) : !courseBank ? (
+                    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                      {ensuringCourseBank ? "正在准备课程题库..." : "课程题库未就绪"}
+                    </div>
+                  ) : filteredBankQuestions.length === 0 ? (
+                    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                      没有符合条件的题目
                     </div>
                   ) : (
-                    selectedQuestionGroups.map(([type, items], groupIndex) => {
-                      const groupStartIndex = selectedQuestionGroups
-                        .slice(0, groupIndex)
-                        .reduce((sum, [, groupItems]) => sum + groupItems.length, 0);
-                      const isExpanded = expandedTypes.has(type);
-                      return (
-                        <div key={type} className="border-t border-border/50 first:border-t-0">
-                          <button
+                    <>
+                      <div className="space-y-2">
+                        {pagedBankQuestions.map((question, index) => {
+                          const inPaper = selectedIds.includes(question.id);
+                          const removing = removingIds.has(question.id);
+                          return (
+                            <QuestionPreviewCard
+                              key={question.id}
+                              question={question}
+                              index={
+                                (safeBankPage - 1) * BANK_PAGE_SIZE + index + 1
+                              }
+                              expandOnClick
+                              hideAnswer
+                              markChoiceAnswer
+                              className={cn(
+                                "transition-all duration-200",
+                                inPaper
+                                  ? "border-primary/50 bg-primary/5"
+                                  : "hover:border-primary/50",
+                                removing && "scale-[0.98] opacity-0",
+                              )}
+                              trailing={
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant={inPaper ? "secondary" : "outline"}
+                                  className="h-7 shrink-0 px-2 text-xs"
+                                  onClick={(event) =>
+                                    toggleQuestion(question, event.currentTarget)
+                                  }
+                                >
+                                  {inPaper ? "已加入" : "加入"}
+                                </Button>
+                              }
+                            />
+                          );
+                        })}
+                      </div>
+                      {bankPageCount > 1 ? (
+                        <div className="flex items-center justify-center gap-2 py-3">
+                          <Button
                             type="button"
-                            onClick={() => toggleTypeExpanded(type)}
-                            aria-expanded={isExpanded}
-                            className="sticky top-0 z-10 flex w-full items-center justify-between gap-2 bg-muted/60 px-4 py-2 text-left backdrop-blur transition-colors hover:bg-muted"
+                            variant="outline"
+                            size="sm"
+                            disabled={safeBankPage <= 1}
+                            onClick={() => setBankPage(safeBankPage - 1)}
                           >
-                            <span className="flex items-center gap-1.5">
-                              <ChevronRight
-                                className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${isExpanded ? "rotate-90" : ""}`}
-                              />
-                              <span className="text-xs font-semibold text-foreground">
-                                {QUESTION_TYPE_LABELS[type] ?? "未知题型"}
-                              </span>
-                            </span>
-                            <span className="text-xs text-muted-foreground">
-                              {items.length} 题
-                            </span>
-                          </button>
-                          <div
-                            className={`space-y-3 p-3 ${isExpanded ? "" : "hidden"}`}
+                            上一页
+                          </Button>
+                          <span className="text-xs text-muted-foreground">
+                            {safeBankPage} / {bankPageCount}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={safeBankPage >= bankPageCount}
+                            onClick={() => setBankPage(safeBankPage + 1)}
                           >
-                            {items.map((item, itemIndex) =>
-                              item.question ? (
-                                <div
-                                  key={item.question_id}
-                                  className={`transition-all duration-200 motion-reduce:transition-none ${
-                                    replacingQuestionId === item.question_id
-                                      ? "translate-y-1 opacity-35"
-                                      : recentlyReplacedQuestionId === item.question_id
-                                        ? "animate-in fade-in-0 slide-in-from-bottom-1 duration-200 motion-reduce:animate-none"
-                                        : ""
-                                  }`}
-                                >
-                                  <QuestionPreviewCard
-                                    question={item.question}
-                                    index={groupStartIndex + itemIndex + 1}
-                                    className="cursor-pointer transition-all hover:border-primary hover:shadow-md"
-                                    expandOnClick
-                                    hideAnswer
-                                    markChoiceAnswer
-                                    actions={
-                                      <div className="flex items-center gap-1">
-                                        <TooltipButton
-                                          type="button"
-                                          variant="ghost"
-                                          size="icon"
-                                          className="h-7 w-7"
-                                          onClick={() => setEditingQuestion(item.question)}
-                                          tooltip="编辑题目"
-                                        >
-                                          <Pencil className="h-3.5 w-3.5" />
-                                        </TooltipButton>
-                                        <TooltipButton
-                                          type="button"
-                                          variant="ghost"
-                                          size="icon"
-                                          className="h-7 w-7"
-                                          disabled={Boolean(replacingQuestionId)}
-                                          onClick={() => handleReplaceQuestion(item)}
-                                          tooltip="换一题"
-                                        >
-                                          {replacingQuestionId === item.question_id ? (
-                                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                          ) : (
-                                            <RefreshCcw className="h-3.5 w-3.5" />
-                                          )}
-                                        </TooltipButton>
-                                        <TooltipButton
-                                          type="button"
-                                          variant="ghost"
-                                          size="icon"
-                                          className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                                          onClick={() => removeQuestion(item.question_id)}
-                                          tooltip="从试卷中移除"
-                                        >
-                                          <X className="h-3.5 w-3.5" />
-                                        </TooltipButton>
-                                      </div>
-                                    }
-                                  />
-                                </div>
-                              ) : (
-                                <div
-                                  key={item.question_id}
-                                  className="flex items-start gap-3 rounded-lg border border-border/60 px-4 py-3"
-                                >
-                                  <span className="mt-0.5 w-7 shrink-0 text-xs font-semibold tabular-nums text-muted-foreground">
-                                    {groupStartIndex + itemIndex + 1}.
-                                  </span>
-                                  <p className="min-w-0 flex-1 line-clamp-2 text-sm font-medium text-foreground">
-                                    {getPaperQuestionTitle(item)}
-                                  </p>
-                                  <TooltipButton
-                                    type="button"
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-8 w-8 shrink-0"
-                                    onClick={() => removeQuestion(item.question_id)}
-                                    tooltip="从试卷中移除"
-                                  >
-                                    <X className="h-4 w-4 text-destructive" />
-                                  </TooltipButton>
-                                </div>
-                              ),
-                            )}
-                          </div>
+                            下一页
+                          </Button>
                         </div>
-                      );
-                    })
+                      ) : null}
+                    </>
                   )}
                 </div>
-              </div>
-            </section>
+              </section>
+            </div>
+          </div>
+        ) : null}
 
-            <section className="flex min-h-0 min-w-0 flex-col rounded-xl border border-border/60 p-4">
-              {courseQuestionBankName && !courseBank ? (
-                <>
-                  <div className="mb-3 flex shrink-0 items-center justify-between gap-3">
-                    <p className="text-sm font-semibold text-foreground">从课程题库选择</p>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setManualAddOpen(true)}
-                      >
-                        <Plus className="h-4 w-4" />
-                        添加题目
-                      </Button>
-                      {renderAIAppendPopover()}
+        {flyChip ? (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none fixed z-[70] h-5 w-5 rounded-full bg-primary shadow-md transition-transform duration-500 ease-out"
+            style={{
+              left: flyChip.x,
+              top: flyChip.y,
+              transform: flyActive
+                ? `translate(${flyChip.dx}px, ${flyChip.dy}px) scale(0.4)`
+                : "translate(0, 0) scale(1)",
+            }}
+          />
+        ) : null}
+
+        {basketOpen ? (
+          <div
+            className="fixed inset-0 z-[60] flex justify-end bg-black/30"
+            onClick={() => setBasketOpen(false)}
+          >
+            <div
+              className="flex h-full w-full flex-col bg-background shadow-2xl sm:w-1/2"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex shrink-0 items-center justify-between border-b border-border/60 px-4 py-3">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">试卷篮</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    已选 {selectedIds.length} 题 · 试卷共 {detail?.questions.length ?? 0} 题
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label="关闭试卷篮"
+                  onClick={() => setBasketOpen(false)}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+              <div className="grid min-h-0 flex-1 grid-cols-[132px_minmax(0,1fr)]">
+                <aside className="flex min-h-0 flex-col gap-0.5 overflow-y-auto border-r border-border/60 p-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setBasketType("all")}
+                    className={cn(
+                      "flex items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors",
+                      basketType === "all"
+                        ? "bg-primary/10 font-medium text-primary"
+                        : "text-muted-foreground hover:bg-muted",
+                    )}
+                  >
+                    <span>全部</span>
+                    <span className="text-xs tabular-nums">{basketItems.length}</span>
+                  </button>
+                  {basketTypeRows.map(([type, count]) => (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => setBasketType(type)}
+                      className={cn(
+                        "flex items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors",
+                        basketType === type
+                          ? "bg-primary/10 font-medium text-primary"
+                          : "text-muted-foreground hover:bg-muted",
+                      )}
+                    >
+                      <span className="truncate">
+                        {questionDisplayTypeFullLabel[type]}
+                      </span>
+                      <span className="text-xs tabular-nums">{count}</span>
+                    </button>
+                  ))}
+                </aside>
+                <section className="min-h-0 overflow-y-auto p-2">
+                  {visibleBasketItems.length === 0 ? (
+                    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                      试卷篮还是空的
                     </div>
-                  </div>
-                  <div className="flex min-h-0 flex-1 items-center justify-center rounded-lg border border-dashed border-border/70 text-sm text-muted-foreground">
-                    {ensuringCourseBank ? "正在准备课程题库..." : "课程题库未就绪"}
-                  </div>
-                </>
-              ) : (
-                <QuestionSelector
-                  selectedIds={selectedIds}
-                  onChange={updateSelectedIds}
-                  showSummary
-                  renderSummary={({
-                    selectedCount,
-                    currentBankTotal,
-                    total,
-                    onClear,
-                    onOpenFullscreen,
-                  }) => (
-                    <div className="flex shrink-0 items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-foreground">从课程题库选择</p>
-                        <p className="mt-1 truncate text-xs text-muted-foreground">
-                          已选{" "}
-                          <span className="font-semibold text-foreground">{selectedCount}</span> 题
-                          {currentBankTotal != null
-                            ? `·当前题库共 ${currentBankTotal} 题`
-                            : `·共 ${total} 题`}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        {selectedCount > 0 && (
-                          <Button type="button" variant="ghost" size="sm" onClick={onClear}>
-                            清空选择
-                          </Button>
-                        )}
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={onOpenFullscreen}
-                        >
-                          <Maximize2 className="h-4 w-4" />
-                          全屏显示
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setManualAddOpen(true)}
-                        >
-                          <Plus className="h-4 w-4" />
-                          添加题目
-                        </Button>
-                        {renderAIAppendPopover()}
-                      </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {visibleBasketItems.map((item, index) =>
+                        item.question ? (
+                          <QuestionPreviewCard
+                            key={item.id}
+                            question={item.question}
+                            scoreOverride={
+                              scoreItemById.get(item.id)?.score_override ?? null
+                            }
+                            index={selectedIds.indexOf(item.id) + 1}
+                            expandOnClick
+                            hideAnswer
+                            markChoiceAnswer
+                            className={cn(
+                              "transition-all duration-200",
+                              removingIds.has(item.id) &&
+                                "scale-[0.98] opacity-0",
+                              recentlyReplacedQuestionId === item.id &&
+                                "animate-in fade-in-0 duration-200",
+                            )}
+                            actionsPlacement="header"
+                            actions={
+                              <div className="flex items-center gap-1">
+                                <TooltipButton
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7"
+                                  disabled={Boolean(replacingQuestionId)}
+                                  onClick={() =>
+                                    void handleReplaceQuestion({
+                                      question_id: item.id,
+                                      question: item.question as IQuestion,
+                                      order: index,
+                                      score_override: null,
+                                    } as IPaperQuestion)
+                                  }
+                                  tooltip="换一题"
+                                >
+                                  {replacingQuestionId === item.id ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  ) : (
+                                    <RefreshCcw className="h-3.5 w-3.5" />
+                                  )}
+                                </TooltipButton>
+                                <TooltipButton
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                                  onClick={() => removeWithAnimation(item.id)}
+                                  tooltip="从试卷中移除"
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </TooltipButton>
+                              </div>
+                            }
+                          />
+                        ) : (
+                          <div
+                            key={item.id}
+                            className={cn(
+                              "flex items-center gap-3 rounded-lg border border-border/60 px-4 py-3 transition-all duration-200",
+                              removingIds.has(item.id) &&
+                                "scale-[0.98] opacity-0",
+                            )}
+                          >
+                            <span className="w-7 shrink-0 text-xs font-semibold tabular-nums text-muted-foreground">
+                              {index + 1}.
+                            </span>
+                            <p className="min-w-0 flex-1 text-sm text-muted-foreground">
+                              题目已不存在
+                            </p>
+                            <TooltipButton
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 shrink-0"
+                              onClick={() => removeWithAnimation(item.id)}
+                              tooltip="从试卷中移除"
+                            >
+                              <X className="h-4 w-4 text-destructive" />
+                            </TooltipButton>
+                          </div>
+                        ),
+                      )}
                     </div>
                   )}
-                  initialBankName={courseQuestionBankName}
-                  initialBankId={courseBank?.id}
-                  initialBankQuestionCount={courseBank?.question_count}
-                  lockInitialBank={false}
-                  knowledgePointOptions={knowledgePointOptions}
-                  restrictKnowledgePointsToOptions={knowledgePointOptions !== undefined}
-                  fillAvailableHeight
-                  refreshKey={selectorRefreshKey}
-                  onEditQuestion={setEditingQuestion}
-                />
-              )}
-            </section>
+                </section>
+              </div>
+            </div>
           </div>
         ) : null}
 
@@ -1468,6 +1951,39 @@ function PaperEditDialog({
           </Button>
         </DialogFooter>
       </DialogContent>
+      <Dialog open={scoreOpen} onOpenChange={setScoreOpen}>
+        <DialogContent className="max-h-[92dvh] w-[calc(100vw-2rem)] max-w-5xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>设置分数</DialogTitle>
+            <DialogDescription>
+              支持逐题微调，也可以按题型设置总分并均分到每题；点「应用分数」后再保存试卷。
+            </DialogDescription>
+          </DialogHeader>
+          <PaperScorePanel
+            items={scorePreviewItems}
+            questionItems={panelScoreItems}
+            mode={scoreMode}
+            onModeChange={setScoreMode}
+            onQuestionScoreChange={handleQuestionScoreChange}
+            questionTypeSummaries={scoreTypeSummaries}
+            typeScoreDrafts={typeScoreDrafts}
+            onTypeDraftChange={(type, value) =>
+              setTypeScoreDrafts((prev) => ({ ...prev, [type]: value }))
+            }
+            onApplyTypeScore={handleApplyTypeScore}
+            totalScore={scoreTotal}
+            dirty={scoreEdited}
+            saving={false}
+            onSave={() => setScoreOpen(false)}
+            title={`总题量 ${selectedIds.length} 题`}
+            description="直接输入分数即可自动均分；保存试卷后生效。"
+            saveLabel="应用分数"
+            compact
+            autoApply
+          />
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={manualAddOpen} onOpenChange={setManualAddOpen}>
         <DialogContent className="max-h-[92dvh] max-w-4xl overflow-y-auto">
           <DialogHeader>

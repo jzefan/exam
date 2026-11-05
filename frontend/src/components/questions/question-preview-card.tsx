@@ -370,6 +370,7 @@ export function QuestionPreviewCard({
   hideTypeBadge = false,
   hideAnswer = false,
   hideScoreAndDifficulty = false,
+  scoreOverride,
   hideHeader = false,
   hideMeta = false,
   hideSourceBadge = false,
@@ -398,6 +399,8 @@ export function QuestionPreviewCard({
   hideTypeBadge?: boolean;
   hideAnswer?: boolean;
   hideScoreAndDifficulty?: boolean;
+  /** 试卷里给这道题单独设过分时，用它代替题目默认分值。 */
+  scoreOverride?: number | null;
   hideHeader?: boolean;
   hideMeta?: boolean;
   /** 题目来源是外部系统时，来源徽章（手动添加/AI 生成/导入）没有意义。 */
@@ -616,7 +619,7 @@ export function QuestionPreviewCard({
               </span>
               <span className="h-4 w-px bg-border" />
               <span className="whitespace-nowrap font-serif text-sm font-semibold tabular-nums text-foreground">
-                {question.score}
+                {scoreOverride ?? question.score}
                 <span className="ml-0.5 text-xs font-medium text-muted-foreground">
                   分
                 </span>

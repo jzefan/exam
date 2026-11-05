@@ -132,9 +132,19 @@ async def _find_or_create_public_external_guest(
     candidate: PublicLinkRedeemRequest,
     org: Organization | None,
 ) -> User:
+    full_name = candidate.full_name.strip()
+    phone = candidate.phone.strip()
+    student_no = candidate.student_no.strip()
+    if not full_name:
+        raise InvitationError("请填写姓名")
+    if not phone:
+        raise InvitationError("请填写手机号")
+    if not student_no:
+        raise InvitationError("请填写学号")
+
     filters = [
         User.user_type == "external_guest",
-        User.phone == candidate.phone,
+        User.phone == phone,
         User.deleted_at.is_(None),
     ]
     if org is not None:
@@ -142,15 +152,17 @@ async def _find_or_create_public_external_guest(
 
     existing = (await db.execute(select(User).where(*filters))).scalar_one_or_none()
     if existing is not None:
-        existing.full_name = candidate.full_name
+        existing.full_name = full_name
+        existing.student_id = student_no
         return existing
 
     user = User(
         username=f"guest_{uuid.uuid4().hex[:12]}",
         email=f"guest_{uuid.uuid4().hex[:8]}@public.local",
-        phone=candidate.phone,
+        phone=phone,
+        student_id=student_no,
         password_hash="!",
-        full_name=candidate.full_name,
+        full_name=full_name,
         is_active=True,
         user_type="external_guest",
         primary_org_id=org.id if org is not None else None,
