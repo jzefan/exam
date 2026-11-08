@@ -19,7 +19,18 @@ function getVendorChunkName(id: string): string | undefined {
   return `vendor-${packageName.replace(/[^a-zA-Z0-9-_]/g, "-")}`;
 }
 
+// Absolute asset origin (CDN) means every /assets/ URL is cross-origin: the
+// service worker cannot precache it, and the runtime cache deliberately skips
+// cross-origin requests. Keep precaching to the same-origin shell only.
+const assetBase = process.env.VITE_ASSET_BASE || "/";
+const assetsAreExternal = /^https?:\/\//.test(assetBase);
+
 export default defineConfig({
+  // Asset origin. Defaults to the app origin so `vite dev`, `vite preview` and
+  // the Playwright suite keep working; production builds pass
+  // VITE_ASSET_BASE=https://static.llmpingce.com/ so hashed chunks are fetched
+  // from the CDN instead of the 3Mbps edge box.
+  base: assetBase,
   plugins: [
     tailwindcss(),
     react(),
@@ -30,7 +41,14 @@ export default defineConfig({
       registerType: "prompt",
       injectRegister: false,
       injectManifest: {
-        globPatterns: ["**/*.{js,css,html,svg,woff2}"],
+        // App shell only. Including js/woff2/svg here made every release a
+        // ~6MB eager precache download per client (2MB gzipped) racing the
+        // student's login on a 3Mbps edge link. Build chunks, fonts and icon
+        // sprites are runtime-cached by src/sw.ts once a page actually uses
+        // them, which also keeps offline working for pages already visited.
+        globPatterns: assetsAreExternal
+          ? ["**/*.{html,webmanifest}"]
+          : ["**/*.{html,css,webmanifest}"],
         globIgnores: ["**/api/**"],
         maximumFileSizeToCacheInBytes: 3_000_000,
       },

@@ -428,7 +428,7 @@ function OperationsRegradingDialog({
         <DialogHeader className="gap-2 px-7 pb-4 pt-6 text-left">
           <DialogTitle>选择归属题目</DialogTitle>
           <DialogDescription>
-            归属评估者 → 关联的考试或练习 → 具体题目（仅填空 / 简答）
+            依次选择评估人、对应考试或练习，指定需重判的主观题目（填空 / 简答）。
           </DialogDescription>
           <div className="flex min-w-0 items-center gap-2 pt-3 text-xs text-muted-foreground">
             <span

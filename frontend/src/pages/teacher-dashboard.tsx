@@ -185,27 +185,27 @@ export function TeacherDashboard({ name }: { name: string }) {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <TeacherQuickAction
             title="创建课程"
-            description="组织资料、题目与教学活动"
+            description="搭建知识树、管理资料与发布测试"
             icon={<Plus size={18} />}
             onClick={() => navigate("/courses", { state: { create: true } })}
           />
           <TeacherQuickAction
             title="智能出题"
-            description="按课程内容生成题目"
+            description="基于课程资料与知识点 AI 出题"
             icon={<Sparkles size={18} />}
             disabled={loading || courseError}
             onClick={() => openCourseQuickAction("generate")}
           />
           <TeacherQuickAction
             title="导入题目"
-            description="从文档识别课程题目"
+            description="智能解析 Word/PDF 试题并入库"
             icon={<Upload size={18} />}
             disabled={loading || courseError}
             onClick={() => openCourseQuickAction("importQuestions")}
           />
           <TeacherQuickAction
             title="导入试卷"
-            description="从文档识别并导入试卷"
+            description="解析历史整卷并还原结构"
             icon={<FileUp size={18} />}
             disabled={loading || courseError}
             onClick={() => openCourseQuickAction("importPaper")}

@@ -8,7 +8,7 @@ from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import User
-from app.auth.security import hash_password
+from app.auth.security import hash_password_async
 from app.rbac.models import (
     Class,
     Organization,
@@ -439,7 +439,7 @@ async def reset_student_password_for_actor(
     if not reset_password:
         raise ValueError("student account has no usable password seed")
 
-    student.password_hash = hash_password(reset_password)
+    student.password_hash = await hash_password_async(reset_password)
     student.must_change_password = True
     student.session_token = None
     await db.flush()
@@ -572,7 +572,7 @@ async def create_student(
 ) -> User:
     # Prefer phone as the login account; school rosters without phones use student_id.
     account = get_student_account_identifier(data)
-    password_hash = hash_password(account)
+    password_hash = await hash_password_async(account)
     
     user = User(
         username=account,

@@ -113,6 +113,47 @@ target_includes_lsp_runner() {
   [[ "${DEPLOY_TARGET}" == "all" || "${DEPLOY_TARGET}" == "lsp-runner" || "${DEPLOY_TARGET}" == "runners" ]]
 }
 
+# Publish the built bundle to the edge box that fronts the CDN.
+#
+# The CDN pulls static assets from 122, which serves them from EDGE_STATIC_DIR.
+# A failed sync must not abort the deploy: 122 falls back to proxying this
+# server, so the release stays serviceable (just slower) and the next deploy
+# repairs the copy. --delete-delay removes stale hashed files only after the new
+# ones have landed, so an interrupted rsync cannot leave the directory empty.
+sync_static_to_edge() {
+  local slot="$1"
+  local edge_host="${EDGE_STATIC_HOST:-}"
+  local edge_dir="${EDGE_STATIC_DIR:-/var/www/exam-static}"
+  local container_id staging
+
+  if [[ -z "${edge_host}" ]]; then
+    return 0
+  fi
+
+  container_id="$(docker compose -f "${CURRENT_LINK}/docker-compose.yml" ps -q "frontend_${slot}" | head -n 1)"
+  if [[ -z "${container_id}" ]]; then
+    log "WARN: frontend_${slot} container not found; skipping static sync"
+    return 0
+  fi
+
+  staging="$(mktemp -d)"
+  if ! docker cp "${container_id}:/usr/share/nginx/html/." "${staging}/" >/dev/null; then
+    rm -rf "${staging}"
+    log "WARN: could not export the built bundle; skipping static sync"
+    return 0
+  fi
+
+  if rsync -az --delete-delay \
+      -e "ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new" \
+      "${staging}/" "${edge_host}:${edge_dir}/"; then
+    log "Published static bundle to ${edge_host}:${edge_dir}"
+  else
+    log "WARN: static sync to ${edge_host} failed; edge will proxy back to this server"
+  fi
+  rm -rf "${staging}"
+  return 0
+}
+
 wait_for_health() {
   local service="$1"
   local timeout="${2:-180}"
@@ -380,6 +421,7 @@ if target_includes_frontend; then
   log "Starting target frontend slot"
   docker compose up -d "frontend_${TARGET_FRONTEND_SLOT}"
   wait_for_health "frontend_${TARGET_FRONTEND_SLOT}" 180
+  sync_static_to_edge "${TARGET_FRONTEND_SLOT}"
 fi
 
 if target_includes_backend; then

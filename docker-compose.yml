@@ -69,6 +69,14 @@ services:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
         UV_INDEX_URL: ${UV_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
         CHROMIUM_FOR_TESTING_DOWNLOAD_HOST: ${CHROMIUM_FOR_TESTING_DOWNLOAD_HOST:-https://cdn.npmmirror.com/binaries/chrome-for-testing}
+    logging:
+      # Unbounded json-file logs were the remaining disk risk on the app host.
+      # At the current ~15k requests/day this caps at ~100MB per container,
+      # which is roughly one month of history.
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "2"
     restart: unless-stopped
     init: true
     shm_size: "512mb"
@@ -110,6 +118,17 @@ services:
         NODE_BASE_IMAGE: ${NODE_BASE_IMAGE:-node:22-alpine}
         FRONTEND_NGINX_IMAGE: ${FRONTEND_NGINX_IMAGE:-nginx:1.27-alpine}
         PNPM_REGISTRY: ${PNPM_REGISTRY:-https://registry.npmmirror.com}
+        # Set FRONTEND_ASSET_BASE=https://static.<domain>/ in deploy.env once the
+        # CDN is live; the default keeps assets on the app origin.
+        VITE_ASSET_BASE: ${FRONTEND_ASSET_BASE:-/}
+    logging:
+      # Unbounded json-file logs were the remaining disk risk on the app host.
+      # At the current ~15k requests/day this caps at ~100MB per container,
+      # which is roughly one month of history.
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "2"
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/healthz || exit 1"]
@@ -122,6 +141,14 @@ services:
 
   nginx:
     image: ${NGINX_IMAGE:-nginx:1.27-alpine}
+    logging:
+      # Unbounded json-file logs were the remaining disk risk on the app host.
+      # At the current ~15k requests/day this caps at ~100MB per container,
+      # which is roughly one month of history.
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "2"
     restart: unless-stopped
     depends_on:
       db:

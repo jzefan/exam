@@ -13,7 +13,7 @@ from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.auth.security import hash_password, verify_password
+from app.auth.security import hash_password_async, verify_password_async
 
 from app.auth.dependencies import CurrentUser, user_has_role
 from app.auth.models import User
@@ -2922,15 +2922,15 @@ async def set_course_workspace_password(
             course_id=course_id,
             user_id=user.id,
             workspace_key=uuid.uuid4().hex,
-            password_hash=hash_password(pwd),
+            password_hash=await hash_password_async(pwd),
             alias_name=payload.alias_name.strip() if payload.alias_name else user.full_name,
         )
         db.add(ws)
     else:
         if ws.password_hash and payload.old_password:
-            if not verify_password(payload.old_password, ws.password_hash):
+            if not await verify_password_async(payload.old_password, ws.password_hash):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="原密码不正确")
-        ws.password_hash = hash_password(pwd)
+        ws.password_hash = await hash_password_async(pwd)
         if payload.alias_name:
             ws.alias_name = payload.alias_name.strip()
 

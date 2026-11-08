@@ -411,7 +411,7 @@ export function Layout() {
                             icon={<ListChecks size={14} />}
                             onNavigate={() => setExamMenuOpen(false)}
                           >
-                            查看所有考试、练习及状态
+                            查看全量考试与日常练习状态
                           </NavItem>
                           <NavItem
                             href="/exams/create"
@@ -419,7 +419,7 @@ export function Layout() {
                             icon={<FilePlus size={14} />}
                             onNavigate={() => setExamMenuOpen(false)}
                           >
-                            新建考试、组卷、设置时间
+                            按向导设置组卷、考生与考试时间
                           </NavItem>
                           <NavItem
                             href="/exams/practice/create"
@@ -427,7 +427,7 @@ export function Layout() {
                             icon={<FilePlus size={14} />}
                             onNavigate={() => setExamMenuOpen(false)}
                           >
-                            按知识点、题目和学生快速发布练习
+                            按知识点或题型快速组题发布
                           </NavItem>
                           <NavItem
                             href="/exams/students"
@@ -435,7 +435,7 @@ export function Layout() {
                             icon={<Send size={14} />}
                             onNavigate={() => setExamMenuOpen(false)}
                           >
-                            查看各场考试下的考生列表
+                            查看与管理各场考试的参考名单
                           </NavItem>
                           <NavItem
                             href="/papers"
@@ -443,7 +443,7 @@ export function Layout() {
                             icon={<FileText size={14} />}
                             onNavigate={() => setExamMenuOpen(false)}
                           >
-                            管理手工与导入试卷资产
+                            查看与维护课程试卷库
                           </NavItem>
                           <NavItem
                             href="/papers/import"
@@ -451,7 +451,7 @@ export function Layout() {
                             icon={<Upload size={14} />}
                             onNavigate={() => setExamMenuOpen(false)}
                           >
-                            识别历史试卷并入库复用
+                            智能解析 Word/Markdown 试卷
                           </NavItem>
                         </ul>
                       </DropdownMenuContent>
@@ -557,7 +557,7 @@ export function Layout() {
                             icon={<ListChecks size={14} />}
                             onNavigate={() => setQuestionMenuOpen(false)}
                           >
-                            浏览和管理所有题目
+                            检索与维护全量题库
                           </NavItem>
                           <NavItem
                             href="/questions/create"
@@ -565,7 +565,7 @@ export function Layout() {
                             icon={<FilePlus size={14} />}
                             onNavigate={() => setQuestionMenuOpen(false)}
                           >
-                            新建选择题、填空题、主观题等
+                            单题录入（支持单选、多选、填空、主客观题）
                           </NavItem>
                           <NavItem
                             href="/questions/import"
@@ -573,7 +573,7 @@ export function Layout() {
                             icon={<Upload size={14} />}
                             onNavigate={() => setQuestionMenuOpen(false)}
                           >
-                            导入 PDF、Word、Markdown 题目
+                            支持 Word/PDF/Markdown 批量智能识别
                           </NavItem>
                           <NavItem
                             href="/tags"
@@ -581,7 +581,7 @@ export function Layout() {
                             icon={<Tags size={14} />}
                             onNavigate={() => setQuestionMenuOpen(false)}
                           >
-                            为题目打标签，方便筛选检索
+                            统一管理题目标签体系
                           </NavItem>
                           <NavItem
                             href="/knowledge"
@@ -589,7 +589,7 @@ export function Layout() {
                             icon={<Network size={14} />}
                             onNavigate={() => setQuestionMenuOpen(false)}
                           >
-                            管理专业 / 方向 / 主知识点的层级与前置依赖
+                            维护专业方向与知识树前置依赖
                           </NavItem>
                         </ul>
                       </DropdownMenuContent>

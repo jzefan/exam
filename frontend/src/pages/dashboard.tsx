@@ -296,43 +296,43 @@ export function Dashboard() {
               <>
                 <QuickAction
                   title="新建题目"
-                  description="创建选择题、填空题、主观题等"
+                  description="录入各类型题目并配置答案解析"
                   icon={<FilePlus size={18} />}
                   onClick={() => navigate("/questions/create")}
                 />
                 <QuickAction
                   title="题库管理"
-                  description="浏览、搜索和管理所有题目"
+                  description="分类维护题目、标签与课程题库"
                   icon={<BookOpen size={18} />}
                   onClick={() => navigate("/questions")}
                 />
                 <QuickAction
                   title="用户管理"
-                  description="管理平台所有用户与角色"
+                  description="维护用户账号、角色权限与班级"
                   icon={<UserCog size={18} />}
                   onClick={() => navigate("/users")}
                 />
                 <QuickAction
                   title="创建考试"
-                  description="组卷、设置考试时间与规则"
+                  description="按向导组卷、配置考生与考试时间"
                   icon={<Plus size={18} />}
                   onClick={() => navigate("/exams/create")}
                 />
                 <QuickAction
                   title="考试管理"
-                  description="查看所有考试及当前状态"
+                  description="监控考试进程、答卷提交与成绩"
                   icon={<ClipboardList size={18} />}
                   onClick={() => navigate("/exams")}
                 />
                 <QuickAction
                   title="阅卷中心"
-                  description="人工阅卷与 AI 智能评分"
+                  description="主观题人工核分与 AI 辅助阅卷"
                   icon={<FileCheck size={18} />}
                   onClick={() => navigate("/grading")}
                 />
                 <QuickAction
                   title="岗位管理"
-                  description="管理岗位模型与能力体系"
+                  description="构建岗位能力模型与技能图谱"
                   icon={<Briefcase size={18} />}
                   onClick={() => navigate("/gwmx/job-models")}
                 />
@@ -348,13 +348,13 @@ export function Dashboard() {
                 />
                 <QuickAction
                   title="我的课程"
-                  description="维护课程知识点、资料、考试与练习"
+                  description="课程知识树、资料库与测试发布"
                   icon={<LibraryBig size={18} />}
                   onClick={() => navigate("/courses")}
                 />
                 <QuickAction
                   title="创建课程"
-                  description="新建一门课程，开始组织资料与题目"
+                  description="开设新课程并初始化教学架构"
                   icon={<Plus size={18} />}
                   onClick={() =>
                     navigate("/courses", { state: { create: true } })
@@ -362,13 +362,13 @@ export function Dashboard() {
                 />
                 <QuickAction
                   title="导入题目"
-                  description="从文档识别并导入题目"
+                  description="智能解析 Word/PDF 批量入库"
                   icon={<Upload size={18} />}
                   onClick={() => navigate("/questions/import")}
                 />
                 <QuickAction
                   title="考试阅卷"
-                  description="处理待阅卷试卷与评分确认"
+                  description="批改主观作答并复核确认"
                   icon={<FileCheck size={18} />}
                   onClick={() => navigate("/grading")}
                 />

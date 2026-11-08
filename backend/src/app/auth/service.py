@@ -11,7 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import PasswordResetToken, User
 from app.auth.schemas import RoleOption, UserCreate, UserOrgInfo, UserResponse, UserUpdate
-from app.auth.security import hash_password, verify_password
+from app.auth.security import (
+    hash_password_async,
+    password_needs_rehash,
+    verify_password_async,
+)
 from app.config import settings
 from app.rbac.models import Organization, Role, TeacherStudent, UserOrganization
 
@@ -96,7 +100,7 @@ async def reset_password_with_token(db: AsyncSession, token: str, password: str)
     if user is None or not user.is_active:
         return False
 
-    user.password_hash = hash_password(password)
+    user.password_hash = await hash_password_async(password)
     reset_token.used_at = now
     await db.flush()
     return True
@@ -109,7 +113,7 @@ async def create_user(db: AsyncSession, data: UserCreate) -> User:
     user = User(
         username=data.username,
         email=data.email or _build_optional_email(data.username),
-        password_hash=hash_password(data.password),
+        password_hash=await hash_password_async(data.password),
         full_name=data.full_name,
         persona=data.persona,
         owner_teacher_id=data.owner_teacher_id,
@@ -150,7 +154,7 @@ async def force_change_password_for_student(db: AsyncSession, user: User, passwo
     if len(password) < 6:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="密码至少需要6位")
 
-    user.password_hash = hash_password(password)
+    user.password_hash = await hash_password_async(password)
     user.must_change_password = False
     await db.flush()
     await db.refresh(user)
@@ -189,7 +193,15 @@ async def authenticate_user_with_reason(
             return candidate, None
 
     for candidate in candidates:
-        if verify_password(password, candidate.password_hash):
+        if await verify_password_async(password, candidate.password_hash):
+            # Flag a cost upgrade for the login flow to apply. It must NOT be
+            # written here: mutating a mapped attribute now leaves the object
+            # dirty, the next autoflush marks every server-onupdate column
+            # (updated_at) expired, and build_user_response then triggers a
+            # lazy load outside the greenlet context -> MissingGreenlet -> 500.
+            # The router folds the new hash into the update it already issues.
+            if password_needs_rehash(candidate.password_hash):
+                candidate._needs_password_rehash = True  # type: ignore[attr-defined]
             return candidate, None
     return None, LoginFailureReason.WRONG_PASSWORD
 

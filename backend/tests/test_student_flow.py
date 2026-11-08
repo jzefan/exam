@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -165,7 +166,7 @@ async def test_student_exam_flow(client: AsyncClient, db_session) -> None:
 
 
 @pytest.mark.asyncio
-async def test_fill_in_answer_is_evaluated_on_save_and_reused_on_submit(
+async def test_fill_in_answer_is_evaluated_on_submit_not_on_save(
     monkeypatch, client: AsyncClient, db_session
 ) -> None:
     org = await _create_org_with_roles(db_session)
@@ -195,7 +196,7 @@ async def test_fill_in_answer_is_evaluated_on_save_and_reused_on_submit(
 
     question = Question(
         type=QuestionType.FILL_IN,
-        title="填空题保存时评估",
+        title="填空题提交时评估",
         content={"text": "<p>请填写____、____。</p>"},
         options=None,
         answer={"blanks": ["A", "B"]},
@@ -210,8 +211,8 @@ async def test_fill_in_answer_is_evaluated_on_save_and_reused_on_submit(
     await db_session.flush()
 
     exam = Exam(
-        title="填空题保存评估考试",
-        description="验证下一题保存时触发填空题评估",
+        title="填空题提交评估考试",
+        description="验证自动保存只落库、提交时才触发填空题评估",
         start_time=datetime.now(timezone.utc) - timedelta(minutes=10),
         end_time=datetime.now(timezone.utc) + timedelta(minutes=50),
         duration_minutes=60,
@@ -262,7 +263,8 @@ async def test_fill_in_answer_is_evaluated_on_save_and_reused_on_submit(
         },
     )
     assert save_response.status_code == 200
-    assert calls == 1
+    # Autosave is a pure durability path: no LLM call, no grading cache.
+    assert calls == 0
 
     exam_student = (
         await db_session.execute(
@@ -270,7 +272,7 @@ async def test_fill_in_answer_is_evaluated_on_save_and_reused_on_submit(
         )
     ).scalar_one()
     saved_answer = exam_student.saved_answers[str(question.id)]
-    assert saved_answer["_fill_in_grading_cache"]["score_awarded"] == 4
+    assert saved_answer == {"blanks": ["甲", "乙"]}
 
     restart_response = await client.post(f"/api/student/exams/{exam.id}/start")
     assert restart_response.status_code == 200
@@ -707,3 +709,114 @@ async def test_student_cannot_retake_ongoing_exam_without_teacher_permission(
     restart = await client.post(f"/api/student/exams/{exam.id}/start", json={"retake": True})
     assert restart.status_code == 400
     assert restart.json()["detail"] == "Retake is not allowed"
+
+
+@pytest.mark.asyncio
+async def test_submit_grades_fill_in_answers_concurrently(
+    monkeypatch, client: AsyncClient, db_session
+) -> None:
+    """Submit must not await the equivalence LLM once per question, serially.
+
+    Grading was the reason a 20-question paper took 30s to submit: N sequential
+    LLM round-trips on a single worker. The endpoint now fans out (bounded), so
+    this asserts the calls actually overlap — a serial implementation would
+    never see two in flight at once.
+    """
+    org = await _create_org_with_roles(db_session)
+
+    teacher = await create_user(
+        db_session,
+        UserCreate(
+            username="teacher_parallel_fill_in",
+            email="teacher_parallel_fill_in@example.com",
+            password="teacherpass123",
+            full_name="Teacher Parallel Fill In",
+            role_name="teacher",
+            org_id=org.id,
+        ),
+    )
+    student = await create_user(
+        db_session,
+        UserCreate(
+            username="student_parallel_fill_in",
+            email="student_parallel_fill_in@example.com",
+            password="studentpass123",
+            full_name="Student Parallel Fill In",
+            role_name="student",
+            org_id=org.id,
+        ),
+    )
+
+    questions = []
+    for index, expected in enumerate(["A", "B", "C"]):
+        question = Question(
+            type=QuestionType.FILL_IN,
+            title=f"并发判分填空 {index}",
+            content={"text": "<p>请填写____。</p>"},
+            options=None,
+            answer={"blanks": [expected]},
+            analysis=None,
+            difficulty=2,
+            score=2,
+            usage_count=0,
+            created_by=teacher.id,
+            owner_id=teacher.id,
+        )
+        questions.append(question)
+    db_session.add_all(questions)
+    await db_session.flush()
+
+    exam = Exam(
+        title="并发判分考试",
+        description="验证提交时填空题并发判分",
+        start_time=datetime.now(timezone.utc) - timedelta(minutes=10),
+        end_time=datetime.now(timezone.utc) + timedelta(minutes=50),
+        duration_minutes=60,
+        total_score=6,
+        status="ongoing",
+        max_switch_count=0,
+        show_result=True,
+        created_by=teacher.id,
+        owner_id=teacher.id,
+    )
+    db_session.add(exam)
+    await db_session.flush()
+    db_session.add_all([ExamQuestion(exam_id=exam.id, question_id=question.id, order=index) for index, question in enumerate(questions)])
+    db_session.add(ExamStudent(exam_id=exam.id, student_id=student.id))
+    await db_session.commit()
+
+    in_flight = 0
+    max_in_flight = 0
+
+    async def fake_ai(*, expected_answers, student_answers, **_kwargs):
+        nonlocal in_flight, max_in_flight
+        in_flight += 1
+        max_in_flight = max(max_in_flight, in_flight)
+        try:
+            # Long enough that a serial implementation can never overlap.
+            await asyncio.sleep(0.05)
+        finally:
+            in_flight -= 1
+        return [{"score": 1.0, "is_correct": True, "reason": "ok"}]
+
+    monkeypatch.setattr(
+        "app.exams.student_router._request_fill_in_equivalence_with_deepseek", fake_ai
+    )
+    client.headers.update({"Authorization": f"Bearer {create_access_token(student.id, '')}"})
+
+    assert (await client.post(f"/api/student/exams/{exam.id}/start")).status_code == 200
+    save_response = await client.post(
+        f"/api/student/exams/{exam.id}/answers",
+        json={
+            "answers": [
+                {"question_id": str(question.id), "answer_content": {"blanks": ["甲"]}}
+                for question in questions
+            ]
+        },
+    )
+    assert save_response.status_code == 200
+
+    submit_response = await client.post(f"/api/student/exams/{exam.id}/submit")
+    assert submit_response.status_code == 200
+    assert submit_response.json()["score"] == 6
+    assert max_in_flight > 1

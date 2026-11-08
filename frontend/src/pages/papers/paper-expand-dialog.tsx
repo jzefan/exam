@@ -19,7 +19,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import type { IPaper, IPaperDetail, IQuestion, IQuestionBank } from "@/types";
+import type {
+  IPaper,
+  IPaperDetail,
+  IQuestion,
+  IQuestionBank,
+  QuestionDisplayType,
+} from "@/types";
 
 import { paperApiRequest } from "./api";
 import { allocateExpansionQuestionIds } from "./paper-expand-utils";
@@ -46,7 +52,11 @@ export function PaperExpandDialog({
   const navigate = useNavigate();
   const { toast } = useToast();
   const [detail, setDetail] = useState<IPaperDetail | null>(null);
-  const [bankQuestions, setBankQuestions] = useState<IQuestion[]>([]);
+  const [candidates, setCandidates] = useState<IQuestion[]>([]);
+  const [typeCounts, setTypeCounts] = useState<
+    Array<[QuestionDisplayType, number]>
+  >([]);
+  const [bankTotal, setBankTotal] = useState(0);
   const [target, setTarget] = useState(100);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -61,35 +71,80 @@ export function PaperExpandDialog({
     : null;
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !bank) return;
     let cancelled = false;
     setLoading(true);
     setDetail(null);
-    setBankQuestions([]);
-    const params = new URLSearchParams({
-      _start: "0",
-      _end: "2000",
-      ...(bank ? { question_bank_id: bank.id } : {}),
-    });
-    Promise.all([
-      paperApiRequest<IPaperDetail>(`/papers/${paper.id}`),
-      bank
-        ? paperApiRequest<IQuestion[]>(`/questions?${params}`)
-        : Promise.resolve<IQuestion[]>([]),
-    ])
-      .then(([paperDetail, questions]) => {
-        if (cancelled) return;
-        setDetail(paperDetail);
-        setBankQuestions(questions);
-        setTarget(Math.max(100, paperDetail.questions.length));
-      })
+    setCandidates([]);
+    setTypeCounts([]);
+    setBankTotal(0);
+
+    const load = async () => {
+      const paperDetail = await paperApiRequest<IPaperDetail>(
+        `/papers/${paper.id}`,
+      );
+      if (cancelled) return;
+      setDetail(paperDetail);
+      setTarget(Math.max(100, paperDetail.questions.length));
+
+      const knowledgeIds = new Set<string>();
+      for (const item of paperDetail.questions) {
+        for (const point of item.question?.knowledge_points ?? []) {
+          knowledgeIds.add(point.id);
+        }
+      }
+      if (knowledgeIds.size === 0 && paperDetail.root_knowledge_point_id) {
+        knowledgeIds.add(paperDetail.root_knowledge_point_id);
+      }
+
+      const counts = await paperApiRequest<Array<{ type: string; count: number }>>(
+        `/questions/type-distribution?question_bank_id=${bank.id}`,
+      );
+      if (cancelled) return;
+      const countMap = new Map<QuestionDisplayType, number>();
+      for (const row of counts) {
+        const type = row.type as QuestionDisplayType;
+        if (!(type in questionDisplayTypeFullLabel)) continue;
+        countMap.set(type, (countMap.get(type) ?? 0) + row.count);
+      }
+      setTypeCounts([...countMap.entries()]);
+      setBankTotal([...countMap.values()].reduce((sum, n) => sum + n, 0));
+
+      // 每个知识点只取一页候选，避免把整个题库拉回前端。
+      const knowledgeList = knowledgeIds.size > 0 ? [...knowledgeIds] : [null];
+      const pages = await Promise.all(
+        knowledgeList.map((knowledgeId) => {
+          const params = new URLSearchParams({
+            _start: "0",
+            _end: "60",
+            question_bank_id: bank.id,
+          });
+          if (knowledgeId) params.set("knowledge_point_id", knowledgeId);
+          return paperApiRequest<IQuestion[]>(`/questions?${params}`);
+        }),
+      );
+      if (cancelled) return;
+      const paperIds = new Set(
+        paperDetail.questions.map((item) => item.question_id),
+      );
+      const unique = new Map<string, IQuestion>();
+      for (const page of pages) {
+        for (const question of page) {
+          if (paperIds.has(question.id)) continue;
+          unique.set(question.id, question);
+        }
+      }
+      setCandidates([...unique.values()]);
+    };
+
+    load()
       .catch((error) => {
         if (cancelled) return;
         toast({
           title: "加载试卷失败",
           description: error instanceof Error ? error.message : "请稍后重试",
           variant: "destructive",
-          });
+        });
         onOpenChange(false);
       })
       .finally(() => {
@@ -98,47 +153,10 @@ export function PaperExpandDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, paper.id, bank?.id, onOpenChange, toast]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, paper.id, bank?.id]);
 
   const paperQuestions = detail?.questions ?? [];
-  const paperKnowledgeIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const item of paperQuestions) {
-      for (const point of item.question?.knowledge_points ?? []) {
-        ids.add(point.id);
-      }
-    }
-    if (ids.size === 0 && paper.root_knowledge_point_id) {
-      ids.add(paper.root_knowledge_point_id);
-    }
-    return ids;
-  }, [paperQuestions, paper.root_knowledge_point_id]);
-
-  const expandCandidates = useMemo(() => {
-    const selected = new Set(paperQuestions.map((item) => item.question_id));
-    return bankQuestions.filter(
-      (question) =>
-        !selected.has(question.id) &&
-        (paperKnowledgeIds.size === 0 ||
-          question.knowledge_points.some((point) =>
-            paperKnowledgeIds.has(point.id),
-          )),
-    );
-  }, [bankQuestions, paperKnowledgeIds, paperQuestions]);
-
-  const bankTypeRows = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const question of bankQuestions) {
-      const displayType = getQuestionDisplayType(question);
-      if (!displayType) continue;
-      counts.set(displayType, (counts.get(displayType) ?? 0) + 1);
-    }
-    return [...counts.entries()].sort(
-      ([a], [b]) =>
-        Object.keys(questionDisplayTypeFullLabel).indexOf(a) -
-        Object.keys(questionDisplayTypeFullLabel).indexOf(b),
-    );
-  }, [bankQuestions]);
 
   const addedIds = useMemo(
     () =>
@@ -146,13 +164,13 @@ export function PaperExpandDialog({
         paperQuestions.map((item) =>
           item.question ? getQuestionDisplayType(item.question) : null,
         ),
-        expandCandidates.map((question) => ({
+        candidates.map((question) => ({
           id: question.id,
           displayType: getQuestionDisplayType(question),
         })),
         target,
       ),
-    [expandCandidates, paperQuestions, target],
+    [candidates, paperQuestions, target],
   );
 
   const handleGenerate = async () => {
@@ -237,20 +255,17 @@ export function PaperExpandDialog({
             </div>
             <div className="rounded-md border border-border/60 bg-muted/20 p-3">
               <p className="text-sm font-medium text-foreground">
-                课程题库共 {bankQuestions.length} 题
+                课程题库共 {bankTotal} 题
               </p>
               <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                {bankTypeRows.map(([type, count]) => (
+                {typeCounts.map(([type, count]) => (
                   <span key={type}>
-                    {questionDisplayTypeFullLabel[
-                      type as keyof typeof questionDisplayTypeFullLabel
-                    ] ?? type}{" "}
-                    {count}
+                    {questionDisplayTypeFullLabel[type]} {count}
                   </span>
                 ))}
               </div>
               <p className="mt-2 text-xs text-muted-foreground">
-                同知识点且未在试卷中的可用 {expandCandidates.length} 题
+                同知识点且未在试卷中的可用 {candidates.length} 题
               </p>
             </div>
           </div>

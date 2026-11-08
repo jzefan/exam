@@ -750,8 +750,7 @@ export function MaterialAIGenerateDialog({
                 基于学习资料智能出题
               </DialogTitle>
               <DialogDescription className="mt-1 text-xs leading-relaxed">
-                题目将自动归入「{targetQuestionBankName}
-                」，并关联到当前知识点。若资料含图片/版面信息，将优先使用多模态模型理解内容。
+                题目将自动归入「{targetQuestionBankName}」并关联当前知识点，支持图文多模态解析。
               </DialogDescription>
             </div>
           </div>
@@ -1181,8 +1180,7 @@ export function MaterialAIGenerateDialog({
             </div>
             <DialogTitle>练习已发布</DialogTitle>
             <DialogDescription>
-              已发布 {createdAssignment?.questionCount ?? 0}{" "}
-              道题的练习，可以立即进入练习详情查看。
+              已成功发布练习（共 {createdAssignment?.questionCount ?? 0} 题），可前往详情页查看或分发。
             </DialogDescription>
           </DialogHeader>
 

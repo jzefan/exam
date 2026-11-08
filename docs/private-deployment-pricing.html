@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>智评线 · 私有部署费用评估（2026-11）</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --ink:#1b2330; --muted:#5d6a7d; --line:#e3e8ef;
+    --brand:#25499b; --brand-soft:#eaf0fb; --accent:#c8541b; --accent-soft:#fdf0e8;
+    --ok:#1a7a54; --ok-soft:#e8f5ee; --warn:#a4371f; --warn-soft:#fbece9;
+    --shadow:0 1px 2px rgba(20,32,55,.05),0 8px 24px rgba(20,32,55,.05);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;
+    font-size:15px;line-height:1.72;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 20px 72px}
+  header.top{border-bottom:1px solid var(--line);padding-bottom:24px;margin-bottom:28px}
+  .kicker{font-size:12px;letter-spacing:.14em;color:var(--brand);font-weight:700;text-transform:uppercase}
+  h1{font-size:30px;line-height:1.3;margin:10px 0 8px;letter-spacing:-.02em}
+  .sub{color:var(--muted);font-size:14px;margin:0}
+  .badge{display:inline-block;background:var(--brand-soft);color:var(--brand);border-radius:999px;
+    padding:3px 12px;font-size:12px;font-weight:700;margin-left:8px;vertical-align:middle}
+  h2{font-size:20px;margin:38px 0 14px;letter-spacing:-.01em;display:flex;align-items:center;gap:10px}
+  h2::before{content:"";width:4px;height:19px;background:var(--brand);border-radius:2px;display:inline-block}
+  h3{font-size:15px;margin:22px 0 10px}
+  p{margin:10px 0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 22px;box-shadow:var(--shadow)}
+  .grid{display:grid;gap:14px}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;box-shadow:var(--shadow)}
+  .stat .n{font-size:26px;font-weight:750;letter-spacing:-.03em;line-height:1.2}
+  .stat .n small{font-size:14px;font-weight:600;margin-left:2px}
+  .stat .l{font-size:12.5px;color:var(--muted);margin-top:4px}
+  .hero{background:linear-gradient(180deg,#fff, #fbfcff);border:1px solid var(--line);
+    border-left:4px solid var(--brand);border-radius:12px;padding:22px 24px;box-shadow:var(--shadow)}
+  .hero .big{font-size:34px;font-weight:800;color:var(--brand);letter-spacing:-.03em;line-height:1.2}
+  .hero .big small{font-size:16px;font-weight:600}
+  .tag{display:inline-block;font-size:12px;font-weight:700;border-radius:6px;padding:2px 9px;margin-right:6px}
+  .tag.b{background:var(--brand-soft);color:var(--brand)}
+  .tag.g{background:var(--ok-soft);color:var(--ok)}
+  .tag.o{background:var(--accent-soft);color:var(--accent)}
+  .tag.r{background:var(--warn-soft);color:var(--warn)}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#f9fafc;font-weight:700;color:#41506a;font-size:12.5px;letter-spacing:.02em}
+  tr:last-child td{border-bottom:none}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  tfoot td{font-weight:750;background:#f9fafc;border-top:2px solid var(--line)}
+  .muted{color:var(--muted)}
+  .small{font-size:12.5px}
+  .src{font-size:11.5px;color:#7b879a;word-break:break-all}
+  a{color:var(--brand);text-decoration:none}
+  a:hover{text-decoration:underline}
+  ul{margin:8px 0;padding-left:20px}
+  li{margin:5px 0}
+  .tabs{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 18px}
+  .tab{border:1px solid var(--line);background:#fff;border-radius:9px;padding:9px 16px;cursor:pointer;
+    font:inherit;font-size:13.5px;font-weight:650;color:var(--muted);transition:.15s}
+  .tab:hover{border-color:#a9bce4;color:var(--brand)}
+  .tab.on{background:var(--brand);border-color:var(--brand);color:#fff;box-shadow:0 3px 10px rgba(37,73,155,.22)}
+  .tab .p{display:block;font-size:11.5px;font-weight:500;opacity:.85}
+  .bar{display:flex;height:34px;border-radius:8px;overflow:hidden;margin:6px 0 10px;background:#eef1f6}
+  .bar div{display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:700;
+    transition:width .35s ease;min-width:0;white-space:nowrap}
+  .bar .s1{background:#25499b}.bar .s2{background:#4a76c9}.bar .s3{background:#c8541b}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12.5px;color:var(--muted)}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:middle}
+  .price-line{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:4px}
+  .price-line .v{font-size:32px;font-weight:800;color:var(--brand);letter-spacing:-.03em}
+  .price-line .u{font-size:14px;color:var(--muted)}
+  .note{background:#fffdf6;border:1px solid #f0e2bd;border-radius:10px;padding:14px 18px;font-size:13.5px}
+  .danger{background:var(--warn-soft);border:1px solid #f0ccc4;border-radius:10px;padding:16px 20px}
+  .okbox{background:var(--ok-soft);border:1px solid #c6e6d5;border-radius:10px;padding:16px 20px}
+  .split{display:grid;grid-template-columns:1.15fr .85fr;gap:16px}
+  .kv{display:flex;justify-content:space-between;gap:14px;padding:7px 0;border-bottom:1px dashed var(--line);font-size:13.5px}
+  .kv:last-child{border-bottom:none}
+  .kv b{font-variant-numeric:tabular-nums}
+  input[type=range]{width:100%;accent-color:var(--brand);margin:8px 0}
+  .calc{background:#f9fafc;border:1px solid var(--line);border-radius:10px;padding:14px 18px}
+  .calc .res{font-size:20px;font-weight:750;color:var(--brand);font-variant-numeric:tabular-nums}
+  footer{margin-top:44px;padding-top:20px;border-top:1px solid var(--line);font-size:12px;color:#8a95a6}
+  @media(max-width:820px){
+    .g3,.g4,.g2,.split{grid-template-columns:1fr 1fr}
+    h1{font-size:24px}
+  }
+  @media(max-width:560px){
+    .g3,.g4,.g2,.split{grid-template-columns:1fr}
+    .wrap{padding:20px 14px 48px}
+    .card{padding:16px}
+    .bar div{font-size:10px}
+    table{font-size:12.5px}
+    th,td{padding:8px 7px}
+  }
+  @media print{
+    body{background:#fff;font-size:12px}
+    .wrap{max-width:none;padding:0}
+    .card,.stat,.hero{box-shadow:none;break-inside:avoid}
+    .tabs{display:none}
+    h2{margin-top:22px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div class="kicker">成本评估 · 私有化交付</div>
+  <h1>智评线 私有部署费用评估 <span class="badge">供内部报价决策</span></h1>
+  <p class="sub">评估对象：本仓库现有系统 ｜ 目标：学校经费 10–20 万元内可落地 ｜ 编制日期：2026-11-07</p>
+</header>
+
+<div class="hero">
+  <div class="price-line">
+    <span class="big">16.8 <small>万元</small></span>
+    <span class="u">推荐「标准版」首年总价（含软件授权 + 实施交付 + 首年运维）</span>
+    <span class="tag o">推荐</span>
+  </div>
+  <p style="margin:8px 0 0"><strong>结论：10–20 万可行，但只能按「现有成品软件授权 + 标准化实施 + 首年运维」签，不能按定制开发签。</strong>
+  这个价位对应的是产品复用，不是研发投入回收；把范围写死、把续年运维写进合同，是不亏本的关键。</p>
+  <div class="grid g3" style="margin-top:18px">
+    <div class="stat"><div class="n">12.8–19.8<small> 万</small></div><div class="l">三档首年报价区间</div></div>
+    <div class="stat"><div class="n">≈69<small> 人日</small></div><div class="l">私有部署新增工作量（首校）</div></div>
+    <div class="stat"><div class="n">2.4<small> 万/年</small></div><div class="l">标准版续年运维（第 2 年起）</div></div>
+  </div>
+</div>
+
+<h2>一、为什么是这个价：两个锚点</h2>
+
+<div class="split">
+  <div class="card">
+    <h3 style="margin-top:0">锚点 A · 软件体量（重置成本远高于 20 万）</h3>
+    <div class="grid g2" style="gap:10px">
+      <div class="stat" style="box-shadow:none"><div class="n">23.8<small> 万行</small></div><div class="l">后端 Python 10.45 万 + 前端 TS/TSX 13.36 万</div></div>
+      <div class="stat" style="box-shadow:none"><div class="n">646<small> 个</small></div><div class="l">前后端源文件</div></div>
+      <div class="stat" style="box-shadow:none"><div class="n">24 / 32</div><div class="l">后端业务模块目录 / 路由文件</div></div>
+      <div class="stat" style="box-shadow:none"><div class="n">73<small> 个</small></div><div class="l">Alembic 数据库迁移版本</div></div>
+      <div class="stat" style="box-shadow:none"><div class="n">243<small> 个</small></div><div class="l">测试文件（pytest 108 + vitest 135）</div></div>
+      <div class="stat" style="box-shadow:none"><div class="n">8 / 2,086</div><div class="l">Compose 服务 / 部署脚本行数</div></div>
+    </div>
+    <p class="small muted" style="margin-top:12px">按从零定制开发的行业口径，这套体量的重置成本是数十万到百万量级，且周期以年计。<strong>10–20 万只有在「软件已经存在、只卖授权 + 实施」时成立</strong>——这一点在合同里要表述清楚，避免被理解成定制开发项目。</p>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">锚点 B · 同类高校采购中标价</h3>
+    <table>
+      <thead><tr><th>项目</th><th class="num">金额</th><th>性质</th></tr></thead>
+      <tbody>
+        <tr><td>杭州电子科技大学 智能考试综合服务平台</td><td class="num">19.63 万</td><td>成品平台</td></tr>
+        <tr><td>成都职业技术学院 在线考试系统服务</td><td class="num">15.38 万</td><td>15 日部署+培训</td></tr>
+        <tr><td>甘肃中医药大学 智慧考试系统（超星 V3.0）</td><td class="num">49.50 万</td><td>成熟商业产品</td></tr>
+        <tr><td>广州美术学院 专业考试系统服务</td><td class="num">209.65 万</td><td>8 个月专项服务</td></tr>
+        <tr><td>广东开放大学 考试综合平台建设+3 年服务</td><td class="num">395.80 万</td><td>平台建设类</td></tr>
+      </tbody>
+    </table>
+    <p class="small muted" style="margin-top:10px">15–20 万正是「标准化成品软件 / 短期部署服务」的市场档位；49.5 万是成熟商业license的上沿；两百万以上属于建设类项目。<strong>本校报价落在 12.8–19.8 万，与采购惯例相符，不需要额外论证「为什么这么便宜」。</strong></p>
+  </div>
+</div>
+<p class="src">来源：<a href="https://cgzx.hdu.edu.cn/2026/1103/c13050a302584/page.htm">杭电采购中心</a> ·
+<a href="https://www.gmgitc.com/BID/BidResultDetail?ID=0724-2630CD015260%7C2026/09/10%7C/01%7C111142">国义招标</a> ·
+<a href="https://www.gsei.com.cn/html/1337/2026-10-26/content-710843.html">甘肃经济信息网</a> ·
+<a href="https://www.ccgp.gov.cn/cggg/dfgg/cjgg/202512/t20251216_25933854.htm">中国政府采购网</a> ·
+<a href="https://www.ccgp.gov.cn/cggg/dfgg/zbgg/202605/t20260520_26595029.htm">中国政府采购网</a>（检索于 2026-11-07）</p>
+
+<h2>二、私有部署到底新增了哪些工作量</h2>
+<p class="muted small">现有系统是按「自己运维的一套线上平台」做的，不是商品化安装包。下列工作是把它变成「能交给别人独立运维」所必须补的，也是报价里最容易被漏算的部分。</p>
+
+<div class="card" style="padding:0;overflow-x:auto">
+<table>
+  <thead><tr><th style="width:34px">#</th><th>工作项</th><th>具体要补什么（基于仓库现状）</th><th class="num">人日</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>交付包产品化</td><td>去掉硬编码：部署目标 <code>146.56.224.80:3036</code>、<code>/home/leishuo/exam-app</code> 路径、导出表头写死的校名；统一配置项；产出版本清单与 SBOM、离线镜像包、一键安装脚本</td><td class="num">12</td></tr>
+    <tr><td>2</td><td>内网 / 离线适配</td><td>基础镜像、pip/npm 源、Chromium for Testing、jdtls 依赖离线化或代理化；5 家大模型 API 的出口白名单，或改指向校内 OpenAI 兼容端点（<code>*_base_url</code> 已可配，这是利好）</td><td class="num">6</td></tr>
+    <tr><td>3</td><td>授权与许可机制</td><td><strong>当前代码里没有任何 License / 授权机制</strong>。需新增机器码绑定、有效期、人数上限、许可文件校验，否则无法界定交付范围</td><td class="num">5</td></tr>
+    <tr><td>4</td><td>单校裁剪与品牌化</td><td>隐藏平台管理员 / 企业 / 岗位模型（<code>/gwmx</code>）等单校无关模块；校名、Logo、登录页、导出模板可配置</td><td class="num">4</td></tr>
+    <tr><td>5</td><td>统一身份认证对接</td><td>已有 OIDC SSO（ArkLoop IdP），但学校通常是 CAS / OAuth2 / LDAP / 企业微信，需适配联调 + 账号映射与首次登录策略</td><td class="num">6</td></tr>
+    <tr><td>6</td><td>基础数据导入</td><td>学生、班级、课程、知识点、题库按标准 Excel/CSV 模板迁入，并校验重复与关联关系</td><td class="num">4</td></tr>
+    <tr><td>7</td><td>安全加固与等保配合</td><td>HTTPS、密码与会话策略、审计日志留痕、上传文件校验、<strong>judge-runner 执行学生代码的沙箱隔离说明与整改</strong>、配合漏洞扫描整改</td><td class="num">9</td></tr>
+    <tr><td>8</td><td>运维体系</td><td>数据库定时备份 + 恢复演练、健康检查与告警、蓝绿升级与回滚手册（学习通模式为单实例交接，需单独写清）</td><td class="num">5</td></tr>
+    <tr><td>9</td><td>文档与培训</td><td>管理员 / 教师 / 学生三本手册、部署运维手册、2 场培训（远程或现场）</td><td class="num">5</td></tr>
+    <tr><td>10</td><td>上线陪跑与验收</td><td>数据初始化、2 场模拟考试含 AI 阅卷全流程、缺陷修复、备份恢复演练、验收报告</td><td class="num">8</td></tr>
+    <tr><td>11</td><td>项目管理与沟通</td><td>需求确认、周报、协调窗口、1 次现场支持</td><td class="num">5</td></tr>
+  </tbody>
+  <tfoot><tr><td colspan="3">合计（首校一次性）</td><td class="num">69 人日</td></tr></tfoot>
+</table>
+</div>
+
+<div class="grid g2" style="margin-top:14px">
+  <div class="calc">
+    <h3 style="margin-top:0">人力成本敏感性</h3>
+    <label class="small muted" for="rate">人日单价：<b id="rateVal">1,300</b> 元</label>
+    <input type="range" id="rate" min="1000" max="1800" step="100" value="1300">
+    <p style="margin:6px 0 0">69 人日直接人力成本 ≈ <span class="res" id="costVal">8.97 万</span></p>
+    <p class="small muted" style="margin:6px 0 0">其中约 27 人日（第 1/3/8/9 项）属于<strong>一次性产品化投入</strong>，做成标准交付包后第二所学校可复用。首校按 60% 分摊计入成本，约 <span id="shareVal">7.53 万</span>——这是实施费不宜低于 7 万的原因。</p>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">私有化之后，维护比 SaaS 更贵</h3>
+    <ul class="small" style="margin-bottom:8px">
+      <li>无法统一在线升级，每校一份实例，版本会分叉</li>
+      <li>升级要远程进校内环境、做回归、准备回滚，约 2 次/年 × 2 人日</li>
+      <li>安全补丁与依赖更新约 3 人日/年；远程答疑限 30 工单约 6 人日</li>
+      <li>备份巡检、配置变更约 5 人日/年</li>
+    </ul>
+    <div class="kv"><span>合计维护工作量</span><b>≈18 人日/年</b></div>
+    <div class="kv"><span>按 1,300 元/人日折算</span><b>≈2.34 万元/年</b></div>
+    <p class="small muted" style="margin:8px 0 0"><strong>续年运维低于 2 万就是赔本做。</strong>合同必须写明服务边界，否则"卖一次、维护一辈子"。</p>
+  </div>
+</div>
+
+<h2>三、三档报价与范围（点击切换）</h2>
+
+<div class="tabs" role="tablist">
+  <button class="tab" data-k="A">A 基础版<span class="p">12.8 万 · 先上线</span></button>
+  <button class="tab on" data-k="B">B 标准版（推荐）<span class="p">16.8 万 · 均衡</span></button>
+  <button class="tab" data-k="C">C 完整版<span class="p">19.8 万 · 含 SSO/等保配合</span></button>
+</div>
+
+<div class="card">
+  <div class="price-line"><span class="v" id="pTotal">16.8 万</span><span class="u" id="pDesc">首年总价 · 推荐档</span></div>
+  <div class="bar" id="pBar">
+    <div class="s1" id="b1" style="width:35.7%">授权 6.0</div>
+    <div class="s2" id="b2" style="width:47.6%">实施 8.0</div>
+    <div class="s3" id="b3" style="width:16.7%">运维 2.8</div>
+  </div>
+  <div class="legend"><span><i style="background:#25499b"></i>软件授权（一次性）</span><span><i style="background:#4a76c9"></i>实施交付（一次性）</span><span><i style="background:#c8541b"></i>首年运维</span></div>
+
+  <div class="split" style="margin-top:20px">
+    <div>
+      <h3 style="margin-top:0">费用明细</h3>
+      <div class="kv"><span>软件授权（单校永久使用许可）</span><b id="d1">6.0 万</b></div>
+      <div class="kv"><span>实施交付（工作量约 <span id="dDays">58</span> 人日计入）</span><b id="d2">8.0 万</b></div>
+      <div class="kv"><span>首年运维（12 个月）</span><b id="d3">2.8 万</b></div>
+      <div class="kv"><span><strong>首年合计</strong></span><b id="dSum">16.8 万</b></div>
+      <div class="kv"><span>第 2 年起续年运维</span><b id="dYear">2.4 万/年</b></div>
+      <div class="kv"><span>交付周期</span><b id="dWeeks">6–8 周</b></div>
+    </div>
+    <div>
+      <h3 style="margin-top:0">本档包含</h3>
+      <ul class="small" id="pInclude" style="padding-left:18px;margin-top:4px"></ul>
+    </div>
+  </div>
+</div>
+
+<div class="note" style="margin-top:14px">
+  <strong>如果还要压到 10 万出头：</strong>建议把「永久授权」改成「年度许可」，首年可报 <strong>9.8 万</strong>（授权 3.0 + 实施 5.8 + 运维 1.0），第 2 年起 4.5 万/年。适合经费按年度拨付、无法一次性列支的学校。代价是三年总支出（约 18.8 万）高于买断，且学校停付即停用，需在谈判时说清；对供方则是把一次性收入变成订阅，现金流更慢但更稳。
+</div>
+
+<h2>四、必须写进合同的「不含范围」</h2>
+<div class="danger">
+  <p style="margin-top:0"><strong>报价之所以能压在 20 万内，靠的是严格的范围边界。以下任一项被默认包含，项目就会亏。</strong></p>
+  <div class="grid g2">
+    <ul style="margin:6px 0">
+      <li><strong>源码交付 / 知识产权转让</strong>：不含。如需源码另行议价（通常为授权费的 3–5 倍），且需单独约定二次开发责任边界</li>
+      <li><strong>定制功能开发</strong>：不含。按 1,500–2,000 元/人日另计，或单独立项</li>
+      <li><strong>服务器 / GPU / 本地大模型算力</strong>：不含。学校自备或代购另计</li>
+      <li><strong>大模型 API 调用费</strong>：不含。AI 阅卷、出题、OCR 走第三方 API，按实际用量实报实销或约定年额度，不能包死在总价里</li>
+    </ul>
+    <ul style="margin:6px 0">
+      <li><strong>等保测评费 / 第三方渗透测试费</strong>：不含。仅配合整改，测评与费用由学校承担</li>
+      <li><strong>教务系统直连 / 接口开发</strong>：不含。仅提供标准模板导入；直连教务库需另计</li>
+      <li><strong>驻场、超场次现场培训、7×24 SLA</strong>：不含。默认工作日远程响应</li>
+      <li><strong>学习通数据抓取的长期可用性</strong>：不承诺。该能力依赖第三方页面结构，对方改版会失效，建议列为可选项或不纳入验收</li>
+    </ul>
+  </div>
+</div>
+
+<h2>五、学校需提供的前提（写进附件，避免延期责任）</h2>
+<div class="grid g2">
+  <div class="card">
+    <h3 style="margin-top:0">基础设施</h3>
+    <ul class="small">
+      <li>服务器：建议 <strong>8C16G / 200G SSD</strong> 起，Docker Engine + Compose，内网固定 IP；启用学习通浏览器自动化或本地模型时资源上调</li>
+      <li>域名 + HTTPS 证书（或校内 CA 证书）</li>
+      <li>网络出口：放行 5 家大模型 API 与镜像源；若无出口，需提供校内 OpenAI 兼容模型端点（<code>*_base_url</code> 已支持）</li>
+      <li>数据库备份存储空间</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">数据与人员</h3>
+    <ul class="small">
+      <li>统一身份认证接口文档与测试账号（CAS / OAuth2 / LDAP）；若不对接，接受本地账号 + 批量导入</li>
+      <li>学生、班级、课程、知识点、题库按模板提供，并指定数据核对人</li>
+      <li>1 名校内系统管理员对接 + 2–3 名种子教师参加培训</li>
+      <li>明确验收人、验收窗口与试运行考试安排</li>
+    </ul>
+  </div>
+</div>
+
+<h2>六、付款、验收与风险控制</h2>
+<div class="grid g2">
+  <div class="card">
+    <h3 style="margin-top:0">付款节奏</h3>
+    <div class="kv"><span>合同生效 / 交付包进场</span><b>30%</b></div>
+    <div class="kv"><span>系统上线、试运行通过</span><b>40%</b></div>
+    <div class="kv"><span>终验合格、文档培训完成</span><b>30%</b></div>
+    <p class="small muted">质保期 12 个月（自终验起），与首年运维期对齐；续年运维按年签。</p>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">可量化的验收口径</h3>
+    <ul class="small">
+      <li>8 个 Compose 服务健康检查全绿，前端 / 后端 / runner 可访问</li>
+      <li>2 场模拟考试全流程跑通：组卷 → 发布 → 学生端作答 → 客观题判分 + AI 主观题阅卷 → 成绩与教师确认</li>
+      <li>数据库备份恢复演练 1 次成功</li>
+      <li>管理员 / 教师手册交付 + 2 场培训签到</li>
+      <li>许可文件生效、人数与有效期校验通过</li>
+    </ul>
+  </div>
+</div>
+<div class="okbox" style="margin-top:14px">
+  <strong>给供方的三条自我保护：</strong>
+  <ul style="margin:8px 0 0">
+    <li><strong>版本分叉要封顶</strong>：合同写明「仅维护交付版本 + 每年 2 次合并上游安全与功能更新」，不承诺无限跟进主线新功能。</li>
+    <li><strong>首校要做成可复制交付包</strong>：第 1/3/8/9 项的产品化成果必须沉淀为通用产物，否则第二所学校仍要重复 69 人日，低价就变成长期负债。</li>
+    <li><strong>AI 效果先 POC</strong>：若学校改走本地小模型，多模型协同评分与 OCR 效果会下降，务必在签约前用真实样卷跑一次，把效果预期写进验收附件。</li>
+  </ul>
+</div>
+
+<footer>
+  评估依据：本仓库 README.md、prd.md、docker-compose.yml、backend/src/app/config.py、deploy/env/*.example、docs/deployment-docker-compose.md 及代码规模统计（2026-11-07）。人日与单价为估算口径，正式报价前建议按学校实际环境再核一次第 2/5/7 项。
+</footer>
+
+</div>
+
+<script>
+(function(){
+  var data = {
+    A: {total:12.8, lic:5.0, imp:5.8, ops:2.0, year:1.8, days:44, weeks:"4–6 周", desc:"首年总价 · 最小可交付",
+      inc:["成品软件单校使用许可（不含源码）","标准交付包安装、配置化、离线镜像适配","本地账号 + 标准模板批量导入（不含 SSO 对接）","基础安全配置（HTTPS / 密码策略）","1 场远程培训 + 管理员手册","1 场模拟考试陪跑、12 个月远程质保","不含：等保配合、现场支持、深度数据迁移"]},
+    B: {total:16.8, lic:6.0, imp:8.0, ops:2.8, year:2.4, days:58, weeks:"6–8 周", desc:"首年总价 · 推荐档",
+      inc:["成品软件单校使用许可（不含源码）","完整交付包产品化 + 授权许可机制","内网 / 离线适配与镜像代理配置","单校裁剪与品牌化（校名、Logo、导出模板）","标准模板数据导入 + 关联校验","安全加固与等保整改配合（不含测评费）","备份恢复体系 + 升级回滚手册","2 场培训 + 三本用户手册 + 运维手册","2 场模拟考试陪跑、12 个月运维服务"]},
+    C: {total:19.8, lic:7.0, imp:9.8, ops:3.0, year:3.0, days:69, weeks:"8–10 周", desc:"首年总价 · 全范围",
+      inc:["标准版全部内容","CAS / OAuth2 / LDAP 统一身份认证对接与联调","教务基础数据迁移与清洗（标准接口范围内）","等保全套配合：审计日志、代码执行沙箱说明与整改","1 次现场支持 + 2 场现场培训","7×12 响应、季度健康检查与巡检报告","上线后 1 个月驻场式远程陪跑","优先级缺陷修复（工作日 4 小时响应）"]}
+  };
+  function f(n){return n.toFixed(1)}
+  function render(k){
+    var d=data[k];
+    document.getElementById("pTotal").textContent=f(d.total)+" 万";
+    document.getElementById("pDesc").textContent=d.desc;
+    document.getElementById("d1").textContent=f(d.lic)+" 万";
+    document.getElementById("d2").textContent=f(d.imp)+" 万";
+    document.getElementById("d3").textContent=f(d.ops)+" 万";
+    document.getElementById("dSum").textContent=f(d.total)+" 万";
+    document.getElementById("dYear").textContent=f(d.year)+" 万/年";
+    document.getElementById("dDays").textContent=d.days;
+    document.getElementById("dWeeks").textContent=d.weeks;
+    var w1=d.lic/d.total*100,w2=d.imp/d.total*100,w3=100-w1-w2;
+    var b1=document.getElementById("b1"),b2=document.getElementById("b2"),b3=document.getElementById("b3");
+    b1.style.width=w1+"%";b2.style.width=w2+"%";b3.style.width=w3+"%";
+    b1.textContent="授权 "+f(d.lic);b2.textContent="实施 "+f(d.imp);b3.textContent="运维 "+f(d.ops);
+    var ul=document.getElementById("pInclude");ul.innerHTML="";
+    d.inc.forEach(function(t){var li=document.createElement("li");li.textContent=t;ul.appendChild(li)});
+    var tabs=document.querySelectorAll(".tab");
+    for(var i=0;i<tabs.length;i++){tabs[i].classList.toggle("on",tabs[i].getAttribute("data-k")===k)}
+  }
+  var tabs=document.querySelectorAll(".tab");
+  for(var i=0;i<tabs.length;i++){tabs[i].addEventListener("click",function(){render(this.getAttribute("data-k"))})}
+  render("B");
+
+  var rate=document.getElementById("rate");
+  function calc(){
+    var r=parseInt(rate.value,10), total=69*r/10000, share=(69-27)*r/10000+27*r/10000*0.6;
+    document.getElementById("rateVal").textContent=r.toLocaleString("zh-CN");
+    document.getElementById("costVal").textContent=total.toFixed(2)+" 万";
+    document.getElementById("shareVal").textContent=share.toFixed(2)+" 万";
+  }
+  rate.addEventListener("input",calc);calc();
+})();
+</script>
+</body>
+</html>

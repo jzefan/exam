@@ -660,8 +660,8 @@ export function QuestionGenTemplatesPage() {
                         size="icon"
                         variant="ghost"
                         className="size-8"
-                        aria-label="编辑"
-                        title="编辑"
+                        aria-label="编辑出题技能"
+                        title="编辑出题技能"
                         onClick={() => setEditor({ templateId: skill.id })}
                       >
                         <Pencil size={14} />
@@ -670,7 +670,7 @@ export function QuestionGenTemplatesPage() {
                         size="icon"
                         variant="ghost"
                         className="size-8"
-                        aria-label="复制"
+                        aria-label="复制为新技能"
                         title="复制为新技能"
                         disabled={busyId === skill.id}
                         onClick={() => void handleDuplicate(skill.id)}
@@ -685,8 +685,8 @@ export function QuestionGenTemplatesPage() {
                         size="icon"
                         variant="ghost"
                         className="size-8 text-destructive"
-                        aria-label="删除"
-                        title="删除"
+                        aria-label="删除出题技能"
+                        title="删除技能"
                         onClick={() => setDeleteTarget(skill)}
                       >
                         <Trash2 size={14} />

@@ -356,6 +356,10 @@ def _build_standard_answers(question_type: str, answer: dict[str, Any], analysis
 _FILL_IN_BLANK_PLACEHOLDER_RE = re.compile(r"_{3,}|（\s*）|\(\s*\)|【\s*】")
 _FILL_IN_EDGE_PUNCT_RE = re.compile(r"^[\s,，、.。．;；:：]+|[\s,，、.。．;；:：]+$")
 _FILL_IN_GRADING_MODEL = "deepseek-flash"
+# Upper bound on concurrent equivalence requests for one submit. The grader runs
+# inside the single uvicorn worker, so this caps both LLM rate pressure and the
+# amount of work one student's submit can take from everyone else.
+_FILL_IN_GRADING_CONCURRENCY = 6
 _FILL_IN_INVISIBLE_CHAR_RE = re.compile(r"[\u200b\u200c\u200d\ufeff]")
 _FILL_IN_EMPTY_CALL_RE = re.compile(r"^([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*)\(\)$")
 _FILL_IN_SIMPLE_SUBSCRIPT_RE = re.compile(r"_\{([a-z0-9]+)\}")
@@ -2085,21 +2089,17 @@ async def save_answers(
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Exam window closed")
 
     saved_answers = dict(exam_student.saved_answers or {})
-    exam_questions_by_id = {item.question_id: item for item in exam.exam_questions}
+    # Autosave is a durability path, not a grading path: it must stay a single
+    # cheap write. Grading here used to call the fill-in equivalence LLM for
+    # every dirty answer, which cost 2-6s per keystroke-batch on the one uvicorn
+    # worker and queued every other request (login, exam start) behind it.
+    # Scores are computed — and the grading cache filled — at submit time.
     for item in payload.answers:
         previous_answer = saved_answers.get(str(item.question_id))
-        answer_content = _carry_forward_fill_in_cache(
+        saved_answers[str(item.question_id)] = _carry_forward_fill_in_cache(
             incoming=deepcopy(item.answer_content),
             previous=previous_answer,
         )
-        exam_question = exam_questions_by_id.get(item.question_id)
-        if exam_question is not None:
-            question = exam_question.question
-            question_type = question.type.value if isinstance(question.type, QuestionType) else str(question.type)
-            if question_type == QuestionType.FILL_IN.value:
-                question_score = exam_question.score_override if exam_question.score_override is not None else question.score
-                await _grade_question_with_ai(question, answer_content, question_score)
-        saved_answers[str(item.question_id)] = answer_content
     exam_student.saved_answers = saved_answers
     await db.commit()
     return {"saved": len(payload.answers)}
@@ -2225,6 +2225,49 @@ async def submit_exam(
 
     sorted_exam_questions = sorted(exam.exam_questions, key=lambda item: item.order)
 
+    answer_contents: dict[uuid.UUID, dict[str, Any]] = {}
+    for exam_question in sorted_exam_questions:
+        question = exam_question.question
+        content = deepcopy(answers_map.get(str(question.id), {}))
+        answer_contents[question.id] = content if isinstance(content, dict) else {}
+
+    # Fill-in grading may call the equivalence LLM. Awaiting those calls one at a
+    # time inside the row-building loop turned a 20-question paper into a 30s
+    # submit; grade the objective answers up front with bounded concurrency and
+    # then build the rows in order. Identical scores, far less wall time.
+    objective_questions = [
+        item
+        for item in sorted_exam_questions
+        if not _is_subjective_question_type(
+            item.question.type.value
+            if isinstance(item.question.type, QuestionType)
+            else str(item.question.type)
+        )
+    ]
+    grading_semaphore = asyncio.Semaphore(_FILL_IN_GRADING_CONCURRENCY)
+
+    async def _grade_objective(
+        exam_question: ExamQuestion,
+    ) -> tuple[float, bool, dict[str, Any]]:
+        question = exam_question.question
+        question_score = (
+            exam_question.score_override
+            if exam_question.score_override is not None
+            else question.score
+        )
+        async with grading_semaphore:
+            return await _grade_question_with_ai(
+                question, answer_contents[question.id], question_score
+            )
+
+    graded_objectives = await asyncio.gather(
+        *(_grade_objective(item) for item in objective_questions)
+    )
+    objective_grades: dict[uuid.UUID, tuple[float, bool, dict[str, Any]]] = {
+        item.question_id: grade
+        for item, grade in zip(objective_questions, graded_objectives)
+    }
+
     # Pass 1: grade objectives in-memory, collect subjective payloads for deferred creation.
     objective_score = 0.0
     answer_rows: list[StudentExamAnswer] = []
@@ -2236,9 +2279,7 @@ async def submit_exam(
 
     for exam_question in sorted_exam_questions:
         question = exam_question.question
-        answer_content = deepcopy(answers_map.get(str(question.id), {}))
-        if not isinstance(answer_content, dict):
-            answer_content = {}
+        answer_content = answer_contents[question.id]
         question_score = exam_question.score_override if exam_question.score_override is not None else question.score
         question_type = question.type.value if isinstance(question.type, QuestionType) else str(question.type)
         is_subjective = _is_subjective_question_type(question_type)
@@ -2261,7 +2302,7 @@ async def submit_exam(
                 )
             )
         else:
-            score_awarded, is_correct, feedback = await _grade_question_with_ai(question, answer_content, question_score)
+            score_awarded, is_correct, feedback = objective_grades[question.id]
             objective_score += score_awarded
 
         answers_map[str(question.id)] = deepcopy(answer_content)

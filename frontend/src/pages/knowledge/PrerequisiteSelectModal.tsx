@@ -25,7 +25,7 @@ export function PrerequisiteSelectModal({ open, targetNodeId, allNodes, onSelect
       <DialogContent className="max-w-sm">
         <DialogHeader>
           <DialogTitle>选择前置知识点</DialogTitle>
-          <DialogDescription>从当前方向的其他知识点中选择一个作为前置依赖。</DialogDescription>
+          <DialogDescription>选择一个知识点作为其前置先修条件。</DialogDescription>
         </DialogHeader>
         <div className="max-h-72 space-y-1 overflow-y-auto">
           {candidates.length === 0 && (

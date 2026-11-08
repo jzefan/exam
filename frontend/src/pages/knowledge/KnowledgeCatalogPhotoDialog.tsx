@@ -277,7 +277,7 @@ export function KnowledgeCatalogPhotoDialog({
             {selectedTargetName
               ? `将目录识别结果导入到“${selectedTargetName}”。`
               : "请先选择专业或方向。"}
-            上传目录照片或扫描版 PDF，系统按章、节识别后以层级树方式显示。检测为双栏时，会先完整识别左栏，复核右栏顶部后再继续右栏。
+            上传目录图片或扫描版 PDF，系统将自动识别章节层级。支持双栏教材排版自动校正。
           </DialogDescription>
         </DialogHeader>
 

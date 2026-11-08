@@ -144,8 +144,8 @@ function CourseCard({
               variant="ghost"
               size="icon"
               className="size-9 shrink-0 text-muted-foreground hover:text-foreground"
-              aria-label={`发布短链接：${course.name}`}
-              title="发布短链接"
+              aria-label={`公开访问与短链接设置：${course.name}`}
+              title="公开访问与短链接设置"
               onClick={(event) => {
                 event.stopPropagation();
                 onPublish(course);
@@ -222,8 +222,8 @@ function CourseCard({
               variant="ghost"
               size="sm"
               className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-              aria-label="发布短链接"
-              title="发布短链接"
+              aria-label="公开访问与短链接设置"
+              title="公开访问与短链接设置"
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();

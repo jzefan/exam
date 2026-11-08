@@ -65,8 +65,23 @@ server {
     }
 }
 
+# 上游声明 + keepalive：入口到 146:3036 的每次请求都要重新握手的话，
+# 每个 API 调用、每个静态资源都多付一个 RTT。走 upstream 池可复用连接。
+# （若哪天把 DNS 直接指到 146，把这里的 server 换成 146 的内网/公网地址即可。）
+upstream exam_app_edge {
+    server 146.56.224.80:3036;
+    keepalive 64;
+}
+
+# 只有真正的 Upgrade 请求（WebSocket）才发 Connection: upgrade，
+# 其余请求留空——空值才能让 nginx 复用上面的 keepalive 连接。
+map $http_upgrade $edge_connection_upgrade {
+    default upgrade;
+    ''      '';
+}
+
 server {
-    listen 443 ssl;
+    listen 443 ssl http2;
     server_name llmpingce.com www.llmpingce.com;
 
     ssl_certificate /home/ubuntu/ssl_cert/llmpingce.com/llmpingce.com_bundle.crt;
@@ -78,6 +93,27 @@ server {
 
     client_max_body_size 200m;
 
+    # nginx.conf sets `gzip on` but leaves gzip_types commented out, which means
+    # text/html only — JS/CSS/JSON went over the wire uncompressed. This edge is
+    # the last hop to the student, so it must compress. Responses that already
+    # carry a Content-Encoding (API gzipped at 146, static .gz from disk) are
+    # passed through untouched; nginx never double-compresses.
+    gzip on;
+    gzip_vary on;
+    gzip_comp_level 4;
+    gzip_min_length 1024;
+    gzip_proxied any;
+    gzip_types
+        text/plain
+        text/css
+        text/xml
+        text/javascript
+        application/javascript
+        application/json
+        application/manifest+json
+        application/xml
+        image/svg+xml;
+
     # CA 文件验证路径（HTTPS 侧）。443 的 location / 是全量 proxy_pass，
     # 没有这个块的话请求会一路穿到内层 nginx 的 SPA 兜底，返回 index.html。
     location ^~ /.well-known/pki-validation/ {
@@ -87,14 +123,19 @@ server {
     }
 
     location / {
-        proxy_pass http://146.56.224.80:3036;
+        proxy_pass http://exam_app_edge;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        $edge_connection_upgrade;
 
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
 
-        proxy_connect_timeout  3600s;
+        # 连接超时给短的：146 挂掉时快速失败，而不是把请求挂一小时。
+        # 读写超时保持原值，长耗时导入仍需要长窗口。
+        proxy_connect_timeout  30s;
         proxy_send_timeout     3600s;
         proxy_read_timeout     3600s;
     }
@@ -153,5 +194,68 @@ server {
         proxy_connect_timeout  3600s;
         proxy_send_timeout     3600s;
         proxy_read_timeout     3600s;
+    }
+}
+
+# ---------------------------------------------------
+# 静态资源域（供 CDN 回源）static.llmpingce.com
+# ---------------------------------------------------
+# CDN 只把未命中的请求发到这里。文件由 146 在发版时 rsync 到
+# /var/www/exam-static；本地读不到就回退代理到 146，所以同步失败也不会
+# 把站点打挂，只是退化成原来的慢路径。
+# 回源用 HTTP:80 + Host: static.llmpingce.com（子域名没有证书，别走 HTTPS）。
+server {
+    listen 80;
+    server_name static.llmpingce.com;
+
+    root /var/www/exam-static;
+
+    gzip on;
+    gzip_static on;
+    gzip_vary on;
+    gzip_comp_level 4;
+    gzip_min_length 1024;
+    gzip_proxied any;
+    gzip_types
+        text/plain
+        text/css
+        text/xml
+        text/javascript
+        application/javascript
+        application/json
+        application/manifest+json
+        application/xml
+        image/svg+xml;
+
+    # 只发 /assets/：这个域只承载内容哈希过的构建产物。其它路径一律 404，
+    # 免得 CDN 把带 no-cache 语义的 index.html 当成可缓存一年的内容存下来。
+    location /assets/ {
+        try_files $uri @app_fallback;
+        # type="module" 的 chunk 和 @font-face 字体都以 CORS 模式取，缺这个
+        # 头浏览器会直接拒绝执行。只在这里加，CDN 控制台不要重复配置，
+        # 否则会出现两个 Access-Control-Allow-Origin 导致校验失败。
+        add_header Access-Control-Allow-Origin "*";
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
+    location / {
+        return 404;
+    }
+
+    # 同步失败时的兜底：回 146 取。上游也带 Cache-Control / ACAO，先隐藏
+    # 再统一加，避免重复头让 CDN 和浏览器判错。
+    location @app_fallback {
+        proxy_pass http://exam_app_edge;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_hide_header Cache-Control;
+        proxy_hide_header Access-Control-Allow-Origin;
+        add_header Access-Control-Allow-Origin "*";
+        add_header Cache-Control "public, max-age=31536000, immutable";
     }
 }

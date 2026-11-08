@@ -120,6 +120,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await chaoxing_manager.shutdown()
 
 
+def _configure_app_logging() -> None:
+    """Give the app's own loggers a handler and an INFO level.
+
+    uvicorn's default logging config only configures the ``uvicorn.*`` loggers
+    and leaves the root logger untouched. With no handler anywhere, ``app.*``
+    records fall through to ``logging.lastResort``, which silently drops
+    everything below WARNING — so the request-timing middleware produced no
+    output at all while slow-query warnings still showed up.
+
+    Attaching a handler to the ``app`` namespace (instead of calling
+    basicConfig) keeps third-party libraries at their own defaults and avoids
+    double-printing uvicorn's access log.
+    """
+    app_logger = logging.getLogger("app")
+    if app_logger.handlers:
+        return
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(levelname)s:     %(name)s - %(message)s"))
+    app_logger.addHandler(handler)
+    app_logger.setLevel(settings.log_level.upper())
+    app_logger.propagate = False
+
+
+_configure_app_logging()
+
 app = FastAPI(title="AI Exam Grading System", version="0.1.0", lifespan=lifespan)
 
 from app.database import engine as _engine  # noqa: E402

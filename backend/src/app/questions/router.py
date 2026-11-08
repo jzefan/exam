@@ -262,6 +262,28 @@ def _parse_uuid_list_filter(value: str, field_name: str) -> list[uuid.UUID]:
 
 # --- Questions ---
 
+def _choice_multi_expression():
+    """多选题判定：content.multi=true 或 answer.correct 是数组。"""
+    return or_(
+        func.lower(cast(Question.content["multi"], String)) == "true",
+        func.coalesce(cast(Question.answer["correct"], String), "").like("[%"),
+    )
+
+
+def _knowledge_point_subtree_cte(kp_id: uuid.UUID):
+    anchor = select(KnowledgePoint.id).where(
+        KnowledgePoint.id == kp_id,
+        KnowledgePoint.deleted_at.is_(None),
+    )
+    subtree = anchor.cte(name="kp_subtree", recursive=True)
+    return subtree.union_all(
+        select(KnowledgePoint.id).where(
+            KnowledgePoint.parent_id == subtree.c.id,
+            KnowledgePoint.deleted_at.is_(None),
+        )
+    )
+
+
 @questions_router.get("", response_model=list[QuestionResponse])
 async def list_questions(
     request: Request,
@@ -304,14 +326,25 @@ async def list_questions(
     search_text = (filters.pop("search_text_like", None) or filters.pop("search_text", None) or "").strip()
     question_type_raw = filters.pop("type", None)
     question_type_in_raw = filters.pop("type_in", None)
+    choice_multi_raw = filters.pop("multi", None)
+    choice_multi_filter = None
+    if choice_multi_raw is not None:
+        multi_expression = func.coalesce(_choice_multi_expression(), False)
+        if str(choice_multi_raw).lower() in ("true", "1"):
+            choice_multi_filter = multi_expression.is_(True)
+        elif str(choice_multi_raw).lower() in ("false", "0"):
+            choice_multi_filter = multi_expression.is_(False)
 
     if tag_ids:
         base_query = base_query.join(question_tags).where(question_tags.c.tag_id.in_(tag_ids))
     if knowledge_point_id:
+        kp_subtree = _knowledge_point_subtree_cte(knowledge_point_id)
         base_query = base_query.join(question_knowledge_points).where(
-            question_knowledge_points.c.knowledge_point_id == knowledge_point_id
+            question_knowledge_points.c.knowledge_point_id.in_(select(kp_subtree.c.id))
         )
     base_query = _apply_question_type_filter(base_query, question_type_raw, question_type_in_raw)
+    if choice_multi_filter is not None:
+        base_query = base_query.where(choice_multi_filter)
     if search_text:
         like_pattern = f"%{search_text}%"
         base_query = base_query.where(
@@ -339,10 +372,13 @@ async def list_questions(
     if tag_ids:
         full_query = full_query.join(question_tags).where(question_tags.c.tag_id.in_(tag_ids))
     if knowledge_point_id:
+        kp_subtree = _knowledge_point_subtree_cte(knowledge_point_id)
         full_query = full_query.join(question_knowledge_points).where(
-            question_knowledge_points.c.knowledge_point_id == knowledge_point_id
+            question_knowledge_points.c.knowledge_point_id.in_(select(kp_subtree.c.id))
         )
     full_query = _apply_question_type_filter(full_query, question_type_raw, question_type_in_raw)
+    if choice_multi_filter is not None:
+        full_query = full_query.where(choice_multi_filter)
     if search_text:
         like_pattern = f"%{search_text}%"
         full_query = full_query.where(

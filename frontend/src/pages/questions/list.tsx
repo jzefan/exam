@@ -1129,7 +1129,7 @@ export function QuestionList() {
                         </span>
                       </TooltipTrigger>
                       <TooltipContent side="top">
-                        <p>清除这个题库的所有题目</p>
+                        <p>清空题库（删除题库内所有题目）</p>
                       </TooltipContent>
                     </Tooltip>
                     <Tooltip>
@@ -1150,7 +1150,7 @@ export function QuestionList() {
                         </span>
                       </TooltipTrigger>
                       <TooltipContent side="top">
-                        <p>只是删除题库，但是题目会移动到未在题库里</p>
+                        <p>解散题库（题目保留在“未分类题目”中）</p>
                       </TooltipContent>
                     </Tooltip>
                   </div>

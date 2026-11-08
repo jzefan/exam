@@ -424,7 +424,7 @@ export function QuestionReplacementDialog({
               {questionLabel ? `为${questionLabel}换一题` : "为当前题目换一题"}
             </DialogTitle>
             <DialogDescription>
-              题库换题只从原题所在题库查找相似题；AI 换题会根据提示词生成新题。确认后才会替换当前题目，原题仍保留在题库中。
+              支持从原题库抽选同类题或由 AI 定制新题。确认替换后原题仍完整保留在题库中。
             </DialogDescription>
           </DialogHeader>
 

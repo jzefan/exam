@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useGetIdentity, useList } from "@refinedev/core";
-import { Search, Check, FileText, Maximize2, Minimize2, ChevronDown, Pencil, X } from "lucide-react";
+import { Search, FileText, Maximize2, Minimize2, ChevronDown, Pencil, X, LoaderCircle } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
@@ -13,20 +13,25 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
 import {
-  getQuestionContentHtml,
-  getQuestionDisplayType,
   getQuestionTitle,
-  questionDisplayTypeShortLabel,
 } from "@/components/questions/question-preview-utils";
-import { LatexText } from "@/components/ui/latex-text";
-import { RichContent } from "@/components/ui/rich-content";
 import { formatQuestionBankLabel } from "@/lib/question-banks";
 import { cn } from "@/lib/utils";
 import type { IQuestion, IQuestionBank, QuestionDisplayType, QuestionType } from "@/types";
 import { getUserRole } from "@/types/rbac";
 import type { SelectedKnowledgePoint } from "@/components/questions/knowledge-point-selector";
+import {
+  KnowledgeFilterTreeMenu,
+  type KnowledgeTreeMenuOption,
+} from "@/pages/courses/knowledge-filter-tree-menu";
+import type { CourseKnowledgeNode } from "@/pages/courses/api";
 
 const ALL_BANKS = "__all_banks__";
 const ALL_TYPES = "__all_types__";
@@ -41,10 +46,71 @@ const typeLabels: Record<string, { label: string; className: string }> = {
   code: { label: "编程", className: "border-violet-500/20 bg-violet-500/10 text-violet-700 dark:text-violet-300" },
 };
 
+type QuestionSelectorKnowledgePoint = SelectedKnowledgePoint & {
+  parent_id?: string | null;
+};
+
+function buildTreeFromFlatPoints(
+  points: QuestionSelectorKnowledgePoint[],
+): CourseKnowledgeNode | null {
+  if (!points || points.length === 0) return null;
+  const map = new Map<string, CourseKnowledgeNode>();
+  for (const p of points) {
+    map.set(p.id, {
+      id: p.id,
+      name: p.name,
+      question_count: 0,
+      material_count: 0,
+      children: [],
+    });
+  }
+  const roots: CourseKnowledgeNode[] = [];
+  for (const p of points) {
+    const node = map.get(p.id)!;
+    if (p.parent_id && map.has(p.parent_id)) {
+      map.get(p.parent_id)!.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+  if (roots.length === 0) return null;
+  if (roots.length === 1) return roots[0];
+  return {
+    id: "__virtual_root__",
+    name: "全部知识点",
+    question_count: 0,
+    material_count: 0,
+    children: roots,
+  };
+}
+
+function flattenTreeOptions(
+  node: CourseKnowledgeNode | null,
+  depth = 0,
+  prefix = "",
+): KnowledgeTreeMenuOption[] {
+  if (!node) return [];
+  if (node.id === "__virtual_root__") {
+    return (node.children ?? []).flatMap((child) => flattenTreeOptions(child, 0, ""));
+  }
+  const currentPath = prefix ? `${prefix} / ${node.name}` : node.name;
+  const current: KnowledgeTreeMenuOption = {
+    id: node.id,
+    name: node.name,
+    path: currentPath,
+    depth,
+  };
+  const children = (node.children ?? []).flatMap((child) =>
+    flattenTreeOptions(child, depth + 1, currentPath),
+  );
+  return [current, ...children];
+}
+
 export function QuestionSelector({
   selectedIds,
   onChange,
   knowledgePointOptions,
+  knowledgeTree,
   showSummary = true,
   renderSummary,
   isFullscreen: controlledIsFullscreen,
@@ -64,6 +130,7 @@ export function QuestionSelector({
   selectedIds: string[];
   onChange: (ids: string[]) => void;
   knowledgePointOptions?: SelectedKnowledgePoint[];
+  knowledgeTree?: CourseKnowledgeNode | null;
   showSummary?: boolean;
   /** 自定义摘要行：由父组件渲染（题数统计 + 清空/全屏等操作），用于将摘要并入外层标题行。 */
   renderSummary?: (info: {
@@ -104,11 +171,15 @@ export function QuestionSelector({
     initialType === "choice" ? null : (initialType ?? null),
   );
   const [knowledgePointFilter, setKnowledgePointFilter] = useState<string | null>(null);
+  const [knowledgeMenuOpen, setKnowledgeMenuOpen] = useState(false);
+  const [allQuestionsExpanded, setAllQuestionsExpanded] = useState(false);
   const [page, setPage] = useState(1);
+  const [accumulatedQuestions, setAccumulatedQuestions] = useState<IQuestion[]>([]);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
   const [internalIsFullscreen, setInternalIsFullscreen] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const isFullscreen = controlledIsFullscreen ?? internalIsFullscreen;
-  const pageSize = isFullscreen ? 500 : 20;
+  const pageSize = 20;
   const setIsFullscreen = (next: boolean) => {
     onFullscreenChange?.(next);
     if (controlledIsFullscreen === undefined) {
@@ -143,7 +214,7 @@ export function QuestionSelector({
     pagination: { currentPage: 1, pageSize: 200 },
   });
   const banks = bankQuery.data?.data ?? [];
-  const { query: knowledgePointQuery } = useList<SelectedKnowledgePoint>({
+  const { query: knowledgePointQuery } = useList<QuestionSelectorKnowledgePoint>({
     resource: "knowledge-points",
     pagination: { currentPage: 1, pageSize: 500 },
     queryOptions: { enabled: !restrictKnowledgePointsToOptions },
@@ -157,6 +228,30 @@ export function QuestionSelector({
           ),
         ).values(),
       );
+
+  const effectiveKnowledgeTree = useMemo(() => {
+    if (knowledgeTree) return knowledgeTree;
+    if (knowledgePoints.length > 0) {
+      return buildTreeFromFlatPoints(knowledgePoints as QuestionSelectorKnowledgePoint[]);
+    }
+    return null;
+  }, [knowledgeTree, knowledgePoints]);
+
+  const treeOptions = useMemo(() => {
+    if (effectiveKnowledgeTree) {
+      return flattenTreeOptions(effectiveKnowledgeTree);
+    }
+    return knowledgePoints.map((item) => ({
+      id: item.id,
+      name: item.name,
+      path: item.name,
+    }));
+  }, [effectiveKnowledgeTree, knowledgePoints]);
+
+  const selectedKnowledgePointName = useMemo(() => {
+    if (!knowledgePointFilter) return null;
+    return treeOptions.find((opt) => opt.id === knowledgePointFilter)?.name ?? null;
+  }, [knowledgePointFilter, treeOptions]);
 
   useEffect(() => {
     if (bankNameInitialised) return;
@@ -184,6 +279,14 @@ export function QuestionSelector({
     setKnowledgePointFilter(initialKnowledgePointId);
   }, [initialKnowledgePointId]);
 
+  const lastLoadedKeyRef = useRef<string>("");
+
+  useEffect(() => {
+    setPage(1);
+    setAccumulatedQuestions([]);
+    lastLoadedKeyRef.current = "";
+  }, [search, bankFilter, typeFilter, knowledgePointFilter]);
+
   // Load questions
   const { query: questionQuery } = useList<IQuestion>({
     resource: "questions",
@@ -198,14 +301,88 @@ export function QuestionSelector({
         : []),
     ],
   });
-  // Backend may return the same question id multiple times when joining
-  // tags / knowledge points. Dedupe by id so users don't see "ghost" selected
-  // rows on other pages caused by row multiplication.
-  const rawQuestions = questionQuery.data?.data ?? [];
-  const questions = Array.from(new Map(rawQuestions.map((q) => [q.id, q])).values());
+
+  useEffect(() => {
+    const raw = questionQuery.data?.data;
+    if (!raw) return;
+
+    const batchKey = `${page}:${raw.map((q) => q.id).join(",")}`;
+    if (lastLoadedKeyRef.current === batchKey) return;
+    lastLoadedKeyRef.current = batchKey;
+
+    setAccumulatedQuestions((prev) => {
+      if (page === 1) {
+        const map = new Map<string, IQuestion>();
+        for (const q of raw) {
+          map.set(q.id, q);
+        }
+        return Array.from(map.values());
+      }
+      const map = new Map<string, IQuestion>();
+      for (const q of prev) {
+        map.set(q.id, q);
+      }
+      for (const q of raw) {
+        map.set(q.id, q);
+      }
+      return Array.from(map.values());
+    });
+  }, [questionQuery.data?.data, page]);
+
+  const questions = useMemo(() => {
+    if (page === 1 && accumulatedQuestions.length === 0 && questionQuery.data?.data) {
+      const map = new Map<string, IQuestion>();
+      for (const q of questionQuery.data.data) {
+        map.set(q.id, q);
+      }
+      return Array.from(map.values());
+    }
+    return accumulatedQuestions;
+  }, [page, accumulatedQuestions, questionQuery.data?.data]);
+
   const total = questionQuery.data?.total ?? 0;
   const isLoading = questionQuery.isLoading;
-  const totalPages = Math.ceil(total / pageSize);
+  const hasMore = questions.length < total;
+
+  const loadNextPage = () => {
+    if (!questionQuery.isFetching && !questionQuery.isLoading && hasMore) {
+      setPage((prev) => prev + 1);
+    }
+  };
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+
+    if (typeof IntersectionObserver === "undefined") {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const first = entries[0];
+        if (first?.isIntersecting) {
+          loadNextPage();
+        }
+      },
+      {
+        rootMargin: "200px",
+      },
+    );
+
+    observer.observe(sentinel);
+    return () => {
+      observer.disconnect();
+    };
+  }, [questionQuery.isFetching, questionQuery.isLoading, hasMore]);
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+    if (scrollHeight - scrollTop - clientHeight < 200) {
+      loadNextPage();
+    }
+  };
+
   const currentBank = bankFilter ? banks.find((bank) => bank.id === bankFilter) : null;
   const currentBankTotal = currentBank?.question_count ?? initialBankQuestionCount;
   const hasInitialBankFallback =
@@ -214,6 +391,9 @@ export function QuestionSelector({
 
   useEffect(() => {
     if (!refreshKey) return;
+    setPage(1);
+    setAccumulatedQuestions([]);
+    lastLoadedKeyRef.current = "";
     void bankQuery.refetch();
     void questionQuery.refetch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -266,9 +446,13 @@ export function QuestionSelector({
     onEditQuestion?.(question);
   };
 
-  const shouldIgnoreCardToggle = (target: EventTarget | null) =>
-    target instanceof HTMLElement &&
-    Boolean(target.closest("button,a,input,textarea,select,[role='button'],[data-no-card-toggle='true']"));
+  const shouldIgnoreCardToggle = (target: EventTarget | null, currentTarget?: HTMLElement | null) => {
+    if (!(target instanceof HTMLElement)) return false;
+    const interactive = target.closest("button,a,input,textarea,select,[data-no-card-toggle='true']");
+    if (interactive) return true;
+    const roleButton = target.closest("[role='button']");
+    return Boolean(roleButton && currentTarget && roleButton !== currentTarget);
+  };
 
   const renderFilters = () => (
     <div className="grid gap-2 lg:grid-cols-[minmax(180px,2.8fr)_minmax(120px,1.5fr)_minmax(100px,1.1fr)_minmax(120px,1.7fr)]">
@@ -324,37 +508,41 @@ export function QuestionSelector({
           ))}
         </SelectContent>
       </Select>
-      {knowledgePoints.length > 0 && (
-        <Select
-          value={knowledgePointFilter ?? ALL_BANKS}
-          onValueChange={(value) => {
-            setKnowledgePointFilter(value === ALL_BANKS ? null : value);
-            setPage(1);
-          }}
-        >
-          <SelectTrigger className="h-9 w-full min-w-0" aria-label="按知识点筛选">
-            <SelectValue placeholder="全部知识点" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL_BANKS}>全部知识点</SelectItem>
-            {knowledgePoints.map((item) => (
-              <SelectItem key={item.id} value={item.id}>
-                {item.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      {treeOptions.length > 0 && (
+        <DropdownMenu open={knowledgeMenuOpen} onOpenChange={setKnowledgeMenuOpen}>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              aria-label="按知识点筛选"
+              className="h-9 w-full min-w-0 justify-between px-3 text-sm font-normal"
+            >
+              <span className="truncate">
+                {selectedKnowledgePointName ?? "全部知识点"}
+              </span>
+              <ChevronDown size={14} className="ml-1 shrink-0 text-muted-foreground" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-[320px] p-1">
+            <KnowledgeFilterTreeMenu
+              tree={effectiveKnowledgeTree}
+              options={treeOptions}
+              selectedId={knowledgePointFilter}
+              showRootNode={Boolean(effectiveKnowledgeTree && effectiveKnowledgeTree.id !== "__virtual_root__")}
+              onSelect={(nodeId) => {
+                setKnowledgePointFilter(nodeId);
+                setPage(1);
+              }}
+              onClose={() => setKnowledgeMenuOpen(false)}
+            />
+          </DropdownMenuContent>
+        </DropdownMenu>
       )}
     </div>
   );
 
   const renderQuestionList = () => (
-    <div
-      className={cn(
-        "divide-y divide-border/40 overflow-y-auto rounded-lg border border-border/60",
-        fillAvailableHeight ? "min-h-0 flex-1" : "max-h-[min(56vh,520px)]",
-      )}
-    >
+    <div className="space-y-3">
       {isLoading ? (
         <div className="p-8 text-center text-sm text-muted-foreground">加载中...</div>
       ) : questions.length === 0 ? (
@@ -363,125 +551,110 @@ export function QuestionSelector({
           暂无题目
         </div>
       ) : (
-        questions.map((q) => {
+        <>
+          {questions.map((q, idx) => {
           const isSelected = selectedSet.has(q.id);
-          const isExpanded = expandedId === q.id;
-          const displayType = getQuestionDisplayType(q);
-          const t = displayType
-            ? (typeLabels[displayType] ?? { label: questionDisplayTypeShortLabel[displayType], className: "" })
-            : { label: q.type, className: "" };
+          const isSingleExpanded = expandedId === q.id;
+          const isExpanded = allQuestionsExpanded || isSingleExpanded;
           const questionText = getQuestionTitle(q);
-          const questionHtml = getQuestionContentHtml(q);
+          const displayedQuestion: IQuestion = isExpanded ? q : { ...q, analysis: null };
           return (
             <div
               key={q.id}
-              className={
-                isSelected
-                  ? "border-l-2 border-l-primary bg-primary/5"
-                  : "border-l-2 border-l-transparent"
-              }
+              role="button"
+              tabIndex={0}
+              aria-expanded={isExpanded}
+              aria-label={questionText}
+              className="outline-none transition-all focus-visible:ring-2 focus-visible:ring-primary/40 rounded-2xl"
+              onClick={(event) => {
+                if (shouldIgnoreCardToggle(event.target, event.currentTarget)) return;
+                toggleExpanded(q.id);
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                if (shouldIgnoreCardToggle(event.target, event.currentTarget)) return;
+                event.preventDefault();
+                toggleExpanded(q.id);
+              }}
             >
-              <div
-                role="button"
-                tabIndex={0}
-                aria-expanded={isExpanded}
-                aria-label={questionText}
-                className={`grid w-full grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] items-center gap-3 px-3 py-3.5 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
-                  isSelected ? "hover:bg-primary/10" : "hover:bg-muted/50"
-                }`}
-                onClick={() => toggleExpanded(q.id)}
-                onKeyDown={(event) => {
-                  if (event.key !== "Enter" && event.key !== " ") return;
-                  event.preventDefault();
-                  toggleExpanded(q.id);
-                }}
-              >
-                <button
-                  type="button"
-                  data-no-card-toggle="true"
-                  aria-label={isSelected ? "取消选择题目" : "选择题目"}
-                  aria-pressed={isSelected}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    toggle(q.id);
-                  }}
-                  className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
-                    isSelected
-                      ? "bg-primary border-primary text-primary-foreground"
-                      : "border-input"
-                  }`}
-                >
-                  {isSelected && <Check size={12} />}
-                </button>
-                <Badge
-                  variant="outline"
-                  className={`text-xs shrink-0 ${
-                    isSelected
-                      ? "border-primary/25 bg-primary/10 text-primary"
-                      : t.className
-                  }`}
-                >
-                  {t.label}
-                </Badge>
-                <div className={`min-w-0 overflow-hidden text-sm ${isSelected ? "font-medium text-foreground" : "text-foreground"}`}>
-                  {questionHtml ? (
-                    <RichContent
-                      html={questionHtml}
-                      className="line-clamp-1 max-w-full break-words [&_.katex-display]:my-0 [&_.katex-display]:inline-block [&_*]:!text-inherit"
+              <QuestionPreviewCard
+                question={displayedQuestion}
+                index={idx + 1}
+                mode="detailed"
+                expanded={isExpanded}
+                hideAnswer={false}
+                markChoiceAnswer
+                className={cn(
+                  "cursor-pointer transition-all hover:border-primary hover:shadow-md",
+                  isSelected ? "border-primary/50 ring-1 ring-primary/20 bg-primary/5" : "",
+                )}
+                trailing={
+                  <div className="flex items-center gap-2">
+                    {isExpanded && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label="关闭题目详情"
+                        className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (allQuestionsExpanded) {
+                            setAllQuestionsExpanded(false);
+                            setExpandedId(null);
+                          } else {
+                            setExpandedId(null);
+                          }
+                        }}
+                      >
+                        <X size={13} />
+                      </Button>
+                    )}
+                    <Checkbox
+                      checked={isSelected}
+                      onCheckedChange={() => toggle(q.id)}
+                      aria-label={isSelected ? "取消选择题目" : "选择题目"}
+                      className="h-4 w-4 rounded"
+                      onClick={(e) => e.stopPropagation()}
                     />
-                  ) : (
-                    <span className="block truncate">
-                      <LatexText>{questionText}</LatexText>
-                    </span>
-                  )}
-                </div>
-                <span className={`shrink-0 whitespace-nowrap text-xs ${isSelected ? "text-foreground/75" : "text-muted-foreground"}`}>
-                  {q.score}分 · 难度{q.difficulty}
-                </span>
-                <ChevronDown
-                  size={16}
-                  className={`shrink-0 text-muted-foreground transition-transform ${isExpanded ? "rotate-180" : ""}`}
-                />
-              </div>
-              {isExpanded && (
-                <div className="border-t border-dashed border-primary/30 bg-muted/30 px-3 pb-4 pt-3">
-                  <div className="relative rounded-xl border border-primary/20 bg-background p-4 shadow-sm ring-1 ring-primary/5">
+                  </div>
+                }
+                actions={
+                  onEditQuestion ? (
                     <Button
                       type="button"
                       variant="ghost"
-                      size="icon"
-                      aria-label="关闭题目详情"
-                      className="absolute right-2 top-2 z-10 h-7 w-7 rounded-full bg-background/90 shadow-sm"
-                      onClick={() => setExpandedId(null)}
+                      size="sm"
+                      className="h-7 px-1.5 text-xs text-muted-foreground hover:text-blue-600 sm:px-2 dark:hover:text-blue-400"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleEditQuestion(q);
+                      }}
                     >
-                      <X size={13} />
+                      <Pencil size={13} className="sm:mr-1" />
+                      <span className="hidden sm:inline">编辑题目</span>
                     </Button>
-                    <QuestionPreviewCard
-                      question={q}
-                      mode="detailed"
-                      defaultExpanded
-                      markChoiceAnswer
-                      className="border-0 bg-transparent pr-8 shadow-none"
-                      actions={
-                        onEditQuestion ? (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleEditQuestion(q)}
-                          >
-                            <Pencil size={14} />
-                            编辑题目
-                          </Button>
-                        ) : undefined
-                      }
-                    />
-                  </div>
-                </div>
-              )}
+                  ) : undefined
+                }
+              />
             </div>
           );
-        })
+        })}
+
+        {hasMore ? (
+          <div
+            ref={sentinelRef}
+            className="flex items-center justify-center gap-2 py-4 text-xs text-muted-foreground"
+          >
+            <LoaderCircle size={15} className="animate-spin text-muted-foreground" />
+            正在加载更多题目...
+          </div>
+        ) : questions.length > 20 ? (
+          <div className="py-4 text-center text-xs text-muted-foreground">
+            已加载全部 {total} 道题目
+          </div>
+        ) : null}
+        </>
       )}
     </div>
   );
@@ -511,8 +684,8 @@ export function QuestionSelector({
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden px-6 py-4">
         {renderFilters()}
-        <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-          {isLoading ? (
+        <div className="min-h-0 flex-1 overflow-y-auto pr-1" onScroll={handleScroll}>
+          {isLoading && questions.length === 0 ? (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
               加载中...
             </div>
@@ -523,7 +696,7 @@ export function QuestionSelector({
             </div>
           ) : (
             <div className="space-y-4">
-              {questions.map((q) => {
+              {questions.map((q, idx) => {
                 const isSelected = selectedSet.has(q.id);
                 return (
                   <div
@@ -533,12 +706,12 @@ export function QuestionSelector({
                     aria-pressed={isSelected}
                     className="cursor-pointer rounded-lg outline-none transition-all focus-visible:ring-2 focus-visible:ring-primary/40"
                     onClick={(event) => {
-                      if (shouldIgnoreCardToggle(event.target)) return;
+                      if (shouldIgnoreCardToggle(event.target, event.currentTarget)) return;
                       toggle(q.id);
                     }}
                     onKeyDown={(event) => {
                       if (event.key !== "Enter" && event.key !== " ") return;
-                      if (shouldIgnoreCardToggle(event.target)) return;
+                      if (shouldIgnoreCardToggle(event.target, event.currentTarget)) return;
                       event.preventDefault();
                       toggle(q.id);
                     }}
@@ -553,6 +726,7 @@ export function QuestionSelector({
                       />
                       <QuestionPreviewCard
                         question={q}
+                        index={idx + 1}
                         mode="detailed"
                         defaultExpanded
                         markChoiceAnswer
@@ -586,6 +760,17 @@ export function QuestionSelector({
                   </div>
                 );
               })}
+
+              {hasMore ? (
+                <div className="flex items-center justify-center gap-2 py-4 text-xs text-muted-foreground">
+                  <LoaderCircle size={15} className="animate-spin text-muted-foreground" />
+                  正在加载更多题目...
+                </div>
+              ) : questions.length > 20 ? (
+                <div className="py-4 text-center text-xs text-muted-foreground">
+                  已加载全部 {total} 道题目
+                </div>
+              ) : null}
             </div>
           )}
         </div>
@@ -594,72 +779,76 @@ export function QuestionSelector({
   );
 
   return (
-    <div className={cn(fillAvailableHeight ? "flex min-h-0 flex-1 flex-col gap-4" : "space-y-4")}>
+    <div
+      className={cn(
+        fillAvailableHeight
+          ? "flex h-full min-h-0 flex-1 flex-col gap-3 overflow-hidden"
+          : "space-y-4",
+      )}
+    >
       {/* Summary */}
-      {showSummary && renderSummary
-        ? renderSummary({
-            selectedCount: selectedIds.length,
-            currentBankTotal,
-            total,
-            onClear: () => onChange([]),
-            onOpenFullscreen: () => setIsFullscreen(true),
-          })
-        : null}
-      {showSummary && !renderSummary && (
-        <div className="flex items-center justify-between">
-          <p className="text-sm text-muted-foreground">
-            已选 <span className="font-semibold text-foreground">{selectedIds.length}</span> 题
-            {currentBankTotal != null ? (
-              <>
-                <span className="mx-1">·</span>
-                当前题库共 <span className="font-semibold text-foreground">{currentBankTotal}</span> 题
-              </>
-            ) : null}
-          </p>
-          <div className="flex items-center gap-2">
-            {selectedIds.length > 0 && (
-              <Button type="button" variant="ghost" size="sm" onClick={() => onChange([])}>
-                清空选择
+      <div className="shrink-0">
+        {showSummary && renderSummary
+          ? renderSummary({
+              selectedCount: selectedIds.length,
+              currentBankTotal,
+              total,
+              onClear: () => onChange([]),
+              onOpenFullscreen: () => setIsFullscreen(true),
+            })
+          : null}
+        {showSummary && !renderSummary && (
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">
+              已选 <span className="font-semibold text-foreground">{selectedIds.length}</span> 题
+              {currentBankTotal != null ? (
+                <>
+                  <span className="mx-1">·</span>
+                  当前题库共 <span className="font-semibold text-foreground">{currentBankTotal}</span> 题
+                </>
+              ) : null}
+            </p>
+            <div className="flex items-center gap-2">
+              {selectedIds.length > 0 && (
+                <Button type="button" variant="ghost" size="sm" onClick={() => onChange([])}>
+                  清空选择
+                </Button>
+              )}
+              <Button type="button" variant="outline" size="sm" onClick={() => setIsFullscreen(true)}>
+                <Maximize2 size={14} />
+                全屏展示
               </Button>
-            )}
-            <Button type="button" variant="outline" size="sm" onClick={() => setIsFullscreen(true)}>
-              <Maximize2 size={14} />
-              全屏展示
-            </Button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      {renderFilters()}
+      {/* Filters */}
+      <div className="shrink-0">{renderFilters()}</div>
 
-      {renderQuestionList()}
-
-      {/* Pagination */}
-      {!isFullscreen && totalPages > 1 && (
-        <div className="flex items-center justify-center gap-2">
+      {/* Toolbar: 全局展开/收起与统计 */}
+      {questions.length > 0 && (
+        <div className="flex shrink-0 items-center justify-between text-xs text-muted-foreground">
+          <span>共 {total} 道题目</span>
           <Button
             type="button"
             variant="outline"
             size="sm"
-            disabled={page <= 1}
-            onClick={() => setPage((p) => p - 1)}
+            className="h-7 px-2 text-xs"
+            onClick={() => setAllQuestionsExpanded((prev) => !prev)}
           >
-            上一页
-          </Button>
-          <span className="text-xs text-muted-foreground">
-            {page} / {totalPages}
-          </span>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={page >= totalPages}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            下一页
+            {allQuestionsExpanded ? "全部收起" : "全部展开"}
           </Button>
         </div>
       )}
+
+      {/* Question List */}
+      <div
+        className={cn("min-h-0 flex-1 overflow-y-auto pr-1")}
+        onScroll={handleScroll}
+      >
+        {renderQuestionList()}
+      </div>
 
       {isFullscreen && typeof document !== "undefined"
         ? createPortal(

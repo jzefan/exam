@@ -1479,7 +1479,7 @@ export function GradingCenterPage() {
                 满分
               </Button>
             </TooltipTrigger>
-            <TooltipContent>满分 {candidateDetail?.max_score ?? ""} 分，一键确认</TooltipContent>
+            <TooltipContent>给满分（{candidateDetail?.max_score ?? ""} 分）并确认</TooltipContent>
           </Tooltip>
         </TooltipProvider>
         <TooltipProvider delayDuration={300}>
@@ -1498,7 +1498,7 @@ export function GradingCenterPage() {
                 未得分
               </Button>
             </TooltipTrigger>
-            <TooltipContent>0 分，一键确认</TooltipContent>
+            <TooltipContent>记 0 分并确认</TooltipContent>
           </Tooltip>
         </TooltipProvider>
       </div>
@@ -1656,7 +1656,7 @@ export function GradingCenterPage() {
                     </TooltipTrigger>
                   </PopoverTrigger>
                   <TooltipContent side="bottom">
-                    导出本场考试下所有考生的分数
+                    导出考生成绩表
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
@@ -2171,7 +2171,7 @@ export function GradingCenterPage() {
                           隐藏
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent>隐藏考生列表</TooltipContent>
+                      <TooltipContent>收起考生列表</TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
                 </div>
@@ -2288,7 +2288,7 @@ export function GradingCenterPage() {
                               side="top"
                               className="duration-300 ease-out data-[state=closed]:duration-75"
                             >
-                              您已经查看过但还没确定
+                              已阅，待确认得分
                             </TooltipContent>
                           </Tooltip>
                         </TooltipProvider>
@@ -2353,7 +2353,7 @@ export function GradingCenterPage() {
                                 显示
                               </Button>
                             </TooltipTrigger>
-                            <TooltipContent>显示考生列表</TooltipContent>
+                            <TooltipContent>展开考生列表</TooltipContent>
                           </Tooltip>
                         </TooltipProvider>
                       ) : null}
@@ -2877,7 +2877,7 @@ export function GradingCenterPage() {
                                 side="right"
                                 className="duration-300 ease-out data-[state=closed]:duration-75"
                               >
-                                您已经查看过但还没确定
+                                已阅，待确认得分
                               </TooltipContent>
                             </Tooltip>
                           </TooltipProvider>

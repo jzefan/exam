@@ -812,7 +812,7 @@ export function PaperImportPage() {
                 支持 PDF、Word（docx格式）、Markdown，单文件不超过{" "}
                 {Math.round(MAX_FILE_SIZE_BYTES / 1024 / 1024)}MB
                 <br />
-                Markdown 若为「题型 / 题目内容 / 答案 / 解析 / 难度」标准模板，将直接按规则解析。
+                符合「题型/题干/答案/解析/难度」标准模板的文档将直接按规则极速解析。
               </p>
               <Button
                 onClick={() => fileInputRef.current?.click()}
@@ -842,7 +842,7 @@ export function PaperImportPage() {
             <DialogDescription>
               {enhancementApplied
                 ? `已使用「${enhancedRootKnowledgePoint?.name ?? "已选课程"}」完成知识点关联，确认试卷信息后即可入库。`
-                : "确认试卷信息并选择主知识点。主知识点可理解为课程名称，用于后续检索和 AI 生成。"}
+                : "确认试卷信息并关联归属课程，入库后可用于组卷与 AI 扩题。"}
             </DialogDescription>
           </DialogHeader>
 

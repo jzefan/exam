@@ -198,3 +198,47 @@ async def test_single_role_login_with_explicit_role_name(client: AsyncClient, db
 
     assert response.status_code == 200
     assert response.json()["access_token"]
+
+
+@pytest.mark.asyncio
+async def test_login_upgrades_a_legacy_password_hash_without_failing(
+    client: AsyncClient, db_session: AsyncSession
+):
+    """A hash minted with the old bcrypt cost must still log in.
+
+    Regression: the first attempt at transparent rehashing mutated the User row
+    inside authenticate_user_with_reason. The next autoflush expired the
+    server-onupdate columns, build_user_response then read ``updated_at``
+    outside the greenlet context, and every legacy account got a 500 on login.
+    """
+    import bcrypt
+
+    await seed_roles(db_session)
+    org = await _org(db_session, "老旧哈希学校")
+    user = await create_user(
+        db_session,
+        UserCreate(
+            username="legacy-hash-teacher",
+            email="legacy@example.com",
+            password=PASSWORD,
+            full_name="Legacy Hash",
+            role_name="teacher",
+            org_id=org.id,
+        ),
+    )
+    # Re-mint the password with the previous production work factor.
+    user.password_hash = bcrypt.hashpw(PASSWORD.encode(), bcrypt.gensalt(rounds=12)).decode()
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/auth/login", json={"username": "legacy-hash-teacher", "password": PASSWORD}
+    )
+    assert response.status_code == 200, response.text
+
+    await db_session.refresh(user)
+    assert user.password_hash.split("$")[2] == "10"
+
+    again = await client.post(
+        "/api/auth/login", json={"username": "legacy-hash-teacher", "password": PASSWORD}
+    )
+    assert again.status_code == 200, again.text

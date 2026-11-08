@@ -1,3 +1,28 @@
+# Current deployment slots are injected by scripts/deploy.sh.
+# __BACKEND_SLOT__ / __FRONTEND_SLOT__ are replaced with blue or green
+# during release switching.
+#
+# Upstreams are declared (rather than proxy_pass'ing the hostname inline) so
+# nginx can keep a pool of connections to each container: without that, every
+# API call pays a fresh TCP handshake to the backend, and each proxied asset
+# pays one to the frontend. `Connection "upgrade"` used to be hardcoded on
+# /api/, which both pretended every request was a websocket and disabled that
+# keepalive; the map below upgrades only real Upgrade requests.
+upstream backend_upstream {
+  server backend___BACKEND_SLOT__:8000;
+  keepalive 64;
+}
+
+upstream frontend_upstream {
+  server frontend___FRONTEND_SLOT__:80;
+  keepalive 16;
+}
+
+map $http_upgrade $connection_upgrade {
+  default upgrade;
+  ''      '';
+}
+
 server {
   listen 3036;
   server_name _;
@@ -6,9 +31,22 @@ server {
   # upload overhead is not rejected before the request reaches FastAPI.
   client_max_body_size 200m;
 
-  # Current deployment slots are injected by scripts/deploy.sh.
-  # __BACKEND_SLOT__ / __FRONTEND_SLOT__ are replaced with blue or green
-  # during release switching.
+  # JSON payloads here are routinely 100KB-900KB (question banks, knowledge
+  # points). Compressing at this layer means both hops — backend→edge and
+  # edge→browser — carry ~4x fewer bytes. Static assets arrive already gzipped
+  # from the frontend container, so nginx leaves their Content-Encoding alone.
+  gzip on;
+  gzip_vary on;
+  gzip_comp_level 4;
+  gzip_min_length 1024;
+  gzip_proxied any;
+  gzip_types
+    application/json
+    application/javascript
+    text/css
+    text/plain
+    text/xml
+    image/svg+xml;
 
   location = /healthz {
     access_log off;
@@ -17,10 +55,10 @@ server {
   }
 
   location /api/ {
-    proxy_pass http://backend___BACKEND_SLOT__:8000;
+    proxy_pass http://backend_upstream;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
+    proxy_set_header Connection $connection_upgrade;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -34,13 +72,15 @@ server {
   }
 
   location / {
-    proxy_pass http://frontend___FRONTEND_SLOT__:80;
+    proxy_pass http://frontend_upstream;
     proxy_http_version 1.1;
+    proxy_set_header Connection "";
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
   }
+
 
   # Future domain / HTTPS notes:
   # 1. Change listen 3036 to listen 80 and add a second TLS server block on 443.

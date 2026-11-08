@@ -84,3 +84,31 @@ export async function appendPaperQuestionsWithAI<TPaperDetail>(
     body: JSON.stringify(payload),
   });
 }
+
+/** 与 paperApiRequest 相同，但额外返回 X-Total-Count，便于服务端分页。 */
+export async function paperApiList<T>(
+  path: string,
+): Promise<{ data: T; total: number | null }> {
+  const token = localStorage.getItem("access_token");
+  const response = await fetch(`/api${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    let message = text || `请求失败: ${response.status}`;
+    try {
+      const payload = JSON.parse(text) as { detail?: string };
+      if (payload?.detail) {
+        message = payload.detail;
+      }
+    } catch {
+      // body is plain text or empty; use text as-is
+    }
+    throw new Error(message);
+  }
+
+  const totalHeader = response.headers.get("X-Total-Count");
+  const data = (await response.json()) as T;
+  return { data, total: totalHeader ? Number(totalHeader) : null };
+}

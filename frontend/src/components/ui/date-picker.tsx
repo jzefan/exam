@@ -256,8 +256,8 @@ export function DatePicker({
                     type="text"
                     inputMode="numeric"
                     placeholder="09:30"
-                    aria-label="时间，可手动输入或滚动调整（每 5 分钟）"
-                    title="可手动输入，或在此滚动以 5 分钟为步进调整，也可用上下方向键"
+                    aria-label="时间（支持输入、滚轮或方向键微调）"
+                    title="支持键盘输入、滚轮或上下方向键微调（步长 5 分钟）"
                     value={timeDraft ?? timeValue}
                     className="h-8 w-32 rounded-md border border-input bg-background pl-7 pr-2 text-sm tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     onChange={(event) => setTimeDraft(event.target.value)}

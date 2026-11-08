@@ -37,7 +37,7 @@ export function NodeCollapseToggle({
           </button>
         </TooltipTrigger>
         <TooltipContent side="right" className="text-xs">
-          {collapsed ? `展开子节点（${count ?? ""}）` : "收起子节点"}
+          {collapsed ? (count != null ? `展开子节点 (${count})` : "展开子节点") : "收起子节点"}
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>

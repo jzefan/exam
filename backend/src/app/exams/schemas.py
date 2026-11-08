@@ -117,6 +117,7 @@ class ExamUpdate(BaseModel):
     show_score: bool | None = None
     notes_template: str | None = None
     question_mode: ExamQuestionMode | None = None
+    course_kp_id: uuid.UUID | None = None
     question_ids: list[uuid.UUID] | None = None
     question_items: list[ExamQuestionItem] | None = None
     student_ids: list[uuid.UUID] | None = None
@@ -134,6 +135,7 @@ class ExamResponse(BaseModel):
     duration_minutes: int
     total_score: float
     status: ExamStatus
+    course_kp_id: uuid.UUID | None = None
     position_id: uuid.UUID | None
     position_name: str | None = None
     max_switch_count: int

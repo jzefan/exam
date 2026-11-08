@@ -315,7 +315,7 @@ export function ImportReviewEditor({
                     variant="secondary"
                     size="sm"
                     disabled={isRecognizing}
-                    title="补全当前题的答案、解析或题型"
+                    title="智能补全当前题的答案、解析与题型"
                     onClick={onReRecognize}
                     className="h-9 rounded-lg border-none bg-indigo-50 text-sm font-bold text-indigo-600 hover:bg-indigo-100"
                   >
@@ -326,7 +326,7 @@ export function ImportReviewEditor({
                     variant="outline"
                     size="sm"
                     disabled={isAnalyzingDocument}
-                    title="重新分析整份导入文件，适合识别结果明显不准时使用"
+                    title="重新分析整份文件（解析偏差较大时使用）"
                     className="h-9 rounded-lg border-slate-200 text-sm font-bold text-slate-700 hover:bg-white"
                     onClick={onAnalyzeDocument}
                   >

@@ -28,6 +28,7 @@ from app.auth.security import (
     create_access_token,
     create_role_selection_token,
     decode_role_selection_token,
+    hash_password_async,
 )
 from app.auth.email import EmailNotConfiguredError, send_password_reset_email
 from app.auth.service import (
@@ -219,6 +220,7 @@ async def login(
         started_at=started_at,
         authenticated_at=authenticated_at,
         username=data.username,
+        plaintext_password=data.password,
     )
 
 
@@ -256,6 +258,7 @@ async def login_select_role(
         started_at=started_at,
         authenticated_at=None,
         username=user.username,
+        plaintext_password=None,
     )
 
 
@@ -268,6 +271,7 @@ async def _issue_login_token(
     started_at: float,
     authenticated_at: float | None,
     username: str,
+    plaintext_password: str | None = None,
 ) -> TokenResponse:
     """Mint the access token for a verified login and update login bookkeeping."""
     user_id = user.id
@@ -308,6 +312,13 @@ async def _issue_login_token(
         preferred_role=role_name,
     )
     update_values: dict = {"last_login_at": now}
+    if getattr(user, "_needs_password_rehash", False) and plaintext_password:
+        # Transparently upgrade a hash minted with the old (slower) cost.
+        # Folded into the update this flow already issues, and deliberately
+        # placed after build_user_response(): dirtying `user` earlier lets the
+        # autoflush expire server-onupdate columns, and reading them afterwards
+        # does implicit IO outside the greenlet context (MissingGreenlet, 500).
+        update_values["password_hash"] = await hash_password_async(plaintext_password)
     if session_id is not None:
         update_values["session_token"] = session_id
     await db.execute(

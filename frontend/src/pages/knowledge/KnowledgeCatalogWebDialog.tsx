@@ -284,7 +284,7 @@ export function KnowledgeCatalogWebDialog({
             {selectedTargetName
               ? `上传书籍封面或填写书名，系统自动获取该书目录后导入到“${selectedTargetName}”。`
               : "请先选择课程。"}
-            目录会先展示给你校对，确认无误再导入。
+            导入前支持预览和校对章节目录。
           </DialogDescription>
         </DialogHeader>
 

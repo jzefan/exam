@@ -94,6 +94,7 @@ import {
   getDifficultyStrategyLabel,
   type PaperDifficultyStrategy,
 } from "@/pages/papers/api";
+import { getCourseKnowledgeTree, type CourseKnowledgeNode } from "@/pages/courses/api";
 
 type ExamViewDetail = IExam & {
   questions: IExamQuestion[];
@@ -299,6 +300,9 @@ export function ExamPaperViewPage() {
     backTo?: string;
     backLabel?: string;
     courseName?: string;
+    courseId?: string;
+    courseKpId?: string;
+    mainKnowledgePointId?: string;
     defaultBankName?: string;
     courseOrigin?: boolean;
   };
@@ -404,6 +408,7 @@ export function ExamPaperViewPage() {
   });
   const knowledgePoints = knowledgePointsQuery.query.data?.data ?? [];
   const [ensuredCourseBank, setEnsuredCourseBank] = useState<IQuestionBank | null>(null);
+  const [courseKnowledgeTree, setCourseKnowledgeTree] = useState<CourseKnowledgeNode | null>(null);
 
   useEffect(() => {
     if (!exam) return;
@@ -529,6 +534,73 @@ export function ExamPaperViewPage() {
       ),
     [availableQuestions, exam?.knowledge_points],
   );
+
+  const effectiveCourseId = useMemo(() => {
+    if (exam?.course_kp_id) return exam.course_kp_id;
+    if (backState.courseKpId) return backState.courseKpId;
+    if (backState.courseId) return backState.courseId;
+    if (backState.mainKnowledgePointId) return backState.mainKnowledgePointId;
+    if (backState.backTo) {
+      const match = backState.backTo.match(/\/courses\/([a-zA-Z0-9_-]+)/);
+      if (match?.[1]) return match[1];
+    }
+    const rawBankCourseName = courseQuestionBankName
+      ? courseQuestionBankName.replace(/-题库.*$/, "").trim()
+      : null;
+    const targetName = (backState.courseName?.trim() || rawBankCourseName)?.trim();
+    if (targetName && knowledgePoints.length > 0) {
+      const matched = knowledgePoints.find(
+        (kp) => !kp.parent_id && kp.name.trim() === targetName,
+      );
+      if (matched) return matched.id;
+    }
+    const kpIdPool = [
+      ...(exam?.knowledge_points?.map((kp) => kp.id) ?? []),
+      ...availableQuestions.flatMap(
+        (q) => q.knowledge_points?.map((kp) => kp.id) ?? [],
+      ),
+    ];
+    if (kpIdPool.length > 0 && knowledgePoints.length > 0) {
+      const kpMap = new Map(knowledgePoints.map((kp) => [kp.id, kp]));
+      for (const id of kpIdPool) {
+        let curr = kpMap.get(id);
+        while (curr && curr.parent_id && kpMap.has(curr.parent_id)) {
+          curr = kpMap.get(curr.parent_id);
+        }
+        if (curr && !curr.parent_id) {
+          return curr.id;
+        }
+      }
+    }
+    return null;
+  }, [
+    exam?.course_kp_id,
+    exam?.knowledge_points,
+    backState.courseKpId,
+    backState.courseId,
+    backState.mainKnowledgePointId,
+    backState.backTo,
+    backState.courseName,
+    courseQuestionBankName,
+    knowledgePoints,
+    availableQuestions,
+  ]);
+
+  useEffect(() => {
+    if (!effectiveCourseId) {
+      setCourseKnowledgeTree(null);
+      return;
+    }
+    let active = true;
+    getCourseKnowledgeTree(effectiveCourseId)
+      .then((tree) => {
+        if (active && tree) setCourseKnowledgeTree(tree);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [effectiveCourseId]);
 
   const totalScore = useMemo(
     () =>
@@ -1413,7 +1485,7 @@ export function ExamPaperViewPage() {
           <DialogHeader>
             <DialogTitle>考生管理</DialogTitle>
             <DialogDescription>
-              增加或移除当前{categoryLabel}的考生，保存后立即生效。
+              调整当前{categoryLabel}的考生名单，保存后立即生效。
             </DialogDescription>
           </DialogHeader>
           <StudentSelector
@@ -1451,7 +1523,7 @@ export function ExamPaperViewPage() {
           <DialogHeader>
             <DialogTitle>修改{categoryLabel}基本信息</DialogTitle>
             <DialogDescription>
-              修改名称、岗位、开始结束时间与时长，保存后立即更新当前{categoryLabel}。
+              修改名称、关联岗位、起止时间与时长等基本设置。
             </DialogDescription>
           </DialogHeader>
           {basicInfoDraft ? (
@@ -1571,8 +1643,7 @@ export function ExamPaperViewPage() {
           <DialogHeader>
             <DialogTitle>生成模拟试卷</DialogTitle>
             <DialogDescription>
-              系统会按原考试的题型比例和知识点分布组卷，优先从题库抽取，不足部分再由
-              AI 自动生成。
+              保持原题型比例与知识点分布，优先从题库抽选，不足部分由 AI 智能补全。
             </DialogDescription>
           </DialogHeader>
 
@@ -1682,15 +1753,16 @@ export function ExamPaperViewPage() {
         <DialogContent className="flex h-[calc(100dvh-2rem)] max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-[1300px] flex-col overflow-hidden">
           <DialogHeader className="shrink-0">
             <DialogTitle>从题库中添加</DialogTitle>
-            <DialogDescription>
-              默认从当前课程题库筛选；保存后只会把新选择的题目追加到当前{categoryLabel}。
+            <DialogDescription className="sr-only">
+              从课程题库中挑选题目追加到当前{categoryLabel}。
             </DialogDescription>
           </DialogHeader>
-          <div className="min-h-0 flex-1">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <QuestionSelector
               selectedIds={addQuestionIds}
               onChange={setAddQuestionIds}
-              knowledgePointOptions={selectedKnowledgePoints}
+              knowledgeTree={courseKnowledgeTree}
+              knowledgePointOptions={courseKnowledgeTree ? undefined : selectedKnowledgePoints}
               showSummary
               renderSummary={({ total, currentBankTotal, onOpenFullscreen }) => (
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1717,7 +1789,7 @@ export function ExamPaperViewPage() {
               initialBankId={courseBank?.id}
               initialBankQuestionCount={courseBank?.question_count}
               lockInitialBank={false}
-              restrictKnowledgePointsToOptions={selectedKnowledgePoints.length > 0}
+              restrictKnowledgePointsToOptions={false}
               fillAvailableHeight
             />
           </div>
@@ -1751,7 +1823,7 @@ export function ExamPaperViewPage() {
           <DialogHeader>
             <DialogTitle>添加题目</DialogTitle>
             <DialogDescription>
-              题目会保存到「{courseQuestionBankName ?? courseBank?.name ?? "题库"}」，并立即加入当前{categoryLabel}。
+              录入的题目将存入「{courseQuestionBankName ?? courseBank?.name ?? "题库"}」并自动加入本{categoryLabel}。
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-4">
@@ -1839,7 +1911,7 @@ export function ExamPaperViewPage() {
           <DialogHeader>
             <DialogTitle>AI 添加题目</DialogTitle>
             <DialogDescription>
-              基于当前{categoryLabel}题型、难度和课程知识点生成新题，生成后立即加入当前{categoryLabel}。
+              结合本{categoryLabel}的题型、难度与课程知识点生成新题并直接加入。
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-4">

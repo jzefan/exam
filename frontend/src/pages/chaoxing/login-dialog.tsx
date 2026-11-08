@@ -132,7 +132,7 @@ export function LoginDialog({ session, open, onOpenChange, onVerified, onExpired
     <DialogContent className="flex h-[min(95dvh,900px)] max-h-[95dvh] max-w-[1128px] flex-col gap-0 overflow-hidden p-0 sm:w-[95vw]">
       <DialogHeader className="shrink-0 px-4 pb-3 pt-4">
         <DialogTitle>连接学习通</DialogTitle>
-        <DialogDescription>在下方学习通页面登录。账号密码会加密记住并在下次自动填写；登录状态仍会在断开后清除。</DialogDescription>
+        <DialogDescription>在下方窗口登录学习通。凭据经本地加密保存并在下次自动填充，会话断开后状态自动清除。</DialogDescription>
       </DialogHeader>
       {error && <Alert className="mx-4 mb-3 shrink-0" variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-3">

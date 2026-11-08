@@ -986,7 +986,7 @@ export function ExamTaking({ examIdOverride, onSubmitted }: ExamTakingProps = {}
           <AlertDialogHeader>
             <AlertDialogTitle>确认离开考试？</AlertDialogTitle>
             <AlertDialogDescription>
-              离开考试页面可能被记录为切屏，切屏次数达到上限将导致自动交卷。确定要返回吗？
+              离开页面将被记录为切屏行为。达到切屏上限将强制自动交卷，确定离开吗？
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

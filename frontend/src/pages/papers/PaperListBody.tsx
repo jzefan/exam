@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useList } from "@refinedev/core";
 import { useNavigate } from "react-router-dom";
-import { Calculator, Copy, Download, Eye, ListPlus, Loader2, Network, Pencil, Plus, RefreshCcw, Search, ShoppingBasket, Sparkles, Trash2, X } from "lucide-react";
+import { Calculator, Copy, Download, Eye, FilePlus2, ListPlus, Loader2, Network, Pencil, Plus, RefreshCcw, Search, Send, ShoppingBasket, Sparkles, Trash2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { TooltipButton } from "@/components/ui/tooltip-button";
@@ -60,11 +60,16 @@ import {
 import {
   appendPaperQuestionsWithAI,
   getDifficultyStrategyLabel,
+  paperApiList,
   paperApiRequest,
   type PaperDifficultyStrategy,
 } from "./api";
 import { PaperAIGenerateDialog } from "./ai-generate-dialog";
 import { PaperExpandDialog } from "./paper-expand-dialog";
+import {
+  PaperQuickPublishDialog,
+  type PaperQuickPublishMode,
+} from "./quick-publish-dialog";
 import { PaperScorePanel, type ScoreViewMode } from "@/pages/exams/components/PaperScorePanel";
 import {
   buildPaperPreviewItems,
@@ -168,6 +173,12 @@ export function PaperListBody({
   const [expandDialogPaper, setExpandDialogPaper] = useState<IPaper | null>(
     null,
   );
+  const [publishTarget, setPublishTarget] = useState<{
+    paper: IPaper;
+    mode: PaperQuickPublishMode;
+  } | null>(null);
+  const [publishDetail, setPublishDetail] = useState<IPaperDetail | null>(null);
+  const [publishLoading, setPublishLoading] = useState(false);
   const [editingPaper, setEditingPaper] = useState<IPaper | null>(null);
 
   const { query } = useList<IPaper>({
@@ -194,6 +205,26 @@ export function PaperListBody({
       }),
     [allPapers, keyword, sourceFilter, rootKnowledgePointId],
   );
+
+  const handleOpenPublish = async (
+    paper: IPaper,
+    mode: PaperQuickPublishMode,
+  ) => {
+    setPublishLoading(true);
+    try {
+      const detail = await paperApiRequest<IPaperDetail>(`/papers/${paper.id}`);
+      setPublishDetail(detail);
+      setPublishTarget({ paper, mode });
+    } catch (error) {
+      toast({
+        title: "加载试卷失败",
+        description: error instanceof Error ? error.message : "请稍后重试",
+        variant: "destructive",
+      });
+    } finally {
+      setPublishLoading(false);
+    }
+  };
 
   const withBusyGuard = async (paperId: string, fn: () => Promise<void>) => {
     setBusyPaperId(paperId);
@@ -406,7 +437,7 @@ export function PaperListBody({
                                 </DropdownMenuTrigger>
                               </span>
                             </TooltipTrigger>
-                            <TooltipContent>生成试卷</TooltipContent>
+                            <TooltipContent>试卷衍生与 AI 重组</TooltipContent>
                           </Tooltip>
                           <DropdownMenuContent align="end" className="w-56">
                             <Tooltip>
@@ -420,7 +451,7 @@ export function PaperListBody({
                                 </DropdownMenuItem>
                               </TooltipTrigger>
                               <TooltipContent side="left">
-                                复制当前试卷为一份新试卷，题目和分值保持不变
+                                复制试卷（保留题目与分值）
                               </TooltipContent>
                             </Tooltip>
                             <Tooltip>
@@ -434,7 +465,7 @@ export function PaperListBody({
                                 </DropdownMenuItem>
                               </TooltipTrigger>
                               <TooltipContent side="left">
-                                用 AI 基于当前试卷重新生成一份新试卷
+                                按本卷结构 AI 仿编新卷
                               </TooltipContent>
                             </Tooltip>
                             {courseQuestionBankName ? (
@@ -453,10 +484,78 @@ export function PaperListBody({
                                   </DropdownMenuItem>
                                 </TooltipTrigger>
                                 <TooltipContent side="left">
-                                  保留题目和知识点，扩充到指定题数后生成新试卷
+                                  保留已有题目并扩充题量
                                 </TooltipContent>
                               </Tooltip>
                             ) : null}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TooltipProvider>
+                      <TooltipProvider delayDuration={150}>
+                        <DropdownMenu>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="inline-flex">
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    disabled={
+                                      isBusy ||
+                                      publishLoading ||
+                                      Boolean(paper.archived_at) ||
+                                      paper.question_count === 0
+                                    }
+                                    aria-label="发布"
+                                  >
+                                    <Send className="h-4 w-4" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent>发布</TooltipContent>
+                          </Tooltip>
+                          <DropdownMenuContent align="end" className="w-44">
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <DropdownMenuItem
+                                  disabled={
+                                    isBusy ||
+                                    Boolean(paper.archived_at) ||
+                                    paper.question_count === 0
+                                  }
+                                  onSelect={() =>
+                                    void handleOpenPublish(paper, "practice")
+                                  }
+                                >
+                                  <Send className="mr-2 h-4 w-4" />
+                                  发布练习
+                                </DropdownMenuItem>
+                              </TooltipTrigger>
+                              <TooltipContent side="left">
+                                用这份试卷发布练习
+                              </TooltipContent>
+                            </Tooltip>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <DropdownMenuItem
+                                  disabled={
+                                    isBusy ||
+                                    Boolean(paper.archived_at) ||
+                                    paper.question_count === 0
+                                  }
+                                  onSelect={() =>
+                                    void handleOpenPublish(paper, "exam")
+                                  }
+                                >
+                                  <FilePlus2 className="mr-2 h-4 w-4" />
+                                  发布考试
+                                </DropdownMenuItem>
+                              </TooltipTrigger>
+                              <TooltipContent side="left">
+                                用这份试卷创建并发布考试
+                              </TooltipContent>
+                            </Tooltip>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </TooltipProvider>
@@ -478,7 +577,7 @@ export function PaperListBody({
                                 </DropdownMenuTrigger>
                               </span>
                             </TooltipTrigger>
-                            <TooltipContent>导出</TooltipContent>
+                            <TooltipContent>导出试卷 (Word / JSON)</TooltipContent>
                           </Tooltip>
                           <DropdownMenuContent align="end" className="w-48">
                             <DropdownMenuLabel className="text-xs">导出 Word</DropdownMenuLabel>
@@ -559,6 +658,39 @@ export function PaperListBody({
           paper={expandDialogPaper}
           courseQuestionBankName={courseQuestionBankName}
           generatedPaperState={detailNavState}
+        />
+      ) : null}
+
+      {publishTarget && publishDetail ? (
+        <PaperQuickPublishDialog
+          open
+          mode={publishTarget.mode}
+          paper={publishDetail}
+          courseKpId={
+            detailNavState?.courseKpId ?? rootKnowledgePointId ?? undefined
+          }
+          courseSemesterId={detailNavState?.courseSemesterId}
+          defaultClassIds={detailNavState?.defaultClassIds}
+          semesterOptions={detailNavState?.courseSemesters}
+          onOpenChange={(open) => {
+            if (!open) {
+              setPublishTarget(null);
+              setPublishDetail(null);
+            }
+          }}
+          onPublished={() => {
+            const successTo =
+              publishTarget.mode === "practice"
+                ? detailNavState?.publishPracticeSuccessTo
+                : detailNavState?.publishExamSuccessTo;
+            setPublishTarget(null);
+            setPublishDetail(null);
+            if (successTo) {
+              navigate(successTo);
+            } else {
+              void query.refetch();
+            }
+          }}
         />
       ) : null}
     </div>
@@ -765,7 +897,15 @@ function PaperEditDialog({
   const [replacingQuestionId, setReplacingQuestionId] = useState<string | null>(null);
   const [recentlyReplacedQuestionId, setRecentlyReplacedQuestionId] = useState<string | null>(null);
   // 题库浏览：左侧题型、右侧题目；试卷篮展示当前试卷题目。
-  const [bankQuestions, setBankQuestions] = useState<IQuestion[]>([]);
+  const [bankPageQuestions, setBankPageQuestions] = useState<IQuestion[]>([]);
+  const [bankQuestionCache, setBankQuestionCache] = useState<
+    Map<string, IQuestion>
+  >(() => new Map());
+  const [bankTypeCounts, setBankTypeCounts] = useState<
+    Array<[QuestionDisplayType, number]>
+  >([]);
+  const [bankTotal, setBankTotal] = useState(0);
+  const [bankGrandTotal, setBankGrandTotal] = useState(0);
   const [bankLoading, setBankLoading] = useState(false);
   const [bankType, setBankType] = useState<QuestionDisplayType | "all">("all");
   const [bankSearch, setBankSearch] = useState("");
@@ -851,25 +991,86 @@ function PaperEditDialog({
       : null) ??
     null;
 
-  // 题库题目：课程题库下的全部题目，供左侧题型 + 右侧列表浏览。
+  // 题型总数：走后端聚合接口，避免把整个题库拉回前端计数。
   useEffect(() => {
     if (!courseBank?.id) {
-      setBankQuestions([]);
+      setBankTypeCounts([]);
+      setBankTotal(0);
+      return;
+    }
+    let cancelled = false;
+    const params = new URLSearchParams({ question_bank_id: courseBank.id });
+    paperApiRequest<Array<{ type: string; count: number }>>(
+      `/questions/type-distribution?${params}`,
+    )
+      .then((rows) => {
+        if (cancelled) return;
+        const counts = new Map<QuestionDisplayType, number>();
+        for (const row of rows) {
+          const type = row.type as QuestionDisplayType;
+          if (!QUESTION_DISPLAY_TYPE_ORDER.includes(type)) continue;
+          counts.set(type, (counts.get(type) ?? 0) + row.count);
+        }
+        setBankTypeCounts(
+          QUESTION_DISPLAY_TYPE_ORDER.filter((type) => counts.has(type)).map(
+            (type) => [type, counts.get(type)!] as const,
+          ),
+        );
+        const grandTotal = [...counts.values()].reduce(
+          (sum, count) => sum + count,
+          0,
+        );
+        setBankGrandTotal(grandTotal);
+        setBankTotal(grandTotal);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setBankTypeCounts([]);
+          setBankTotal(0);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [courseBank?.id, selectorRefreshKey]);
+
+  // 题目列表：服务端分页 + 题型/搜索筛选，避免一次加载整个题库。
+  useEffect(() => {
+    if (!courseBank?.id) {
+      setBankPageQuestions([]);
       return;
     }
     let cancelled = false;
     setBankLoading(true);
     const params = new URLSearchParams({
-      _start: "0",
-      _end: "2000",
+      _start: String((safeBankPage - 1) * BANK_PAGE_SIZE),
+      _end: String(safeBankPage * BANK_PAGE_SIZE),
       question_bank_id: courseBank.id,
     });
-    paperApiRequest<IQuestion[]>(`/questions?${params}`)
-      .then((items) => {
-        if (!cancelled) setBankQuestions(items);
+    const keyword = bankSearch.trim();
+    if (keyword) params.set("search_text", keyword);
+    if (bankType === "single_choice") {
+      params.set("type", "choice");
+      params.set("multi", "false");
+    } else if (bankType === "multi_choice") {
+      params.set("type", "choice");
+      params.set("multi", "true");
+    } else if (bankType !== "all") {
+      params.set("type", bankType);
+    }
+    paperApiList<IQuestion[]>(`/questions?${params}`)
+      .then(({ data, total }) => {
+        if (cancelled) return;
+        setBankPageQuestions(data);
+        if (total != null) setBankTotal(total);
+        setBankQuestionCache((prev) => {
+          const next = new Map(prev);
+          for (const question of data) next.set(question.id, question);
+          return next;
+        });
       })
       .catch(() => {
-        if (!cancelled) setBankQuestions([]);
+        if (!cancelled) setBankPageQuestions([]);
       })
       .finally(() => {
         if (!cancelled) setBankLoading(false);
@@ -877,73 +1078,15 @@ function PaperEditDialog({
     return () => {
       cancelled = true;
     };
-  }, [courseBank?.id, selectorRefreshKey]);
-
-  const getBankQuestionText = (question: IQuestion) => {
-    const content = question.content as
-      | { text?: unknown }
-      | string
-      | null
-      | undefined;
-    const raw =
-      question.title?.trim() ||
-      (typeof content === "string"
-        ? content
-        : content && typeof content.text === "string"
-          ? content.text
-          : "");
-    return (
-      raw
-        .replace(/<[^>]+>/g, " ")
-        .replace(/\s+/g, " ")
-        .trim() || "未命名题目"
-    );
-  };
-
-  const bankTypeRows = useMemo(() => {
-    const counts = new Map<QuestionDisplayType, number>();
-    for (const question of bankQuestions) {
-      const displayType = getQuestionDisplayType(question);
-      if (!displayType) continue;
-      counts.set(displayType, (counts.get(displayType) ?? 0) + 1);
-    }
-    return QUESTION_DISPLAY_TYPE_ORDER.filter((type) => counts.has(type)).map(
-      (type) => [type, counts.get(type)!] as const,
-    );
-  }, [bankQuestions]);
-
-  const filteredBankQuestions = useMemo(() => {
-    const keyword = bankSearch.trim().toLowerCase();
-    return bankQuestions.filter((question) => {
-      if (
-        bankType !== "all" &&
-        getQuestionDisplayType(question) !== bankType
-      ) {
-        return false;
-      }
-      if (!keyword) return true;
-      const knowledgeNames = (question.knowledge_points ?? [])
-        .map((point) => point.name)
-        .join(" ");
-      return `${getBankQuestionText(question)} ${knowledgeNames}`
-        .toLowerCase()
-        .includes(keyword);
-    });
-  }, [bankQuestions, bankSearch, bankType]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bankPage, bankSearch, bankType, courseBank?.id, selectorRefreshKey]);
 
   useEffect(() => {
     setBankPage(1);
   }, [bankType, bankSearch]);
 
-  const bankPageCount = Math.max(
-    1,
-    Math.ceil(filteredBankQuestions.length / BANK_PAGE_SIZE),
-  );
+  const bankPageCount = Math.max(1, Math.ceil(bankTotal / BANK_PAGE_SIZE));
   const safeBankPage = Math.min(bankPage, bankPageCount);
-  const pagedBankQuestions = filteredBankQuestions.slice(
-    (safeBankPage - 1) * BANK_PAGE_SIZE,
-    safeBankPage * BANK_PAGE_SIZE,
-  );
 
   // 试卷篮：当前试卷里的题目（含刚加入、还没保存的）。
   const questionById = useMemo(() => {
@@ -951,9 +1094,11 @@ function PaperEditDialog({
     for (const item of detail?.questions ?? []) {
       if (item.question) map.set(item.question_id, item.question);
     }
-    for (const question of bankQuestions) map.set(question.id, question);
+    for (const [id, question] of bankQuestionCache) {
+      map.set(id, question);
+    }
     return map;
-  }, [bankQuestions, detail]);
+  }, [bankQuestionCache, detail]);
 
   const basketItems = useMemo(
     () =>
@@ -1647,9 +1792,9 @@ function PaperEditDialog({
                   )}
                 >
                   <span>全部题型</span>
-                  <span className="text-xs tabular-nums">{bankQuestions.length}</span>
+                  <span className="text-xs tabular-nums">{bankGrandTotal}</span>
                 </button>
-                {bankTypeRows.map(([type, count]) => (
+                {bankTypeCounts.map(([type, count]) => (
                   <button
                     key={type}
                     type="button"
@@ -1676,7 +1821,7 @@ function PaperEditDialog({
                       ? "全部题型"
                       : questionDisplayTypeFullLabel[bankType]}
                     {" · "}
-                    {filteredBankQuestions.length} 题
+                    {bankTotal} 题
                   </span>
                   <span className="shrink-0">点「加入 / 已加入」增删</span>
                 </div>
@@ -1690,14 +1835,14 @@ function PaperEditDialog({
                     <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
                       {ensuringCourseBank ? "正在准备课程题库..." : "课程题库未就绪"}
                     </div>
-                  ) : filteredBankQuestions.length === 0 ? (
+                  ) : bankPageQuestions.length === 0 ? (
                     <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
                       没有符合条件的题目
                     </div>
                   ) : (
                     <>
                       <div className="space-y-2">
-                        {pagedBankQuestions.map((question, index) => {
+                        {bankPageQuestions.map((question, index) => {
                           const inPaper = selectedIds.includes(question.id);
                           const removing = removingIds.has(question.id);
                           return (

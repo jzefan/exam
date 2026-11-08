@@ -8,7 +8,12 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import User
-from app.auth.security import create_access_token, decode_access_token, hash_password, verify_password
+from app.auth.security import (
+    create_access_token,
+    decode_access_token,
+    hash_password_async,
+    verify_password_async,
+)
 from app.database import get_db
 from app.job_models.models import LearningResource
 from app.learning.models import Direction, KnowledgePoint, Major
@@ -217,7 +222,7 @@ async def enter_course_share(
                             alias_name=ws.alias_name or user.full_name,
                             has_password=True,
                         )
-                    if not verify_password(payload.password, ws.password_hash):
+                    if not await verify_password_async(payload.password, ws.password_hash):
                         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="访问密码错误")
 
                 token = create_access_token(user.id, "teacher")
@@ -258,7 +263,7 @@ async def enter_course_share(
         username=username,
         email=f"{username}@course.local",
         full_name=display_name,
-        password_hash=hash_password(raw_pass),
+        password_hash=await hash_password_async(raw_pass),
         is_active=True,
         user_type="teacher",
         primary_org_id=org.id,
@@ -275,7 +280,11 @@ async def enter_course_share(
     await add_role_to_user(db, guest_user.id, org.id, teacher_role.id, is_primary=True)
 
     new_ws_key = uuid.uuid4().hex
-    pwd_hash = hash_password(payload.password.strip()) if payload.password and payload.password.strip() else None
+    pwd_hash = (
+        await hash_password_async(payload.password.strip())
+        if payload.password and payload.password.strip()
+        else None
+    )
     if pwd_hash:
         guest_user.password_hash = pwd_hash
 

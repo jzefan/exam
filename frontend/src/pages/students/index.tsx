@@ -759,8 +759,7 @@ export default function StudentManagementPage() {
               <div className="text-sm">
                 <p className="font-semibold text-blue-900">格式要求：</p>
                 <p className="text-blue-800/80">
-                  必须包含"姓名"，并提供"手机号"或"{copy.persona === "teacher" ? "学号" : "编号"}"。无手机号时使用{copy.persona === "teacher" ? "学号" : "编号"}作为账号和初始密码；识别到{copy.group}会自动创建或复用{copy.group}。
-                  {isScopedClassSelected ? `如果文件中没有${copy.group}，导入的${copy.person}将自动加入当前${copy.group}。` : ""}
+                  表格须包含“姓名”，及“手机号”或“{copy.persona === "teacher" ? "学号" : "编号"}”。若无手机号，默认以{copy.persona === "teacher" ? "学号" : "编号"}作为登录账号与初始密码。{isScopedClassSelected ? `未填${copy.group}时自动归入当前${copy.group}。` : `若包含${copy.group}列将自动归类。`}
                 </p>
               </div>
             </div>

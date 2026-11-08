@@ -19,7 +19,7 @@ from typing import Any, AsyncIterator
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import load_only, selectinload
 
 from app.auth.models import User
 from app.config import settings
@@ -456,13 +456,19 @@ async def _load_workspace_tasks(
     exam_id: str | None = None,
     lightweight: bool = False,
     current_submission_only: bool = False,
+    include_snapshots: bool = True,
 ) -> list[GradingTask]:
     # 列表态（收件箱 / 按题目考生列表）只需终评快照与审计事件即可算出状态与分数；
     # 完整的多模型快照 + model_config 只有单条详情页才需要，列表态不加载以减少数据量。
     if lightweight:
         options = [
-            selectinload(GradingTask.latest_final_snapshot),
-            selectinload(GradingTask.audit_events),
+            *([selectinload(GradingTask.latest_final_snapshot)] if include_snapshots else []),
+            # Only event_type/operator_id feed the list-state status and viewed
+            # checks; each event also carries a JSONB payload that is never read
+            # here. Loading it for thousands of tasks dominated the decode cost.
+            selectinload(GradingTask.audit_events).options(
+                load_only(GradingAuditEvent.event_type, GradingAuditEvent.operator_id)
+            ),
         ]
     else:
         options = [
@@ -472,19 +478,38 @@ async def _load_workspace_tasks(
             selectinload(GradingTask.snapshots).selectinload(GradingResultSnapshot.model_config),
             selectinload(GradingTask.audit_events),
         ]
-    query = (
+    # Two-phase load. The filters below throw most tasks away, but they need the
+    # full task graph (latest snapshot + every audit event) to compute status,
+    # and `source_business_id` parsing cannot be pushed into SQL. Loading the
+    # graph for *every* task meant ~3.5k task rows and ~16k audit payloads
+    # hydrated — 70k+ JSONB values decoded — for an inbox that ends up showing a
+    # few dozen questions: 2s of CPU on the single API worker, which stalls
+    # every other request for the same 2s.
+    #
+    # Phase 1 therefore selects only the columns the filters read, applies them,
+    # then phase 2 hydrates the graph for the survivors only.
+    identity_query = (
         select(GradingTask)
-        .options(*options)
+        .options(
+            load_only(
+                GradingTask.id,
+                GradingTask.source_type,
+                GradingTask.source_business_id,
+                GradingTask.created_at,
+                GradingTask.updated_at,
+                GradingTask.status,
+            )
+        )
+        .where(GradingTask.source_type != "chaoxing_submission")
         .execution_options(populate_existing=True)
         .order_by(GradingTask.updated_at.desc())
     )
     if exam_id:
-        query = query.where(
+        identity_query = identity_query.where(
             GradingTask.source_type == "exam_submission",
             GradingTask.source_business_id.like(f"{exam_id}:%"),
         )
-    result = await db.execute(query)
-    tasks = list(result.scalars().all())
+    tasks = list((await db.execute(identity_query)).scalars().all())
     tasks = await _filter_tasks_by_exam_access(
         db,
         tasks,
@@ -492,8 +517,20 @@ async def _load_workspace_tasks(
         is_platform_admin=is_platform_admin,
     )
     if current_submission_only:
-        return await _select_current_exam_submission_tasks(db, tasks)
-    return tasks
+        tasks = await _select_current_exam_submission_tasks(db, tasks)
+    if not tasks:
+        return []
+
+    hydrated = (
+        await db.execute(
+            select(GradingTask)
+            .where(GradingTask.id.in_([task.id for task in tasks]))
+            .options(*options)
+            .execution_options(populate_existing=True)
+        )
+    ).scalars().all()
+    hydrated_by_id = {task.id: task for task in hydrated}
+    return [hydrated_by_id[task.id] for task in tasks if task.id in hydrated_by_id]
 
 
 def format_evidence_summary(summary: dict[str, Any]) -> list[str]:
@@ -1172,6 +1209,10 @@ async def get_grading_inbox(
         exam_id=exam_id,
         lightweight=True,
         current_submission_only=True,
+        # The inbox groups by question and only reports counts/status labels;
+        # which score came from a human is decided from id columns alone
+        # (_task_result_source), so the snapshot graph is never read here.
+        include_snapshots=False,
     )
     locators = await _hydrate_task_locators(db, tasks)
 

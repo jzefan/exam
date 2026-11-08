@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>智评线 · 本地部署服务器配置与算力（按人次）评估</title>
+<style>
+  :root{
+    --bg:#f6f7f9;--card:#fff;--ink:#1b2330;--muted:#5d6a7d;--line:#e3e8ef;
+    --brand:#25499b;--brand-soft:#eaf0fb;--accent:#c8541b;--accent-soft:#fdf0e8;
+    --ok:#1a7a54;--ok-soft:#e8f5ee;--warn:#a4371f;--warn-soft:#fbece9;
+    --shadow:0 1px 2px rgba(20,32,55,.05),0 8px 24px rgba(20,32,55,.05);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-size:15px;line-height:1.72;
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 20px 72px}
+  header.top{border-bottom:1px solid var(--line);padding-bottom:22px;margin-bottom:26px}
+  .kicker{font-size:12px;letter-spacing:.14em;color:var(--brand);font-weight:700;text-transform:uppercase}
+  h1{font-size:29px;line-height:1.32;margin:10px 0 8px;letter-spacing:-.02em}
+  .sub{color:var(--muted);font-size:14px;margin:0}
+  .badge{display:inline-block;background:var(--brand-soft);color:var(--brand);border-radius:999px;padding:3px 12px;font-size:12px;font-weight:700;margin-left:8px;vertical-align:middle}
+  h2{font-size:20px;margin:36px 0 14px;display:flex;align-items:center;gap:10px;letter-spacing:-.01em}
+  h2::before{content:"";width:4px;height:19px;background:var(--brand);border-radius:2px;display:inline-block}
+  h3{font-size:15px;margin:20px 0 10px}
+  p{margin:10px 0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 22px;box-shadow:var(--shadow)}
+  .grid{display:grid;gap:14px}.g2{grid-template-columns:1fr 1fr}.g3{grid-template-columns:repeat(3,1fr)}.g4{grid-template-columns:repeat(4,1fr)}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px 17px;box-shadow:var(--shadow)}
+  .stat .n{font-size:24px;font-weight:750;letter-spacing:-.03em;line-height:1.25}
+  .stat .n small{font-size:13px;font-weight:600;margin-left:2px}
+  .stat .l{font-size:12.5px;color:var(--muted);margin-top:4px}
+  .hero{background:linear-gradient(180deg,#fff,#fbfcff);border:1px solid var(--line);border-left:4px solid var(--brand);border-radius:12px;padding:22px 24px;box-shadow:var(--shadow)}
+  .hero .big{font-size:30px;font-weight:800;color:var(--brand);letter-spacing:-.03em;line-height:1.25}
+  .tag{display:inline-block;font-size:12px;font-weight:700;border-radius:6px;padding:2px 9px;margin-right:6px}
+  .tag.b{background:var(--brand-soft);color:var(--brand)}.tag.g{background:var(--ok-soft);color:var(--ok)}
+  .tag.o{background:var(--accent-soft);color:var(--accent)}.tag.r{background:var(--warn-soft);color:var(--warn)}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#f9fafc;font-weight:700;color:#41506a;font-size:12.5px}
+  tr:last-child td{border-bottom:none}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  tfoot td{font-weight:750;background:#f9fafc;border-top:2px solid var(--line)}
+  .muted{color:var(--muted)}.small{font-size:12.5px}.src{font-size:11.5px;color:#7b879a;word-break:break-all}
+  a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}
+  ul{margin:8px 0;padding-left:20px}li{margin:5px 0}
+  code{background:#f1f4f9;border-radius:4px;padding:1px 5px;font-size:12px;color:#334}
+  .note{background:#fffdf6;border:1px solid #f0e2bd;border-radius:10px;padding:14px 18px;font-size:13.5px}
+  .danger{background:var(--warn-soft);border:1px solid #f0ccc4;border-radius:10px;padding:16px 20px}
+  .okbox{background:var(--ok-soft);border:1px solid #c6e6d5;border-radius:10px;padding:16px 20px}
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  /* 测算器 */
+  .calc{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 22px;box-shadow:var(--shadow)}
+  .fields{display:grid;grid-template-columns:1fr 1fr;gap:12px 26px}
+  .field{display:flex;flex-direction:column;gap:2px}
+  .field label{font-size:12.5px;color:var(--muted);display:flex;justify-content:space-between;gap:10px}
+  .field label b{color:var(--brand);font-variant-numeric:tabular-nums}
+  input[type=range]{width:100%;accent-color:var(--brand);margin:4px 0}
+  .checks{display:flex;gap:20px;flex-wrap:wrap;margin-top:12px;font-size:13px}
+  .checks label{cursor:pointer}
+  .out{margin-top:18px;border-top:1px solid var(--line);padding-top:16px}
+  .outgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .outgrid .stat{box-shadow:none;background:#f9fafc}
+  .bar{height:9px;background:#e9eef6;border-radius:6px;overflow:hidden;margin-top:8px}
+  .bar i{display:block;height:100%;background:var(--brand);border-radius:6px;transition:width .3s}
+  .verdict{margin-top:14px;border-radius:9px;padding:11px 15px;font-size:13.5px}
+  .verdict.ok{background:var(--ok-soft);color:#14603f;border:1px solid #c6e6d5}
+  .verdict.warn{background:var(--accent-soft);color:#8a3d12;border:1px solid #f0d0bb}
+  .verdict.bad{background:var(--warn-soft);color:#8a2e18;border:1px solid #f0ccc4}
+  footer{margin-top:42px;padding-top:18px;border-top:1px solid var(--line);font-size:12px;color:#8a95a6}
+  @media(max-width:820px){.g2,.g3,.g4,.split,.fields,.outgrid{grid-template-columns:1fr 1fr}h1{font-size:23px}}
+  @media(max-width:560px){.g2,.g3,.g4,.split,.fields,.outgrid{grid-template-columns:1fr}.wrap{padding:20px 14px 48px}.card{padding:16px}table{font-size:12.5px}th,td{padding:8px 7px}}
+  @media print{body{background:#fff;font-size:12px}.wrap{max-width:none;padding:0}.card,.stat,.hero{box-shadow:none;break-inside:avoid}h2{margin-top:20px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div class="kicker">私有部署 · 容量规划</div>
+  <h1>本地部署服务器配置与算力评估 <span class="badge">按人次测算</span></h1>
+  <p class="sub">配套《智评线私有部署报价方案（标准版）13.8 万》｜ 编制日期：2026-11-07 ｜ 依据本仓库实际调用链路</p>
+</header>
+
+<div class="hero">
+  <div class="big">本地服务器不需要 GPU</div>
+  <p style="margin:8px 0 0"><strong>算力主要发生在外部大模型 API，校内服务器只负责编排、排队、存储与 I/O。</strong>
+  因此硬件投入是一台常规应用服务器，而持续成本是按人次线性增长的 API 调用费 —— 按下面的口径，每人次约 <strong>0.08 元</strong>，1 万人次 / 学期约 <strong>800 元</strong>。</p>
+  <div class="grid g4" style="margin-top:18px">
+    <div class="stat"><div class="n">8C / 32G</div><div class="l">推荐配置（启用学习通浏览器时）</div></div>
+    <div class="stat"><div class="n">8C / 16G</div><div class="l">不启用学习通的最低可用</div></div>
+    <div class="stat"><div class="n">≈0.08<small> 元</small></div><div class="l">每人次 API 费用（5 道主观题）</div></div>
+    <div class="stat"><div class="n">200<small> GB</small></div><div class="l">起步 SSD（1–2 万人次）</div></div>
+  </div>
+</div>
+
+<h2>一、调用链路：每人次到底调几次模型</h2>
+<p class="muted small">以下不是通用假设，而是从本仓库代码读出来的实际行为，测算公式以此为准。</p>
+<div class="card" style="padding:0;overflow-x:auto">
+<table>
+  <thead><tr><th>环节</th><th>触发条件</th><th>调用次数</th><th>代码依据</th></tr></thead>
+  <tbody>
+    <tr><td><strong>主观题主评</strong></td><td>每道主观题（简答 / 论述 / 代码 / SQL）</td><td class="num">1 次</td><td><code>grading/service.py:4123</code>，默认 <code>qwen-grader-v1</code></td></tr>
+    <tr><td><strong>主观题复核</strong></td><td>紧接主评，串行执行</td><td class="num">1 次</td><td><code>:4142</code>，默认 <code>deepseek-review-v1</code></td></tr>
+    <tr><td>仲裁（终审）</td><td>分差 &gt;15% 或维度冲突，且 <code>arbiter_enabled=true</code>（<strong>默认关闭</strong>）</td><td class="num">0 次<br><span class="small muted">开启后约 +0.2 次/题</span></td><td><code>config.py:43</code>、<code>orchestrator.py:18</code>、<code>seed.py:15</code>（豆包）</td></tr>
+    <tr><td>答案复用等价判定</td><td>同题历史答案相似度 ≥0.94 时，先做 1 次语义等价判定，通过后直接克隆评分快照</td><td class="num">复用路径 1 次<br><span class="small muted">替掉 2 次评分</span></td><td><code>service.py:1081</code>、<code>config.py:46</code></td></tr>
+    <tr><td>填空题 AI 判分</td><td><strong>仅当精确匹配 / 无序匹配未全中</strong>才调，且有签名缓存</td><td class="num">≈0.6 次/人次</td><td><code>student_router.py:1318</code>、<code>:1322</code>（deepseek-flash）</td></tr>
+    <tr><td>学生端划词讲解</td><td>学生主动使用，可选</td><td class="num">≈0.1 次/人次</td><td><code>student_router.py:1884</code>（流式、max_tokens 1200）</td></tr>
+    <tr><td><strong>客观题判分</strong></td><td>单选 / 多选 / 判断</td><td class="num">0 次</td><td>本地比对，不走模型</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="note" style="margin-top:12px">
+  <strong>每人次公式：</strong>主观题调用数 = 主观题数 Q × [ (1 − 复用率 r) × 2 + r × 1 ] = Q × (2 − r)。
+  默认 Q=5、r=15% → 约 <strong>9.25 次评分调用 / 人次</strong>，再加填空与讲解约 0.7 次 → 合计约 <strong>10 次调用 / 人次</strong>。
+  评分单次 prompt 由 <code>common-base.md</code> + 题型模板（各约 2.4 KB）加题干、标准答案、评分量表与学生答案组成，估算<strong>输入 2,500 tokens、输出 400 tokens</strong>（结构化 JSON）。
+</div>
+
+<h2>二、按人次测算器</h2>
+<div class="calc">
+  <div class="fields">
+    <div class="field"><label>考生人次 / 学期 <b id="vN">5,000</b></label><input type="range" id="N" min="500" max="50000" step="500" value="5000"></div>
+    <div class="field"><label>每人次主观题数 <b id="vQ">5 题</b></label><input type="range" id="Q" min="1" max="15" step="1" value="5"></div>
+    <div class="field"><label>答案复用率 <b id="vR">15%</b></label><input type="range" id="R" min="0" max="50" step="5" value="15"></div>
+    <div class="field"><label>峰值单场人数 <b id="vP">500 人</b></label><input type="range" id="P" min="50" max="3000" step="50" value="500"></div>
+    <div class="field"><label>要求出分时限 <b id="vT">30 分钟</b></label><input type="range" id="T" min="5" max="180" step="5" value="30"></div>
+    <div class="field"><label>每人次上传附件 <b id="vM">0.5 MB</b></label><input type="range" id="M" min="0" max="5" step="0.5" value="0.5"></div>
+  </div>
+  <div class="checks">
+    <label><input type="checkbox" id="ARB"> 开启仲裁模型（默认关闭）</label>
+    <label><input type="checkbox" id="CX" checked> 启用学习通浏览器自动化</label>
+    <label><input type="checkbox" id="GPU"> 数据不出校，改本地 GPU 推理</label>
+  </div>
+  <div class="out">
+    <div class="outgrid">
+      <div class="stat"><div class="n" id="oCalls">—</div><div class="l">学期 API 调用总次数</div></div>
+      <div class="stat"><div class="n" id="oTokens">—</div><div class="l">学期 token 总量</div></div>
+      <div class="stat"><div class="n" id="oFee">—</div><div class="l">学期 API 费用（估算）</div></div>
+      <div class="stat"><div class="n" id="oPer">—</div><div class="l">每人次 API 费用</div></div>
+      <div class="stat"><div class="n" id="oConc">—</div><div class="l">峰值所需并发调用</div></div>
+      <div class="stat"><div class="n" id="oMem">—</div><div class="l">建议内存</div></div>
+      <div class="stat"><div class="n" id="oDisk">—</div><div class="l">建议磁盘（含备份）</div></div>
+      <div class="stat"><div class="n" id="oHW">—</div><div class="l">推荐硬件档</div></div>
+    </div>
+    <div class="bar"><i id="oBar" style="width:20%"></i></div>
+    <div class="verdict ok" id="oVerdict">—</div>
+  </div>
+</div>
+<p class="small muted" style="margin-top:10px">价格口径（取偏保守的公开刊例价，未计缓存命中与批量折扣，实际通常更低）：评分按 Qwen / DeepSeek 混合 <strong>输入 ¥2.25 / 百万 tokens、输出 ¥7 / 百万</strong>；其他轻量调用按 <strong>¥1.5 / ¥5</strong>；汇率 7.2。单次调用耗时按 6 秒估（主评 + 复核串行，故每题约 12 秒）。<strong>价格会变动，签约前以厂商官网为准。</strong></p>
+
+<h2>三、典型规模对照（默认 5 道主观题、复用率 15%、不开仲裁）</h2>
+<div class="card" style="padding:0;overflow-x:auto">
+<table>
+  <thead><tr><th>人次 / 学期</th><th class="num">API 调用次数</th><th class="num">API 费用</th><th class="num">DB + 附件</th><th>推荐配置</th><th>并发提示</th></tr></thead>
+  <tbody id="scaleBody"></tbody>
+</table>
+</div>
+<p class="small muted" style="margin-top:10px">费用为量级估算，不是报价。表格按峰值单场 = 学期人次 30%（上限 3,000 人）、出分时限 30 分钟、附件 0.5 MB/人次测算；与上方测算器可独立调整的参数口径不同，单场压测请以测算器结果为准。配置档按未启用学习通浏览器给出，启用时内存统一上调到 32G。API 费用由学校按实际用量直接向模型厂商结算或预充值，不包含在 13.8 万软件费内（见报价单「其他约定」）。</p>
+
+<h2>四、服务器详细配置</h2>
+<div class="split">
+  <div class="card">
+    <h3 style="margin-top:0">单机资源拆分（为什么 16G 会紧）</h3>
+    <table>
+      <thead><tr><th>组件</th><th class="num">内存</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>PostgreSQL 17</td><td class="num">2–4 G</td><td>连接池 10 + overflow 10，蓝绿时双 worker</td></tr>
+        <tr><td>backend blue / green</td><td class="num">1.5–3 G</td><td>切换窗口内两份并存；含 httpx 连接池</td></tr>
+        <tr><td>judge_runner</td><td class="num">0.5–1 G</td><td>代码题运行，独立容器</td></tr>
+        <tr><td>lsp_runner</td><td class="num">2–4 G</td><td>Node + 语言服务；启用 jdtls 时 JVM 很吃内存</td></tr>
+        <tr><td>学习通 Chromium</td><td class="num">2–6 G</td><td><code>chaoxing_max_sessions=3</code>，每会话约 2 G；<code>shm_size=512mb</code></td></tr>
+        <tr><td>frontend blue / green + nginx</td><td class="num">0.2 G</td><td>静态资源</td></tr>
+        <tr><td>OS + Docker + 日志</td><td class="num">2 G</td><td>—</td></tr>
+      </tbody>
+      <tfoot><tr><td>合计</td><td class="num">12–20 G</td><td>不启用学习通 → 16 G 够；启用 → 建议 32 G</td></tr></tfoot>
+    </table>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">三档硬件建议</h3>
+    <table>
+      <thead><tr><th>档</th><th>适用</th><th>配置</th></tr></thead>
+      <tbody>
+        <tr><td><strong>最低可用</strong></td><td>≤2,000 人次/学期<br>峰值 ≤150 并发<br>不启用学习通</td><td>4C / 16G / 100G SSD</td></tr>
+        <tr><td><strong>推荐</strong> <span class="tag b">建议</span></td><td>2,000–10,000 人次/学期<br>峰值 ≤500 并发<br>含学习通浏览器</td><td><strong>8C / 32G / 200G SSD</strong><br>报价单写的 8C16G 是「起配」</td></tr>
+        <tr><td><strong>高并发</strong></td><td>&gt;10,000 人次/学期<br>峰值 &gt;500 并发<br>多院系同时考试</td><td>16C / 64G / 500G–1T NVMe<br>建议 DB 与 runner 拆到第二台</td></tr>
+      </tbody>
+    </table>
+    <p class="small muted" style="margin-top:10px">系统：Linux（Ubuntu 22.04 / 麒麟 / 统信均可）、Docker Engine 24+ 与 Compose v2、Python 3.12 镜像、Node 22 镜像、PostgreSQL 17。<strong>不需要 GPU、不需要 CUDA、不需要推理卡。</strong></p>
+  </div>
+</div>
+
+<div class="grid g3" style="margin-top:14px">
+  <div class="card">
+    <h3 style="margin-top:0">存储（按人次）</h3>
+    <ul class="small">
+      <li>每次评分落 1 个 task + 3–4 个 JSON 快照 + 5–10 条审计事件，约 <strong>10–20 KB / 题</strong></li>
+      <li>5 道主观题 ≈ <strong>50–100 KB / 人次</strong> → 1 万人次约 0.5–1 GB 数据库</li>
+      <li>上传附件才是大头：按 0.5 MB/人次 → 1 万人次 5 GB；含拍照作答按 2 MB/人次 → 20 GB</li>
+      <li>镜像 + 系统 + 日志约 30–50 GB；每日全备保留 30 天，按数据量 ×2–3 预留</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">网络与出口</h3>
+    <ul class="small">
+      <li>校内千兆即可：作答流量约 1–3 MB/人次（含题目图片），500 并发约 10–30 Mbps</li>
+      <li>API 出口流量很小（每次请求约 3–6 KB），<strong>关键是稳定低延迟与白名单，不是带宽</strong></li>
+      <li>需放行：<code>api.deepseek.com</code>、<code>dashscope.aliyuncs.com</code>、<code>ark.cn-beijing.volces.com</code>、<code>openrouter.ai</code>（如启用）、镜像源与 NTP</li>
+      <li>对外只需 443；校内固定 IP + 域名 + HTTPS 证书</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">峰值并发才是真瓶颈</h3>
+    <ul class="small">
+      <li>阅卷是异步队列，服务器 CPU 压力低；瓶颈在<strong>模型厂商的 QPS / TPM 额度</strong></li>
+      <li>500 人 × 5 题 × 2 次 = 5,000 次调用；30 分钟出分约需 <strong>17 并发</strong>，10 分钟出分约需 50 并发</li>
+      <li>默认 API 额度常在 5–20 并发量级，大考前须提前申请提额或错峰发布</li>
+      <li>建议：分批交卷 / 关闭仲裁 / 提高复用率 / 设置队列上限与失败重试</li>
+    </ul>
+  </div>
+</div>
+
+<h2>五、如果学校要求「数据不出校」：本地 GPU 对照</h2>
+<div class="danger">
+  <p style="margin-top:0"><strong>结论：经费有限时不建议。</strong>把 API 换成本地推理，等于把「每人次几分钱的可变成本」换成「十几万到几十万的一次性硬件 + 专人运维」，且评分质量与并发都要重新验证。</p>
+  <div class="grid g2">
+    <ul style="margin:6px 0">
+      <li>需自建 OpenAI 兼容端点（vLLM / Ollama），把 <code>*_base_url</code> 指向校内服务；代码已支持，改造量小</li>
+      <li>但要同时替换<strong>三类能力</strong>：文本评分（2 个角色）、视觉识别（Qwen-VL，题目/手写答案 OCR）、embedding（课程资料 RAG，切模型需重新入库，向量维度必须一致）</li>
+      <li>单卡 24G（L20 / 4090）跑 32B 量化模型仅约 5–10 并发，500 人考试出分要排队数小时</li>
+    </ul>
+    <ul style="margin:6px 0">
+      <li>要支撑 30–60 并发，建议 <strong>2×A100 80G 或 4×L20 48G</strong>，另配高速 NVMe 与 UPS；硬件一次性约 15–40 万</li>
+      <li>还需模型选型、量化评测、Prompt 重调、效果 POC 与长期运维，远超 13.8 万软件费</li>
+      <li>折中做法：<strong>文本评分走 API、附件与原始数据留校内</strong>，并在合同里写明数据范围与脱敏规则；或由学校统一采购校内模型网关</li>
+    </ul>
+  </div>
+</div>
+
+<h2>六、把 API 成本压到最低（按代码现有开关）</h2>
+<div class="okbox">
+  <ul style="margin:4px 0">
+    <li><strong>保持 <code>arbiter_enabled=false</code>（默认）</strong>：仲裁默认关闭是有意为之，代码注释明确写了「等 QPS 配额够再开」。开启会同时抬高费用与峰值并发。</li>
+    <li><strong>用好答案复用</strong>：<code>grading_answer_reuse_similarity_threshold=0.94</code>，标准答案趋同的简答/填空题复用率高，复用路径只花 1 次等价判定，替掉 2 次评分。</li>
+    <li><strong>客观题不进模型</strong>：单选/多选/判断本地判分；填空题已有精确匹配 + 签名缓存，只有真正不一致才调 DeepSeek。</li>
+    <li><strong>一次性任务与人次脱钩</strong>：AI 出题、题目/图片 OCR、导入时知识点匹配、课程资料 embedding，都按「题目数 / 资料量」发生，不随考生人次增长，应单列预算而非摊进人次单价。</li>
+    <li><strong>选低价模型档</strong>：Qwen 有 ¥0.96/¥2.4 与 ¥2.998/¥8.993 两档刊例，DeepSeek Flash 亦远低于 Pro；评分场景用 Flash/Plus 即可，成本可再降 60% 以上。</li>
+    <li><strong>错峰与大考前提额</strong>：提前 2 周向厂商申请 QPS/TPM 提额，验收时按「单场峰值人数 + 出分时限」跑一次压测。</li>
+  </ul>
+</div>
+
+<h2>七、前提、风险与来源</h2>
+<div class="grid g2">
+  <div class="card">
+    <h3 style="margin-top:0">测算前提</h3>
+    <ul class="small">
+      <li>「人次」= 1 名学生参加 1 场考试；每人次 5 道主观题、复用率 15%、不开仲裁</li>
+      <li>不含 AI 出题、OCR 识别、知识点匹配、资料 embedding 等一次性任务</li>
+      <li>token 与耗时为估算，实际随题干长度、评分量表复杂度、模型响应速度浮动</li>
+      <li>费用为厂商刊例价估算，未计免费额度、缓存命中、批量折扣与代理加价</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">需要提前确认的风险</h3>
+    <ul class="small">
+      <li><strong>数据与合规</strong>：学生答卷会发送至模型厂商，须经学校信息中心/教务审批，必要时做脱敏</li>
+      <li><strong>出口可用性</strong>：校内防火墙策略、DNS、证书链；无外网出口则退回本地 GPU 方案</li>
+      <li><strong>额度与限流</strong>：大考集中交卷可能触发 429，需队列与重试策略</li>
+      <li><strong>价格变动</strong>：模型迭代与调价频繁，建议按学期复核单价并设预算上限告警</li>
+      <li><strong>学习通自动化</strong>：Chromium 会话吃内存，且依赖第三方页面结构，改版会失效</li>
+    </ul>
+  </div>
+</div>
+<p class="src" style="margin-top:12px">
+价格来源（检索于 2026-11-07）：
+<a href="https://helpcdn.aliyun.com/document_detail/610107.html">阿里云百炼模型价格</a> ·
+<a href="https://help.aliyun.com/zh/emr/emr-serverless-spark/product-overview/model-invoke-pay-as-you-go">阿里云模型调用按量付费</a> ·
+<a href="https://api-docs.deepseek.com/quick_start/pricing">DeepSeek Models &amp; Pricing</a> ·
+<a href="https://deepseek.ai/pricing">DeepSeek Pricing 2026（peak/off-peak 与汇率换算参考）</a>。
+代码依据：本仓库 <code>backend/src/app/config.py</code>、<code>grading/seed.py</code>、<code>grading/orchestrator.py</code>、<code>grading/service.py</code>、<code>exams/student_router.py</code>、<code>docker-compose.yml</code>。
+</p>
+
+<footer>本文件是 13.8 万标准版报价的技术附件，用于学校信息中心做服务器采购与 API 预算论证；不构成硬件报价，也不改变软件报价范围。</footer>
+
+</div>
+
+<script>
+(function(){
+  var PRICE_IN=2.25/1e6, PRICE_OUT=7/1e6;      // 评分混合单价 元/token
+  var LIGHT_IN=1.5/1e6, LIGHT_OUT=5/1e6;        // 轻量调用
+  var TIN=2500, TOUT=400;                        // 评分单次 token
+  var LIN=1000, LOUT=300;                        // 轻量单次 token
+  var SEC=6;                                     // 单次调用秒数
+
+  function el(id){return document.getElementById(id)}
+  function fmt(n){return n.toLocaleString("zh-CN")}
+  function money(n){
+    if(n<1) return "¥"+n.toFixed(3);
+    if(n<10000) return "¥"+Math.round(n).toLocaleString("zh-CN");
+    return "¥"+(n/10000).toFixed(2)+" 万";
+  }
+  function calc(){
+    var N=+el("N").value, Q=+el("Q").value, r=+el("R").value/100,
+        P=+el("P").value, T=+el("T").value, M=+el("M").value;
+    var arb=el("ARB").checked, cx=el("CX").checked, gpu=el("GPU").checked;
+    el("vN").textContent=fmt(N); el("vQ").textContent=Q+" 题";
+    el("vR").textContent=Math.round(r*100)+"%"; el("vP").textContent=fmt(P)+" 人";
+    el("vT").textContent=T+" 分钟"; el("vM").textContent=M.toFixed(1)+" MB";
+
+    var perSubject=Q*(2-r)+(arb?Q*0.2:0);
+    var perLight=0.7;
+    var scoreCalls=N*perSubject, lightCalls=N*perLight;
+    var totalCalls=scoreCalls+lightCalls;
+    var tokens=scoreCalls*(TIN+TOUT)+lightCalls*(LIN+LOUT);
+    var fee=scoreCalls*(TIN*PRICE_IN+TOUT*PRICE_OUT)+lightCalls*(LIN*LIGHT_IN+LOUT*LIGHT_OUT);
+    var per=fee/N;
+
+    // 峰值并发：单场 P 人，每人 Q 题，每题 (2-r) 次调用，限时 T 分钟
+    var peakCalls=P*(Q*(2-r)+(arb?Q*0.2:0));
+    var conc=Math.ceil(peakCalls*SEC/(T*60));
+
+    // 内存：基础 12G + 学习通会话 4G，向上取整到 16/32/64
+    var memNeed=12+(cx?6:0)+(conc>40?4:0);
+    var mem=memNeed<=16?16:(memNeed<=32?32:64);
+    // 磁盘：基础镜像 40G + 数据库 N*Q*15KB + 附件 N*M MB，备份按 2 倍
+    var dbGB=N*Q*15/1024/1024, attGB=N*M/1024;
+    var diskGB=Math.ceil((40+dbGB+attGB)*2/50)*50;
+    if(diskGB<200)diskGB=200;
+    var hw=(mem>=64||conc>60)?"16C / 64G":(mem>=32?"8C / 32G":"8C / 16G");
+
+    el("oCalls").textContent=fmt(Math.round(totalCalls))+" 次";
+    el("oTokens").textContent=(tokens/1e6).toFixed(1)+" M";
+    el("oFee").textContent=gpu?"—":money(fee);
+    el("oPer").textContent=gpu?"—":"¥"+per.toFixed(3);
+    el("oConc").textContent=conc+" 路";
+    el("oMem").textContent=mem+" G";
+    el("oDisk").textContent=diskGB+" GB";
+    el("oHW").textContent=hw;
+
+    var v=el("oVerdict"), cls="ok", msg="";
+    if(gpu){
+      cls="bad";
+      msg="<strong>已切换本地 GPU 模式：</strong>API 费用归零，但需 2×A100 80G 或 4×L20 48G 级推理卡（一次性约 15–40 万）+ vLLM 服务与运维，且视觉识别、embedding 需另行本地化并重新入库。经费有限不建议。";
+    }else if(conc>60){
+      cls="bad";
+      msg="<strong>峰值并发 "+conc+" 路，超出常见默认额度。</strong>建议把出分时限放宽到 60 分钟以上、分批次交卷，或提前 2 周向模型厂商申请 QPS / TPM 提额；否则大考集中交卷会触发 429 限流。";
+    }else if(conc>20){
+      cls="warn";
+      msg="<strong>峰值并发约 "+conc+" 路</strong>，需在验收前按单场 "+fmt(P)+" 人做一次压测，并提前申请模型厂商额度；服务器 "+hw+" 可支撑。";
+    }else{
+      cls="ok";
+      msg="<strong>规模可控：</strong>峰值并发约 "+conc+" 路，常规 API 额度可覆盖；"+hw+" / "+diskGB+" GB SSD 足够，无需 GPU。学期 API 费用约 "+money(fee)+"。";
+    }
+    v.className="verdict "+cls; v.innerHTML=msg;
+    el("oBar").style.width=Math.min(100,Math.max(4,conc/80*100))+"%";
+  }
+  ["N","Q","R","P","T","M"].forEach(function(k){el(k).addEventListener("input",calc)});
+  ["ARB","CX","GPU"].forEach(function(k){el(k).addEventListener("change",calc)});
+  calc();
+
+  // 规模对照表（固定默认参数，仅变人次）
+  var rows=[1000,3000,5000,10000,20000,30000];
+  var body=el("scaleBody"), html="";
+  rows.forEach(function(N){
+    var Q=5,r=0.15, perSubject=Q*(2-r), perLight=0.7;
+    var sc=N*perSubject, lc=N*perLight;
+    var fee=sc*(TIN*PRICE_IN+TOUT*PRICE_OUT)+lc*(LIN*LIGHT_IN+LOUT*LIGHT_OUT);
+    var dbGB=N*Q*15/1024/1024+N*0.5/1024;
+    var P=Math.min(3000,Math.max(200,Math.round(N*0.3))), conc=Math.ceil(P*perSubject*SEC/(30*60));
+    var cfg=N<=2000?"4C/16G/100G":(N<=10000?"8C/32G/200G":"16C/64G/500G");
+    var hint=conc>60?"需提额/错峰":(conc>20?"建议压测+提额":"默认额度可覆盖");
+    html+="<tr><td><strong>"+fmt(N)+"</strong></td><td class='num'>"+fmt(Math.round(sc+lc))+"</td>"+
+      "<td class='num'>"+money(fee)+"</td><td class='num'>"+(dbGB<1?dbGB.toFixed(2):dbGB.toFixed(1))+" GB</td>"+
+      "<td>"+cfg+"</td><td class='small'>"+hint+"（约 "+conc+" 路）</td></tr>";
+  });
+  body.innerHTML=html;
+})();
+</script>
+</body>
+</html>

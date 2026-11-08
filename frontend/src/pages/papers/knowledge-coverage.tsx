@@ -1135,8 +1135,8 @@ export function PaperKnowledgeCoveragePage() {
               disabled={!paper || suggestionGenerating}
               tooltip={
                 missingSuggestionCount > 0
-                  ? `为 ${missingSuggestionCount} 道题生成展示用知识点建议`
-                  : "生成或刷新展示用知识点建议"
+                  ? `为 ${missingSuggestionCount} 道题智能推荐关联知识点`
+                  : "智能推荐知识点关联"
               }
             >
               {suggestionGenerating ? (
@@ -1156,7 +1156,7 @@ export function PaperKnowledgeCoveragePage() {
           <div className="min-w-0">
             <p className="text-sm font-semibold">正在生成 AI 建议知识点</p>
             <p className="mt-0.5 text-xs text-amber-800">
-              这些建议只用于当前知识点视角展示，不会写入题目的真实知识点关联。
+              建议仅在当前图谱视图中参考展示，不会修改题目原始关联。
             </p>
           </div>
         </div>

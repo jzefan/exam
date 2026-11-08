@@ -208,6 +208,12 @@ def _build_exam_response(exam: Exam, student_id: uuid.UUID | None = None) -> Exa
     exam_student = (
         next((s for s in exam.exam_students if s.student_id == student_id), None) if student_id is not None else None
     )
+    course_kp_id = exam.course_kp_id
+    if course_kp_id is None:
+        for kp in knowledge_points_by_id.values():
+            if getattr(kp, "parent_id", None) is None:
+                course_kp_id = kp.id
+                break
     return ExamResponse(
         id=exam.id,
         category=exam.category,
@@ -218,6 +224,7 @@ def _build_exam_response(exam: Exam, student_id: uuid.UUID | None = None) -> Exa
         duration_minutes=exam.duration_minutes,
         total_score=exam.total_score,
         status=exam.status if isinstance(exam.status, str) else exam.status.value,
+        course_kp_id=course_kp_id,
         position_id=exam.position_id,
         position_name=exam.position.name if exam.position else None,
         max_switch_count=exam.max_switch_count,

@@ -889,9 +889,9 @@ function MaterialsTab({
                     variant="ghost"
                     size="icon"
                     className="size-8"
-                    aria-label="预览资料"
+                    aria-label="基于此资料出题"
                     onClick={() => onGenerateFrom(material)}
-                    title="资料没有外链 — 点击直接进入 AI 出题"
+                    title="直接基于此资料智能出题"
                   >
                     <Eye size={15} />
                   </Button>
@@ -1465,8 +1465,8 @@ function BatchGenerateMaterialsDialog({
             {generatable.length === 0 ? (
               <EmptyPanel
                 icon={<FileText size={22} />}
-                title="没有可生成题目的资料"
-                description="仅 PDF、DOCX、PPTX 上传资料支持一键生成题目。"
+                title="暂无可出题资料"
+                description="仅支持使用已上传的 PDF、Word (DOCX) 或 PPT 资料一键出题。"
               />
             ) : (
               generatable.map((material, index) => {
@@ -1753,8 +1753,8 @@ function AssignmentScoreSummaryDialog({
         ) : !summary || summary.assignment_count === 0 ? (
           <EmptyPanel
             icon={<ClipboardList size={22} />}
-            title="暂无可汇总的练习"
-            description="当前课程或学期下还没有练习成绩。"
+            title="暂无练习成绩数据"
+            description="当前课程与学期下尚无学生提交练习。"
           />
         ) : (
           <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
@@ -1980,6 +1980,8 @@ function ExamRows({
     backLabel: "返回课程详情",
     successTo: backTo,
     courseName,
+    courseId,
+    courseKpId: courseId,
     defaultBankName: courseQuestionBankName(courseName),
   };
   const header =
@@ -3398,8 +3400,8 @@ function CourseKnowledgeNodeDialog({
                 {nodeMaterials.length === 0 ? (
                   <EmptyPanel
                     icon={<FileText size={22} />}
-                    title="这个知识点还没有直属资料"
-                    description="添加链接或上传文件后，可在这里维护资料并生成题目。"
+                    title="当前知识点暂无关联资料"
+                    description="上传文件或添加外部链接后，可在此查看资料并快速出题。"
                   />
                 ) : (
                   <div className="space-y-2.5">

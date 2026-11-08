@@ -287,7 +287,8 @@ export function UserList() {
                             size="icon"
                             className="h-8 w-8"
                             onClick={() => edit("users", user.id)}
-                            title="编辑"
+                            aria-label={`编辑用户：${user.username}`}
+                            title="编辑用户"
                           >
                             <Pencil size={14} className="text-muted-foreground" />
                           </Button>
@@ -296,7 +297,8 @@ export function UserList() {
                             size="icon"
                             className="h-8 w-8"
                             onClick={() => handleDelete(user.id)}
-                            title="删除"
+                            aria-label={`删除用户：${user.username}`}
+                            title="删除用户"
                           >
                             <Trash2 size={14} className="text-destructive" />
                           </Button>

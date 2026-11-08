@@ -323,7 +323,8 @@ export function ModelConfigPage() {
                               type="button"
                               onClick={() => void handleClearKey()}
                               className="text-muted-foreground transition-colors hover:text-destructive"
-                              title="清除 Key"
+                              title="清除已配置的 API Key"
+                              aria-label="清除已配置的 API Key"
                             >
                               <Trash2 size={14} />
                             </button>

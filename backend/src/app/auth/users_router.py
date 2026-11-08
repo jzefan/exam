@@ -120,7 +120,7 @@ async def update_user_endpoint(
     db: Annotated[AsyncSession, Depends(get_db)],
     _admin: Annotated[User, require_roles("platform_admin")],
 ) -> UserResponse:
-    from app.auth.security import hash_password
+    from app.auth.security import hash_password_async
     from app.rbac.models import Organization, Role, UserOrganization
 
     result = await db.execute(select(User).where(User.id == user_id, User.deleted_at.is_(None)))
@@ -138,7 +138,7 @@ async def update_user_endpoint(
 
     # Update password if provided
     if data.password is not None and data.password:
-        user.password_hash = hash_password(data.password)
+        user.password_hash = await hash_password_async(data.password)
 
     # Update roles if provided
     if data.role_names is not None:

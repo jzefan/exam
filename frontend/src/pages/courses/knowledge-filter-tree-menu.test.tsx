@@ -47,7 +47,9 @@ function toggleFor(nodeName: string): HTMLElement {
 function renderMenu(
   overrides: Partial<{
     tree: CourseKnowledgeNode | null;
+    options: typeof options;
     selectedId: string | null;
+    showRootNode: boolean;
     onSelect: (nodeId: string | null) => void;
     onClose: () => void;
   }> = {},
@@ -55,8 +57,9 @@ function renderMenu(
   return render(
     <KnowledgeFilterTreeMenu
       tree={overrides.tree === undefined ? tree : overrides.tree}
-      options={options}
+      options={overrides.options ?? options}
       selectedId={overrides.selectedId ?? null}
+      showRootNode={overrides.showRootNode ?? false}
       onSelect={overrides.onSelect ?? vi.fn()}
       onClose={overrides.onClose ?? vi.fn()}
     />,
@@ -97,6 +100,56 @@ describe("KnowledgeFilterTreeMenu", () => {
   it("没有知识树时退回平铺选项", () => {
     renderMenu({ tree: null });
 
+    expect(screen.getByText("物理层")).toBeInTheDocument();
+    expect(screen.getByText("传输介质")).toBeInTheDocument();
+    expect(screen.getByText("双绞线")).toBeInTheDocument();
+  });
+
+  it("showRootNode 为 true 时展示根节点，默认展开根节点，可选中根知识点", async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    const rootOptions = [
+      { id: "course-kp", name: "计算机网络", path: "计算机网络" },
+      ...options,
+    ];
+
+    renderMenu({
+      options: rootOptions,
+      showRootNode: true,
+      onSelect,
+      onClose,
+    });
+
+    // 根节点与一级子节点均可见
+    expect(screen.getByText("计算机网络")).toBeInTheDocument();
+    expect(screen.getByText("物理层")).toBeInTheDocument();
+    expect(screen.getByText("网络层")).toBeInTheDocument();
+
+    // 点击根节点
+    await user.click(screen.getByText("计算机网络"));
+    expect(onSelect).toHaveBeenCalledWith("course-kp");
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    // 折叠根节点
+    await user.click(toggleFor("计算机网络"));
+    expect(screen.queryByText("物理层")).not.toBeInTheDocument();
+  });
+
+  it("选中的深层节点祖先自动展开", () => {
+    const rootOptions = [
+      { id: "course-kp", name: "计算机网络", path: "计算机网络" },
+      ...options,
+    ];
+
+    renderMenu({
+      options: rootOptions,
+      showRootNode: true,
+      selectedId: "kp-twisted", // 最底层的双绞线
+    });
+
+    // 双绞线及其所有祖先应该都展开可见
+    expect(screen.getByText("计算机网络")).toBeInTheDocument();
     expect(screen.getByText("物理层")).toBeInTheDocument();
     expect(screen.getByText("传输介质")).toBeInTheDocument();
     expect(screen.getByText("双绞线")).toBeInTheDocument();

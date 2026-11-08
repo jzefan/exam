@@ -862,7 +862,7 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
                     <div className="space-y-1">
                       <p className="text-[13px] font-medium text-[#334155]">标准输入参考</p>
                       <p className="text-[12px] leading-5 text-[#6b7280]">
-                        评测时，系统会把测试数据写入标准输入。下面是 {LANGUAGE_LABELS[language]} 的常见读取方式。
+                        评测系统通过标准输入 (stdin) 注入测试数据，以下为 {LANGUAGE_LABELS[language]} 常用读取示例：
                       </p>
                     </div>
                     <pre className="overflow-x-auto whitespace-pre-wrap rounded-xl border border-[#e7ecf4] bg-[#f8fafc] px-3 py-3 font-mono text-[12px] leading-6 text-[#334155]">
@@ -1586,7 +1586,7 @@ export function CodeQuestion({ question, answer, onChange }: Props) {
                           <div className="space-y-1">
                             <p className="text-[13px] font-medium text-[#334155]">标准输入参考</p>
                             <p className="text-[12px] leading-5 text-[#6b7280]">
-                              评测时，系统会把测试数据写入标准输入。下面是 {LANGUAGE_LABELS[language]} 的常见读取方式。
+                              评测系统通过标准输入 (stdin) 注入测试数据，以下为 {LANGUAGE_LABELS[language]} 常用读取示例：
                             </p>
                           </div>
                           <pre className="overflow-x-auto whitespace-pre-wrap rounded-xl border border-[#e7ecf4] bg-[#f8fafc] px-3 py-3 font-mono text-[12px] leading-6 text-[#334155]">

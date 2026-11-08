@@ -1739,7 +1739,7 @@ export function QuestionImportPage() {
             <Alert className="flex items-start gap-3 border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-300 [&>svg]:static [&>svg]:translate-y-0">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <AlertDescription className="text-xs leading-5">
-                暂不确定时可以先导入，之后在题库列表中使用“关联知识点”补充。
+                可先跳过关联直接导入，后续在题库中随时补充关联知识点。
               </AlertDescription>
             </Alert>
           </div>

@@ -12,45 +12,94 @@ export type KnowledgeTreeMenuOption = {
   depth?: number;
 };
 
+function findAncestorIds(
+  root: CourseKnowledgeNode | null,
+  targetId: string | null,
+): Set<string> {
+  const ancestors = new Set<string>();
+  if (!root || !targetId) return ancestors;
+
+  const dfs = (node: CourseKnowledgeNode, path: string[]): boolean => {
+    if (node.id === targetId) {
+      for (const id of path) ancestors.add(id);
+      return true;
+    }
+    for (const child of node.children ?? []) {
+      if (dfs(child, [...path, node.id])) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  dfs(root, []);
+  return ancestors;
+}
+
+function getInitialExpandedIds(
+  root: CourseKnowledgeNode | null,
+  showRoot: boolean,
+  selectedId: string | null,
+): Set<string> {
+  if (!root) return new Set();
+  const ids = new Set<string>();
+
+  if (showRoot && root.id !== "__virtual_root__" && (root.children?.length ?? 0) > 0) {
+    ids.add(root.id);
+  }
+
+  const topNodes =
+    root.id === "__virtual_root__"
+      ? (root.children ?? [])
+      : showRoot
+        ? []
+        : (root.children ?? []);
+
+  for (const node of topNodes) {
+    if ((node.children?.length ?? 0) > 0) {
+      ids.add(node.id);
+    }
+  }
+
+  const ancestors = findAncestorIds(root, selectedId);
+  for (const id of ancestors) {
+    ids.add(id);
+  }
+
+  return ids;
+}
+
 /**
  * 知识点树选择菜单：课程目录按层级展示，可逐级展开 / 收起，首行是「全部知识点」。
  *
+ * `showRootNode` 为 true 时（默认 false），会保留并展示课程根节点本身，便于用户直接选中整门课程或展开其子知识点。
  * `tree` 为空（调用方只拿到扁平选项）时退回按 `options` 平铺，不再造一层假层级。
  */
 export function KnowledgeFilterTreeMenu({
   tree,
-  options,
+  options = [],
   selectedId,
+  showRootNode = false,
   onSelect,
   onClose,
 }: {
   tree: CourseKnowledgeNode | null;
-  options: KnowledgeTreeMenuOption[];
+  options?: KnowledgeTreeMenuOption[];
   selectedId: string | null;
+  showRootNode?: boolean;
   onSelect: (nodeId: string | null) => void;
   onClose: () => void;
 }) {
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(
-    () =>
-      new Set(
-        (tree?.children ?? [])
-          .filter((node) => node.children.length > 0)
-          .map((node) => node.id),
-      ),
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() =>
+    getInitialExpandedIds(tree, showRootNode, selectedId),
   );
 
   useEffect(() => {
-    setExpandedIds(
-      new Set(
-        (tree?.children ?? [])
-          .filter((node) => node.children.length > 0)
-          .map((node) => node.id),
-      ),
-    );
-  }, [tree?.id]);
+    setExpandedIds(getInitialExpandedIds(tree, showRootNode, selectedId));
+  }, [tree?.id, showRootNode]);
 
   const availableIds = useMemo(
-    () => new Set(options.map((option) => option.id)),
+    () => (options && options.length > 0 ? new Set(options.map((option) => option.id)) : null),
     [options],
   );
 
@@ -68,12 +117,22 @@ export function KnowledgeFilterTreeMenu({
     onClose();
   };
 
+  const hasAvailableDescendant = (node: CourseKnowledgeNode): boolean => {
+    if (!availableIds) return (node.children?.length ?? 0) > 0;
+    return (node.children ?? []).some(
+      (child) => availableIds.has(child.id) || hasAvailableDescendant(child),
+    );
+  };
+
   const renderNode = (
     node: CourseKnowledgeNode,
     depth: number,
   ): ReactNode => {
-    if (!availableIds.has(node.id)) return null;
-    const hasChildren = node.children.some((child) => availableIds.has(child.id));
+    const isAvailable = !availableIds || availableIds.has(node.id);
+    const hasDescendants = hasAvailableDescendant(node);
+    if (!isAvailable && !hasDescendants) return null;
+
+    const hasChildren = (node.children?.length ?? 0) > 0 && hasDescendants;
     const expanded = expandedIds.has(node.id);
     const selected = node.id === selectedId;
 
@@ -100,7 +159,7 @@ export function KnowledgeFilterTreeMenu({
           <button
             type="button"
             className="flex min-w-0 flex-1 items-center gap-2 px-1.5 py-2 text-left"
-            title={options.find((option) => option.id === node.id)?.path}
+            title={options?.find((option) => option.id === node.id)?.path ?? node.name}
             onClick={() => selectNode(node.id)}
           >
             <BookOpen
@@ -140,18 +199,30 @@ export function KnowledgeFilterTreeMenu({
         ) : null}
       </button>
       <div className="my-1 border-t border-border" />
-      {tree?.children.length ? (
-        tree.children.map((node) => renderNode(node, 0))
-      ) : options.length > 0 ? (
+      {tree ? (
+        showRootNode && tree.id !== "__virtual_root__" ? (
+          renderNode(tree, 0)
+        ) : (tree.children?.length ?? 0) > 0 ? (
+          tree.children.map((node) => renderNode(node, 0))
+        ) : (
+          renderNode(tree, 0)
+        )
+      ) : options && options.length > 0 ? (
         options.map((option) => (
           <button
             key={option.id}
             type="button"
-            className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-muted"
+            className={cn(
+              "flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-muted",
+              selectedId === option.id && "bg-primary/10 text-primary",
+            )}
             onClick={() => selectNode(option.id)}
           >
             <BookOpen size={15} className="shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1 truncate">{option.name}</span>
+            {selectedId === option.id ? (
+              <Check size={14} className="shrink-0 text-primary" />
+            ) : null}
           </button>
         ))
       ) : (

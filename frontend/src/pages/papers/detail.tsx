@@ -106,6 +106,7 @@ import {
   paperApiRequest,
   type PaperDifficultyStrategy,
 } from "./api";
+import { getCourseKnowledgeTree, type CourseKnowledgeNode } from "@/pages/courses/api";
 import { PaperAIGenerateDialog } from "./ai-generate-dialog";
 import {
   applyPaperTypeScoreAllocation,
@@ -341,6 +342,25 @@ export function PaperDetailPage() {
       ? banks.find((bank) => bank.name === courseQuestionBankName)
       : null) ??
     null;
+
+  const [courseKnowledgeTree, setCourseKnowledgeTree] = useState<CourseKnowledgeNode | null>(null);
+  const targetCourseKpId = navState.courseKpId ?? currentPaper?.root_knowledge_point_id;
+
+  useEffect(() => {
+    if (!targetCourseKpId) {
+      setCourseKnowledgeTree(null);
+      return;
+    }
+    let active = true;
+    getCourseKnowledgeTree(targetCourseKpId)
+      .then((tree) => {
+        if (active && tree) setCourseKnowledgeTree(tree);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [targetCourseKpId]);
 
   useEffect(() => {
     if (!fetchedPaper) return;
@@ -1001,7 +1021,7 @@ export function PaperDetailPage() {
               size="sm"
               onClick={handleCopy}
               disabled={busy}
-              tooltip="复制出一份新试卷"
+              tooltip="复制试卷"
             >
               <Copy className="h-4 w-4" />
               复制
@@ -1011,7 +1031,7 @@ export function PaperDetailPage() {
               size="sm"
               onClick={() => setAiDialogOpen(true)}
               disabled={busy || archived}
-              tooltip="基于当前试卷 AI 生成新试卷"
+              tooltip="AI 仿编新试卷"
             >
               <Sparkles className="h-4 w-4" />
               AI 生成新试卷
@@ -1022,7 +1042,7 @@ export function PaperDetailPage() {
               size="sm"
               onClick={openRenameDialog}
               disabled={busy || archived || paperRenameSaving}
-              tooltip="修改当前试卷名称"
+              tooltip="重命名试卷"
             >
               <Pencil className="h-4 w-4" />
               修改试卷名称
@@ -1355,7 +1375,7 @@ export function PaperDetailPage() {
                               className="h-7 w-7 text-muted-foreground hover:text-destructive"
                               disabled={archived || Boolean(replacingQuestionId) || Boolean(removingQuestionId)}
                               onClick={() => setPendingRemoveQuestion({ item, index })}
-                              tooltip="移除题目"
+                              tooltip="从试卷中移除"
                             >
                               {removingQuestionId === item.question_id ? (
                                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1396,7 +1416,7 @@ export function PaperDetailPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>确认移除题目？</AlertDialogTitle>
             <AlertDialogDescription>
-              确认从试卷中移除第 {(pendingRemoveQuestion?.index ?? 0) + 1} 题？移除后会立即更新试卷。
+              确定将第 {(pendingRemoveQuestion?.index ?? 0) + 1} 题从当前试卷中移除？原题仍保留在题库中。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1433,7 +1453,7 @@ export function PaperDetailPage() {
           <DialogHeader>
             <DialogTitle>修改试卷名称</DialogTitle>
             <DialogDescription>
-              保存后会立即更新当前试卷名称。
+              输入新试卷名称，保存后生效。
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-2">
@@ -1506,14 +1526,15 @@ export function PaperDetailPage() {
         <DialogContent className="flex h-[calc(100dvh-2rem)] max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-[1300px] flex-col overflow-hidden">
           <DialogHeader className="shrink-0">
             <DialogTitle>从题库中添加</DialogTitle>
-            <DialogDescription>
-              默认从当前课程题库筛选；保存后只会把新选择的题目追加到当前试卷。
+            <DialogDescription className="sr-only">
+              从课程题库中挑选题目并追加至本试卷。
             </DialogDescription>
           </DialogHeader>
-          <div className="min-h-0 flex-1">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <QuestionSelector
               selectedIds={bankAddSelectorIds}
               onChange={handleBankAddSelectionChange}
+              knowledgeTree={courseKnowledgeTree}
               showSummary
               renderSummary={({ total, currentBankTotal, onOpenFullscreen }) => (
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1538,8 +1559,8 @@ export function PaperDetailPage() {
               initialBankId={courseBank?.id}
               initialBankQuestionCount={courseBank?.question_count}
               lockInitialBank={false}
-              knowledgePointOptions={selectorKnowledgePointOptions}
-              restrictKnowledgePointsToOptions={selectorKnowledgePointOptions !== undefined}
+              knowledgePointOptions={courseKnowledgeTree ? undefined : selectorKnowledgePointOptions}
+              restrictKnowledgePointsToOptions={false}
               fillAvailableHeight
             />
           </div>
@@ -1572,7 +1593,7 @@ export function PaperDetailPage() {
           <DialogHeader>
             <DialogTitle>添加题目</DialogTitle>
             <DialogDescription>
-              题目会保存到「{courseQuestionBankName ?? courseBank?.name ?? "题库"}」，并立即加入当前试卷。
+              新建题目将自动存入「{courseQuestionBankName ?? courseBank?.name ?? "题库"}」并加入本试卷。
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-4">
@@ -1663,7 +1684,7 @@ export function PaperDetailPage() {
           <DialogHeader>
             <DialogTitle>编辑题目</DialogTitle>
             <DialogDescription>
-              修改后会同步更新课程题库，并保留在当前试卷中。
+              修改将同步更新原题库，并保持在当前试卷中。
             </DialogDescription>
           </DialogHeader>
           {editingQuestion ? (
@@ -1693,7 +1714,7 @@ export function PaperDetailPage() {
           <DialogHeader>
             <DialogTitle>AI 添加题目</DialogTitle>
             <DialogDescription>
-              基于当前试卷题型、难度和课程知识点生成新题，生成后立即加入当前试卷。
+              结合当前试卷的题型、难度与课程知识点生成新题并加入。
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-4">

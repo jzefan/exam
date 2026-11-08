@@ -154,12 +154,12 @@ export function CoursePublishDialog({
               </div>
 
               <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground space-y-1">
-                <p className="font-medium text-foreground">用户进入后享有的功能：</p>
+                <p className="font-medium text-foreground">访客权限说明：</p>
                 <ul className="list-inside list-disc space-y-0.5 pl-1">
-                  <li>直接浏览并使用知识点树、资料文档、题库和测试试卷</li>
-                  <li>自主创建自己的学期、班级（学生）并发布练习/考试</li>
-                  <li>自动查看答卷得分与主观题 AI 智能评分</li>
-                  <li>设置独立工作区密码，自建资料与题目对其他用户完全保密</li>
+                  <li>浏览课程知识树、课件资料与公开题库</li>
+                  <li>创建专属学期与班级，独立发布练习与考试</li>
+                  <li>支持答卷批改与主观题 AI 辅助判分</li>
+                  <li>可设置专属工作区密码，自建数据相互隔离</li>
                 </ul>
               </div>
             </div>

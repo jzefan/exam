@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 60 * 24  # 24 hours
     cors_origins: list[str] = ["http://localhost:4000"]
     debug: bool = False
+    # Level for the application's own loggers ("app.*"): request timings,
+    # slow queries, grading progress. INFO keeps per-request duration lines,
+    # which is what production latency work needs; set WARNING to quieten.
+    log_level: str = "INFO"
     # Opt-in connection prototype. See docs/chaoxing-connection.md; ONE API worker.
     chaoxing_enabled: bool = False
     chaoxing_max_sessions: int = 3

@@ -72,7 +72,7 @@ export function PracticePublishMenu({
               </DropdownMenuItem>
             </TooltipTrigger>
             <TooltipContent side="left" className="max-w-60">
-              进入多步向导，逐步设置知识点、题目、学生与发布时间
+              多步向导：精细设置知识点、题目、范围与时间
             </TooltipContent>
           </Tooltip>
 
@@ -84,7 +84,7 @@ export function PracticePublishMenu({
               </DropdownMenuItem>
             </TooltipTrigger>
             <TooltipContent side="left" className="max-w-60">
-              按条件、比例或提示词快速组题，适合日常随堂练习
+              智能组题：按题型比例或条件一键生成随堂练习
             </TooltipContent>
           </Tooltip>
 
@@ -96,7 +96,7 @@ export function PracticePublishMenu({
               </DropdownMenuItem>
             </TooltipTrigger>
             <TooltipContent side="left" className="max-w-60">
-              直接用本课程题库的全部题目发布，发布后仍可删减
+              整库练习：直接选用本课程全部题目
             </TooltipContent>
           </Tooltip>
         </DropdownMenuContent>

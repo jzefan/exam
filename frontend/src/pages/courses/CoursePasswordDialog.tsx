@@ -132,7 +132,7 @@ export function CoursePasswordDialog({
                 {courseName ? `课程密码设置 · ${courseName}` : "课程工作区密码设置"}
               </DialogTitle>
               <DialogDescription className="mt-0.5 text-xs text-muted-foreground">
-                每个用户可以为当前课程设置独立密码，其它用户看不到您的密码和私有数据。
+                设置独立访问密码，保护您的课程资料与私有数据安全。
               </DialogDescription>
             </div>
           </div>
@@ -158,8 +158,8 @@ export function CoursePasswordDialog({
                   </div>
                   <div className="text-[11px] text-muted-foreground">
                     {hasPassword
-                      ? "重新进入该短链接时需凭密码解锁您的专属课程数据"
-                      : "建议设置密码以保护自建资料、题目和班级考绩"}
+                      ? "通过短链接访问时，需输入密码解锁专属课程数据"
+                      : "建议设置密码，防止自建资料、题目及考绩被未授权访问"}
                   </div>
                 </div>
               </div>

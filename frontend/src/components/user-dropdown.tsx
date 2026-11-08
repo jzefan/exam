@@ -107,7 +107,7 @@ export function UserDropdown({
             <DialogDescription>安装后可从桌面直接打开智评线。</DialogDescription>
           </DialogHeader>
           <div className="space-y-3 text-sm leading-6">
-            <p><strong>iPhone Safari：</strong>点分享（如底部是“…”则先点“…”→分享），选“添加到主屏幕”，按提示添加。</p>
+            <p><strong>iPhone Safari：</strong>点击底部「分享」图标，选择「添加到主屏幕」即可。</p>
             <p><strong>Android Chrome：</strong>点右上角菜单，再选“安装应用”或“添加到主屏幕”。</p>
             <p className="text-muted-foreground">首次从桌面打开时，可能需要重新登录。</p>
           </div>
