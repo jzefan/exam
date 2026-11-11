@@ -437,3 +437,36 @@ describe("SmartPracticeDialog", () => {
     ).toBe(7 * 24 * 60 * 60 * 1000);
   });
 });
+
+describe("SmartPracticeDialog page variant", () => {
+  beforeEach(() => {
+    mockListCourseQuestions.mockReset();
+    mockListCourseQuestions.mockResolvedValue([]);
+  });
+
+  it("以页面形态渲染时不在 dialog 里，且「返回」触发 onExit", async () => {
+    const onExit = vi.fn();
+    render(
+      <SmartPracticeDialog
+        variant="page"
+        open
+        onOpenChange={vi.fn()}
+        onExit={onExit}
+        target="paper"
+        courseId="course-1"
+        courseName="数据结构"
+        courseKpId="course-kp-1"
+        courseSemesterId={null}
+        selectedQuestionIds={[]}
+        knowledgeOptions={[]}
+      />,
+    );
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    // 页面形态把标题换成了面包屑（由调用方传入），页签仍在
+    expect(screen.getByRole("tab", { name: "按配比" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "返回" }));
+    expect(onExit).toHaveBeenCalled();
+  });
+});

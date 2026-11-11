@@ -15,7 +15,9 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { Button } from "@/components/ui/button";
 import { RichContent } from "@/components/ui/rich-content";
+import { answerInlineText, stemInlineText } from "./question-inline-edit";
 import {
   getQuestionAnswerText,
   getQuestionContentHtml,
@@ -382,6 +384,7 @@ export function QuestionPreviewCard({
   knowledgeRecognitionStatus,
   children,
   questionBody,
+  inlineEdit,
   onClick,
   onMouseEnter,
   onMouseLeave,
@@ -415,7 +418,22 @@ export function QuestionPreviewCard({
   children?: ReactNode;
   /** External papers can provide structured media without injecting provider HTML. */
   questionBody?: ReactNode;
+  /**
+   * 点击题干/参考答案就地编辑。不传则保持只读（试卷预览等场景）。
+   * 富文本（图片、表格、公式）不能安全地做纯文本往返，由 canEdit* 控制。
+   */
+  inlineEdit?: {
+    /** 由外部「内联编辑」按钮控制，进入后题干/答案同时变为可编辑。 */
+    active: boolean;
+    canEditStem?: boolean;
+    canEditAnswer?: boolean;
+    saving?: boolean;
+    onSave?: (changes: { stem: string; answer: string }) => void | Promise<void>;
+    onCancel?: () => void;
+  };
 } & HTMLAttributes<HTMLDivElement>) {
+  const [stemDraft, setStemDraft] = useState("");
+  const [answerDraft, setAnswerDraft] = useState("");
   const [isHovered, setIsHovered] = useState(false);
   const [isHoverExpanded, setIsHoverExpanded] = useState(false);
   const [isClickExpanded, setIsClickExpanded] = useState(false);
@@ -471,6 +489,26 @@ export function QuestionPreviewCard({
     showDetails &&
     !choiceAnswerInline &&
     (!hideAnswer || hasAnswerText || hasAnswerHtml || (isCode && Boolean(codeAnswer)));
+
+  // Inline editing is entered explicitly (a button in the card actions), never
+  // by clicking the card: clicking already means expand/collapse.
+  const inlineActive = Boolean(inlineEdit?.active);
+  const canInlineStem =
+    inlineActive && (inlineEdit?.canEditStem ?? true);
+  const canInlineAnswer =
+    inlineActive && (inlineEdit?.canEditAnswer ?? true);
+  useEffect(() => {
+    if (!inlineActive) {
+      return;
+    }
+    setStemDraft(stemInlineText(question));
+    setAnswerDraft(answerInlineText(question));
+    // Re-seed only when the editor is opened, not on every refetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inlineActive]);
+  const submitInline = () => {
+    void inlineEdit?.onSave?.({ stem: stemDraft.trim(), answer: answerDraft });
+  };
 
   const showSimpleAnswer =
     !showDetails &&
@@ -642,7 +680,15 @@ export function QuestionPreviewCard({
 
       {/* body */}
       <div className="px-2 py-2 sm:px-5">
-        {questionBody ?? (html ? (
+        {canInlineStem ? (
+          <InlineTextEditor
+            value={stemDraft}
+            onChange={setStemDraft}
+            autoFocus
+            onCancel={() => inlineEdit?.onCancel?.()}
+            onSave={submitInline}
+          />
+        ) : questionBody ?? (html ? (
           <RichContent
             html={html}
             className="text-sm leading-relaxed text-foreground"
@@ -709,10 +755,19 @@ export function QuestionPreviewCard({
         >
           <div className="overflow-hidden">
             <div className="space-y-5">
-              {shouldShowAnswer ? (
+              {shouldShowAnswer || canInlineAnswer ? (
                 <div>
                   <SectionLabel>参考答案</SectionLabel>
-                  {isCode ? (
+                  {canInlineAnswer ? (
+                    <InlineTextEditor
+                      value={answerDraft}
+                      onChange={setAnswerDraft}
+                      multiline
+                      autoFocus={!canInlineStem}
+                      onCancel={() => inlineEdit?.onCancel?.()}
+                      onSave={submitInline}
+                    />
+                  ) : isCode ? (
                     codeAnswer ? (
                       <CodeAnswerBlock
                         code={codeAnswer}
@@ -820,6 +875,40 @@ export function QuestionPreviewCard({
                 </div>
               ) : null}
 
+              {inlineActive ? (
+                <div
+                  className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/[0.04] px-3 py-2"
+                  data-no-card-toggle="true"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-7 px-3 text-xs"
+                    disabled={inlineEdit?.saving}
+                    onClick={submitInline}
+                  >
+                    {inlineEdit?.saving ? (
+                      <Loader2 size={13} className="mr-1 animate-spin" />
+                    ) : null}
+                    确定
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-3 text-xs"
+                    disabled={inlineEdit?.saving}
+                    onClick={() => inlineEdit?.onCancel?.()}
+                  >
+                    取消
+                  </Button>
+                  <span className="text-[11px] text-muted-foreground">
+                    只保存改动的题干 / 参考答案 · Esc 取消
+                  </span>
+                </div>
+              ) : null}
+
               {/* footer */}
               {!hideMeta &&
               (updatedLabel || question.usage_count > 0 || footerActions) ? (
@@ -844,6 +933,45 @@ export function QuestionPreviewCard({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Controlled textarea used by the inline editor; the toolbar owns save/cancel. */
+function InlineTextEditor({
+  value,
+  onChange,
+  multiline = false,
+  autoFocus = false,
+  onCancel,
+  onSave,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  multiline?: boolean;
+  autoFocus?: boolean;
+  onCancel: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <div className="space-y-2" onClick={(event) => event.stopPropagation()}>
+      <textarea
+        autoFocus={autoFocus}
+        value={value}
+        rows={multiline ? Math.min(10, Math.max(3, value.split("\n").length + 1)) : 2}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            onCancel();
+          }
+          if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+            event.preventDefault();
+            onSave();
+          }
+        }}
+        className="w-full resize-y rounded-md border border-input bg-background px-2.5 py-2 text-sm leading-relaxed text-foreground outline-none transition-colors focus-visible:border-amber-400 focus-visible:ring-2 focus-visible:ring-amber-400/50 focus-visible:ring-inset"
+      />
     </div>
   );
 }

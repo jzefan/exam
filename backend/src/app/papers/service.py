@@ -33,6 +33,10 @@ from app.papers.schemas import (
 )
 from app.questions.ai_generate import AIGenerateRequest, AIModelProvider, generate_questions_stream
 from app.questions.models import Question, QuestionBank
+from app.questions.content_normalizer import (
+    normalize_question_content,
+    split_soft_wrapped_paragraphs,
+)
 from app.questions.schemas import (
     ImportReviewStatus,
     QuestionCreate,
@@ -1209,11 +1213,15 @@ def question_create_from_import_draft(
     ]
 
     content_html = _build_import_content_html(draft.content_text, draft.images)
+    normalized_content = normalize_question_content(
+        {"text": draft.content_text, "html": content_html},
+        question_type=draft.type.value if hasattr(draft.type, "value") else str(draft.type),
+    )
 
     return QuestionCreate(
         type=draft.type,
         title=(draft.title or draft.content_text[:120] or "未命名题目")[:500],
-        content={"text": draft.content_text, "html": content_html},
+        content=normalized_content,
         options=draft.options if draft.type.value == "choice" else None,
         answer=answer,
         analysis=draft.analysis,
@@ -1239,13 +1247,15 @@ def _build_import_content_html(
     content_text: str,
     images: list[QuestionImportImageInput] | None = None,
 ) -> str:
-    lines = [line.strip() for line in content_text.splitlines() if line.strip()]
+    # One paragraph per *logical* paragraph, not per source line: a soft wrap in
+    # the Word file used to become its own <p>, which is what made imported
+    # questions render with a break in the middle of a sentence.
     parts: list[str] = []
-    for line in lines:
-        if line.startswith("<img "):
-            parts.append(line)
+    for paragraph in split_soft_wrapped_paragraphs(content_text):
+        if paragraph.startswith("<img "):
+            parts.append(paragraph)
         else:
-            parts.append(f"<p>{_escape_import_html(line)}</p>")
+            parts.append(f"<p>{_escape_import_html(paragraph)}</p>")
 
     for image in images or []:
         alt = _escape_import_html((image.alt or "").strip() or "题目图片")

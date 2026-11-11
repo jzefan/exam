@@ -587,7 +587,19 @@ export function getDraftTypeLabel(draft: QuestionImportDraft): string {
   return getQuestionTypeLabel(draft.type);
 }
 
-export function buildAnswerPayload(type: QuestionType, answerText: string | null) {
+const FILL_IN_BLANK_PLACEHOLDER_RE = /_{3,}|（\s*）|\(\s*\)|【\s*】/g;
+
+/** 与后端 `_count_fill_in_placeholders` 一致的空数统计。 */
+export function countFillInBlanks(contentText: string | null | undefined): number {
+  if (!contentText) return 0;
+  return (contentText.match(FILL_IN_BLANK_PLACEHOLDER_RE) ?? []).length;
+}
+
+export function buildAnswerPayload(
+  type: QuestionType,
+  answerText: string | null,
+  contentText?: string | null,
+) {
   const text = answerText ?? "";
   if (type === "choice") {
     const letters = getChoiceAnswerLetters(text);
@@ -597,6 +609,12 @@ export function buildAnswerPayload(type: QuestionType, answerText: string | null
   }
   if (type === "true_false") return { correct: /^(正确|对|true|t|√)$/i.test(text.trim()) };
   if (type === "fill_in") {
+    // 单空题：永远不按逗号拆，答案里可能就有逗号（如 1,024）；同一空有多个
+    // 可接受说法时用 | 分隔，判分时由后端按 | 拆分。
+    if (countFillInBlanks(contentText) === 1) {
+      const single = text.trim();
+      return { correct: single ? [single] : [] };
+    }
     return { correct: text.split(/[;,；\n]/).map((item) => item.trim()).filter(Boolean) };
   }
   if (type === "code") return { code: text };
@@ -625,8 +643,11 @@ export function buildImportableQuestions(drafts: QuestionImportDraft[], question
       const contentHtml =
         draft.content_html ?? buildImportContentHtml(draft.content_text, draft.images ?? []);
       const answer = draft.answer_html
-        ? { ...buildAnswerPayload(draft.type, draft.answer_text), html: draft.answer_html }
-        : buildAnswerPayload(draft.type, draft.answer_text);
+        ? {
+            ...buildAnswerPayload(draft.type, draft.answer_text, draft.content_text),
+            html: draft.answer_html,
+          }
+        : buildAnswerPayload(draft.type, draft.answer_text, draft.content_text);
       return {
         type: draft.type,
         title,

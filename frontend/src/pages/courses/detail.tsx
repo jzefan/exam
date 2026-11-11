@@ -8,8 +8,8 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { useDelete, useList } from "@refinedev/core";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useDelete, useList, useUpdate } from "@refinedev/core";
 import {
   ArrowDown,
   ArrowLeft,
@@ -39,6 +39,7 @@ import {
   MoreHorizontal,
   Move,
   Pencil,
+  TextCursorInput,
   Plus,
   Search,
   Settings,
@@ -103,6 +104,13 @@ import { cn } from "@/lib/utils";
 import type { IPaper, IQuestion, QuestionType } from "@/types";
 import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
 import {
+  answerFromInlineText,
+  canInlineEditAnswer,
+  canInlineEditStem,
+  stemHtmlFromText,
+} from "@/components/questions/question-inline-edit";
+import { TooltipButton } from "@/components/ui/tooltip-button";
+import {
   questionTypeFullLabel,
 } from "@/components/questions/question-preview-utils";
 import {
@@ -135,6 +143,7 @@ import {
 import type { KnowledgeImportPath } from "@/pages/knowledge/import-knowledge-utils";
 import {
   describeKnowledgeMove,
+  flattenCourseKnowledgeNodes,
   planKnowledgeDrop,
   planKnowledgeMove,
   resolveKnowledgeDropZone,
@@ -222,6 +231,31 @@ const QUESTION_TYPE_FILTERS: QuestionType[] = [
   "essay",
   "code",
 ];
+// List state lives in the URL so it survives the round trip through any editor
+// page: returning to a list must restore exactly what the teacher was looking
+// at (type filter, page, page size, semester), never a default view.
+const QUESTION_TYPES_PARAM = "types";
+const QUESTION_PAGE_PARAM = "qpage";
+const QUESTION_PAGE_SIZE_PARAM = "qsize";
+const DEFAULT_QUESTION_PAGE_SIZE = 50;
+const QUESTION_TYPE_VALUES = new Set<string>(QUESTION_TYPE_FILTERS);
+
+function parsePositiveIntParam(value: string | null, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+function parseQuestionTypesParam(value: string | null): Set<QuestionType> {
+  if (!value) {
+    return new Set();
+  }
+  return new Set(
+    value
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item): item is QuestionType => QUESTION_TYPE_VALUES.has(item)),
+  );
+}
 type CourseTab =
   | "materials"
   | "exams"
@@ -623,28 +657,6 @@ function findCourseKnowledgeNodePath(
     }
   }
   return [];
-}
-
-function flattenCourseKnowledgeNodes(
-  node: CourseKnowledgeNode | null,
-  depth = 0,
-): Array<{ id: string; name: string; depth: number; path: string }> {
-  if (!node) {
-    return [];
-  }
-  const current = {
-    id: node.id,
-    name: node.name,
-    depth,
-    path: node.name,
-  };
-  const children = node.children.flatMap((child) =>
-    flattenCourseKnowledgeNodes(child, depth + 1).map((item) => ({
-      ...item,
-      path: `${node.name} / ${item.path}`,
-    })),
-  );
-  return [current, ...children];
 }
 
 function collectCourseKnowledgeNodeIds(
@@ -1973,8 +1985,10 @@ function ExamRows({
   ) => Promise<void> | void;
 }) {
   const navigate = useNavigate();
+  const location = useLocation();
   // 从课程详情进入查看/修改时，让目标页的「返回」（及保存后跳转）回到课程详情对应模块。
-  const backTo = `/courses/${courseId}?tab=${kind === "assignment" ? "assignments" : "exams"}`;
+  // 用当前地址而不是拼死的 tab：学期、筛选等查询参数必须原样带回来。
+  const backTo = `${location.pathname}${location.search}`;
   const backState = {
     backTo,
     backLabel: "返回课程详情",
@@ -2192,6 +2206,7 @@ function QuestionsTab({
   onCreatePractice,
   onClearAllQuestions,
   onQuestionDeleted,
+  onQuestionUpdated,
   onKnowledgeCompleted,
 }: {
   questions: IQuestion[];
@@ -2235,11 +2250,75 @@ function QuestionsTab({
   onCreatePractice: () => void;
   onClearAllQuestions: () => void;
   onQuestionDeleted?: (questionId: string) => void;
+  onQuestionUpdated?: () => void;
   onKnowledgeCompleted?: () => void | Promise<void>;
 }) {
   const navigate = useNavigate();
+  const location = useLocation();
+  // Round-tripping through the question edit page must come back to the list
+  // exactly as the teacher left it (type filter included), so the return URL is
+  // the current one rather than a hard-coded "?tab=questions".
+  const backToQuestions = `${location.pathname}${location.search}`;
+  const examsTabUrl = (() => {
+    const params = new URLSearchParams(location.search);
+    params.set("tab", "exams");
+    return `${location.pathname}?${params.toString()}`;
+  })();
   const { mutate: deleteQuestion } = useDelete();
+  const { mutate: updateQuestion } = useUpdate();
   const { toast } = useToast();
+  const [inlineEditId, setInlineEditId] = useState<string | null>(null);
+  const [inlineSaving, setInlineSaving] = useState(false);
+  const saveInlineEdit = async (
+    question: IQuestion,
+    changes: { stem: string; answer: string },
+  ) => {
+    const values: Record<string, unknown> = {};
+    if (canInlineEditStem(question)) {
+      const stem = changes.stem.trim();
+      if (!stem) {
+        toast({ title: "题干不能为空", variant: "destructive" });
+        return;
+      }
+      values.content = {
+        ...(question.content ?? {}),
+        text: stem,
+        html: stemHtmlFromText(stem),
+      };
+    }
+    if (canInlineEditAnswer(question)) {
+      values.answer = answerFromInlineText(question, changes.answer);
+    }
+    if (Object.keys(values).length === 0) {
+      return;
+    }
+    setInlineSaving(true);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        updateQuestion(
+          { resource: "questions", id: question.id, values },
+          {
+            onSuccess: () => {
+              toast({ title: "已保存" });
+              onQuestionUpdated?.();
+              resolve();
+            },
+            onError: (error) => {
+              toast({
+                title: "保存失败",
+                description: error?.message ?? "请稍后重试",
+                variant: "destructive",
+              });
+              reject(error);
+            },
+          },
+        );
+      });
+      setInlineEditId(null);
+    } finally {
+      setInlineSaving(false);
+    }
+  };
   const [deleteQuestionTarget, setDeleteQuestionTarget] =
     useState<IQuestion | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -2424,9 +2503,9 @@ function QuestionsTab({
               onClick={() =>
                 navigate("/questions/create", {
                   state: {
-                    backTo: `/courses/${courseId}?tab=questions`,
+                    backTo: backToQuestions,
                     backLabel: "返回课程详情",
-                    successTo: `/courses/${courseId}?tab=questions`,
+                    successTo: backToQuestions,
                     courseKpId: targetCourseKpId,
                   },
                 })
@@ -2441,9 +2520,9 @@ function QuestionsTab({
               onClick={() =>
                 navigate("/questions/import", {
                   state: {
-                    backTo: `/courses/${courseId}?tab=questions`,
+                    backTo: backToQuestions,
                     backLabel: "返回课程详情",
-                    successTo: `/courses/${courseId}?tab=questions`,
+                    successTo: backToQuestions,
                     courseKpId: targetCourseKpId,
                     courseName,
                   },
@@ -2485,9 +2564,9 @@ function QuestionsTab({
                 params.set("seed_key", seedKey);
                 navigate(`/exams/create?${params.toString()}`, {
                   state: {
-                    backTo: `/courses/${courseId}?tab=questions`,
+                    backTo: backToQuestions,
                     backLabel: "返回课程题目",
-                    successTo: `/courses/${courseId}?tab=exams`,
+                    successTo: examsTabUrl,
                     courseKpId: targetCourseKpId,
                     courseName,
                     existingExamTitles,
@@ -2683,10 +2762,20 @@ function QuestionsTab({
                 key={question.id}
                 question={question}
                 index={(safePage - 1) * pageSize + idx + 1}
-                expanded={allQuestionsExpanded}
+                expanded={
+                  inlineEditId === question.id ? true : allQuestionsExpanded
+                }
                 expandOnClick
                 hideAnswer
                 markChoiceAnswer
+                inlineEdit={{
+                  active: inlineEditId === question.id,
+                  canEditStem: canInlineEditStem(question),
+                  canEditAnswer: canInlineEditAnswer(question),
+                  saving: inlineSaving && inlineEditId === question.id,
+                  onSave: (changes) => saveInlineEdit(question, changes),
+                  onCancel: () => setInlineEditId(null),
+                }}
                 className="cursor-pointer transition-all hover:border-primary hover:shadow-md"
                 trailing={
                   <div className="flex items-center gap-2">
@@ -2712,6 +2801,31 @@ function QuestionsTab({
                 }
                 actions={
                   <>
+                    <TooltipButton
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-1.5 text-xs text-muted-foreground hover:text-blue-600 sm:px-2 dark:hover:text-blue-400"
+                      tooltip={
+                        canInlineEditStem(question) || canInlineEditAnswer(question)
+                          ? "就地修改题干和参考答案，不用打开弹窗"
+                          : "该题含图片/表格/公式，请用「编辑」弹窗修改"
+                      }
+                      disabled={
+                        !canInlineEditStem(question) && !canInlineEditAnswer(question)
+                      }
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setInlineEditId((current) =>
+                          current === question.id ? null : question.id,
+                        );
+                      }}
+                    >
+                      <TextCursorInput size={13} className="sm:mr-1" />
+                      <span className="hidden sm:inline">
+                        {inlineEditId === question.id ? "退出编辑" : "内联修改"}
+                      </span>
+                    </TooltipButton>
                     <Button
                       type="button"
                       variant="ghost"
@@ -2720,9 +2834,9 @@ function QuestionsTab({
                       onClick={() =>
                         navigate(`/questions/edit/${question.id}`, {
                           state: {
-                            backTo: `/courses/${courseId}?tab=questions`,
+                            backTo: backToQuestions,
                             backLabel: "返回课程题目",
-                            successTo: `/courses/${courseId}?tab=questions`,
+                            successTo: backToQuestions,
                           },
                         })
                       }
@@ -4716,6 +4830,7 @@ function TodoRail({
 export function CourseDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const initialTab = ((): CourseTab => {
@@ -4744,11 +4859,29 @@ export function CourseDetailPage() {
     }
   }, [urlTab]);
 
+  const courseUrlWithTab = useCallback(
+    (tab: CourseTab, extra: Record<string, string | null | undefined> = {}) => {
+      const params = new URLSearchParams(searchParams);
+      params.set("tab", tab);
+      for (const [key, value] of Object.entries(extra)) {
+        if (value) {
+          params.set(key, value);
+        } else {
+          params.delete(key);
+        }
+      }
+      return `${location.pathname}?${params.toString()}`;
+    },
+    [location.pathname, searchParams],
+  );
+
   const changeTab = useCallback((tab: CourseTab) => {
     setActiveTab(tab);
     setSearchParams((current) => {
       const next = new URLSearchParams(current);
       next.set("tab", tab);
+      // 切走时清掉子视图（如智能创建试卷），否则回来仍是那个子视图。
+      next.delete("view");
       return next;
     }, { replace: true });
   }, [setSearchParams]);
@@ -4788,12 +4921,103 @@ export function CourseDetailPage() {
   const [questionTypeCounts, setQuestionTypeCounts] = useState<
     Partial<Record<QuestionType, number>>
   >({});
-  const [questionPage, setQuestionPage] = useState(1);
-  const [questionPageSize, setQuestionPageSize] = useState(50);
+  const [questionPage, setQuestionPage] = useState(() =>
+    parsePositiveIntParam(searchParams.get(QUESTION_PAGE_PARAM), 1),
+  );
+  const [questionPageSize, setQuestionPageSize] = useState(() =>
+    parsePositiveIntParam(
+      searchParams.get(QUESTION_PAGE_SIZE_PARAM),
+      DEFAULT_QUESTION_PAGE_SIZE,
+    ),
+  );
+  const applyQuestionPage = useCallback(
+    (page: number) => {
+      setQuestionPage(page);
+      setSearchParams(
+        (current) => {
+          const params = new URLSearchParams(current);
+          if (page <= 1) {
+            params.delete(QUESTION_PAGE_PARAM);
+          } else {
+            params.set(QUESTION_PAGE_PARAM, String(page));
+          }
+          return params;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+  const applyQuestionPageSize = useCallback(
+    (size: number) => {
+      setQuestionPageSize(size);
+      // 同上：每页大小和页码归 1 一次写完，避免第二次写覆盖掉 qsize。
+      setQuestionPage(1);
+      setSearchParams(
+        (current) => {
+          const params = new URLSearchParams(current);
+          if (size === DEFAULT_QUESTION_PAGE_SIZE) {
+            params.delete(QUESTION_PAGE_SIZE_PARAM);
+          } else {
+            params.set(QUESTION_PAGE_SIZE_PARAM, String(size));
+          }
+          params.delete(QUESTION_PAGE_PARAM);
+          return params;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
   const [questionQuery, setQuestionQuery] = useState("");
   const [questionSelectedTypes, setQuestionSelectedTypes] = useState<
     Set<QuestionType>
-  >(new Set());
+  >(() => parseQuestionTypesParam(searchParams.get(QUESTION_TYPES_PARAM)));
+  const applyQuestionTypeFilter = useCallback(
+    (next: Set<QuestionType>) => {
+      setQuestionSelectedTypes(next);
+      // 题型变化同时把页码归 1，并且必须和题型写在**同一次** setSearchParams 里：
+      // 分两次写时第二次会拿到尚未更新的 location.search，把刚写进去的题型覆盖掉。
+      setQuestionPage(1);
+      setSearchParams(
+        (current) => {
+          const params = new URLSearchParams(current);
+          if (next.size === 0) {
+            params.delete(QUESTION_TYPES_PARAM);
+          } else {
+            params.set(QUESTION_TYPES_PARAM, [...next].join(","));
+          }
+          params.delete(QUESTION_PAGE_PARAM);
+          return params;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+  const papersView = searchParams.get("view");
+  const urlQuestionTypes = searchParams.get(QUESTION_TYPES_PARAM);
+  useEffect(() => {
+    // Keep back/forward navigation and the filter in sync; returning the same
+    // Set when nothing changed avoids an extra refetch on every render.
+    setQuestionSelectedTypes((current) => {
+      const next = parseQuestionTypesParam(urlQuestionTypes);
+      if (next.size === current.size && [...next].every((type) => current.has(type))) {
+        return current;
+      }
+      return next;
+    });
+  }, [urlQuestionTypes]);
+  const urlQuestionPage = searchParams.get(QUESTION_PAGE_PARAM);
+  const urlQuestionPageSize = searchParams.get(QUESTION_PAGE_SIZE_PARAM);
+  useEffect(() => {
+    setQuestionPage(parsePositiveIntParam(urlQuestionPage, 1));
+  }, [urlQuestionPage]);
+  useEffect(() => {
+    setQuestionPageSize(
+      parsePositiveIntParam(urlQuestionPageSize, DEFAULT_QUESTION_PAGE_SIZE),
+    );
+  }, [urlQuestionPageSize]);
   const [tree, setTree] = useState<CourseKnowledgeNode | null>(null);
   const [selectedMaterialUploadNodeId, setSelectedMaterialUploadNodeId] =
     useState("");
@@ -4851,7 +5075,6 @@ export function CourseDetailPage() {
   const [assignmentWholeBankLoading, setAssignmentWholeBankLoading] =
     useState(false);
   // 「试卷」页签的智能创建（预览时可逐题改分值）。
-  const [smartPaperOpen, setSmartPaperOpen] = useState(false);
   const [assignmentScoreSummaryLoading, setAssignmentScoreSummaryLoading] =
     useState(false);
   const [assignmentScoreSummary, setAssignmentScoreSummary] =
@@ -4954,8 +5177,39 @@ export function CourseDetailPage() {
     toast,
   ]);
 
+  // Reset to the first page only when a filter actually changes.
+  //
+  // This must not depend on applyQuestionPage's identity: setSearchParams is
+  // re-created by the router after every navigation, so a [.., applyQuestionPage]
+  // dependency made the effect fire again right after the page changed and put
+  // the list back on page 1 — "点下一页没反应".
+  const applyQuestionPageRef = useRef(applyQuestionPage);
   useEffect(() => {
-    setQuestionPage(1);
+    applyQuestionPageRef.current = applyQuestionPage;
+  }, [applyQuestionPage]);
+  const lastQuestionFilterKey = useRef<string | null>(null);
+  useEffect(() => {
+    const filterKey = [
+      questionQuery,
+      [...questionSelectedTypes].sort().join(","),
+      questionFilterNodeId ?? "",
+      String(questionPageSize),
+    ].join("|");
+    if (lastQuestionFilterKey.current === null) {
+      // First render: keep whatever page the URL restored (?qpage=3).
+      lastQuestionFilterKey.current = filterKey;
+      return;
+    }
+    if (lastQuestionFilterKey.current === filterKey) {
+      return;
+    }
+    lastQuestionFilterKey.current = filterKey;
+    // 题型 / 每页大小在各自的 handler 里已经把页码归 1 并写过 URL；
+    // 这里再写一次会与那次写入竞争，把 URL 覆盖回旧值。
+    if (questionPage === 1) {
+      return;
+    }
+    applyQuestionPageRef.current(1);
   }, [questionQuery, questionSelectedTypes, questionFilterNodeId, questionPageSize]);
 
   useEffect(() => {
@@ -6349,7 +6603,7 @@ export function CourseDetailPage() {
   const handleGenerateFromKnowledgeNode = useCallback(
     (node: CourseKnowledgeNode) => {
       if (!id) return;
-      const returnTo = `/courses/${id}?tab=knowledge&node_id=${node.id}`;
+      const returnTo = courseUrlWithTab("knowledge", { node_id: node.id });
       try {
         sessionStorage.setItem(
           AI_PREFILL_KEY,
@@ -6373,13 +6627,13 @@ export function CourseDetailPage() {
         },
       });
     },
-    [course, id, navigate],
+    [course, courseUrlWithTab, id, navigate],
   );
 
   const handleCreateQuestionFromKnowledgeNode = useCallback(
     (node: CourseKnowledgeNode) => {
       if (!id) return;
-      const returnTo = `/courses/${id}?tab=knowledge&node_id=${node.id}`;
+      const returnTo = courseUrlWithTab("knowledge", { node_id: node.id });
       navigate("/questions/create", {
         state: {
           backTo: returnTo,
@@ -6389,7 +6643,7 @@ export function CourseDetailPage() {
         },
       });
     },
-    [id, navigate],
+    [courseUrlWithTab, id, navigate],
   );
 
   const handleViewAssignmentsForKnowledgeNode = useCallback(
@@ -6540,9 +6794,9 @@ export function CourseDetailPage() {
       const targetTab = kind === "exam" ? "exams" : "assignments";
       navigate(kind === "exam" ? "/exams/create" : "/exams/practice/create", {
         state: {
-          backTo: `/courses/${id}?tab=${targetTab}`,
+          backTo: courseUrlWithTab(targetTab),
           backLabel: "返回课程详情",
-          successTo: `/courses/${id}?tab=${targetTab}`,
+          successTo: courseUrlWithTab(targetTab),
           courseKpId: options?.courseKpId ?? id,
           ...(course?.name ? { courseName: course.name } : {}),
           ...(kind === "exam"
@@ -6578,7 +6832,16 @@ export function CourseDetailPage() {
         },
       });
     },
-    [course?.name, exams, id, navigate, semesterFilter, selectedSemester, semesterStudentOptions],
+    [
+      course?.name,
+      courseUrlWithTab,
+      exams,
+      id,
+      navigate,
+      semesterFilter,
+      selectedSemester,
+      semesterStudentOptions,
+    ],
   );
 
   const handlePublishAssignmentForKnowledgeNode = useCallback(
@@ -7208,35 +7471,6 @@ export function CourseDetailPage() {
         }}
       />
 
-      <SmartPracticeDialog
-        target="paper"
-        open={smartPaperOpen}
-        onOpenChange={setSmartPaperOpen}
-        courseId={id ?? ""}
-        courseName={course.name}
-        courseKpId={tree?.id ?? id ?? ""}
-        courseSemesterId={semesterFilter}
-        selectedQuestionIds={[]}
-        knowledgeOptions={paperKnowledgePointOptions.map((option) => ({
-          id: option.id,
-          name: option.name,
-          path: option.path,
-        }))}
-        knowledgeTree={tree}
-        onPaperCreated={(paperId) => {
-          navigate(`/papers/${paperId}`, {
-            state: {
-              backTo: `/courses/${id}?tab=papers`,
-              backLabel: "返回课程详情",
-              courseOrigin: true,
-              courseKpId: tree?.id ?? id,
-              publishExamSuccessTo: `/courses/${id}?tab=exams`,
-              publishPracticeSuccessTo: `/courses/${id}?tab=assignments`,
-            },
-          });
-        }}
-      />
-
       <AssociateMaterialKnowledgeDialog
         open={Boolean(materialToAssociate)}
         saving={associatingMaterial}
@@ -7692,7 +7926,13 @@ export function CourseDetailPage() {
           </div>
         </div>
 
-        <main className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4 sm:p-6">
+        <main
+          className={cn(
+            "min-w-0 flex-1 overflow-x-hidden overflow-y-auto",
+            // 智能创建试卷是一个内部滚动的定高视图，父级不再留顶部内边距。
+            papersView === "smart" ? "px-4 pb-4 sm:px-6" : "p-4 sm:p-6",
+          )}
+        >
           {course.is_deleted ? (
             <div className="mb-5 rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
               这门课程已删除。当前仅支持查看课程资料、考试、练习、题目和课程目录，不能新增、编辑或删除内容。
@@ -7748,6 +7988,9 @@ export function CourseDetailPage() {
               <Tabs
                 value={activeTab}
                 onValueChange={(value) => changeTab(value as CourseTab)}
+                className={cn(
+                  papersView === "smart" && "flex h-full min-h-0 flex-col",
+                )}
               >
               {/* 导航已移到左侧栏，这里只保留各模块内容面板。 */}
               <TabsContent value="materials" className="mt-0">
@@ -7910,7 +8153,7 @@ export function CourseDetailPage() {
                       onQueryChange={setQuestionQuery}
                       refreshing={questionsRefreshing}
                       selectedQuestionTypes={questionSelectedTypes}
-                      onSelectedQuestionTypesChange={setQuestionSelectedTypes}
+                      onSelectedQuestionTypesChange={applyQuestionTypeFilter}
                       onCreatePractice={() =>
                         goCreateExamOrAssignment("assignment", {
                           mainKnowledgePointId: tree?.id,
@@ -7919,9 +8162,9 @@ export function CourseDetailPage() {
                         })
                       }
                       page={questionPage}
-                      onPageChange={setQuestionPage}
+                      onPageChange={applyQuestionPage}
                       pageSize={questionPageSize}
-                      onPageSizeChange={setQuestionPageSize}
+                      onPageSizeChange={applyQuestionPageSize}
                       courseId={id ?? ""}
                       courseName={course.name}
                       courseSemesterId={semesterFilter}
@@ -7939,6 +8182,15 @@ export function CourseDetailPage() {
                       onPublishedExamOrAssignment={handlePublishedFromSelection}
                       onClearAllQuestions={() => setClearQuestionsOpen(true)}
                       onQuestionDeleted={() => {
+                        void loadQuestions();
+                        // 左侧「题目」徽标和目录树上的题量来自课程概要 / 知识树，
+                        // 删除后要一起刷新，否则数字会停在旧值。
+                        void Promise.all([
+                          refreshCourseSummary(),
+                          refreshKnowledgeTree(),
+                        ]);
+                      }}
+                      onQuestionUpdated={() => {
                         void loadQuestions();
                       }}
                       onKnowledgeCompleted={async () => {
@@ -7989,13 +8241,74 @@ export function CourseDetailPage() {
                   />
                 )}
               </TabsContent>
-              <TabsContent value="papers" className="mt-0">
+              <TabsContent
+                value="papers"
+                className={cn(
+                  "mt-0",
+                  papersView === "smart" && "flex min-h-0 flex-1 flex-col",
+                )}
+              >
+                {papersView === "smart" ? (
+                  <div className="flex min-h-0 flex-1 flex-col">
+                  <SmartPracticeDialog
+                    variant="page"
+                    breadcrumb={
+                      <nav
+                        aria-label="面包屑"
+                        className="flex items-center gap-1.5 text-sm text-muted-foreground"
+                      >
+                        <Link
+                          to="/courses"
+                          className="transition-colors hover:text-foreground"
+                        >
+                          课程
+                        </Link>
+                        <ChevronRight size={14} className="shrink-0" aria-hidden="true" />
+                        <Link
+                          to={courseUrlWithTab("papers", { view: null })}
+                          className="max-w-[240px] truncate transition-colors hover:text-foreground"
+                          title={course.name}
+                        >
+                          {course.name}
+                        </Link>
+                        <ChevronRight size={14} className="shrink-0" aria-hidden="true" />
+                        <span className="text-foreground">智能创建试卷</span>
+                      </nav>
+                    }
+                    open
+                    onOpenChange={() => undefined}
+                    onExit={() =>
+                      navigate(courseUrlWithTab("papers", { view: null }))
+                    }
+                    target="paper"
+                    courseId={id ?? ""}
+                    courseName={course.name}
+                    courseKpId={tree?.id ?? id ?? ""}
+                    courseSemesterId={semesterFilter}
+                    selectedQuestionIds={[]}
+                    knowledgeOptions={paperKnowledgePointOptions}
+                    knowledgeTree={tree}
+                    onPaperCreated={(paperId) => {
+                      navigate(`/papers/${paperId}`, {
+                        state: {
+                          backTo: courseUrlWithTab("papers"),
+                          backLabel: "返回课程详情",
+                          courseOrigin: true,
+                          courseKpId: tree?.id ?? id,
+                          publishExamSuccessTo: courseUrlWithTab("exams"),
+                          publishPracticeSuccessTo: courseUrlWithTab("assignments"),
+                        },
+                      });
+                    }}
+                  />
+                  </div>
+                ) : (
                 <PaperListBody
                   rootKnowledgePointId={tree?.id ?? id}
                   courseQuestionBankName={courseQuestionBankName(course.name)}
                   knowledgePointOptions={paperKnowledgePointOptions}
                   detailNavState={{
-                    backTo: `/courses/${id}?tab=papers`,
+                    backTo: courseUrlWithTab("papers"),
                     backLabel: "返回课程详情",
                     courseOrigin: true,
                     courseKpId: tree?.id ?? id,
@@ -8006,8 +8319,8 @@ export function CourseDetailPage() {
                       ? { defaultClassIds: selectedSemester.class_ids }
                       : {}),
                     courseSemesters: semesterStudentOptions,
-                    publishExamSuccessTo: `/courses/${id}?tab=exams`,
-                    publishPracticeSuccessTo: `/courses/${id}?tab=assignments`,
+                    publishExamSuccessTo: courseUrlWithTab("exams"),
+                    publishPracticeSuccessTo: courseUrlWithTab("assignments"),
                   }}
                   rightSlot={
                     course.can_write ? (
@@ -8015,7 +8328,9 @@ export function CourseDetailPage() {
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => setSmartPaperOpen(true)}
+                          onClick={() =>
+                            navigate(courseUrlWithTab("papers", { view: "smart" }))
+                          }
                         >
                           <Sparkles size={14} className="mr-1.5" />
                           智能创建试卷
@@ -8025,7 +8340,7 @@ export function CourseDetailPage() {
                           onClick={() =>
                             navigate(`/courses/${id}/papers/create`, {
                               state: {
-                                backTo: `/courses/${id}?tab=papers`,
+                                backTo: courseUrlWithTab("papers"),
                                 backLabel: "返回课程详情",
                                 courseOrigin: true,
                                 rootKnowledgePointId: tree?.id ?? id,
@@ -8046,9 +8361,9 @@ export function CourseDetailPage() {
                           onClick={() =>
                             navigate("/papers/import", {
                               state: {
-                                backTo: `/courses/${id}?tab=papers`,
+                                backTo: courseUrlWithTab("papers"),
                                 backLabel: "返回课程详情",
-                                successTo: `/courses/${id}?tab=papers`,
+                                successTo: courseUrlWithTab("papers"),
                                 courseOrigin: true,
                                 rootKnowledgePointId: tree?.id ?? id,
                                 rootKnowledgePointName: course.name,
@@ -8066,6 +8381,7 @@ export function CourseDetailPage() {
                     ) : null
                   }
                 />
+                )}
               </TabsContent>
               <TabsContent value="statistics" className="mt-0">
                 <div className="mb-5 flex items-center gap-1 border-b border-border">
@@ -8311,17 +8627,13 @@ export function CourseDetailPage() {
           onViewQuestion={(questionId) =>
             navigate(`/questions/edit/${questionId}`, {
               state: {
-                backTo: `/courses/${id}?tab=knowledge${
-                  selectedKnowledgeNodeId
-                    ? `&node_id=${selectedKnowledgeNodeId}`
-                    : ""
-                }`,
+                backTo: courseUrlWithTab("knowledge", {
+                  node_id: selectedKnowledgeNodeId,
+                }),
                 backLabel: "返回课程目录",
-                successTo: `/courses/${id}?tab=knowledge${
-                  selectedKnowledgeNodeId
-                    ? `&node_id=${selectedKnowledgeNodeId}`
-                    : ""
-                }`,
+                successTo: courseUrlWithTab("knowledge", {
+                  node_id: selectedKnowledgeNodeId,
+                }),
               },
             })
           }

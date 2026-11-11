@@ -238,7 +238,7 @@ async def test_fill_in_answer_is_evaluated_on_submit_not_on_save(
     async def fake_ai(*, expected_answers, student_answers, **_kwargs):
         nonlocal calls
         calls += 1
-        assert expected_answers == ["A", "B"]
+        assert expected_answers == [["A"], ["B"]]
         assert student_answers == ["甲", "乙"]
         return [
             {"score": 1.0, "is_correct": True, "reason": "甲可等价于 A。"},

@@ -683,7 +683,7 @@ export function QuestionCreate() {
                         </span>
                         <Input
                           className="flex-1"
-                          placeholder={`第 ${i + 1} 空的答案`}
+                          placeholder={`第 ${i + 1} 空的答案，多个说法用 | 分隔`}
                           value={blank}
                           onChange={(e) =>
                             setFillBlanks((prev) => prev.map((v, j) => (j === i ? e.target.value : v)))
@@ -712,6 +712,9 @@ export function QuestionCreate() {
                       <Plus size={14} className="mr-1" />
                       添加空
                     </Button>
+                    <p className="text-xs text-muted-foreground">
+                      同一个空有多个可接受答案时用 | 分隔，例如：MAC地址|硬件地址|物理地址
+                    </p>
                   </div>
                 ) : type === "code" ? (
                   <Textarea

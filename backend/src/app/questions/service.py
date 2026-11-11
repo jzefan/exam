@@ -28,6 +28,7 @@ from app.config import settings
 from app.exams.models import Exam, ExamQuestion, ExamStudent, StudentExamAnswer, StudentExamSubmission, StudentExamSubmissionAnswer, StudentQuestionProgress
 from app.papers.models import Paper, PaperQuestion
 from app.questions.models import KnowledgePoint, Question, QuestionBank, QuestionImportJob, QuestionImportJobStatus, QuestionSource, QuestionType, Tag, question_tags
+from app.questions.content_normalizer import normalize_question_content
 from app.questions.schemas import (
     EnhanceDraftInput,
     EnhancedDraft,
@@ -4113,10 +4114,24 @@ async def _upgrade_duplicate_question_media(
     return upgraded
 
 
+def _normalize_imported_questions(questions: list[QuestionCreate]) -> list[QuestionCreate]:
+    """Collapse soft line wraps left by document import.
+
+    Bulk creation is the import path; single-question create/update is the rich
+    text editor, where a `<br>` is something a teacher typed on purpose, so it is
+    left alone there.
+    """
+    for data in questions:
+        question_type = data.type.value if hasattr(data.type, "value") else str(data.type)
+        data.content = normalize_question_content(data.content, question_type=question_type)
+    return questions
+
+
 async def bulk_create_questions(
     db: AsyncSession, questions: list[QuestionCreate], user_id: uuid.UUID
 ) -> BulkCreateQuestionsResult:
     """Create questions while skipping items already present in the user's database."""
+    questions = _normalize_imported_questions(questions)
     existing_map = await _existing_question_signatures(db, user_id)
     created_question_ids: list[uuid.UUID] = []
     created_questions: list[QuestionCreate] = []
@@ -4173,6 +4188,7 @@ async def bulk_create_questions_fast(
     批次写库失败时回退成逐条重试，坏行计入 failed，其余照常入库。
     """
     BATCH_SIZE = 500
+    questions = _normalize_imported_questions(questions)
     # signature -> 已存在（或本批已创建）题目 id；本批尚未 flush 的记 None
     signature_ids: dict[str, uuid.UUID | None] = dict(
         await _existing_question_signatures(db, user_id)

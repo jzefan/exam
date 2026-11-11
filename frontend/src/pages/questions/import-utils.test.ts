@@ -164,6 +164,24 @@ describe("选择题单选/多选拆分", () => {
     expect(buildAnswerPayload("choice", "BD")).toEqual({ correct: ["B", "D"] });
     expect(buildAnswerPayload("choice", "A、C")).toEqual({ correct: ["A", "C"] });
   });
+
+  it("单空填空题不按逗号拆答案，多说法用 | 保留", () => {
+    expect(
+      buildAnswerPayload("fill_in", "1,024", "缓冲区默认大小是____ 字节。"),
+    ).toEqual({ correct: ["1,024"] });
+    expect(
+      buildAnswerPayload("fill_in", "MAC地址|硬件地址", "网卡地址也叫____。"),
+    ).toEqual({ correct: ["MAC地址|硬件地址"] });
+  });
+
+  it("多空填空题仍按逗号/分号分空", () => {
+    expect(buildAnswerPayload("fill_in", "A,B", "____ 和 ____")).toEqual({
+      correct: ["A", "B"],
+    });
+    expect(buildAnswerPayload("fill_in", "A；B", "____ 和 ____")).toEqual({
+      correct: ["A", "B"],
+    });
+  });
 });
 
 describe("JSON 导入的 difficulty / analysis / knowledge_point_names", () => {

@@ -1,9 +1,9 @@
 import { useList, useCreate, useDelete, useGetIdentity, useInvalidate, useNavigation, useUpdate } from "@refinedev/core";
 import type { CrudFilter } from "@refinedev/core";
 import type { IQuestion, IQuestionBank, ITag } from "../../types";
-import { Search, BookOpen, Pencil, Trash2, Plus, ChevronDown, ChevronUp, Library, Check, PackageOpen, GraduationCap, SlidersHorizontal, Link2, Save, ChevronRight, Lock, Upload, Sparkles, Loader2, Eraser, AlertTriangle, FolderInput, FilePlus2 } from "lucide-react";
+import { Search, BookOpen, Pencil, Trash2, Plus, ChevronDown, ChevronUp, Library, Check, PackageOpen, GraduationCap, SlidersHorizontal, Link2, Save, ChevronRight, Lock, Upload, Sparkles, Loader2, Eraser, AlertTriangle, FolderInput, FilePlus2, TextCursorInput } from "lucide-react";
 import { useState, useCallback, useEffect, type ReactNode } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { getUserRole } from "@/types/rbac";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -41,6 +41,13 @@ import {
   PaginationPrevious,
   PaginationEllipsis,
 } from "@/components/ui/pagination";
+import {
+  answerFromInlineText,
+  canInlineEditAnswer,
+  canInlineEditStem,
+  stemHtmlFromText,
+} from "@/components/questions/question-inline-edit";
+import { TooltipButton } from "@/components/ui/tooltip-button";
 import {
   QuestionPreviewCard,
 } from "@/components/questions/question-preview-card";
@@ -217,6 +224,7 @@ export function QuestionList() {
   const { toast } = useToast();
   const { data: identity } = useGetIdentity<{ id?: string; primary_org?: { role_name?: string } | null }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeImportJobId, setActiveImportJobId] = useState<string | null>(() => {
     const importJobIdFromQuery = new URLSearchParams(window.location.search).get("import_job_id");
@@ -228,6 +236,9 @@ export function QuestionList() {
   const [filters, setFilters] = useState<CrudFilter[]>([]);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  /** 正在就地编辑的题目 id（点「内联修改」进入，保存/取消后清空）。 */
+  const [inlineEditId, setInlineEditId] = useState<string | null>(null);
+  const [inlineSaving, setInlineSaving] = useState(false);
   const [tagSearch, setTagSearch] = useState("");
 
   // Active sidebar filter values (multi-select)
@@ -235,7 +246,46 @@ export function QuestionList() {
   const [activeKnowledgePointId, setActiveKnowledgePointId] = useState<string | null>(
     searchParams.get("knowledge_point_id"),
   );
-  const [activeTypes, setActiveTypes] = useState<Set<FilterTypeKey>>(new Set(ALL_FILTER_TYPE_KEYS));
+  // 题型筛选放在 URL 里：从题目编辑页返回时能恢复到原来的题型，刷新也不丢。
+  const [activeTypes, setActiveTypes] = useState<Set<FilterTypeKey>>(() => {
+    const raw = searchParams.get("types");
+    if (raw === null) return new Set(ALL_FILTER_TYPE_KEYS);
+    if (raw === "") return new Set();
+    return new Set(
+      raw
+        .split(",")
+        .map((item) => item.trim())
+        .filter((item): item is FilterTypeKey => ALL_FILTER_TYPE_KEYS.has(item as FilterTypeKey)),
+    );
+  });
+  const urlTypes = searchParams.get("types");
+  useEffect(() => {
+    setActiveTypes((current) => {
+      if (urlTypes === null) return new Set(ALL_FILTER_TYPE_KEYS);
+      if (urlTypes === "") return new Set();
+      const next = new Set(
+        urlTypes
+          .split(",")
+          .map((item) => item.trim())
+          .filter((item): item is FilterTypeKey => ALL_FILTER_TYPE_KEYS.has(item as FilterTypeKey)),
+      );
+      if (next.size === current.size && [...next].every((key) => current.has(key))) {
+        return current;
+      }
+      return next;
+    });
+  }, [urlTypes]);
+  useEffect(() => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      if (activeTypes.size === ALL_FILTER_TYPE_KEYS.size) {
+        next.delete("types");
+      } else {
+        next.set("types", [...activeTypes].join(","));
+      }
+      return next;
+    }, { replace: true });
+  }, [activeTypes, setSearchParams]);
   const [activeDifficulties, setActiveDifficulties] = useState<Set<number>>(new Set(ALL_DIFFICULTY_SET));
   const [activeTagIds, setActiveTagIds] = useState<Set<string>>(new Set());
 
@@ -430,7 +480,7 @@ export function QuestionList() {
   const { mutate: deleteBank } = useDelete();
   const { mutate: updateQuestion, mutation: updateQuestionMutation } = useUpdate();
   const invalidate = useInvalidate();
-  const { create, edit } = useNavigation();
+  const { create } = useNavigation();
 
   const refreshBanks = () => invalidate({ resource: "question-banks", invalidates: ["list"] });
   const refreshQuestions = () => invalidate({ resource: "questions", invalidates: ["list"] });
@@ -438,6 +488,59 @@ export function QuestionList() {
     refreshQuestions();
     refreshBanks();
   };
+  /** 保存「内联修改」里改动的题干 / 参考答案（只提交允许编辑的那部分）。 */
+  const saveInlineEdit = async (
+    question: IQuestion,
+    changes: { stem: string; answer: string },
+  ) => {
+    const values: Record<string, unknown> = {};
+    if (canInlineEditStem(question)) {
+      const stem = changes.stem.trim();
+      if (!stem) {
+        toast({ title: "题干不能为空", variant: "destructive" });
+        return;
+      }
+      values.content = {
+        ...(question.content ?? {}),
+        text: stem,
+        html: stemHtmlFromText(stem),
+      };
+    }
+    if (canInlineEditAnswer(question)) {
+      values.answer = answerFromInlineText(question, changes.answer);
+    }
+    if (Object.keys(values).length === 0) {
+      return;
+    }
+
+    setInlineSaving(true);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        updateQuestion(
+          { resource: "questions", id: question.id, values },
+          {
+            onSuccess: () => {
+              refreshQuestions();
+              toast({ title: "已保存" });
+              resolve();
+            },
+            onError: (error) => {
+              toast({
+                title: "保存失败",
+                description: error?.message ?? "请稍后重试",
+                variant: "destructive",
+              });
+              reject(error);
+            },
+          },
+        );
+      });
+      setInlineEditId(null);
+    } finally {
+      setInlineSaving(false);
+    }
+  };
+
   const rawQuestions = data?.data ?? [];
   const questions = rawQuestions;
   const visibleQuestionIds = new Set(questions.map((question) => question.id));
@@ -1531,11 +1634,41 @@ export function QuestionList() {
                           <FolderInput size={13} className="sm:mr-1" />
                           <span className="hidden sm:inline">移动</span>
                         </Button>
+                        <TooltipButton
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-1.5 text-xs text-muted-foreground hover:text-blue-600 sm:px-2 dark:hover:text-blue-400"
+                          tooltip={
+                            canInlineEditStem(question) || canInlineEditAnswer(question)
+                              ? "就地修改题干和参考答案，不用打开弹窗"
+                              : "该题含图片/表格/公式，请用「编辑」弹窗修改"
+                          }
+                          disabled={
+                            !canInlineEditStem(question) && !canInlineEditAnswer(question)
+                          }
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setInlineEditId((current) =>
+                              current === question.id ? null : question.id,
+                            );
+                          }}
+                        >
+                          <TextCursorInput size={13} className="sm:mr-1" />
+                          <span className="hidden sm:inline">
+                            {inlineEditId === question.id ? "退出编辑" : "内联修改"}
+                          </span>
+                        </TooltipButton>
                         <Button
                           variant="ghost"
                           size="sm"
                           className="h-7 px-1.5 text-xs text-muted-foreground hover:text-blue-600 sm:px-2 dark:hover:text-blue-400"
-                          onClick={() => edit("questions", question.id)}
+                          onClick={() =>
+                            navigate(`/questions/edit/${question.id}`, {
+                              state: {
+                                backTo: `${location.pathname}${location.search}`,
+                              },
+                            })
+                          }
                         >
                           <Pencil size={13} className="sm:mr-1" />
                           <span className="hidden sm:inline">编辑</span>
@@ -1552,6 +1685,15 @@ export function QuestionList() {
                       </>
                     }
                     knowledgeRecognitionStatus={getQuestionKnowledgeRecognitionStatus(question.id, activeImportJob) ?? undefined}
+                    expanded={inlineEditId === question.id ? true : undefined}
+                    inlineEdit={{
+                      active: inlineEditId === question.id,
+                      canEditStem: canInlineEditStem(question),
+                      canEditAnswer: canInlineEditAnswer(question),
+                      saving: inlineSaving && inlineEditId === question.id,
+                      onSave: (changes) => saveInlineEdit(question, changes),
+                      onCancel: () => setInlineEditId(null),
+                    }}
                   />
                 );
               })}

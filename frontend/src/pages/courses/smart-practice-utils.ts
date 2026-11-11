@@ -45,6 +45,16 @@ export type SmartPracticeTypeWeight = {
   weight: number;
 };
 
+/** 生成过程中的「每个章节 × 题型」的结果，用于预览页对照设置数量。 */
+export type SmartPracticeSlotTrace = {
+  chapterId: string | null;
+  type: string;
+  requested: number;
+  picked: number;
+  /** 该槽位实际选中的题目 id，用于按章节/题型筛选预览列表。 */
+  questionIds?: string[];
+};
+
 export type SmartPracticeIntent = {
   count: number;
   difficulty: number;
@@ -709,6 +719,7 @@ export function selectSmartPracticeQuestions(
   source: IQuestion[],
   intent: SmartPracticeIntent,
   variation = 0,
+  trace?: SmartPracticeSlotTrace[],
 ): IQuestion[] {
   // 按章节出题：章节可以给题量（count）或比例（weight）。
   const chapterTargets = (intent.chapters ?? [])
@@ -719,6 +730,7 @@ export function selectSmartPracticeQuestions(
         Object.values(chapter.typeCounts ?? {}).some((count) => (count ?? 0) > 0),
     )
     .map((chapter) => ({
+      knowledgePointId: chapter.knowledgePointId,
       scopeIds: new Set(
         chapter.scopeIds !== undefined
           ? chapter.scopeIds
@@ -791,9 +803,20 @@ export function selectSmartPracticeQuestions(
                   scope.has(point.id),
                 ),
               );
-        picked.push(
-          ...pickQuestions(pool, chapterCount.count, pickedIds, group.type),
+        const slotPicked = pickQuestions(
+          pool,
+          chapterCount.count,
+          pickedIds,
+          group.type,
         );
+        picked.push(...slotPicked);
+        trace?.push({
+          chapterId: chapterCount.knowledgePointId,
+          type: group.type,
+          requested: chapterCount.count,
+          picked: slotPicked.length,
+          questionIds: slotPicked.map((item) => item.id),
+        });
       }
     }
     return intent.count > 0 ? picked.slice(0, intent.count) : picked;
@@ -836,9 +859,20 @@ export function selectSmartPracticeQuestions(
         chapterTargets.forEach((chapter, index) => {
           const need = perChapter[index] ?? 0;
           if (need === 0) return;
-          picked.push(
-            ...pickQuestions(poolFor(chapter), need, pickedIds, type),
+          const slotPicked = pickQuestions(
+            poolFor(chapter),
+            need,
+            pickedIds,
+            type,
           );
+          picked.push(...slotPicked);
+          trace?.push({
+            chapterId: chapter.knowledgePointId,
+            type,
+            requested: need,
+            picked: slotPicked.length,
+            questionIds: slotPicked.map((item) => item.id),
+          });
         });
       }
       return picked.slice(0, intent.count);
@@ -869,7 +903,15 @@ export function selectSmartPracticeQuestions(
         >) {
           const need = Math.max(0, Math.floor(requested ?? 0));
           if (need === 0) continue;
-          picked.push(...pickQuestions(pool, need, pickedIds, type));
+          const slotPicked = pickQuestions(pool, need, pickedIds, type);
+          picked.push(...slotPicked);
+          trace?.push({
+            chapterId: chapter.knowledgePointId,
+            type,
+            requested: need,
+            picked: slotPicked.length,
+            questionIds: slotPicked.map((item) => item.id),
+          });
         }
         return;
       }
@@ -881,9 +923,20 @@ export function selectSmartPracticeQuestions(
         typeWeights.forEach((weight, typeIndex) => {
           const need = perType[typeIndex] ?? 0;
           if (need === 0) return;
-          picked.push(
-            ...pickQuestions(pool, need, pickedIds, weight.type),
+          const slotPicked = pickQuestions(
+            pool,
+            need,
+            pickedIds,
+            weight.type,
           );
+          picked.push(...slotPicked);
+          trace?.push({
+            chapterId: chapter.knowledgePointId,
+            type: weight.type,
+            requested: need,
+            picked: slotPicked.length,
+            questionIds: slotPicked.map((item) => item.id),
+          });
         });
         return;
       }

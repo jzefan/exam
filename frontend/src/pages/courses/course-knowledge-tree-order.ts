@@ -164,3 +164,26 @@ export function resolveKnowledgeDropZone(offsetRatio: number): KnowledgeDropZone
   if (offsetRatio > 0.75) return "after";
   return "inside";
 }
+
+/** 把课程知识树拍平成「根 → 子」顺序的行，path 用「 / 」连接各级名称。 */
+export function flattenCourseKnowledgeNodes(
+  node: CourseKnowledgeNode | null,
+  depth = 0,
+): Array<{ id: string; name: string; depth: number; path: string }> {
+  if (!node) {
+    return [];
+  }
+  const current = {
+    id: node.id,
+    name: node.name,
+    depth,
+    path: node.name,
+  };
+  const children = node.children.flatMap((child) =>
+    flattenCourseKnowledgeNodes(child, depth + 1).map((item) => ({
+      ...item,
+      path: `${node.name} / ${item.path}`,
+    })),
+  );
+  return [current, ...children];
+}

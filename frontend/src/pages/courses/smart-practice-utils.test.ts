@@ -11,6 +11,7 @@ import {
   parseSmartPracticeChatPrompt,
   parseSmartPracticePrompt,
   selectSmartPracticeQuestions,
+  type SmartPracticeSlotTrace,
 } from "./smart-practice-utils";
 
 function question(
@@ -488,5 +489,86 @@ describe("smart practice selection", () => {
     expect(prompt).toContain("OSI 模型");
     expect(prompt).toContain("最新要求：再难一点");
     expect(prompt).toContain("完整题目列表");
+  });
+});
+
+describe("smart practice slot trace", () => {
+  it("按章节×题型记录设置数量与实际选到的数量", () => {
+    const source = [
+      question("c1", "choice", 2, "kp-1"),
+      question("c2", "choice", 2, "kp-1"),
+      question("f1", "fill_in", 2, "kp-1"),
+      question("t1", "true_false", 2, "kp-2"),
+    ];
+    const trace: SmartPracticeSlotTrace[] = [];
+    const picked = selectSmartPracticeQuestions(
+      source,
+      {
+        count: 5,
+        difficulty: ALL_DIFFICULTIES,
+        knowledgePointId: null,
+        searchTerms: [],
+        chapters: [
+          {
+            knowledgePointId: "kp-1",
+            scopeIds: ["kp-1"],
+            typeCounts: { choice: 2, fill_in: 2 },
+          },
+          {
+            knowledgePointId: "kp-2",
+            scopeIds: ["kp-2"],
+            typeCounts: { true_false: 1 },
+          },
+        ],
+      },
+      0,
+      trace,
+    );
+
+    expect(picked).toHaveLength(4);
+    expect(trace.map(({ questionIds: _ids, ...rest }) => rest)).toEqual([
+      { chapterId: "kp-1", type: "choice", requested: 2, picked: 2 },
+      // 该章节只有 1 道填空题，设置 2 道实际只取到 1 道
+      { chapterId: "kp-1", type: "fill_in", requested: 2, picked: 1 },
+      { chapterId: "kp-2", type: "true_false", requested: 1, picked: 1 },
+    ]);
+    expect(trace[0].questionIds).toEqual(["c1", "c2"]);
+    expect(trace[1].questionIds).toEqual(["f1"]);
+    expect(trace[2].questionIds).toEqual(["t1"]);
+  });
+
+  it("按题型配比时也能记录到章节的拆分", () => {
+    const source = [
+      question("c1", "choice", 2, "kp-1"),
+      question("c2", "choice", 2, "kp-1"),
+      question("c3", "choice", 2, "kp-2"),
+    ];
+    const trace: SmartPracticeSlotTrace[] = [];
+    selectSmartPracticeQuestions(
+      source,
+      {
+        count: 3,
+        difficulty: ALL_DIFFICULTIES,
+        knowledgePointId: null,
+        searchTerms: [],
+        typeGroups: [
+          {
+            type: "choice",
+            chapterCounts: [
+              { knowledgePointId: "kp-1", scopeIds: ["kp-1"], count: 2 },
+              { knowledgePointId: "kp-2", scopeIds: ["kp-2"], count: 2 },
+            ],
+          },
+        ],
+      },
+      0,
+      trace,
+    );
+
+    expect(trace.map(({ questionIds: _ids, ...rest }) => rest)).toEqual([
+      { chapterId: "kp-1", type: "choice", requested: 2, picked: 2 },
+      // kp-2 只有 1 道单选题
+      { chapterId: "kp-2", type: "choice", requested: 2, picked: 1 },
+    ]);
   });
 });

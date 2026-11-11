@@ -126,8 +126,11 @@ function draftToPreviewQuestion(draft: QuestionImportDraft): IQuestion {
     },
     options: draft.type === "choice" ? draft.options : null,
     answer: draft.answer_html
-      ? { ...buildAnswerPayload(draft.type, draft.answer_text), html: draft.answer_html }
-      : buildAnswerPayload(draft.type, draft.answer_text),
+      ? {
+          ...buildAnswerPayload(draft.type, draft.answer_text, draft.content_text),
+          html: draft.answer_html,
+        }
+      : buildAnswerPayload(draft.type, draft.answer_text, draft.content_text),
     analysis: draft.analysis,
     difficulty: Math.min(5, Math.max(1, Math.round(draft.difficulty || 3))),
     score: 10,

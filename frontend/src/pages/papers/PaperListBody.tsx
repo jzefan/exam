@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useLocation, useSearchParams } from "react-router-dom";
 import { useList } from "@refinedev/core";
 import { useNavigate } from "react-router-dom";
 import { Calculator, Copy, Download, Eye, FilePlus2, ListPlus, Loader2, Network, Pencil, Plus, RefreshCcw, Search, Send, ShoppingBasket, Sparkles, Trash2, X } from "lucide-react";
@@ -24,6 +25,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Tooltip,
   TooltipContent,
@@ -121,6 +129,7 @@ const MANUAL_QUESTION_TYPES: Array<{ value: ManualQuestionType; label: string }>
 ];
 
 const BANK_PAGE_SIZE = 20;
+const BANK_PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
 const QUESTION_DISPLAY_TYPE_ORDER: QuestionDisplayType[] = [
   "single_choice",
@@ -147,6 +156,9 @@ function formatDateTime(iso: string) {
  * 「课程详情-试卷」共用。传入 rootKnowledgePointId 时只展示该主知识点下的试卷
  * （即某门课程的试卷）。
  */
+const PAPER_KEYWORD_PARAM = "pk";
+const PAPER_SOURCE_PARAM = "psrc";
+
 export function PaperListBody({
   rootKnowledgePointId,
   courseQuestionBankName,
@@ -165,9 +177,45 @@ export function PaperListBody({
   rightSlot?: ReactNode;
 }) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { toast } = useToast();
-  const [keyword, setKeyword] = useState("");
-  const [sourceFilter, setSourceFilter] = useState<"all" | PaperSourceType>("all");
+  // Filters live in the URL so opening a paper (and coming back) restores the
+  // same list instead of the unfiltered default.
+  const [keyword, setKeyword] = useState(
+    () => searchParams.get(PAPER_KEYWORD_PARAM) ?? "",
+  );
+  const [sourceFilter, setSourceFilter] = useState<"all" | PaperSourceType>(
+    () => (searchParams.get(PAPER_SOURCE_PARAM) as PaperSourceType | null) ?? "all",
+  );
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const nextKeyword = keyword.trim();
+      const currentKeyword = searchParams.get(PAPER_KEYWORD_PARAM) ?? "";
+      const currentSource = searchParams.get(PAPER_SOURCE_PARAM) ?? "all";
+      if (nextKeyword === currentKeyword && sourceFilter === currentSource) {
+        return;
+      }
+      setSearchParams(
+        (current) => {
+          const params = new URLSearchParams(current);
+          if (nextKeyword) {
+            params.set(PAPER_KEYWORD_PARAM, nextKeyword);
+          } else {
+            params.delete(PAPER_KEYWORD_PARAM);
+          }
+          if (sourceFilter === "all") {
+            params.delete(PAPER_SOURCE_PARAM);
+          } else {
+            params.set(PAPER_SOURCE_PARAM, sourceFilter);
+          }
+          return params;
+        },
+        { replace: true },
+      );
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [keyword, sourceFilter, searchParams, setSearchParams]);
   const [busyPaperId, setBusyPaperId] = useState<string | null>(null);
   const [aiDialogPaper, setAiDialogPaper] = useState<IPaper | null>(null);
   const [expandDialogPaper, setExpandDialogPaper] = useState<IPaper | null>(
@@ -380,6 +428,10 @@ export function PaperListBody({
                           navigate(`/papers/${paper.id}`, {
                             state: {
                               ...detailNavState,
+                              backTo:
+                                detailNavState?.backTo ??
+                                `${location.pathname}${location.search}`,
+                              backLabel: detailNavState?.backLabel ?? "返回试卷列表",
                               courseQuestionBankName,
                               knowledgePointOptions,
                             },
@@ -406,7 +458,9 @@ export function PaperListBody({
                             navigate(`/papers/${paper.id}/knowledge-coverage`, {
                               state: {
                                 ...detailNavState,
-                                backTo: detailNavState?.backTo ?? "/papers",
+                                backTo:
+                                  detailNavState?.backTo ??
+                                  `${location.pathname}${location.search}`,
                                 backLabel: detailNavState?.backLabel ?? "返回试卷列表",
                                 courseQuestionBankName,
                                 knowledgePointOptions,
@@ -910,6 +964,8 @@ function PaperEditDialog({
   const [bankType, setBankType] = useState<QuestionDisplayType | "all">("all");
   const [bankSearch, setBankSearch] = useState("");
   const [bankPage, setBankPage] = useState(1);
+  const [bankPageSize, setBankPageSize] = useState(BANK_PAGE_SIZE);
+  const [bankJump, setBankJump] = useState("");
   const [basketOpen, setBasketOpen] = useState(false);
   const [scoreOpen, setScoreOpen] = useState(false);
   const [scoreEdited, setScoreEdited] = useState(false);
@@ -1043,8 +1099,8 @@ function PaperEditDialog({
     let cancelled = false;
     setBankLoading(true);
     const params = new URLSearchParams({
-      _start: String((safeBankPage - 1) * BANK_PAGE_SIZE),
-      _end: String(safeBankPage * BANK_PAGE_SIZE),
+      _start: String((safeBankPage - 1) * bankPageSize),
+      _end: String(safeBankPage * bankPageSize),
       question_bank_id: courseBank.id,
     });
     const keyword = bankSearch.trim();
@@ -1079,13 +1135,13 @@ function PaperEditDialog({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bankPage, bankSearch, bankType, courseBank?.id, selectorRefreshKey]);
+  }, [bankPage, bankPageSize, bankSearch, bankType, courseBank?.id, selectorRefreshKey]);
 
   useEffect(() => {
     setBankPage(1);
   }, [bankType, bankSearch]);
 
-  const bankPageCount = Math.max(1, Math.ceil(bankTotal / BANK_PAGE_SIZE));
+  const bankPageCount = Math.max(1, Math.ceil(bankTotal / bankPageSize));
   const safeBankPage = Math.min(bankPage, bankPageCount);
 
   // 试卷篮：当前试卷里的题目（含刚加入、还没保存的）。
@@ -1108,6 +1164,19 @@ function PaperEditDialog({
       })),
     [questionById, selectedIds],
   );
+
+  /** 左侧题型各有多少道已在试卷里，便于边挑边看配比。 */
+  const selectedTypeCounts = useMemo(() => {
+    const counts = new Map<QuestionDisplayType, number>();
+    for (const id of selectedIds) {
+      const question = questionById.get(id);
+      if (!question) continue;
+      const displayType = getQuestionDisplayType(question);
+      if (!displayType) continue;
+      counts.set(displayType, (counts.get(displayType) ?? 0) + 1);
+    }
+    return counts;
+  }, [questionById, selectedIds]);
 
   // 设置分数：沿用试卷详情里的评分面板，面板数据跟随当前试卷题目。
   const scoreItemById = useMemo(
@@ -1779,7 +1848,7 @@ function PaperEditDialog({
               </Button>
             </div>
 
-            <div className="grid min-h-0 flex-1 gap-3 overflow-hidden md:grid-cols-[168px_minmax(0,1fr)]">
+            <div className="grid min-h-0 flex-1 gap-3 overflow-hidden md:grid-cols-[200px_minmax(0,1fr)]">
               <aside className="flex min-h-0 flex-col gap-0.5 overflow-y-auto rounded-xl border border-border/60 p-1.5">
                 <button
                   type="button"
@@ -1791,8 +1860,18 @@ function PaperEditDialog({
                       : "text-muted-foreground hover:bg-muted",
                   )}
                 >
-                  <span>全部题型</span>
-                  <span className="text-xs tabular-nums">{bankGrandTotal}</span>
+                  <span className="whitespace-nowrap">全部题型</span>
+                  <span className="flex shrink-0 items-center gap-1.5 text-xs tabular-nums">
+                    {selectedIds.length > 0 ? (
+                      <>
+                        <span className="font-medium text-primary">
+                          已选 {selectedIds.length}
+                        </span>
+                        <span className="text-muted-foreground/60">/</span>
+                      </>
+                    ) : null}
+                    <span>{bankGrandTotal}</span>
+                  </span>
                 </button>
                 {bankTypeCounts.map(([type, count]) => (
                   <button
@@ -1809,7 +1888,17 @@ function PaperEditDialog({
                     <span className="truncate">
                       {questionDisplayTypeFullLabel[type]}
                     </span>
-                    <span className="text-xs tabular-nums">{count}</span>
+                    <span className="flex shrink-0 items-center gap-1.5 text-xs tabular-nums">
+                      {(selectedTypeCounts.get(type) ?? 0) > 0 ? (
+                        <>
+                          <span className="font-medium text-primary">
+                            已选 {selectedTypeCounts.get(type)}
+                          </span>
+                          <span className="text-muted-foreground/60">/</span>
+                        </>
+                      ) : null}
+                      <span>{count}</span>
+                    </span>
                   </button>
                 ))}
               </aside>
@@ -1850,7 +1939,7 @@ function PaperEditDialog({
                               key={question.id}
                               question={question}
                               index={
-                                (safeBankPage - 1) * BANK_PAGE_SIZE + index + 1
+                                (safeBankPage - 1) * bankPageSize + index + 1
                               }
                               expandOnClick
                               hideAnswer
@@ -1879,34 +1968,104 @@ function PaperEditDialog({
                           );
                         })}
                       </div>
-                      {bankPageCount > 1 ? (
-                        <div className="flex items-center justify-center gap-2 py-3">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            disabled={safeBankPage <= 1}
-                            onClick={() => setBankPage(safeBankPage - 1)}
-                          >
-                            上一页
-                          </Button>
-                          <span className="text-xs text-muted-foreground">
-                            {safeBankPage} / {bankPageCount}
-                          </span>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            disabled={safeBankPage >= bankPageCount}
-                            onClick={() => setBankPage(safeBankPage + 1)}
-                          >
-                            下一页
-                          </Button>
-                        </div>
-                      ) : null}
+
                     </>
                   )}
                 </div>
+                {!bankLoading && courseBank && bankPageQuestions.length > 0 ? (
+                  <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2 border-t border-border/60 px-3 py-2 text-xs text-muted-foreground">
+                    <label className="flex items-center gap-1.5">
+                      <span>每页</span>
+                      <Select
+                        value={String(bankPageSize)}
+                        onValueChange={(value) => {
+                          setBankPageSize(Number(value));
+                          setBankPage(1);
+                          setBankJump("");
+                        }}
+                      >
+                        <SelectTrigger
+                          className="h-8 w-[72px] text-xs"
+                          aria-label="每页题目数量"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {BANK_PAGE_SIZE_OPTIONS.map((size) => (
+                            <SelectItem
+                              key={size}
+                              value={String(size)}
+                              className="text-xs"
+                            >
+                              {size}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <span>题</span>
+                    </label>
+                    <span className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 px-2 text-xs"
+                        disabled={safeBankPage <= 1}
+                        onClick={() => setBankPage(safeBankPage - 1)}
+                      >
+                        上一页
+                      </Button>
+                      <span className="tabular-nums">
+                        {safeBankPage} / {bankPageCount}
+                      </span>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 px-2 text-xs"
+                        disabled={safeBankPage >= bankPageCount}
+                        onClick={() => setBankPage(safeBankPage + 1)}
+                      >
+                        下一页
+                      </Button>
+                    </span>
+                    {bankPageCount > 1 ? (
+                      <form
+                        className="flex items-center gap-1.5"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          const next = Number(bankJump.trim());
+                          if (!Number.isFinite(next) || next <= 0) return;
+                          setBankPage(
+                            Math.min(bankPageCount, Math.max(1, Math.floor(next))),
+                          );
+                          setBankJump("");
+                        }}
+                      >
+                        <span>跳至</span>
+                        <Input
+                          className="h-8 w-12 text-center text-xs"
+                          inputMode="numeric"
+                          value={bankJump}
+                          onChange={(event) =>
+                            setBankJump(event.target.value.replace(/[^\d]/g, ""))
+                          }
+                          aria-label="跳转到指定页"
+                        />
+                        <span>页</span>
+                        <Button
+                          type="submit"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 px-2 text-xs"
+                          disabled={!bankJump.trim()}
+                        >
+                          跳转
+                        </Button>
+                      </form>
+                      ) : null}
+                    </div>
+                ) : null}
               </section>
             </div>
           </div>

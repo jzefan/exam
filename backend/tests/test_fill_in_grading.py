@@ -40,7 +40,7 @@ async def test_fill_in_grading_scores_by_blank_count_with_local_normalization() 
 async def test_fill_in_grading_uses_deepseek_equivalence_for_disputed_blanks(monkeypatch) -> None:
     async def fake_ai(*, question_text, expected_answers, student_answers, knowledge_points=None):
         assert "Pandas" in question_text
-        assert expected_answers == ["groupby", "agg", "transform"]
+        assert expected_answers == [["groupby"], ["agg"], ["transform"]]
         assert student_answers == ["group by", "apply", "transform"]
         return [
             {"score": 1.0, "is_correct": True, "reason": "group by 与 groupby 表达同一 Pandas 方法。"},
@@ -115,7 +115,7 @@ async def test_fill_in_grading_treats_same_multi_blank_answers_in_different_orde
 @pytest.mark.asyncio
 async def test_fill_in_grading_scores_partial_matches_without_requiring_blank_order(monkeypatch) -> None:
     async def fake_ai(*, expected_answers, student_answers, **_kwargs):
-        assert expected_answers == ["A", "B", "C"]
+        assert expected_answers == [["A"], ["B"], ["C"]]
         assert student_answers == ["C", "X", "A"]
         return [
             {"is_correct": False, "reason": "本地已命中的空不需要由 AI 覆盖。"},
@@ -180,7 +180,7 @@ async def test_fill_in_grading_reuses_cached_ai_result_when_answer_is_unchanged(
     async def fake_ai(*, expected_answers, student_answers, **_kwargs):
         nonlocal calls
         calls += 1
-        assert expected_answers == ["A", "B"]
+        assert expected_answers == [["A"], ["B"]]
         assert student_answers == ["甲", "乙"]
         return [
             {"score": 1.0, "is_correct": True, "reason": "甲可等价于 A。"},
@@ -360,7 +360,7 @@ async def test_fill_in_grading_text_answer_triggers_ai_equivalence(monkeypatch) 
     routed through the AI equivalence check rather than silently scoring 0."""
 
     async def fake_ai(*, question_text, expected_answers, student_answers, knowledge_points=None):
-        assert expected_answers == ["groupby", "agg", "transform"]
+        assert expected_answers == [["groupby"], ["agg"], ["transform"]]
         return [
             {"score": 1.0, "is_correct": True, "reason": "group by 与 groupby 等价。"},
             {"score": 1.0, "is_correct": True, "reason": "聚合等价。"},
@@ -380,3 +380,84 @@ async def test_fill_in_grading_text_answer_triggers_ai_equivalence(monkeypatch) 
 
     assert score == 9
     assert correct is True
+
+
+def _build_question_with_content(answer: dict[str, object], content_text: str) -> Question:
+    return Question(
+        type=QuestionType.FILL_IN,
+        title=content_text,
+        content={"text": content_text},
+        options=None,
+        answer=answer,
+        analysis=None,
+        difficulty=2,
+        score=5,
+        usage_count=0,
+        created_by="170050d5-f106-4427-b05e-b0bd92857491",
+        owner_id="170050d5-f106-4427-b05e-b0bd92857491",
+    )
+
+
+@pytest.mark.asyncio
+async def test_fill_in_single_blank_accepts_pipe_separated_alternatives(monkeypatch) -> None:
+    async def fail_ai(**_kwargs):
+        raise AssertionError("命中备选答案时不应该调用 AI 判定")
+
+    monkeypatch.setattr(
+        "app.exams.student_router._request_fill_in_equivalence_with_deepseek", fail_ai
+    )
+    question = _build_question_with_content(
+        {"correct": ["MAC地址|硬件地址|物理地址"]},
+        "MAC 地址也被称为____。",
+    )
+
+    score, correct, feedback = await _grade_question_with_ai(
+        question,
+        {"blanks": ["物理地址"]},
+        5,
+    )
+
+    assert score == 5
+    assert correct is True
+    assert feedback["dimensions"][0]["comment"] == "共命中 1/1 个空。"
+
+
+@pytest.mark.asyncio
+async def test_fill_in_single_blank_keeps_comma_inside_answer() -> None:
+    question = _build_question_with_content(
+        {"correct": ["1,024"]},
+        "缓冲区默认大小是____ 字节。",
+    )
+
+    score, correct, _ = await _grade_question_with_ai(
+        question,
+        {"blanks": ["1,024"]},
+        5,
+    )
+
+    assert score == 5
+    assert correct is True
+
+
+@pytest.mark.asyncio
+async def test_fill_in_multi_blank_accepts_alternatives_per_blank(monkeypatch) -> None:
+    async def fail_ai(**_kwargs):
+        raise AssertionError("命中备选答案时不应该调用 AI 判定")
+
+    monkeypatch.setattr(
+        "app.exams.student_router._request_fill_in_equivalence_with_deepseek", fail_ai
+    )
+    question = _build_question_with_content(
+        {"correct": ["MAC地址|硬件地址", "ARP"]},
+        "____ 负责地址解析，对应的协议是____。",
+    )
+
+    score, correct, feedback = await _grade_question_with_ai(
+        question,
+        {"blanks": ["硬件地址", "ARP"]},
+        5,
+    )
+
+    assert score == 5
+    assert correct is True
+    assert feedback["dimensions"][0]["comment"] == "共命中 2/2 个空。"

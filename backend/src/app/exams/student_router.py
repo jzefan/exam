@@ -411,6 +411,69 @@ def _get_fill_in_expected_answers(answer: dict[str, Any]) -> list[str]:
     return []
 
 
+# 同一个空的多个可接受答案用竖线分隔（"答案1|答案2"）。不用逗号，因为答案
+# 本身可能带逗号（例如 "1,024"），逗号仍然是「多个空」的分隔符。
+_FILL_IN_ALTERNATIVE_SPLIT_RE = re.compile(r"[|｜]")
+
+
+def _split_fill_in_alternatives(text: str) -> list[str]:
+    """Split one blank's answer text into acceptable alternatives."""
+    return [part.strip() for part in _FILL_IN_ALTERNATIVE_SPLIT_RE.split(text) if part.strip()]
+
+
+def _dedupe_fill_in_alternatives(items: list[str]) -> list[str]:
+    alternatives: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        for part in _split_fill_in_alternatives(item) or [item]:
+            key = _normalize_fill_in_text(part)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            alternatives.append(part)
+    return alternatives
+
+
+def _build_fill_in_expected_groups(
+    answer: dict[str, Any],
+    blank_count: int,
+) -> list[list[str]]:
+    """Group expected answers by blank.
+
+    - 多空题：每项对应一个空，项内再用 "|" 写该空的备选答案。
+    - 单空题：所有项（以及项内 "|" 拆出来的部分）都是这个空的备选答案。
+    """
+    items = _get_fill_in_expected_answers(answer)
+    if not items:
+        return []
+    if blank_count != 1:
+        return [_dedupe_fill_in_alternatives([item]) or [item] for item in items]
+    alternatives = _dedupe_fill_in_alternatives(items)
+    return [alternatives] if alternatives else []
+
+
+def _build_fill_in_group_match_flags(
+    provided_list: list[str],
+    expected_groups: list[list[str]],
+) -> list[bool]:
+    """Per-blank flags: a blank counts as matched when any alternative matches."""
+    match_flags = [False] * len(expected_groups)
+    normalized_groups = [
+        {_normalize_fill_in_text(item) for item in group if _normalize_fill_in_text(item)}
+        for group in expected_groups
+    ]
+    for provided_item in provided_list:
+        normalized = _normalize_fill_in_text(provided_item)
+        if not normalized:
+            continue
+        for index, group in enumerate(normalized_groups):
+            if match_flags[index] or normalized not in group:
+                continue
+            match_flags[index] = True
+            break
+    return match_flags
+
+
 def _count_fill_in_placeholders(content: dict[str, Any]) -> int:
     text = content.get("text") or content.get("html") or ""
     if not isinstance(text, str):
@@ -478,43 +541,22 @@ def _try_joined_fill_in_match(provided_list: list[str], expected_list: list[str]
     return False
 
 
-def _build_fill_in_unordered_exact_match_flags(
-    provided_list: list[str],
-    expected_list: list[str],
-) -> list[bool]:
-    match_flags = [False] * len(expected_list)
-    expected_indices_by_answer: dict[str, list[int]] = {}
-    for index, expected_item in enumerate(expected_list):
-        normalized = _normalize_fill_in_text(expected_item)
-        if normalized:
-            expected_indices_by_answer.setdefault(normalized, []).append(index)
-
-    for provided_item in provided_list:
-        normalized = _normalize_fill_in_text(provided_item)
-        if not normalized:
-            continue
-        candidate_indices = expected_indices_by_answer.get(normalized)
-        if not candidate_indices:
-            continue
-        expected_index = candidate_indices.pop(0)
-        match_flags[expected_index] = True
-
-    return match_flags
-
-
-_FILL_IN_GRADING_SIGNATURE_VERSION = "v3"  # bump to invalidate old caches
+_FILL_IN_GRADING_SIGNATURE_VERSION = "v4"  # bump to invalidate old caches
 
 
 def _build_fill_in_grading_signature(
     *,
-    expected_list: list[str],
+    expected_groups: list[list[str]],
     provided_list: list[str],
     score: float,
     knowledge_points: list[str] | None = None,
 ) -> str:
     payload = {
         "v": _FILL_IN_GRADING_SIGNATURE_VERSION,
-        "expected": [_normalize_fill_in_text(item) for item in expected_list],
+        "expected": [
+            [_normalize_fill_in_text(item) for item in group]
+            for group in expected_groups
+        ],
         "provided": [_normalize_fill_in_text(item) for item in provided_list],
         "score": round(float(score), 4),
         "knowledge_points": sorted(knowledge_points or []),
@@ -615,7 +657,8 @@ def _get_question_plain_text(question: Question) -> str:
 async def _request_fill_in_equivalence_with_deepseek(
     *,
     question_text: str,
-    expected_answers: list[str],
+    # 每个空一个「可接受答案」列表；同义说法用 "|" 写在同一项里。
+    expected_answers: list[list[str]],
     student_answers: list[str],
     knowledge_points: list[str] | None = None,
 ) -> list[dict[str, Any]]:
@@ -1213,16 +1256,20 @@ async def _grade_fill_in_question_with_ai(
     *,
     force_recompute: bool = False,
 ) -> tuple[float, bool, dict[str, Any]]:
-    expected_list = _get_fill_in_expected_answers(question.answer or {})
+    blank_count = _count_fill_in_placeholders(question.content or {})
+    expected_groups = _build_fill_in_expected_groups(question.answer or {}, blank_count)
+    # 单空题里逗号分隔的多个答案算「可接受答案」，用第一项代表该空参与
+    # 整体/合并比对，逐空判定则用分组逐项匹配。
+    expected_list = [group[0] for group in expected_groups]
     provided = answer_content.get("blanks", [])
     provided_list = [str(item) for item in provided] if isinstance(provided, list) else [str(provided)]
-    total = max(len(expected_list), 1)
+    total = max(len(expected_groups), 1)
     knowledge_points = [
         kp.name for kp in (question.knowledge_points or [])
         if getattr(kp, "name", None)
     ]
     signature = _build_fill_in_grading_signature(
-        expected_list=expected_list,
+        expected_groups=expected_groups,
         provided_list=provided_list,
         score=score,
         knowledge_points=knowledge_points,
@@ -1310,7 +1357,7 @@ async def _grade_fill_in_question_with_ai(
         )
         return score, True, feedback
 
-    match_flags = _build_fill_in_unordered_exact_match_flags(provided_list, expected_list)
+    match_flags = _build_fill_in_group_match_flags(provided_list, expected_groups)
     # Per-blank fractional score: exact match → 1.0, AI partial credit → 0.5,
     # AI full credit → 1.0, AI no credit → 0.0.
     match_scores: list[float] = [1.0 if flag else 0.0 for flag in match_flags]
@@ -1325,7 +1372,7 @@ async def _grade_fill_in_question_with_ai(
         try:
             ai_matches = await _request_fill_in_equivalence_with_deepseek(
                 question_text=_get_question_plain_text(question),
-                expected_answers=expected_list,
+                expected_answers=expected_groups,
                 student_answers=[provided_list[index] if index < len(provided_list) else "" for index in range(len(expected_list))],
                 knowledge_points=knowledge_points or None,
             )
@@ -1359,8 +1406,8 @@ async def _grade_fill_in_question_with_ai(
     full_matches = sum(1 for s in match_scores if s >= 1.0)
     partial_matches = sum(1 for s in match_scores if 0.0 < s < 1.0)
     missing_points = [
-        f"第 {index + 1} 空应为 {expected_item}"
-        for index, expected_item in enumerate(expected_list)
+        f"第 {index + 1} 空应为 {' 或 '.join(expected_groups[index])}"
+        for index in range(len(expected_groups))
         if match_scores[index] <= 0.0
     ]
     actual_score = round(score * total_credit / total, 2)

@@ -1,12 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
-  Check,
   ChevronDown,
   Loader2,
   RefreshCw,
   Sparkles,
-  X,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -51,7 +49,11 @@ import {
   type StudentSemesterOption,
 } from "@/pages/exams/components/ClassStudentSelector";
 import type { IQuestion, QuestionDisplayType } from "@/types";
-import { getQuestionDisplayType } from "@/components/questions/question-preview-utils";
+import {
+  getQuestionDisplayType,
+  questionDisplayTypeFullLabel,
+} from "@/components/questions/question-preview-utils";
+import { QuestionPreviewCard } from "@/components/questions/question-preview-card";
 
 import { listCourseQuestions } from "./api";
 import type { CourseKnowledgeNode } from "./api";
@@ -60,10 +62,10 @@ import {
   ALL_DIFFICULTIES,
   SMART_PRACTICE_WHOLE_COURSE_ID,
   collectKnowledgeScopeIds,
-  getQuestionPreviewText,
   parseSmartPracticePrompt,
   selectSmartPracticeQuestions,
   type SmartPracticeChapterTarget,
+  type SmartPracticeSlotTrace,
   type SmartPracticeIntent,
   type SmartPracticeTypeKey,
   type SmartPracticeTypeTarget,
@@ -159,6 +161,15 @@ const DISPLAY_TYPE_ORDER: Array<[QuestionDisplayType, string]> = [
   ["code", "编程"],
 ];
 
+/** 配比里的题型 key 既可能是 single_choice/multi_choice，也可能是 choice 等。 */
+function typeLabel(type: string): string {
+  return (
+    questionDisplayTypeFullLabel[type as keyof typeof questionDisplayTypeFullLabel] ??
+    TYPE_LABELS[type] ??
+    type
+  );
+}
+
 const TYPE_LABELS: Record<string, string> = {
   choice: "选择题",
   true_false: "判断题",
@@ -192,6 +203,12 @@ function getPromptTemplate(
 export interface SmartPracticeDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** dialog：弹窗（默认）；page：独立页面（/courses/:id/papers/smart）。 */
+  variant?: "dialog" | "page";
+  /** page 变体的「返回」动作。 */
+  onExit?: () => void;
+  /** page 变体顶部固定的面包屑（由调用方提供，便于复用路由信息）。 */
+  breadcrumb?: ReactNode;
   /** practice：创建练习；paper：创建试卷（预览时可改每题分值）。 */
   target?: "practice" | "paper";
   courseId: string;
@@ -214,6 +231,9 @@ export interface SmartPracticeDialogProps {
 export function SmartPracticeDialog({
   open,
   onOpenChange,
+  variant = "dialog",
+  onExit,
+  breadcrumb,
   target = "practice",
   courseId,
   courseName,
@@ -228,6 +248,7 @@ export function SmartPracticeDialog({
   onPublished,
   onPaperCreated,
 }: SmartPracticeDialogProps) {
+  const isPage = variant === "page";
   const { toast } = useToast();
   const [stage, setStage] = useState<DialogStage>("configure");
   const [mode, setMode] = useState<CreationMode>("ratio");
@@ -258,6 +279,10 @@ export function SmartPracticeDialog({
   const [includedIds, setIncludedIds] = useState<Set<string>>(new Set());
   // 预览题数少于设置题数时，需要老师显式确认后才允许发布，避免悄悄少发题。
   const [requestedPreviewCount, setRequestedPreviewCount] = useState(0);
+  /** 每个「章节 × 题型」设置了多少、实际选到多少，用于预览页对照。 */
+  const [previewSlotTrace, setPreviewSlotTrace] = useState<SmartPracticeSlotTrace[]>([]);
+  /** 预览页左侧树选中的「章节|题型」；null 表示全部。 */
+  const [slotFilter, setSlotFilter] = useState<string | null>(null);
   const [shortfallAccepted, setShortfallAccepted] = useState(false);
   const [variation, setVariation] = useState(0);
   const [title, setTitle] = useState(() => defaultDialogTitle(courseName, "practice"));
@@ -701,11 +726,15 @@ export function SmartPracticeDialog({
       intent.knowledgePointId,
       knowledgeOptions,
     );
+    const slotTrace: SmartPracticeSlotTrace[] = [];
     const picked = selectSmartPracticeQuestions(
       sourceQuestions,
       { ...intent, knowledgePointIds },
       nextVariation,
+      slotTrace,
     );
+    setPreviewSlotTrace(slotTrace);
+    setSlotFilter(null);
     setPreviewQuestions(picked);
     setIncludedIds(new Set(picked.map((question) => question.id)));
     setScoreOverrides(
@@ -737,6 +766,108 @@ export function SmartPracticeDialog({
       return next;
     });
   };
+
+  const previewSlotRows = useMemo(() => {
+    if (previewSlotTrace.length === 0) {
+      return [];
+    }
+    const chapterName = (chapterId: string | null) => {
+      if (!chapterId || chapterId === SMART_PRACTICE_WHOLE_COURSE_ID) {
+        return "整个课程";
+      }
+      return (
+        knowledgeOptions.find((option) => option.id === chapterId)?.name ??
+        "未知章节"
+      );
+    };
+    const merged = new Map<
+      string,
+      { chapter: string; type: string; requested: number; picked: number }
+    >();
+    for (const slot of previewSlotTrace) {
+      const chapter = chapterName(slot.chapterId);
+      const type = typeLabel(slot.type);
+      const key = `${chapter}|${type}`;
+      const row = merged.get(key) ?? { chapter, type, requested: 0, picked: 0 };
+      row.requested += slot.requested;
+      row.picked += slot.picked;
+      merged.set(key, row);
+    }
+    return [...merged.values()];
+  }, [previewSlotTrace, knowledgeOptions]);
+
+  const previewSlotTree = useMemo(() => {
+    if (previewSlotTrace.length === 0) {
+      return [];
+    }
+    const chapterName = (chapterId: string | null) => {
+      if (!chapterId || chapterId === SMART_PRACTICE_WHOLE_COURSE_ID) {
+        return "整个课程";
+      }
+      return (
+        knowledgeOptions.find((option) => option.id === chapterId)?.name ??
+        "未知章节"
+      );
+    };
+    const chapters = new Map<
+      string,
+      {
+        id: string;
+        label: string;
+        requested: number;
+        picked: number;
+        types: Array<{
+          key: string;
+          label: string;
+          requested: number;
+          picked: number;
+        }>;
+      }
+    >();
+    for (const slot of previewSlotTrace) {
+      const chapterId = slot.chapterId ?? "";
+      const chapter = chapters.get(chapterId) ?? {
+        id: chapterId,
+        label: chapterName(slot.chapterId),
+        requested: 0,
+        picked: 0,
+        types: [],
+      };
+      chapter.requested += slot.requested;
+      chapter.picked += slot.picked;
+      const key = `${chapterId}|${slot.type}`;
+      const existing = chapter.types.find((item) => item.key === key);
+      if (existing) {
+        existing.requested += slot.requested;
+        existing.picked += slot.picked;
+      } else {
+        chapter.types.push({
+          key,
+          label: typeLabel(slot.type),
+          requested: slot.requested,
+          picked: slot.picked,
+        });
+      }
+      chapters.set(chapterId, chapter);
+    }
+    return [...chapters.values()];
+  }, [previewSlotTrace, knowledgeOptions]);
+
+  const slotFilteredIds = useMemo(() => {
+    if (!slotFilter) {
+      return null;
+    }
+    const ids = new Set<string>();
+    for (const slot of previewSlotTrace) {
+      if (`${slot.chapterId ?? ""}|${slot.type}` !== slotFilter) {
+        continue;
+      }
+      for (const id of slot.questionIds ?? []) {
+        ids.add(id);
+      }
+    }
+    return ids;
+  }, [slotFilter, previewSlotTrace]);
 
   const previewShortfall =
     requestedPreviewCount > 0 &&
@@ -852,44 +983,118 @@ export function SmartPracticeDialog({
     (target === "paper" || studentIds.length > 0) &&
     (!previewShortfall || shortfallAccepted);
 
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (!publishing) onOpenChange(next);
-      }}
-    >
-      <DialogContent className="flex max-h-[90vh] flex-col gap-0 p-0 sm:max-w-4xl">
+  const pageTopBar = isPage ? (
+    <div className="flex flex-wrap items-center gap-3 bg-background/95 px-1 py-2">
+      <div className="min-w-0">{breadcrumb}</div>
+      {target === "paper" ? (
+        <div className="flex min-w-0 flex-1 justify-center">
+          <Input
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            maxLength={200}
+            aria-label="试卷名称"
+            placeholder="试卷名称"
+            className="h-8 max-w-xs"
+          />
+        </div>
+      ) : null}
+      <div className="flex shrink-0 items-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => onExit?.()}
+          disabled={publishing}
+        >
+          返回
+        </Button>
+        {stage === "configure" ? (
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => generatePreview()}
+            disabled={!canGenerate}
+          >
+            <Sparkles data-icon="inline-start" />
+            生成预览
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => void handlePublish()}
+            disabled={!canPublish || publishing}
+          >
+            {publishing ? (
+              <Loader2 data-icon="inline-start" className="animate-spin" />
+            ) : null}
+            {target === "paper" ? "创建试卷" : "确认发布 · 7 天"}
+          </Button>
+        )}
+      </div>
+    </div>
+  ) : null;
+
+  const content = (
+    <>
+      {pageTopBar}
         {stage === "configure" ? (
           <Tabs
             value={mode}
             onValueChange={(value) => setMode(value as CreationMode)}
             className="flex min-h-0 flex-1 flex-col"
           >
-              <DialogHeader className="border-b px-5 py-4 pr-12">
-                <div className="grid grid-cols-[auto_1fr] items-center gap-3 sm:grid-cols-[1fr_auto_1fr]">
-                  <DialogTitle className="flex items-center gap-2 text-base">
-                    <Sparkles size={16} aria-hidden="true" />
-                    智能创建{target === "paper" ? "试卷" : "练习"}
-                  </DialogTitle>
-                  <TabsList className="grid w-52 grid-cols-3 justify-self-end sm:w-80 sm:justify-self-center">
+              <DialogHeader
+                className={cn(
+                  isPage ? "px-0 py-2" : "border-b px-5 py-4 pr-12",
+                )}
+              >
+                <div
+                  className={cn(
+                    "grid items-center gap-3",
+                    isPage
+                      ? "grid-cols-1"
+                      : "grid-cols-[auto_1fr] sm:grid-cols-[1fr_auto_1fr]",
+                  )}
+                >
+                  {isPage ? null : (
+                    <DialogTitle className="flex items-center gap-2 text-base">
+                      <Sparkles size={16} aria-hidden="true" />
+                      智能创建{target === "paper" ? "试卷" : "练习"}
+                    </DialogTitle>
+                  )}
+                  <TabsList
+                    className={cn(
+                      "grid w-52 grid-cols-3 sm:w-80",
+                      isPage
+                        ? "justify-self-start"
+                        : "justify-self-end sm:justify-self-center",
+                    )}
+                  >
                     <TabsTrigger value="ratio">按配比</TabsTrigger>
                     <TabsTrigger value="prompt">提示词</TabsTrigger>
                     <TabsTrigger value="conditions">按条件</TabsTrigger>
                   </TabsList>
-                  <span className="hidden sm:block" aria-hidden="true" />
+                  {isPage ? null : <span className="hidden sm:block" aria-hidden="true" />}
                 </div>
-                <DialogDescription>{sourceLabel}</DialogDescription>
+                {isPage ? null : <DialogDescription>{sourceLabel}</DialogDescription>}
               </DialogHeader>
 
-              <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+              <div
+                className={cn(
+                  "min-h-0 flex-1 px-5 py-4",
+                  isPage ? "overflow-y-auto px-0" : "overflow-y-auto",
+                )}
+              >
                 <div
                   data-testid="smart-practice-mode-content"
                   className={cn(
                     "min-h-0",
-                    mode === "conditions"
-                      ? "h-[268px] sm:h-[132px]"
-                      : "h-[320px] sm:h-[220px]",
+                    isPage
+                      ? "min-h-[220px]"
+                      : mode === "conditions"
+                        ? "h-[268px] sm:h-[132px]"
+                        : "h-[320px] sm:h-[220px]",
                   )}
                 >
                   <TabsContent
@@ -1643,30 +1848,43 @@ export function SmartPracticeDialog({
           </Tabs>
         ) : (
           <>
-            <DialogHeader className="border-b px-5 py-4 pr-12">
-              <DialogTitle className="flex items-center gap-2 text-base">
-                <Sparkles size={16} aria-hidden="true" />
-                智能创建{target === "paper" ? "试卷" : "练习"}
-              </DialogTitle>
-              <DialogDescription>
-                预览 · {includedQuestions.length} 题
-                {target === "paper" ? ` · ${paperTotalScore} 分` : ""}
-              </DialogDescription>
-            </DialogHeader>
-            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-            <div className="mb-4 flex flex-wrap items-center gap-2">
-              <Button type="button" variant="ghost" size="sm" onClick={() => setStage("configure")}>
-                <ArrowLeft data-icon="inline-start" />
-                修改条件
-              </Button>
-              <Button type="button" variant="outline" size="sm" onClick={handleRegenerate}>
-                <RefreshCw data-icon="inline-start" />
-                换一组
-              </Button>
-            </div>
+            {isPage ? null : (
+              <DialogHeader className="border-b px-5 py-4 pr-12">
+                <DialogTitle className="flex items-center gap-2 text-base">
+                  <Sparkles size={16} aria-hidden="true" />
+                  智能创建{target === "paper" ? "试卷" : "练习"}
+                </DialogTitle>
+                <DialogDescription>
+                  预览 · {includedQuestions.length} 题
+                  {target === "paper" ? ` · ${paperTotalScore} 分` : ""}
+                </DialogDescription>
+              </DialogHeader>
+            )}
+            <div
+              className={cn(
+                "min-h-0 flex-1 px-5 py-4",
+                isPage
+                  ? "flex flex-col overflow-y-auto px-0 py-3 lg:overflow-hidden"
+                  : "overflow-y-auto",
+                isPage && previewSlotTree.length > 0 &&
+                  "lg:grid lg:min-h-0 lg:flex-1 lg:grid-cols-[220px_minmax(0,1fr)] lg:items-stretch lg:gap-4",
+              )}
+            >
+            {!isPage ? (
+              <div className="mb-4 flex flex-wrap items-center gap-2">
+                <Button type="button" variant="ghost" size="sm" onClick={() => setStage("configure")}>
+                  <ArrowLeft data-icon="inline-start" />
+                  修改条件
+                </Button>
+                <Button type="button" variant="outline" size="sm" onClick={handleRegenerate}>
+                  <RefreshCw data-icon="inline-start" />
+                  换一组
+                </Button>
+              </div>
+            ) : null}
 
             {previewShortfall ? (
-              <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-amber-300/70 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200">
+              <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-amber-300/70 lg:col-span-full bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200">
                 <span className="min-w-0 flex-1">
                   设置 {requestedPreviewCount} 题，当前条件只匹配到{" "}
                   {previewQuestions.length} 题。
@@ -1698,61 +1916,191 @@ export function SmartPracticeDialog({
               </div>
             ) : null}
 
+            {!isPage && previewSlotRows.length > 0 ? (
+              <div className="mb-3 overflow-hidden rounded-md border">
+                <table className="w-full text-xs">
+                  <thead className="bg-muted/50 text-muted-foreground">
+                    <tr>
+                      <th className="px-2 py-1.5 text-left font-medium">章节</th>
+                      <th className="px-2 py-1.5 text-left font-medium">题型</th>
+                      <th className="px-2 py-1.5 text-right font-medium">设置</th>
+                      <th className="px-2 py-1.5 text-right font-medium">实际</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {previewSlotRows.map((row) => (
+                      <tr
+                        key={`${row.chapter}|${row.type}`}
+                        className="border-t border-border/60"
+                      >
+                        <td
+                          className="max-w-[200px] truncate px-2 py-1.5"
+                          title={row.chapter}
+                        >
+                          {row.chapter}
+                        </td>
+                        <td className="px-2 py-1.5">{row.type}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums">
+                          {row.requested}
+                        </td>
+                        <td
+                          className={cn(
+                            "px-2 py-1.5 text-right tabular-nums",
+                            row.picked < row.requested &&
+                              "font-medium text-amber-600 dark:text-amber-400",
+                          )}
+                        >
+                          {row.picked}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+
+            {isPage && previewSlotTree.length > 0 ? (
+              <aside className="flex min-h-0 flex-col gap-2 lg:overflow-y-auto">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 px-2 text-xs"
+                    onClick={() => setStage("configure")}
+                  >
+                    <ArrowLeft data-icon="inline-start" />
+                    修改条件
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 px-2 text-xs"
+                    onClick={handleRegenerate}
+                  >
+                    <RefreshCw data-icon="inline-start" />
+                    换一组
+                  </Button>
+                </div>
+                <div className="flex flex-col gap-0.5 rounded-xl bg-muted/40 p-1.5">
+                <button
+                  type="button"
+                  onClick={() => setSlotFilter(null)}
+                  className={cn(
+                    "flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
+                    slotFilter === null
+                      ? "bg-primary/10 font-medium text-primary"
+                      : "text-muted-foreground hover:bg-muted",
+                  )}
+                >
+                  <span className="truncate">全部题目</span>
+                  <span className="tabular-nums">{previewQuestions.length}</span>
+                </button>
+                {previewSlotTree.map((chapter) => (
+                  <div key={chapter.id} className="mt-1">
+                    <div className="flex items-center justify-between gap-2 px-2 py-1 text-xs font-medium">
+                      <span className="truncate" title={chapter.label}>
+                        {chapter.label}
+                      </span>
+                      <span className="shrink-0 tabular-nums text-muted-foreground">
+                        {chapter.picked}/{chapter.requested}
+                      </span>
+                    </div>
+                    {chapter.types.map((type) => (
+                      <button
+                        key={type.key}
+                        type="button"
+                        onClick={() => setSlotFilter(type.key)}
+                        className={cn(
+                          "flex w-full items-center justify-between gap-2 rounded-md py-1 pl-5 pr-2 text-left text-xs transition-colors",
+                          slotFilter === type.key
+                            ? "bg-primary/10 font-medium text-primary"
+                            : "text-muted-foreground hover:bg-muted",
+                        )}
+                      >
+                        <span className="truncate">{type.label}</span>
+                        <span
+                          className={cn(
+                            "shrink-0 tabular-nums",
+                            type.picked < type.requested &&
+                              "text-amber-600 dark:text-amber-400",
+                          )}
+                        >
+                          {type.picked}/{type.requested}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ))}
+                </div>
+              </aside>
+            ) : null}
+
+            <div
+              className={cn(
+                isPage && "min-w-0 pr-1 lg:min-h-0 lg:overflow-y-auto",
+              )}
+            >
             <div className="flex flex-col gap-2">
-              {previewQuestions.map((question, index) => {
+              {(slotFilteredIds
+                ? previewQuestions.filter((question) => slotFilteredIds.has(question.id))
+                : previewQuestions
+              ).map((question) => {
+                const index = previewQuestions.indexOf(question);
                 const included = includedIds.has(question.id);
                 return (
-                  <div
+                  <QuestionPreviewCard
                     key={question.id}
-                    className="flex items-start gap-3 rounded-md border px-3 py-2.5"
-                  >
-                    <Checkbox
-                      className="mt-0.5"
-                      checked={included}
-                      onCheckedChange={() => toggleIncluded(question.id)}
-                      aria-label={`${included ? "移除" : "加入"}第 ${index + 1} 题`}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">
-                        {index + 1}. {getQuestionPreviewText(question)}
-                      </p>
-                      <div className="mt-1 flex flex-wrap gap-1.5 text-xs text-muted-foreground">
-                        <span>{TYPE_LABELS[question.type] ?? "题目"}</span>
-                        <span>难度 {question.difficulty}</span>
-                        {question.knowledge_points[0] ? (
-                          <span>{question.knowledge_points[0].name}</span>
+                    question={question}
+                    index={index + 1}
+                    mode="compact"
+                    expandOnClick
+                    hideAnswer
+                    // 分值在这里可改，header 里就不再重复展示分值和难度。
+                    hideScoreAndDifficulty={target === "paper"}
+                    className={cn("text-left", !included && "opacity-60")}
+                    trailing={
+                      <div className="flex items-center gap-2">
+                        {target === "paper" ? (
+                          <>
+                            <span className="whitespace-nowrap text-xs text-muted-foreground">
+                              难度 {question.difficulty}
+                            </span>
+                            <label
+                              className="flex items-center gap-1 text-xs text-muted-foreground"
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              <Input
+                                type="number"
+                                min={0}
+                                step={0.5}
+                                className="h-7 w-16 text-right"
+                                aria-label={`第 ${index + 1} 题分值`}
+                                value={
+                                  scoreOverrides[question.id] ??
+                                  question.score ??
+                                  0
+                                }
+                                onChange={(event) =>
+                                  setScoreOverrides((prev) => ({
+                                    ...prev,
+                                    [question.id]: Number(event.target.value),
+                                  }))
+                                }
+                              />
+                              分
+                            </label>
+                          </>
                         ) : null}
-                      </div>
-                    </div>
-                    {target === "paper" ? (
-                      <label className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-                        <Input
-                          type="number"
-                          min={0}
-                          step={0.5}
-                          className="h-7 w-16 text-right"
-                          aria-label={`第 ${index + 1} 题分值`}
-                          value={
-                            scoreOverrides[question.id] ??
-                            question.score ??
-                            0
-                          }
-                          onChange={(event) =>
-                            setScoreOverrides((prev) => ({
-                              ...prev,
-                              [question.id]: Number(event.target.value),
-                            }))
-                          }
+                        <Checkbox
+                          checked={included}
+                          onCheckedChange={() => toggleIncluded(question.id)}
+                          aria-label={`${included ? "移除" : "加入"}第 ${index + 1} 题`}
                         />
-                        分
-                      </label>
-                    ) : null}
-                    {!included ? (
-                      <X size={16} className="text-muted-foreground" aria-hidden="true" />
-                    ) : (
-                      <Check size={16} className="text-primary" aria-hidden="true" />
-                    )}
-                  </div>
+                      </div>
+                    }
+                  />
                 );
               })}
             </div>
@@ -1761,8 +2109,11 @@ export function SmartPracticeDialog({
               className={cn(
                 "mt-5 grid gap-4",
                 target === "paper"
-                  ? ""
+                  ? isPage
+                    ? "hidden"
+                    : ""
                   : "lg:grid-cols-[minmax(220px,0.7fr)_minmax(0,1.3fr)]",
+                isPage && target === "paper" && "hidden",
               )}
             >
               <div className="flex flex-col gap-1.5">
@@ -1790,25 +2141,53 @@ export function SmartPracticeDialog({
               )}
             </div>
             </div>
+            </div>
           </>
         )}
 
-        <DialogFooter className="border-t px-5 py-4 sm:gap-2 sm:space-x-0">
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={publishing}>
-            取消
-          </Button>
-          {stage === "configure" ? (
-            <Button type="button" onClick={() => generatePreview()} disabled={!canGenerate}>
-              <Sparkles data-icon="inline-start" />
-              生成预览
-            </Button>
-          ) : (
-            <Button type="button" onClick={() => void handlePublish()} disabled={!canPublish || publishing}>
-              {publishing ? <Loader2 data-icon="inline-start" className="animate-spin" /> : null}
-              {target === "paper" ? "创建试卷" : "确认发布 · 7 天"}
-            </Button>
+          {isPage ? null : (
+            <DialogFooter className="border-t px-5 py-4 sm:gap-2 sm:space-x-0">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+                disabled={publishing}
+              >
+                取消
+              </Button>
+              {stage === "configure" ? (
+                <Button type="button" onClick={() => generatePreview()} disabled={!canGenerate}>
+                  <Sparkles data-icon="inline-start" />
+                  生成预览
+                </Button>
+              ) : (
+                <Button type="button" onClick={() => void handlePublish()} disabled={!canPublish || publishing}>
+                  {publishing ? <Loader2 data-icon="inline-start" className="animate-spin" /> : null}
+                  {target === "paper" ? "创建试卷" : "确认发布 · 7 天"}
+                </Button>
+              )}
+            </DialogFooter>
           )}
-        </DialogFooter>
+    </>
+  );
+
+  if (isPage) {
+    // 高度完全交给父容器（课程详情的 main），不再用视口公式估算：
+    // 面包屑栏固定、预览阶段只有试题列表和左侧树各自滚动。
+    return (
+      <div className="flex min-h-0 w-full flex-1 flex-col gap-1">{content}</div>
+    );
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!publishing) onOpenChange(next);
+      }}
+    >
+      <DialogContent className="flex max-h-[90vh] flex-col gap-0 p-0 sm:max-w-4xl">
+        {content}
       </DialogContent>
     </Dialog>
   );
