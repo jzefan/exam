@@ -15,7 +15,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -100,9 +99,6 @@ function CourseAuthDialog({ register }: { register: boolean }) {
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>{register ? "注册教师账号" : "教师登录"}</DialogTitle>
-          <DialogDescription>
-            登录后可创建自己的学期、学生和教学内容。
-          </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
           <div className="space-y-2">
@@ -236,9 +232,6 @@ function PublicPreview({
               {preview.description}
             </p>
           )}
-          <p className="mt-2 text-xs text-muted-foreground">
-            公开教学内容可直接预览，自建内容仅自己可见。
-          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
@@ -378,41 +371,36 @@ function PublicPreview({
               ))}
             </TabsContent>
             <TabsContent value="teaching">
-              <div className="space-y-4 py-6">
-                <p className="text-sm text-muted-foreground">
-                  登录教师账号后，在本课程内管理自己的教学。
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={() =>
-                      create(`${coursePath}?tab=manage&create=semester`)
-                    }
-                  >
-                    创建学期
-                  </Button>
-                  <Button variant="outline" onClick={() => create("/students")}>
-                    管理学生
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() =>
-                      create(
-                        `/exams/practice/create?course_kp_id=${preview.course_id}`,
-                      )
-                    }
-                  >
-                    发布练习
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() =>
-                      create(`/exams/create?course_kp_id=${preview.course_id}`)
-                    }
-                  >
-                    发布考试
-                  </Button>
-                </div>
+              <div className="flex flex-wrap gap-2 py-6">
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    create(`${coursePath}?tab=manage&create=semester`)
+                  }
+                >
+                  创建学期
+                </Button>
+                <Button variant="outline" onClick={() => create("/students")}>
+                  管理学生
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    create(
+                      `/exams/practice/create?course_kp_id=${preview.course_id}`,
+                    )
+                  }
+                >
+                  发布练习
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    create(`/exams/create?course_kp_id=${preview.course_id}`)
+                  }
+                >
+                  发布考试
+                </Button>
               </div>
             </TabsContent>
           </>
@@ -478,15 +466,11 @@ export function CourseWorkspaceShell({
   }, []);
   useEffect(() => {
     let active = true;
-    Promise.all([
-      getCourseSharePublicPreview(shareCode),
-      getCourseShareContent(shareCode),
-    ])
-      .then(([info, data]) => {
-        if (active) {
-          setPreview(info);
-          setContent(data);
-        }
+    setPreview(null);
+    setError("");
+    getCourseSharePublicPreview(shareCode)
+      .then((info) => {
+        if (active) setPreview(info);
       })
       .catch((err: Error) => {
         if (active) setError(err.message);
@@ -496,8 +480,25 @@ export function CourseWorkspaceShell({
     };
   }, [shareCode]);
   useEffect(() => {
+    // The catalogue is only rendered for anonymous visitors and failed joins.
+    if (token && !joinError) return;
+    let active = true;
+    setContent(null);
+    getCourseShareContent(shareCode)
+      .then((data) => {
+        if (active) setContent(data);
+      })
+      .catch((err: Error) => {
+        if (active) setError(err.message);
+      });
+    return () => {
+      active = false;
+    };
+  }, [shareCode, token, joinError]);
+  useEffect(() => {
     if (!token) return;
     setRedirectAnonymous(true);
+    setJoinError("");
     let active = true;
     enterCourseShare(shareCode)
       .then((result) => {
@@ -522,7 +523,9 @@ export function CourseWorkspaceShell({
         </p>
       </div>
     );
-  if (!preview)
+  const joining = !!token && member?.token !== token && !joinError;
+  const catalogueNeeded = !token || !!joinError;
+  if (!preview || joining || (catalogueNeeded && !content))
     return (
       <div className="flex min-h-screen items-center justify-center">
         <Loader2 aria-label="加载课程" className="size-5 animate-spin" />

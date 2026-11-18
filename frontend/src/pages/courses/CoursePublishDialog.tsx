@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -111,12 +110,9 @@ export function CoursePublishDialog({
             <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
               <Globe size={18} />
             </div>
-            <div>
-              <DialogTitle className="text-base font-semibold">发布课程短链接</DialogTitle>
-              <DialogDescription className="mt-0.5 text-xs text-muted-foreground">
-                发布后，任何用户无需从平台登录或查找课程，点击链接即可直接进入。
-              </DialogDescription>
-            </div>
+            <DialogTitle className="text-base font-semibold">
+              {courseName ? `发布「${courseName}」` : "发布课程短链接"}
+            </DialogTitle>
           </div>
         </DialogHeader>
 
@@ -153,15 +149,6 @@ export function CoursePublishDialog({
                 </div>
               </div>
 
-              <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground space-y-1">
-                <p className="font-medium text-foreground">访客权限说明：</p>
-                <ul className="list-inside list-disc space-y-0.5 pl-1">
-                  <li>浏览课程知识树、课件资料与公开题库</li>
-                  <li>注册或登录教师账号后，管理学期、学生、练习与考试</li>
-                  <li>支持答卷批改与主观题 AI 辅助判分</li>
-                  <li>教师登录后创建的内容仅自己可见</li>
-                </ul>
-              </div>
             </div>
           ) : (
             <div className="rounded-lg border border-dashed border-border p-6 text-center">
@@ -169,9 +156,6 @@ export function CoursePublishDialog({
                 <Link2 size={20} />
               </div>
               <p className="mt-2 text-sm font-medium text-foreground">尚未发布课程短链接</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                生成短链接后，你可以将其分享给其他教师，他们可立即进入「{courseName}」。
-              </p>
             </div>
           )}
         </div>

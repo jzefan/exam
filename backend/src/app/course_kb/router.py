@@ -65,6 +65,20 @@ async def _get_resource(db: AsyncSession, resource_id: uuid.UUID) -> LearningRes
     return resource
 
 
+async def _require_course_material(
+    db: AsyncSession,
+    course_id: uuid.UUID,
+    resource: LearningResource,
+    user,
+    *,
+    write: bool = False,
+) -> None:
+    nodes = course_nodes(course_id=course_id)
+    if resource.node_id not in set(await db.scalars(select(nodes.c.id))):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资料不属于当前课程")
+    await require_material_access(db, resource, user.id, write=write)
+
+
 @router.post("/{course_id}/materials/{resource_id}/kb-ingest", response_model=KbStatusResponse)
 async def kb_ingest(
     course_id: uuid.UUID,
@@ -76,10 +90,7 @@ async def kb_ingest(
     """Start the chunk→embed→store pipeline for one material (async, returns at once)."""
     await _visible_course(db, course_id, user)
     resource = await _get_resource(db, resource_id)
-    nodes = course_nodes(course_id=course_id)
-    if resource.node_id not in set(await db.scalars(select(nodes.c.id))):
-        raise HTTPException(404, "资料不属于当前课程")
-    await require_material_access(db, resource, user.id, write=True)
+    await _require_course_material(db, course_id, resource, user, write=True)
     if not body.material_text.strip():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="资料文本为空，无法入库")
 
@@ -103,10 +114,7 @@ async def kb_status(
 ) -> KbStatusResponse:
     await _visible_course(db, course_id, user)
     resource = await _get_resource(db, resource_id)
-    nodes = course_nodes(course_id=course_id)
-    if resource.node_id not in set(await db.scalars(select(nodes.c.id))):
-        raise HTTPException(404, "资料不属于当前课程")
-    await require_material_access(db, resource, user.id)
+    await _require_course_material(db, course_id, resource, user)
     return KbStatusResponse(
         kb_status=resource.kb_status,
         kb_error=resource.kb_error,

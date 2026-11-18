@@ -1,6 +1,8 @@
 import { renderLatexInHtml } from "@/components/ui/latex-text";
 import type { IExamQuestionForStudent } from "@/types";
 
+import { ExamClipboardLock } from "./exam-clipboard-lock";
+
 interface Props {
   question: IExamQuestionForStudent;
   answer: Record<string, unknown>;
@@ -35,7 +37,7 @@ export function FillInQuestion({ question, answer, onChange }: Props) {
   };
 
   return (
-    <div className="space-y-6">
+    <ExamClipboardLock className="space-y-6">
       <div
         className="prose prose-sm dark:prose-invert max-w-none leading-relaxed"
         dangerouslySetInnerHTML={{
@@ -61,6 +63,6 @@ export function FillInQuestion({ question, answer, onChange }: Props) {
           </div>
         ))}
       </div>
-    </div>
+    </ExamClipboardLock>
   );
 }

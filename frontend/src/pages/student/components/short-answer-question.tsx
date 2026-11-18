@@ -8,6 +8,8 @@ import { useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import type { IExamQuestionForStudent } from "@/types";
 
+import { ExamClipboardLock } from "./exam-clipboard-lock";
+
 interface Props {
   question: IExamQuestionForStudent;
   answer: Record<string, unknown>;
@@ -96,7 +98,7 @@ export function ShortAnswerQuestion({ question, answer, onChange }: Props) {
 
   if (!isSqlQuestion) {
     return (
-      <div className="space-y-5">
+      <ExamClipboardLock className="space-y-5">
         <div
           className="prose prose-sm dark:prose-invert max-w-none leading-relaxed"
           dangerouslySetInnerHTML={{
@@ -122,12 +124,12 @@ export function ShortAnswerQuestion({ question, answer, onChange }: Props) {
           onChange={(nextHtml) => onChange({ html: nextHtml })}
           placeholder="请输入答案..."
         />
-      </div>
+      </ExamClipboardLock>
     );
   }
 
   return (
-    <div className="space-y-5">
+    <ExamClipboardLock className="space-y-5">
       <div
         className="prose prose-sm dark:prose-invert max-w-none leading-relaxed"
         dangerouslySetInnerHTML={{
@@ -179,6 +181,7 @@ export function ShortAnswerQuestion({ question, answer, onChange }: Props) {
                 roundedSelection: true,
                 scrollBeyondLastLine: false,
                 wordWrap: "on",
+                contextmenu: false,
                 quickSuggestions: true,
                 suggestOnTriggerCharacters: true,
                 tabSize: 2,
@@ -206,6 +209,6 @@ export function ShortAnswerQuestion({ question, answer, onChange }: Props) {
           </aside>
         </div>
       </section>
-    </div>
+    </ExamClipboardLock>
   );
 }

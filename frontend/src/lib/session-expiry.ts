@@ -75,15 +75,7 @@ function handleUnauthorized(url: string, authorization: string | null) {
 
 function attachAxiosUnauthorizedHandler(instance: AxiosInstance) {
   instance.interceptors.response.use(
-    (response) => {
-      if (response.status === 401) {
-        handleUnauthorized(
-          response.config.url ?? "",
-          String(response.config.headers?.Authorization ?? ""),
-        );
-      }
-      return response;
-    },
+    (response) => response,
     (error) => {
       if (error?.response?.status === 401) {
         handleUnauthorized(

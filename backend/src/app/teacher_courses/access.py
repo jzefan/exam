@@ -202,11 +202,8 @@ async def require_node_access(db: AsyncSession, node_id: uuid.UUID, node_type: s
     from app.auth.dependencies import user_has_role
 
     is_admin = await user_has_role(db, user_id, "platform_admin")
-    if not await db.scalar(
-        select(KnowledgePoint.id).where(
-            KnowledgePoint.id == node_id,
-            KnowledgePoint.deleted_at.is_(None),
-            True if is_admin else knowledge_read_filter(user_id),
-        )
-    ):
+    conditions = [KnowledgePoint.id == node_id, KnowledgePoint.deleted_at.is_(None)]
+    if not is_admin:
+        conditions.append(knowledge_read_filter(user_id))
+    if not await db.scalar(select(KnowledgePoint.id).where(*conditions)):
         raise HTTPException(404, "知识点不存在或无权访问")

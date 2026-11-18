@@ -498,9 +498,6 @@ export function ResourcePreview({ resource: original, open, onOpenChange }: Reso
   const url = resource.url || ""
   const ext = getFileExt(resource)
 
-  // All previewable content supports fullscreen
-  const supportsFullscreen = true
-
   function renderContent() {
     if (ext === "pdf") return <PdfPreview url={url} />
     if (["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) {
@@ -544,7 +541,7 @@ export function ResourcePreview({ resource: original, open, onOpenChange }: Reso
             <DialogTitle className="text-base truncate">{resource.title}</DialogTitle>
           </DialogHeader>
           <div className="flex items-center gap-[8px] shrink-0">
-            {supportsFullscreen && <FullscreenToggle containerRef={contentRef} />}
+            <FullscreenToggle containerRef={contentRef} />
             <DialogClose className="rounded-sm opacity-70 hover:opacity-100 focus:outline-none">
               <X className="h-4 w-4" />
             </DialogClose>

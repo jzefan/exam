@@ -208,13 +208,5 @@ def format_rag_block(retrieved: list[RetrievedChunk], *, max_chars: int = 24000)
     return "\n\n".join(lines)[:max_chars]
 
 
-async def search_chunks_standalone(
-    *, course_kp_id: uuid.UUID, query: str, k: int = _DEFAULT_TOP_K
-) -> list[RetrievedChunk]:
-    """Convenience wrapper that opens its own session (for callers without one)."""
-    async with async_session() as db:
-        return await search_chunks(db, course_kp_id=course_kp_id, query=query, k=k)
-
-
 def estimate_corpus_tokens(texts: list[str]) -> int:
     return sum(estimate_tokens(text) for text in texts)

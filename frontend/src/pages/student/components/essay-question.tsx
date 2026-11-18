@@ -3,6 +3,8 @@ import { renderLatexInHtml } from "@/components/ui/latex-text";
 import { Paperclip, X, FileIcon } from "lucide-react";
 import type { IExamQuestionForStudent } from "@/types";
 
+import { ExamClipboardLock } from "./exam-clipboard-lock";
+
 interface Attachment {
   name: string;
   url: string;
@@ -47,7 +49,7 @@ export function EssayQuestion({ question, answer, onChange }: Props) {
   };
 
   return (
-    <div className="space-y-5">
+    <ExamClipboardLock className="space-y-5">
       <div
         className="prose prose-sm dark:prose-invert max-w-none leading-relaxed"
         dangerouslySetInnerHTML={{
@@ -104,6 +106,6 @@ export function EssayQuestion({ question, answer, onChange }: Props) {
           </div>
         )}
       </div>
-    </div>
+    </ExamClipboardLock>
   );
 }

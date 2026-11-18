@@ -3,7 +3,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -49,18 +49,35 @@ async def get_published_course(db: AsyncSession, share_code: str) -> KnowledgePo
     return course
 
 
-async def public_materials(db: AsyncSession, course: KnowledgePoint):
+def _public_material_filters(course: KnowledgePoint):
     nodes = course_nodes(course_id=course.id)
+    return (
+        LearningResource.node_type == "kp",
+        LearningResource.node_id.in_(select(nodes.c.id)),
+        LearningResource.deleted_at.is_(None),
+        (LearningResource.uploaded_by == course.owner_id) | LearningResource.uploaded_by.is_(None),
+    )
+
+
+def _public_paper_filters(course: KnowledgePoint):
+    return (
+        Paper.deleted_at.is_(None),
+        Paper.root_knowledge_point_id == course.id,
+        Paper.owner_id == course.owner_id,
+        Paper.is_reusable.is_(True),
+    )
+
+
+async def _count(db: AsyncSession, model, *filters) -> int:
+    return int(await db.scalar(select(func.count()).select_from(model).where(*filters)) or 0)
+
+
+async def public_materials(db: AsyncSession, course: KnowledgePoint):
     return list(
         (
             await db.scalars(
                 select(LearningResource)
-                .where(
-                    LearningResource.node_type == "kp",
-                    LearningResource.node_id.in_(select(nodes.c.id)),
-                    LearningResource.deleted_at.is_(None),
-                    (LearningResource.uploaded_by == course.owner_id) | LearningResource.uploaded_by.is_(None),
-                )
+                .where(*_public_material_filters(course))
                 .order_by(LearningResource.sort_order, LearningResource.created_at)
             )
         ).all()
@@ -72,9 +89,7 @@ async def public_questions(db: AsyncSession, course: KnowledgePoint):
         (
             await db.scalars(
                 select(Question)
-                .where(
-                    course_question_filter(course.id, course.owner_id, None),
-                )
+                .where(course_question_filter(course.id, course.owner_id, None))
                 .options(
                     selectinload(Question.creator),
                     selectinload(Question.question_bank),
@@ -94,11 +109,7 @@ async def public_papers(db: AsyncSession, course: KnowledgePoint):
         (
             await db.scalars(
                 paper_base_query()
-                .where(
-                    Paper.root_knowledge_point_id == course.id,
-                    Paper.owner_id == course.owner_id,
-                    Paper.is_reusable.is_(True),
-                )
+                .where(*_public_paper_filters(course))
                 .order_by(Paper.created_at.desc())
             )
         )
@@ -112,7 +123,7 @@ async def get_course_share_public_preview(share_code: str, db: DB):
     course = await get_published_course(db, share_code)
     major_name = await db.scalar(select(Major.name).join(Direction).where(Direction.id == course.direction_id))
     nodes = course_nodes(course_id=course.id)
-    node_ids = list(await db.scalars(select(nodes.c.id)))
+    knowledge_point_total = int(await db.scalar(select(func.count()).select_from(nodes)) or 0)
     return CourseSharePublicPreviewResponse(
         course_id=course.id,
         share_code=share_code,
@@ -120,10 +131,10 @@ async def get_course_share_public_preview(share_code: str, db: DB):
         description=course.description,
         major_name=major_name,
         stats={
-            "knowledge_point_count": max(0, len(node_ids) - 1),
-            "material_count": len(await public_materials(db, course)),
-            "question_count": len(await public_questions(db, course)),
-            "paper_count": len(await public_papers(db, course)),
+            "knowledge_point_count": max(0, knowledge_point_total - 1),
+            "material_count": await _count(db, LearningResource, *_public_material_filters(course)),
+            "question_count": await _count(db, Question, course_question_filter(course.id, course.owner_id, None)),
+            "paper_count": await _count(db, Paper, *_public_paper_filters(course)),
         },
     )
 
@@ -161,7 +172,7 @@ async def get_course_share_content(share_code: str, db: DB):
             for r in await public_materials(db, course)
         ],
         "questions": [QuestionResponse.from_question(q) for q in await public_questions(db, course)],
-        "papers": [build_paper_detail_response(p, []) for p in await public_papers(db, course)],
+        "papers": [build_paper_detail_response(p) for p in await public_papers(db, course)],
     }
 
 
