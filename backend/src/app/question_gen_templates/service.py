@@ -545,6 +545,7 @@ async def _retrieve_rag_block(
             query=query,
             k=_RAG_TOP_K,
             scope_node_ids=scope or None,
+            user_id=template.owner_id,
         )
     except Exception:  # noqa: BLE001 - retrieval must never break generation
         return ""

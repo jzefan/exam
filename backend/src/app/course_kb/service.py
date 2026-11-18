@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.teacher_courses.access import material_read_filter
+
 from app.config import settings
 from app.course_kb.chunker import chunk_material, estimate_tokens
 from app.course_kb.embedder import EmbeddingUnavailable, cosine_similarity, embed_texts
@@ -153,10 +155,12 @@ async def search_chunks(
     query: str,
     k: int = _DEFAULT_TOP_K,
     scope_node_ids: list[uuid.UUID] | None = None,
+    user_id: uuid.UUID | None = None,
 ) -> list[RetrievedChunk]:
     """Top-k chunks for the query, scoped to the course (or given chapter nodes)."""
     node_ids = scope_node_ids if scope_node_ids else await course_node_ids(db, course_kp_id)
-    stmt = select(CourseMaterialChunk).where(
+    stmt = select(CourseMaterialChunk).join(LearningResource, LearningResource.id == CourseMaterialChunk.resource_id).where(
+        material_read_filter(user_id),
         CourseMaterialChunk.course_kp_id == course_kp_id,
         CourseMaterialChunk.node_id.in_(node_ids),
         CourseMaterialChunk.deleted_at.is_(None),

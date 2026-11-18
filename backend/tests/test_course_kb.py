@@ -155,7 +155,7 @@ async def test_search_ranks_by_cosine_with_scope(db_session: AsyncSession, monke
         return [[1.0, 0.05] for _ in texts]  # query points at "循环"
 
     monkeypatch.setattr(service, "embed_texts", fake_embed)
-    hits = await service.search_chunks(db_session, course_kp_id=course.id, query="循环结构", k=2)
+    hits = await service.search_chunks(db_session, course_kp_id=course.id, query="循环结构", k=2, user_id=course.owner_id)
     assert hits and "循环" in hits[0].text
     assert hits[0].score >= hits[-1].score
     block = service.format_rag_block(hits)

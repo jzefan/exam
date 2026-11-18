@@ -85,6 +85,21 @@ async def get_current_user(
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
+async def get_optional_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(HTTPBearer(auto_error=False))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> User | None:
+    if credentials is None:
+        return None
+    user = await _resolve_user_from_token(credentials.credentials, db)
+    if user is None or not user.is_active or user.user_type == "external_guest":
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return user
+
+
+OptionalUser = Annotated[User | None, Depends(get_optional_user)]
+
+
 def require_roles(*role_names: str):
     """Legacy compatibility: check if user has any of the given role names in their orgs."""
 

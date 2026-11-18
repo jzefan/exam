@@ -10,11 +10,13 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.teacher_courses.access import knowledge_read_filter
+
 from app.activity_logs.service import CATEGORY_QUESTION, log_event
 from app.auth.dependencies import CurrentUser, require_roles, user_has_role
 from app.auth.models import User
 from app.common.pagination import PaginationParams, apply_filters, apply_pagination, get_total_count, parse_filters, parse_pagination
-from app.common.resource_access import can_read_shared_resource, can_write_owned_resource, teacher_visible_resource_filter
+from app.common.resource_access import can_read_shared_resource, can_write_owned_resource
 from app.database import get_db
 from app.questions.models import KnowledgePoint, Question, QuestionImportJobStatus, QuestionSource, QuestionType
 from app.questions.models import question_knowledge_points, question_tags
@@ -202,7 +204,7 @@ async def _get_visible_knowledge_point_or_404(
         KnowledgePoint.deleted_at.is_(None),
     )
     if not is_admin:
-        stmt = stmt.where(teacher_visible_resource_filter(KnowledgePoint, user.id))
+        stmt = stmt.where(knowledge_read_filter(user.id))
     kp = (await db.execute(stmt)).scalar_one_or_none()
     if kp is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge point not found")
@@ -240,7 +242,7 @@ async def _ensure_can_read_knowledge_points(
         KnowledgePoint.deleted_at.is_(None),
     )
     if not is_admin:
-        stmt = stmt.where(teacher_visible_resource_filter(KnowledgePoint, user.id))
+        stmt = stmt.where(knowledge_read_filter(user.id))
     visible_ids = set((await db.execute(stmt)).scalars().all())
     if visible_ids != requested_ids:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge point not found")
@@ -826,12 +828,12 @@ async def import_bulk_create_job_endpoint(
     await _ensure_can_read_knowledge_points(db, list(knowledge_point_ids), user, is_admin)
 
     # 题目随课程进入时未显式选题库的，落入该主知识（课程）对应的默认题库。
-    # 题库按课程归属人建库，和课程题目列表（按 course.owner_id 找题库）保持一致。
+    # 每位教师使用自己的私有题库，并立即关联课程，导入完成后即可在课程中查看。
     root_kp = await db.get(KnowledgePoint, root_knowledge_point_id)
     default_bank = None
     if root_kp is not None:
         default_bank = await get_or_create_root_knowledge_question_bank(
-            db, user_id=root_kp.owner_id or user.id, root_knowledge_point=root_kp
+            db, user_id=user.id, root_knowledge_point=root_kp
         )
         data.questions = [
             q if q.question_bank_id is not None else q.model_copy(update={"question_bank_id": default_bank.id})
@@ -840,7 +842,10 @@ async def import_bulk_create_job_endpoint(
 
     # 课程/批量导入入库的题目统一标记为"导入"来源。
     data.questions = [
-        question.model_copy(update={"source": QuestionSource.IMPORTED})
+        question.model_copy(update={
+            "source": QuestionSource.IMPORTED,
+            "knowledge_point_ids": question.knowledge_point_ids or [root_knowledge_point_id],
+        })
         for question in data.questions
     ]
     result = await bulk_create_questions_fast(db, data.questions, user.id)

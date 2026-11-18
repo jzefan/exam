@@ -27,11 +27,14 @@ describe("ResourcePreview", () => {
   beforeEach(() => {
     fetchMock.mockReset()
     vi.stubGlobal("fetch", fetchMock)
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:preview-file") })
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() })
   })
 
   it("previews pptx files client-side instead of routing through preview-html", async () => {
-    fetchMock.mockResolvedValue(
-      new Response(await createPptxFixture(), {
+    const fixture = await createPptxFixture()
+    fetchMock.mockImplementation(async () =>
+      new Response(fixture.slice(0), {
         status: 200,
         headers: { "Content-Type": "application/vnd.openxmlformats-officedocument.presentationml.presentation" },
       }),

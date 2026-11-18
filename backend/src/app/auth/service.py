@@ -132,6 +132,7 @@ async def create_user(db: AsyncSession, data: UserCreate) -> User:
             org_id = org.id
 
     if org_id:
+        user.primary_org_id = org_id
         for i, role_name in enumerate(role_names):
             result = await db.execute(
                 select(Role).where(Role.name == role_name, Role.deleted_at.is_(None))
@@ -146,6 +147,7 @@ async def create_user(db: AsyncSession, data: UserCreate) -> User:
                     is_primary_role=(i == 0),
                 ))
         await db.flush()
+        await db.refresh(user)
 
     return user
 

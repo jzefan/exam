@@ -6,6 +6,7 @@ from typing import NamedTuple
 
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.auth.models import User
 from app.auth.security import hash_password_async
@@ -31,12 +32,59 @@ from app.rbac.schemas import (
 # --- Class Management ---
 
 
+def normalize_class_name(name: str) -> str:
+    """Class names are school-scoped identities, so compare them loosely.
+
+    The same roster imported from different spreadsheets often differs only in
+    surrounding or doubled whitespace. Case is folded for English names; Chinese
+    names are unaffected.
+    """
+
+    return " ".join(name.split()).casefold()
+
+
+class ClassNameConflictError(ValueError):
+    """Raised when another class in the same school already uses this name."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"同校已存在同名班级「{name}」，请直接使用已有班级")
+
+
+class ClassLookupRow(NamedTuple):
+    """Lightweight class identity used before importing a roster.
+
+    Deliberately not an ORM entity: resolving names must not pull every student
+    of every class in the school through the ``Class.students`` relationship.
+    """
+
+    id: uuid.UUID
+    name: str
+    created_at: datetime
+    created_by_name: str | None
+
+
 async def create_class(
     db: AsyncSession,
     org_id: uuid.UUID,
     data: ClassCreate,
     created_by: uuid.UUID | None = None,
 ) -> Class:
+    normalized = normalize_class_name(data.name)
+    # Serialize class creation per school so two teachers importing the same
+    # roster name concurrently cannot both pass the existence check.
+    await db.execute(
+        select(Organization.id).where(Organization.id == org_id).with_for_update()
+    )
+    rows = await db.execute(
+        select(Class.id, Class.name).where(
+            Class.org_id == org_id,
+            Class.deleted_at.is_(None),
+        )
+    )
+    for _class_id, existing_name in rows:
+        if normalize_class_name(existing_name) == normalized:
+            raise ClassNameConflictError(existing_name)
+
     cls = Class(name=data.name, org_id=org_id, created_by=created_by)
     db.add(cls)
     await db.flush()
@@ -49,6 +97,53 @@ async def list_org_classes(db: AsyncSession, org_id: uuid.UUID) -> list[Class]:
         select(Class).where(Class.org_id == org_id, Class.deleted_at.is_(None)).order_by(Class.name)
     )
     return list(result.scalars().all())
+
+
+async def lookup_org_classes(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    names: list[str],
+) -> list[tuple[str, list[ClassLookupRow]]]:
+    """Resolve class names against the whole school, not the teacher's roster.
+
+    Class visibility is teacher-scoped, but class identity is school-scoped: a
+    teacher importing a roster must be able to reuse a colleague's class with the
+    same name instead of silently creating a duplicate.
+    """
+
+    creator = aliased(User)
+    rows = await db.execute(
+        select(Class.id, Class.name, Class.created_at, creator.full_name)
+        .outerjoin(creator, creator.id == Class.created_by)
+        .where(Class.org_id == org_id, Class.deleted_at.is_(None))
+    )
+    by_name: dict[str, list[ClassLookupRow]] = {}
+    for class_id, name, created_at, creator_name in rows:
+        by_name.setdefault(normalize_class_name(name), []).append(
+            ClassLookupRow(
+                id=class_id,
+                name=name,
+                created_at=created_at,
+                created_by_name=creator_name,
+            )
+        )
+
+    return [(name, by_name.get(normalize_class_name(name), [])) for name in names]
+
+
+async def class_member_counts(
+    db: AsyncSession,
+    class_ids: set[uuid.UUID] | list[uuid.UUID],
+) -> dict[uuid.UUID, int]:
+    ids = list(class_ids)
+    if not ids:
+        return {}
+    rows = await db.execute(
+        select(User.class_id, func.count(User.id))
+        .where(User.class_id.in_(ids), User.deleted_at.is_(None))
+        .group_by(User.class_id)
+    )
+    return {class_id: count for class_id, count in rows if class_id is not None}
 
 
 async def list_teacher_classes(db: AsyncSession, org_id: uuid.UUID, teacher_id: uuid.UUID) -> list[Class]:

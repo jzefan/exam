@@ -81,7 +81,9 @@ const { apiRequestMock, toastMock, usePermissionsMock, useGetIdentityMock, reset
     return Promise.reject(new Error(`Unexpected request: ${path}`));
   };
 
-  const apiRequestMock = vi.fn(defaultApiImplementation);
+  const apiRequestMock = vi.fn<
+    (path: string, options?: { method?: string; body?: string }) => Promise<unknown>
+  >(defaultApiImplementation);
 
   return {
     usePermissionsMock: vi.fn(() => ({ data: "teacher" })),
@@ -374,6 +376,76 @@ describe("StudentManagementPage", () => {
       expect(screen.queryByRole("table")).not.toBeInTheDocument();
     } finally {
       window.matchMedia = originalMatchMedia;
+    }
+  });
+
+  it("reuses a same-school class before importing a roster with a new class name", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    apiRequestMock.mockImplementation((path: string, options?: { method?: string; body?: string }) => {
+      if (path === "/rbac/students/classes/resolve" && options?.method === "POST") {
+        return Promise.resolve({
+          items: [
+            {
+              name: "新班",
+              matches: [
+                { id: "class-existing", name: "新班", member_count: 38, created_by_name: "colleague" },
+              ],
+            },
+          ],
+        });
+      }
+      if (path === "/rbac/students/batch" && options?.method === "POST") {
+        return Promise.resolve({ success_count: 1, failed_count: 0, errors: [] });
+      }
+      if (path === "/rbac/students/classes") {
+        return Promise.resolve([]);
+      }
+      if (path === "/rbac/students") {
+        return Promise.resolve([]);
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    try {
+      const user = userEvent.setup();
+      render(<StudentManagementPage />);
+      await user.click(await screen.findByRole("button", { name: "批量导入" }));
+
+      const XLSX = await import("xlsx");
+      const workbook = XLSX.utils.book_new();
+      const worksheet = XLSX.utils.aoa_to_sheet([
+        ["姓名", "学号", "班级"],
+        ["王五", "3256260199", "新班"],
+      ]);
+      XLSX.utils.book_append_sheet(workbook, worksheet, "sheet1");
+      const buffer = XLSX.write(workbook, { bookType: "xlsx", type: "array" }) as ArrayBuffer;
+      const file = {
+        name: "点名册.xlsx",
+        arrayBuffer: async () => buffer,
+      } as File;
+
+      const input = await waitFor(() => {
+        const element = document.querySelector('input[type="file"]');
+        expect(element).not.toBeNull();
+        return element as HTMLInputElement;
+      });
+      await user.upload(input, file);
+
+      await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
+      expect(confirmSpy.mock.calls[0][0]).toContain("同校已存在同名班级");
+
+      const batchCall = apiRequestMock.mock.calls.find(
+        ([path, options]) =>
+          path === "/rbac/students/batch" &&
+          (options as { method?: string } | undefined)?.method === "POST",
+      );
+      expect(batchCall).toBeDefined();
+      const payload = JSON.parse((batchCall?.[1] as { body: string }).body) as Array<{
+        class_id?: string;
+      }>;
+      expect(payload[0].class_id).toBe("class-existing");
+    } finally {
+      confirmSpy.mockRestore();
     }
   });
 });

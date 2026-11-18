@@ -1,3 +1,6 @@
+import { ResourceLink } from "@/components/resource-link";
+import { useCourseWorkspace } from "@/lib/course-workspace";
+import { useGetIdentity } from "@refinedev/core";
 import {
   useCallback,
   useEffect,
@@ -31,7 +34,6 @@ import {
   FileText,
   FilePlus2,
   Layers3,
-  KeyRound,
   Link2,
   ListChecks,
   LoaderCircle,
@@ -185,7 +187,6 @@ import { NewSemesterDialog } from "./NewSemesterDialog";
 import { AssociateClassesDialog } from "./AssociateClassesDialog";
 import { ClassStudentsDialog } from "./ClassStudentsDialog";
 import { CoursePublishDialog } from "./CoursePublishDialog";
-import { CoursePasswordDialog } from "./CoursePasswordDialog";
 import { GradeWeightPanel } from "./GradeWeightPanel";
 import { CourseGradebook } from "./CourseGradebook";
 import { CourseMasteryAnalytics } from "./CourseMasteryAnalytics";
@@ -704,6 +705,7 @@ function MaterialsTab({
   onAssociate,
   onGenerateFrom,
   onDelete,
+  onPreview,
 }: {
   materials: TeacherCourseMaterial[];
   canWrite: boolean;
@@ -717,6 +719,7 @@ function MaterialsTab({
   onAssociate: (material: TeacherCourseMaterial) => void;
   onGenerateFrom: (material: TeacherCourseMaterial) => void;
   onDelete: (material: TeacherCourseMaterial) => void;
+  onPreview: (material: TeacherCourseMaterial) => void;
 }) {
   const [query, setQuery] = useState("");
   const generatableCount = materials.filter(
@@ -795,9 +798,9 @@ function MaterialsTab({
                   {materialIcon(material.resource_type, material.url)}
                 </div>
                 <div className="min-w-0 flex-1 basis-[calc(100%-48px)] sm:basis-auto">
-                  <p className="truncate text-sm font-medium text-foreground">
+                  <button type="button" onClick={() => onPreview(material)} className="max-w-full truncate text-left text-sm font-medium text-foreground hover:text-primary hover:underline">
                     {material.title}
-                  </p>
+                  </button>
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                     <Badge
                       variant="secondary"
@@ -887,14 +890,13 @@ function MaterialsTab({
                     className="size-8"
                     asChild
                   >
-                    <a
-                      href={material.url}
+                    <ResourceLink href={material.url} filename={material.title}
                       target="_blank"
                       rel="noreferrer"
                       aria-label="打开资料"
                     >
                       <ExternalLink size={15} />
-                    </a>
+                    </ResourceLink>
                   </Button>
                 ) : canWrite && canGenerate ? (
                   <Button
@@ -908,7 +910,7 @@ function MaterialsTab({
                     <Eye size={15} />
                   </Button>
                 ) : null}
-                {canWrite ? (
+                {canWrite && material.can_edit ? (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button
@@ -923,14 +925,13 @@ function MaterialsTab({
                     <DropdownMenuContent align="end" className="w-40">
                       {material.url ? (
                         <DropdownMenuItem asChild>
-                          <a
-                            href={material.url}
+                          <ResourceLink href={material.url} filename={material.title}
                             target="_blank"
                             rel="noreferrer"
                           >
                             <ExternalLink size={14} className="mr-2" />
                             打开链接
-                          </a>
+                          </ResourceLink>
                         </DropdownMenuItem>
                       ) : null}
                       {canGenerate ? (
@@ -2255,6 +2256,7 @@ function QuestionsTab({
 }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const { data: editor } = useGetIdentity<{ id: string; primary_org?: { role_name: string } }>();
   // Round-tripping through the question edit page must come back to the list
   // exactly as the teacher left it (type filter included), so the return URL is
   // the current one rather than a hard-coded "?tab=questions".
@@ -2799,7 +2801,7 @@ function QuestionsTab({
                     ) : null}
                   </div>
                 }
-                actions={
+                actions={canWrite && (question.owner_id === editor?.id || editor?.primary_org?.role_name === "platform_admin") ?
                   <>
                     <TooltipButton
                       type="button"
@@ -2854,7 +2856,7 @@ function QuestionsTab({
                       <Trash2 size={13} className="sm:mr-1" />
                       <span className="hidden sm:inline">删除</span>
                     </Button>
-                  </>
+                  </> : null
                 }
               />
             ))}
@@ -3646,8 +3648,7 @@ function CourseKnowledgeNodeDialog({
                                       className="h-8 rounded-[9px]"
                                       asChild
                                     >
-                                      <a
-                                        href={material.url}
+                                      <ResourceLink href={material.url} filename={material.title}
                                         target="_blank"
                                         rel="noreferrer"
                                       >
@@ -3656,12 +3657,12 @@ function CourseKnowledgeNodeDialog({
                                           className="mr-1.5"
                                         />
                                         打开
-                                      </a>
+                                      </ResourceLink>
                                     </Button>
                                   ) : null}
                                 </div>
                               </div>
-                              {canWrite ? (
+                              {canWrite && material.can_edit ? (
                                 <div className="flex shrink-0 gap-1">
                                   <Button
                                     type="button"
@@ -4828,7 +4829,11 @@ function TodoRail({
 }
 
 export function CourseDetailPage() {
-  const { id } = useParams<{ id: string }>();
+  const { id: routeId } = useParams<{ id: string }>();
+  const workspace = useCourseWorkspace();
+  const id = workspace?.courseId ?? routeId;
+  const { data: identity } = useGetIdentity<{ primary_org?: { role_name: string } }>();
+  const isPlatformAdmin = identity?.primary_org?.role_name === "platform_admin";
   const navigate = useNavigate();
   const location = useLocation();
   const { toast } = useToast();
@@ -5045,9 +5050,8 @@ export function CourseDetailPage() {
       return next;
     }, { replace: true });
   }, [setSearchParams]);
-  const [newSemesterOpen, setNewSemesterOpen] = useState(false);
+  const [newSemesterOpen, setNewSemesterOpen] = useState(searchParams.get("create") === "semester");
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
-  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
   const [associateClassesOpen, setAssociateClassesOpen] = useState(false);
   const [classStudentsTarget, setClassStudentsTarget] = useState<SemesterClassCard | null>(null);
   const [classToRemove, setClassToRemove] = useState<SemesterClassCard | null>(null);
@@ -7171,8 +7175,8 @@ export function CourseDetailPage() {
               variant="outline"
               size="icon"
               className="size-9 shrink-0"
-              onClick={() => navigate("/courses")}
-              title="返回我的课程"
+              onClick={() => navigate(workspace ? "/" : "/courses")}
+              title={workspace ? "返回课程首页" : "返回我的课程"}
             >
               <ArrowLeft size={16} />
             </Button>
@@ -7288,13 +7292,6 @@ export function CourseDetailPage() {
         courseName={course.name}
         open={publishDialogOpen}
         onOpenChange={setPublishDialogOpen}
-      />
-
-      <CoursePasswordDialog
-        courseId={course.id}
-        courseName={course.name}
-        open={passwordDialogOpen}
-        onOpenChange={setPasswordDialogOpen}
       />
 
       <AssociateClassesDialog
@@ -7831,8 +7828,8 @@ export function CourseDetailPage() {
               variant="ghost"
               size="icon"
               className="size-9 shrink-0"
-              aria-label="返回我的课程"
-              onClick={() => navigate("/courses")}
+              aria-label={workspace ? "返回课程首页" : "返回我的课程"}
+              onClick={() => navigate(workspace ? "/" : "/courses")}
             >
               <ArrowLeft size={18} />
             </Button>
@@ -7974,7 +7971,7 @@ export function CourseDetailPage() {
             {knowledgeEditorOpen ? (
               <KnowledgeTreeEditorPage
                 tree={tree}
-                canWrite={course.can_write}
+                canWrite={Boolean(course.is_owner) && course.can_write}
                 busy={reorderingKnowledge}
                 selectedNodeId={knowledgeEditorNodeId}
                 onSelectedNodeChange={setKnowledgeEditorNodeId}
@@ -8020,6 +8017,7 @@ export function CourseDetailPage() {
                     ) : null}
                     <MaterialsTab
                       materials={filteredMaterials}
+                      onPreview={setPreviewMaterial}
                       canWrite={course.can_write}
                       questionCountByNodeId={questionCountByNodeId}
                       scopeLabel={
@@ -8177,7 +8175,7 @@ export function CourseDetailPage() {
                       existingExamTitles={exams.map((exam) => exam.title)}
                       knowledgeTree={tree}
                       canWrite={course.can_write}
-                      showClearAllQuestions={!questionFilterNode}
+                      showClearAllQuestions={Boolean(course.is_owner) && !questionFilterNode}
                       seedUsage={seedUsage}
                       onPublishedExamOrAssignment={handlePublishedFromSelection}
                       onClearAllQuestions={() => setClearQuestionsOpen(true)}
@@ -8213,7 +8211,7 @@ export function CourseDetailPage() {
                 ) : (
                   <KnowledgeTab
                     tree={tree}
-                    canWrite={course.can_write}
+                    canWrite={Boolean(course.is_owner) && course.can_write}
                     assignmentLinksByNodeId={assignmentLinksByNodeId}
                     onOpenEditor={() => {
                       setKnowledgeEditorNodeId(tree?.id ?? null);
@@ -8434,7 +8432,7 @@ export function CourseDetailPage() {
                     [
                       ["classes", "班级管理"],
                       ["weights", "成绩权重"],
-                      ["security", "分享与密码"],
+                      ["security", "访问设置"],
                     ] as const
                   ).map(([key, label]) => (
                     <button
@@ -8540,63 +8538,13 @@ export function CourseDetailPage() {
                     )}
                   </div>
                 ) : manageSubTab === "weights" ? (
-                  <GradeWeightPanel courseId={id ?? ""} canWrite={course.can_write} />
+                  <GradeWeightPanel courseId={id ?? ""} canWrite={Boolean(course.is_owner) && course.can_write} />
                 ) : (
-                  <div className="space-y-4">
-                    <p className="text-sm text-muted-foreground">
-                      课程公开发布与个人工作区独立密码配置
-                    </p>
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                      <div className="rounded-lg border border-border bg-card p-5">
-                        <div className="flex items-center gap-3">
-                          <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-                            <Link2 size={20} />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <h4 className="text-sm font-semibold">课程短链接发布</h4>
-                            <p className="mt-0.5 text-xs text-muted-foreground">
-                              生成短链接供用户或学生直接进入课程
-                            </p>
-                          </div>
-                        </div>
-                        <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-                          发布后用户无需复杂注册即可访问本课程的基础资料、题库与试卷，并可自主创建学期、班级和练习。
-                        </p>
-                        <div className="mt-4">
-                          {course.is_owner ? (
-                            <Button size="sm" variant="outline" onClick={() => setPublishDialogOpen(true)}>
-                              <Link2 size={14} className="mr-1.5" />
-                              管理短链接
-                            </Button>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">仅课程创建者可配置短链接发布</span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="rounded-lg border border-border bg-card p-5">
-                        <div className="flex items-center gap-3">
-                          <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-                            <KeyRound size={20} />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <h4 className="text-sm font-semibold">个人工作区密码</h4>
-                            <p className="mt-0.5 text-xs text-muted-foreground">
-                              设置或修改你在本课程的专属访问密码
-                            </p>
-                          </div>
-                        </div>
-                        <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-                          密码仅对当前用户的工作区生效，其他用户无法查看或修改。设置后每次直接通过短链接进入需验证该密码。
-                        </p>
-                        <div className="mt-4">
-                          <Button size="sm" variant="outline" onClick={() => setPasswordDialogOpen(true)}>
-                            <KeyRound size={14} className="mr-1.5" />
-                            配置密码
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
+                  <div className="space-y-3 py-4">
+                    {isPlatformAdmin ? <>
+                      <p className="text-sm text-muted-foreground">公开内容可通过短链接预览。教师登录后可创建自己的教学内容。</p>
+                      <Button size="sm" variant="outline" onClick={() => setPublishDialogOpen(true)}><Link2 size={14} className="mr-1.5" />管理短链接</Button>
+                    </> : <p className="text-sm text-muted-foreground">你的学期、学生和自建内容仅自己可见。课程公开短链接由平台管理员管理。</p>}
                   </div>
                 )}
               </TabsContent>
@@ -8611,7 +8559,7 @@ export function CourseDetailPage() {
           course={course}
           materials={materials}
           questions={questions}
-          canWrite={course.can_write}
+          canWrite={Boolean(course.is_owner) && course.can_write}
           onOpenChange={(nextOpen) => {
             if (!nextOpen) setSelectedKnowledgeNodeId(null);
           }}

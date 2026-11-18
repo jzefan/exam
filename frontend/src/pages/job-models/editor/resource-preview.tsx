@@ -1,3 +1,4 @@
+import { fetchResourceBlob, isProtectedResourceUrl } from "@/lib/resource-url"
 import { useState, useEffect, useRef, useCallback } from "react"
 import {
   Dialog,
@@ -238,7 +239,7 @@ function parseSlideRelationships(slidePath: string, relsXml: string | null) {
 }
 
 async function loadPptxSlides(url: string): Promise<PptxSlidePreview[]> {
-  const response = await fetch(url, { headers: authHeaders() })
+  const response = await fetch(url)
   if (!response.ok) {
     throw new Error(`文件下载失败（${response.status}）`)
   }
@@ -389,7 +390,7 @@ function PptxPreview({ url }: { url: string }) {
  * Unified document preview for .doc/.docx
  * Server-side converts to HTML via textutil, rendered in iframe to preserve all styles/tables.
  */
-function DocumentPreview({ resourceId, downloadUrl }: { resourceId: string; downloadUrl: string }) {
+function DocumentPreview({ resourceId, downloadUrl, docx = false }: { resourceId: string; downloadUrl: string; docx?: boolean }) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -398,12 +399,21 @@ function DocumentPreview({ resourceId, downloadUrl }: { resourceId: string; down
     let cancelled = false
     ;(async () => {
       try {
-        const res = await fetch(
-          `/api/job-models/models/resources/${resourceId}/preview-html`,
-          { headers: authHeaders() }
-        )
-        if (!res.ok) throw new Error(`${res.status}`)
-        const html = await res.text()
+        let html: string
+        if (docx) {
+          // Modern Word files can be previewed on every platform, without textutil.
+          const response = await fetch(downloadUrl)
+          if (!response.ok) throw new Error(`${response.status}`)
+          const mammoth = await import("mammoth")
+          html = (await mammoth.convertToHtml({ arrayBuffer: await response.arrayBuffer() })).value
+        } else {
+          const res = await fetch(
+            `/api/job-models/models/resources/${resourceId}/preview-html`,
+            { headers: authHeaders() }
+          )
+          if (!res.ok) throw new Error(`${res.status}`)
+          html = await res.text()
+        }
         if (!hasVisibleHtml(html)) {
           throw new Error("转换结果为空")
         }
@@ -421,7 +431,7 @@ function DocumentPreview({ resourceId, downloadUrl }: { resourceId: string; down
       cancelled = true
       setBlobUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null })
     }
-  }, [resourceId])
+  }, [resourceId, downloadUrl, docx])
 
   if (loading) {
     return (
@@ -444,7 +454,7 @@ function DocumentPreview({ resourceId, downloadUrl }: { resourceId: string; down
     )
   }
 
-  return <iframe src={blobUrl} className="w-full h-full rounded bg-white" title="Document Preview" />
+  return <iframe sandbox="" src={blobUrl} className="w-full h-full rounded bg-white" title="Document Preview" />
 }
 
 function FallbackPreview({ resource }: { resource: Resource }) {
@@ -462,7 +472,25 @@ function FallbackPreview({ resource }: { resource: Resource }) {
   )
 }
 
-export function ResourcePreview({ resource, open, onOpenChange }: ResourcePreviewProps) {
+export function ResourcePreview({ resource: original, open, onOpenChange }: ResourcePreviewProps) {
+  const [loaded, setLoaded] = useState<{ source: string; url: string } | null>(null)
+  const [error, setError] = useState("")
+  const protectedUrl = original?.url && isProtectedResourceUrl(original.url) ? original.url : null
+  useEffect(() => {
+    setError("")
+    setLoaded(null)
+    if (!open || !protectedUrl) return
+    const controller = new AbortController()
+    let blobUrl: string | undefined
+    fetchResourceBlob(protectedUrl, controller.signal).then((blob) => {
+      if (controller.signal.aborted) return
+      blobUrl = URL.createObjectURL(blob)
+      setLoaded({ source: protectedUrl, url: blobUrl })
+    }).catch((err: Error) => { if (!controller.signal.aborted) setError(err.message) })
+    return () => { controller.abort(); if (blobUrl) URL.revokeObjectURL(blobUrl) }
+  }, [protectedUrl, open])
+  const ready = !protectedUrl || loaded?.source === protectedUrl
+  const resource = original && { ...original, file_path: original.file_path || original.url, url: protectedUrl ? loaded?.url || null : original.url }
   const contentRef = useRef<HTMLDivElement>(null)
 
   if (!resource) return null
@@ -475,9 +503,12 @@ export function ResourcePreview({ resource, open, onOpenChange }: ResourcePrevie
 
   function renderContent() {
     if (ext === "pdf") return <PdfPreview url={url} />
+    if (["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) {
+      return <img src={url} alt={resource!.title} className="h-full w-full object-contain" />
+    }
     if (ext === "pptx") return <PptxPreview url={url} />
     if (["doc", "docx"].includes(ext)) {
-      return <DocumentPreview resourceId={resource!.id} downloadUrl={url} />
+      return <DocumentPreview key={`${resource!.id}:${url}`} resourceId={resource!.id} downloadUrl={url} docx={ext === "docx"} />
     }
 
     if (
@@ -507,7 +538,7 @@ export function ResourcePreview({ resource, open, onOpenChange }: ResourcePrevie
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl w-[90vw] h-[80vh] flex flex-col p-0 gap-0 [&>button:last-child]:hidden">
+      <DialogContent aria-describedby={undefined} className="max-w-4xl w-[90vw] h-[80vh] flex flex-col p-0 gap-0 [&>button:last-child]:hidden">
         <div className="px-4 py-3 border-b shrink-0 flex items-center">
           <DialogHeader className="flex-1 min-w-0 !space-y-0">
             <DialogTitle className="text-base truncate">{resource.title}</DialogTitle>
@@ -520,7 +551,7 @@ export function ResourcePreview({ resource, open, onOpenChange }: ResourcePrevie
           </div>
         </div>
         <div ref={contentRef} className="flex-1 overflow-hidden p-1 bg-white">
-          {renderContent()}
+          {error ? <p role="alert" className="p-6 text-sm text-destructive">{error}</p> : !ready ? <div className="flex h-full items-center justify-center"><Loader2 className="size-5 animate-spin" /></div> : renderContent()}
         </div>
       </DialogContent>
     </Dialog>

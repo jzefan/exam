@@ -32,13 +32,16 @@ import { Label } from "@/components/ui/label";
 import { apiRequest } from "@/pages/grading/api";
 import { useToast } from "@/hooks/use-toast";
 import { getPersonaCopy } from "@/lib/persona-copy";
+import { getApiErrorMessage } from "@/lib/api-error";
 import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/hooks/use-viewport";
 import {
   buildStudentBatchImportItems,
   parseStudentImportFile,
+  prepareStudentImportClasses,
   type StudentImportClassOption,
 } from "@/components/students/student-import-utils";
+import { lookupStudentImportClasses } from "@/components/students/class-lookup";
 
 type ClassItem = StudentImportClassOption;
 type StudentFilterScope = string | "all" | "unassigned";
@@ -172,8 +175,12 @@ export default function StudentManagementPage() {
       setNewClassName("");
       setIsAddClassDialogOpen(false);
       fetchClasses();
-    } catch {
-      toast({ title: "创建失败", variant: "destructive" });
+    } catch (error) {
+      toast({
+        title: "创建失败",
+        description: getApiErrorMessage(error),
+        variant: "destructive",
+      });
     }
   };
 
@@ -223,10 +230,19 @@ export default function StudentManagementPage() {
     setImporting(true);
     try {
       const rows = await parseStudentImportFile(file);
-      const { students: mappedStudents, classes: nextClasses } = await buildStudentBatchImportItems({
+      const fallbackClassId = isScopedClassSelected ? selectedClassId : undefined;
+      // Same-school classes are shared across teachers: resolve unknown names
+      // against the whole school and let the teacher reuse a colleague's class.
+      const importClasses = await prepareStudentImportClasses({
         rows,
         classes,
-        fallbackClassId: isScopedClassSelected ? selectedClassId : undefined,
+        lookup: lookupStudentImportClasses,
+        confirm: (message) => window.confirm(message),
+      });
+      const { students: mappedStudents, classes: nextClasses } = await buildStudentBatchImportItems({
+        rows,
+        classes: importClasses,
+        fallbackClassId,
         createClass: (name) =>
           apiRequest<ClassItem>("/rbac/students/classes", {
             method: "POST",
@@ -247,7 +263,7 @@ export default function StudentManagementPage() {
     } catch (error: unknown) {
       toast({
         title: "导入失败",
-        description: error instanceof Error ? error.message : "请检查导入文件后重试",
+        description: getApiErrorMessage(error, "请检查导入文件后重试"),
         variant: "destructive",
       });
     } finally {

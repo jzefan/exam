@@ -1,5 +1,5 @@
 import { apiRequest } from "@/pages/grading/api";
-import type { IQuestion, QuestionType } from "@/types";
+import type { IQuestion, IPaperDetail, IUser, QuestionType } from "@/types";
 
 /**
  * Dedupe concurrent GETs to the same URL. React 19 StrictMode + lazy + Suspense
@@ -59,6 +59,7 @@ export interface MaterialKnowledgeFragment {
 }
 
 export interface TeacherCourseMaterial {
+  can_edit?: boolean;
   id: string;
   node_id: string;
   node_name: string | null;
@@ -673,11 +674,7 @@ export interface CourseShareEnterResponse {
   course_name: string;
   alias_name: string | null;
   has_password: boolean;
-  user: {
-    id: string;
-    full_name: string;
-    username: string;
-  } | null;
+  user: IUser | null;
 }
 
 export interface CourseWorkspaceSecurityResponse {
@@ -744,3 +741,14 @@ export function enterCourseShare(
   );
 }
 
+
+export interface PublicCourseContent {
+  knowledge_points: Array<{ id: string; name: string; parent_id: string | null; description: string | null }>;
+  materials: TeacherCourseMaterial[];
+  questions: IQuestion[];
+  papers: IPaperDetail[];
+}
+
+export function getCourseShareContent(shareCode: string) {
+  return apiRequest<PublicCourseContent>(`/public/course-share/${encodeURIComponent(shareCode)}/content`);
+}

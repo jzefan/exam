@@ -9,8 +9,16 @@ from app.auth.dependencies import CurrentUser, user_has_role
 from app.database import get_db
 from app.rbac.schemas import StudentCreate, StudentRead, ClassCreate, ClassResponse, BatchImportResponse
 from app.rbac.schemas import StudentBatchDeleteRequest, StudentBatchDeleteResponse
-from app.rbac.schemas import StudentPasswordResetResponse
+from app.rbac.schemas import (
+    ClassLookupGroup,
+    ClassLookupItem,
+    ClassLookupRequest,
+    ClassLookupResponse,
+    StudentPasswordResetResponse,
+)
 from app.rbac.service import (
+    ClassNameConflictError,
+    class_member_counts,
     create_or_link_student,
     create_student, 
     delete_student_for_actor,
@@ -20,6 +28,7 @@ from app.rbac.service import (
     get_user_primary_org, 
     create_class, 
     list_org_classes, 
+    lookup_org_classes,
     delete_class,
     reset_student_password_for_actor,
 )
@@ -62,8 +71,61 @@ async def add_class(
     user: CurrentUser,
     org_id: Annotated[uuid.UUID, Depends(get_teacher_org_id)]
 ):
-    cls = await create_class(db, org_id, body, created_by=None if await is_student_admin(db, user) else user.id)
+    try:
+        cls = await create_class(db, org_id, body, created_by=None if await is_student_admin(db, user) else user.id)
+    except ClassNameConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return ClassResponse.model_validate(cls)
+
+
+@router.post("/classes/resolve", response_model=ClassLookupResponse)
+async def resolve_classes(
+    body: ClassLookupRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    _user: CurrentUser,
+    org_id: Annotated[uuid.UUID, Depends(get_teacher_org_id)],
+):
+    """Return same-school classes matching the submitted names.
+
+    Used by roster imports: when a teacher's own class list does not contain a
+    name, the name may still exist under another teacher in the same school. The
+    import flow asks the teacher to reuse that class instead of creating a
+    duplicate (or a conflicting one).
+    """
+
+    names = list(dict.fromkeys(name.strip() for name in body.names if name and name.strip()))
+    if not names:
+        return ClassLookupResponse()
+
+    groups = await lookup_org_classes(db, org_id, names)
+    all_class_ids = {row.id for _, matches in groups for row in matches}
+    counts = await class_member_counts(db, all_class_ids)
+
+    items: list[ClassLookupGroup] = []
+    for requested_name, matches in groups:
+        if not matches:
+            continue
+        ordered = sorted(
+            matches,
+            key=lambda row: (-counts.get(row.id, 0), row.created_at, str(row.id)),
+        )
+        items.append(
+            ClassLookupGroup(
+                name=requested_name,
+                matches=[
+                    ClassLookupItem(
+                        id=row.id,
+                        name=row.name,
+                        member_count=counts.get(row.id, 0),
+                        created_by_name=row.created_by_name,
+                        created_at=row.created_at,
+                    )
+                    for row in ordered
+                ],
+            )
+        )
+    return ClassLookupResponse(items=items)
+
 
 @router.delete("/classes/{class_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def remove_class(

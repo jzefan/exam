@@ -16,9 +16,12 @@ import {
   buildStudentBatchImportItems,
   getStudentImportAccount,
   parseStudentImportFile,
+  prepareStudentImportClasses,
   type StudentImportClassOption,
 } from "@/components/students/student-import-utils";
+import { lookupStudentImportClasses } from "@/components/students/class-lookup";
 import { cn } from "@/lib/utils";
+import { getApiErrorMessage } from "@/lib/api-error";
 import type { IUser } from "@/types";
 
 type SupplementMode = "import" | "manual";
@@ -369,9 +372,15 @@ export function ClassStudentSelector({
       };
 
       if (rowsToCreate.length > 0) {
-        const { students: payload } = await buildStudentBatchImportItems({
+        const importClasses = await prepareStudentImportClasses({
           rows: rowsToCreate,
           classes,
+          lookup: lookupStudentImportClasses,
+          confirm: (message) => window.confirm(message),
+        });
+        const { students: payload } = await buildStudentBatchImportItems({
+          rows: rowsToCreate,
+          classes: importClasses,
           createClass: (name) =>
             apiRequest<ClassItem>("/rbac/students/classes", {
               method: "POST",
@@ -402,9 +411,10 @@ export function ClassStudentSelector({
     } catch (error) {
       setImportResults([]);
       setImportError(
-        error instanceof Error
-          ? error.message
-          : "文件解析失败，请上传包含“姓名”，并提供“手机号”或“学号”的 Excel 文件。",
+        getApiErrorMessage(
+          error,
+          "文件解析失败，请上传包含“姓名”，并提供“手机号”或“学号”的 Excel 文件。",
+        ),
       );
     }
     if (fileRef.current) fileRef.current.value = "";
@@ -444,16 +454,38 @@ export function ClassStudentSelector({
     setIsManualSubmitting(true);
     setManualFeedback(null);
     try {
-      let classId =
-        classes.find((item) => normalizeValue(item.name) === normalizeValue(className))?.id ?? null;
+      const visibleClassMatches = classes.filter(
+        (item) => normalizeValue(item.name) === normalizeValue(className),
+      );
+      let classId = visibleClassMatches.length === 1 ? visibleClassMatches[0].id : null;
 
       if (!classId) {
-        const createdClass = await apiRequest<ClassItem>("/rbac/students/classes", {
-          method: "POST",
-          body: JSON.stringify({ name: className }),
-        });
-        classId = createdClass.id;
-        setClasses((prev) => [...prev, createdClass]);
+        const [lookup] = await lookupStudentImportClasses([className]);
+        const existing = lookup?.matches?.[0];
+        if (existing) {
+          const creator = existing.created_by_name ? `，创建人 ${existing.created_by_name}` : "";
+          const extra =
+            lookup.matches.length > 1 ? `（同校共 ${lookup.matches.length} 个同名班级，已选人数最多的）` : "";
+          const accepted = window.confirm(
+            `同校已存在同名班级「${existing.name}」（${existing.member_count} 人${creator}）${extra}。\n\n是否使用这个班级？`,
+          );
+          if (!accepted) {
+            throw new Error("已取消：同校班级不能重名，请修改班级名称。");
+          }
+          classId = existing.id;
+          setClasses((prev) =>
+            prev.some((item) => item.id === existing.id)
+              ? prev
+              : [...prev, { id: existing.id, name: existing.name }],
+          );
+        } else {
+          const createdClass = await apiRequest<ClassItem>("/rbac/students/classes", {
+            method: "POST",
+            body: JSON.stringify({ name: className }),
+          });
+          classId = createdClass.id;
+          setClasses((prev) => [...prev, createdClass]);
+        }
       }
 
       const createdStudent = await apiRequest<StudentRecord>("/rbac/students", {
@@ -476,10 +508,7 @@ export function ClassStudentSelector({
       );
       resetManualForm();
     } catch (error) {
-      setManualMessage(
-        error instanceof Error ? error.message : "手动添加失败，请稍后重试。",
-        "destructive",
-      );
+      setManualMessage(getApiErrorMessage(error, "手动添加失败，请稍后重试。"), "destructive");
     } finally {
       setIsManualSubmitting(false);
     }

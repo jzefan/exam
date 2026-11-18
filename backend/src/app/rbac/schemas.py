@@ -114,7 +114,12 @@ class StudentCreate(BaseModel):
 
 
 class ClassCreate(BaseModel):
-    name: str = Field(max_length=100)
+    name: str = Field(min_length=1, max_length=100)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def strip_name(cls, value):
+        return str(value).strip() if value is not None else value
 
 
 class ClassResponse(BaseModel):
@@ -123,6 +128,29 @@ class ClassResponse(BaseModel):
     name: str
     org_id: uuid.UUID
     created_at: datetime
+
+
+class ClassLookupRequest(BaseModel):
+    """Names to resolve inside the caller's school before creating new classes."""
+
+    names: list[str] = Field(default_factory=list, max_length=200)
+
+
+class ClassLookupItem(BaseModel):
+    id: uuid.UUID
+    name: str
+    member_count: int
+    created_by_name: str | None = None
+    created_at: datetime | None = None
+
+
+class ClassLookupGroup(BaseModel):
+    name: str
+    matches: list[ClassLookupItem] = Field(default_factory=list)
+
+
+class ClassLookupResponse(BaseModel):
+    items: list[ClassLookupGroup] = Field(default_factory=list)
 
 
 class StudentRead(BaseModel):

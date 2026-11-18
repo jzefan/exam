@@ -15,10 +15,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import httpx
-from sqlalchemy import Select, and_, func, or_, select
+from sqlalchemy import Select, and_, func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
+
+from app.teacher_courses.access import knowledge_read_filter, question_read_filter
 
 from app.auth.models import User
 from app.common.data_visibility import VisibilityScope
@@ -185,7 +187,7 @@ async def list_knowledge_points(
 ) -> list[KnowledgePoint]:
     stmt = select(KnowledgePoint).where(KnowledgePoint.deleted_at.is_(None))
     if not is_platform_admin:
-        stmt = stmt.where(teacher_visible_resource_filter(KnowledgePoint, user.id))
+        stmt = stmt.where(knowledge_read_filter(user.id))
     result = await db.execute(stmt.order_by(KnowledgePoint.name))
     return list(result.scalars().all())
 
@@ -336,15 +338,7 @@ async def clear_question_bank_questions(db: AsyncSession, bank: QuestionBank) ->
 def _question_scope_query(*, user: User | None, is_platform_admin: bool) -> Select:
     query = select(Question).where(Question.deleted_at.is_(None))
     if user is not None and not is_platform_admin:
-        query = query.outerjoin(QuestionBank, Question.question_bank_id == QuestionBank.id).where(
-            or_(
-                teacher_owned_resource_filter(Question, user.id),
-                and_(
-                    Question.question_bank_id.is_not(None),
-                    QuestionBank.visibility == VisibilityScope.PLATFORM,
-                ),
-            )
-        )
+        query = query.where(question_read_filter(user.id))
     return query
 
 

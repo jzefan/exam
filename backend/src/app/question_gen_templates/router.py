@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser
-from app.common.resource_access import teacher_visible_resource_filter
+from app.teacher_courses.access import knowledge_read_filter
 from app.database import get_db
 from app.learning.models import KnowledgePoint
 from app.question_gen_templates import service
@@ -86,7 +86,7 @@ async def _require_visible_course(db: AsyncSession, course_kp_id: uuid.UUID, use
     stmt = select(KnowledgePoint.id).where(
         KnowledgePoint.id == course_kp_id,
         KnowledgePoint.deleted_at.is_(None),
-        teacher_visible_resource_filter(KnowledgePoint, user.id),
+        knowledge_read_filter(user.id),
     )
     if (await db.execute(stmt)).first() is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="课程不存在或无权访问")

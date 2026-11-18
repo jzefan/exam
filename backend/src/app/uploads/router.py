@@ -1,9 +1,15 @@
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from typing import Annotated
+from sqlalchemy import select, or_
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.auth.dependencies import OptionalUser, user_has_role
+from app.database import get_db
+from app.job_models.models import LearningResource
+from app.teacher_courses.access import require_material_access
 from fastapi.responses import FileResponse
-
 
 router = APIRouter()
 
@@ -50,9 +56,7 @@ async def upload_file(file: UploadFile) -> dict[str, str]:
     if len(contents) > MAX_FILE_SIZE:
         raise HTTPException(status_code=400, detail="文件大小不能超过 10MB")
 
-    ext = Path(file.filename or "attachment").suffix or (
-        ".docx" if file.content_type in ALLOWED_DOC_TYPES else ".png"
-    )
+    ext = Path(file.filename or "attachment").suffix or (".docx" if file.content_type in ALLOWED_DOC_TYPES else ".png")
     filename = f"{uuid.uuid4().hex}{ext}"
     filepath = UPLOAD_DIR / filename
     filepath.write_bytes(contents)
@@ -61,9 +65,29 @@ async def upload_file(file: UploadFile) -> dict[str, str]:
 
 
 @router.get("/files/{filename}")
-async def serve_file(filename: str) -> FileResponse:
+async def serve_file(filename: str, user: OptionalUser, db: Annotated[AsyncSession, Depends(get_db)]) -> FileResponse:
     safe_name = Path(filename).name
     filepath = UPLOAD_DIR / safe_name
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="文件不存在")
-    return FileResponse(filepath)
+    resources = list(
+        await db.scalars(
+            select(LearningResource).where(
+                or_(
+                    LearningResource.url == f"/api/uploads/files/{safe_name}",
+                    LearningResource.file_path == str(filepath),
+                )
+            )
+        )
+    )
+    # Uploaded-file records are authoritative. A link to an existing URL must
+    # neither grant access to a private file nor make a public file private.
+    file_resources = [resource for resource in resources if resource.file_path]
+    for resource in file_resources or resources:
+        await require_material_access(
+            db,
+            resource,
+            user.id if user else None,
+            is_admin=bool(user and await user_has_role(db, user.id, "platform_admin")),
+        )
+    return FileResponse(filepath, headers={"Cache-Control": "private, no-store"})

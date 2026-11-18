@@ -1,3 +1,4 @@
+import { useCourseWorkspace } from "@/lib/course-workspace";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   useCreate,
@@ -398,7 +399,12 @@ export function PracticeCreate() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const location = useLocation();
-  const navState = (location.state ?? {}) as {
+  const workspace = useCourseWorkspace();
+  const navState = {
+    ...(workspace ? { courseKpId: workspace.courseId, courseName: workspace.courseName,
+      backTo: "/", successTo: "/", courseOrigin: true } : {}),
+    ...(location.state ?? {}),
+  } as {
     backTo?: string;
     backLabel?: string;
     successTo?: string;

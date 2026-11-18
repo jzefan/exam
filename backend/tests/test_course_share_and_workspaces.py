@@ -1,404 +1,403 @@
-"""Tests for course short links, direct entry, workspace passwords, and multi-user data isolation."""
+"""Public course contract across anonymous visitors, publishers and two teachers."""
 
-import uuid
 import pytest
-from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.auth.models import User
 from app.auth.schemas import UserCreate
 from app.auth.security import create_access_token
 from app.auth.service import create_user
-from app.common.data_visibility import VisibilityScope
+from app.database import get_db
 from app.job_models.models import LearningResource
 from app.learning.models import Direction, KnowledgePoint, Major
-from app.papers.models import Paper
+from app.main import app
+from app.papers.models import Paper, PaperQuestion
 from app.questions.models import Question, QuestionBank, QuestionType
 from app.questions.service import root_knowledge_question_bank_name
-from app.rbac.models import Organization, Role, UserOrganization
-from app.rbac.service import add_role_to_user
-
-
-async def _create_teacher(
-    db: AsyncSession,
-    username: str,
-    org: Organization,
-    teacher_role: Role,
-) -> tuple[User, str]:
-    user = await create_user(
-        db,
-        UserCreate(
-            username=username,
-            email=f"{username}@example.com",
-            password="password123",
-            full_name=f"Teacher {username}",
-        ),
-    )
-    user.primary_org_id = org.id
-    await add_role_to_user(db, user.id, org.id, teacher_role.id, is_primary=True)
-    await db.commit()
-    token = create_access_token(user.id, "teacher")
-    return user, token
+from app.rbac.seed import seed_roles
+from app.rbac.models import Organization
+from app.teacher_courses.models import CourseUserWorkspace
 
 
 @pytest.fixture
-async def setup_course_env(db_session: AsyncSession):
-    org = Organization(name="Test University", type="school", is_active=True)
-    db_session.add(org)
-    await db_session.flush()
+async def client(db_engine):
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
-    teacher_role = Role(name="teacher", display_name="Teacher", is_system=True)
-    db_session.add(teacher_role)
-    await db_session.flush()
+    async def override():
+        async with factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
 
+    app.dependency_overrides[get_db] = override
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        yield c
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+async def env(db_session):
+    await seed_roles(db_session)
+    db_session.add(Organization(name="Course School", type="school", is_active=True))
+    await db_session.flush()
+    result = {}
+    for name, role in [
+        ("author", "teacher"),
+        ("b", "teacher"),
+        ("c", "teacher"),
+        ("admin", "platform_admin"),
+        ("school", "school_admin"),
+        ("student", "student"),
+    ]:
+        user = await create_user(
+            db_session,
+            UserCreate(
+                username=f"course_{name}",
+                email=f"{name}@example.com",
+                password="password123",
+                full_name=name,
+                role_name=role,
+            ),
+        )
+        result[name] = {"id": user.id, "headers": {"Authorization": f"Bearer {create_access_token(user.id, role)}"}}
     major = Major(name="Computer Science")
     db_session.add(major)
     await db_session.flush()
-
-    direction = Direction(name="Python Direction", major_id=major.id)
+    direction = Direction(name="Python", major_id=major.id)
     db_session.add(direction)
     await db_session.flush()
-
-    author, author_token = await _create_teacher(db_session, "author_teacher", org, teacher_role)
-    other, other_token = await _create_teacher(db_session, "other_teacher", org, teacher_role)
-
-    # Base Course Knowledge Point
-    course = KnowledgePoint(
-        name="Python Programming Course",
-        direction_id=direction.id,
-        owner_id=author.id,
-        visibility=VisibilityScope.PRIVATE,
-    )
+    owner = result["author"]["id"]
+    course = KnowledgePoint(name="Python Course", direction_id=direction.id, owner_id=owner)
     db_session.add(course)
     await db_session.flush()
-
-    # Sub-knowledge point
-    kp1 = KnowledgePoint(
-        name="Variables and Types",
-        parent_id=course.id,
-        owner_id=author.id,
-        visibility=VisibilityScope.PRIVATE,
-    )
-    db_session.add(kp1)
+    kp = KnowledgePoint(name="Variables", parent_id=course.id, owner_id=owner)
+    bank = QuestionBank(name=root_knowledge_question_bank_name(course.name), owner_id=owner)
+    db_session.add_all([kp, bank])
     await db_session.flush()
-
-    # Course default question bank
-    bank = QuestionBank(
-        name=root_knowledge_question_bank_name(course.name),
-        owner_id=author.id,
-        visibility=VisibilityScope.PRIVATE,
-    )
-    db_session.add(bank)
-    await db_session.flush()
-
-    # Base question
-    base_q = Question(
+    q = Question(
         type=QuestionType.CHOICE,
-        title="What is type(42)?",
-        content={"stem": "What is type(42)?"},
-        options={"A": "int", "B": "str"},
-        answer={"answer": "A"},
+        title="Base question",
+        content={"stem": "1+1?"},
+        options={"A": "2", "B": "3"},
+        answer={"correct": "A"},
         difficulty=1,
-        score=5.0,
+        score=5,
+        owner_id=owner,
+        created_by=owner,
         question_bank_id=bank.id,
-        owner_id=author.id,
-        created_by=author.id,
     )
-    base_q.knowledge_points.append(kp1)
-    db_session.add(base_q)
-    await db_session.flush()
-
-    # Base material
-    base_mat = LearningResource(
-        node_id=course.id,
+    q.knowledge_points.append(kp)
+    material = LearningResource(
+        node_id=kp.id,
         node_type="kp",
-        resource_type="document",
-        title="Course Syllabus",
-        url="/api/uploads/syllabus.pdf",
-        uploaded_by=author.id,
+        resource_type="link",
+        title="Base material",
+        url="https://example.com/course",
+        uploaded_by=owner,
     )
-    db_session.add(base_mat)
+    paper = Paper(
+        title="Base paper", root_knowledge_point_id=course.id, is_reusable=True, owner_id=owner, created_by=owner
+    )
+    db_session.add_all([q, material, paper])
     await db_session.flush()
-
-    # Base paper
-    base_paper = Paper(
-        title="Midterm Exam Paper",
-        root_knowledge_point_id=course.id,
-        owner_id=author.id,
-        created_by=author.id,
-        is_reusable=True,
-    )
-    db_session.add(base_paper)
+    db_session.add(PaperQuestion(paper_id=paper.id, question_id=q.id, order=0))
     await db_session.commit()
+    return {**result, "course": str(course.id), "kp": str(kp.id), "question": str(q.id), "paper": str(paper.id)}
 
-    return {
-        "org": org,
-        "author": author,
-        "author_token": author_token,
-        "other": other,
-        "other_token": other_token,
-        "course": course,
-        "kp1": kp1,
-        "base_q": base_q,
-        "base_mat": base_mat,
-        "base_paper": base_paper,
+
+async def publish(client, env):
+    r = await client.post(f"/api/teacher/courses/{env['course']}/publish-link", headers=env["admin"]["headers"])
+    assert r.status_code == 200, r.text
+    return r.json()["share_code"]
+
+
+async def enter(client, env, code):
+    r = await client.post(f"/api/public/course-share/{code}/enter", headers=env["b"]["headers"], json={})
+    assert r.status_code == 200, r.text
+    assert r.json()["access_token"] is None
+    assert r.json()["user"]["id"] == str(env["b"]["id"])
+    assert r.json()["user"]["primary_org"]["role_name"] == "teacher"
+
+
+async def test_only_platform_admin_publishes(client, env):
+    path = f"/api/teacher/courses/{env['course']}/publish-link"
+    for who in ("author", "b", "school"):
+        assert (await client.post(path, headers=env[who]["headers"])).status_code == 403
+    code = await publish(client, env)
+    for who in ("author", "b", "school"):
+        assert (await client.delete(path, headers=env[who]["headers"])).status_code == 403
+    assert (await client.delete(path, headers=env["admin"]["headers"])).status_code == 204
+    for suffix in ("", "/content"):
+        assert (await client.get(f"/api/public/course-share/{code}{suffix}")).status_code == 404
+
+
+async def test_public_preview_is_read_only(client, env, db_session):
+    code = await publish(client, env)
+    count = await db_session.scalar(select(func.count(User.id)))
+    r = await client.get(f"/api/public/course-share/{code}/content")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert len(data["knowledge_points"]) == 2
+    assert data["questions"][0]["id"] == env["question"]
+    assert data["papers"][0]["questions"][0]["question_id"] == env["question"]
+    assert data["materials"][0]["title"] == "Base material"
+    assert (await client.post(f"/api/public/course-share/{code}/enter", json={})).status_code in (401, 403)
+    assert (
+        await client.post(f"/api/public/course-share/{code}/enter", json={}, headers=env["student"]["headers"])
+    ).status_code == 403
+    assert await db_session.scalar(select(func.count(User.id))) == count
+    assert await db_session.scalar(select(func.count(CourseUserWorkspace.id))) == 0
+
+
+async def test_teacher_student_semester_exam_flow(client, env):
+    cid = env["course"]
+    b = env["b"]["headers"]
+    c = env["c"]["headers"]
+    await enter(client, env, await publish(client, env))
+    cls = await client.post("/api/rbac/students/classes", headers=b, json={"name": "B class"})
+    assert cls.status_code == 201, cls.text
+    student = await client.post(
+        "/api/rbac/students",
+        headers=b,
+        json={"full_name": "B student", "student_id": "share-b-student", "class_id": cls.json()["id"]},
+    )
+    assert student.status_code == 201, student.text
+    sem = await client.post(
+        f"/api/teacher/courses/{cid}/semesters", headers=b, json={"name": "Spring", "class_ids": [cls.json()["id"]]}
+    )
+    assert sem.status_code == 201, sem.text
+    assert (await client.get("/api/rbac/students", headers=c)).json() == []
+    assert (await client.get(f"/api/teacher/courses/{cid}/semesters", headers=c)).json() == []
+    assert (
+        await client.patch(
+            f"/api/teacher/courses/{cid}/semesters/{sem.json()['id']}/classes", headers=c, json={"class_ids": []}
+        )
+    ).status_code == 403
+    assert (
+        await client.post(
+            f"/api/teacher/courses/{cid}/semesters", headers=c, json={"name": "No", "class_ids": [cls.json()["id"]]}
+        )
+    ).status_code == 404
+    grade = await client.get(f"/api/teacher/courses/{cid}/grade-summary", headers=b)
+    assert grade.status_code == 200, grade.text
+    for category, suffix in [("exam", "exams"), ("practice", "assignments")]:
+        exam = await client.post(
+            "/api/exams",
+            headers=b,
+            json={
+                "title": category,
+                "category": category,
+                "status": "ongoing",
+                "course_kp_id": cid,
+                "course_semester_id": sem.json()["id"],
+                "question_ids": [env["question"]],
+                "student_ids": [student.json()["id"]],
+            },
+        )
+        assert exam.status_code == 201, exam.text
+        assert (await client.post(f"/api/exams/{exam.json()['id']}/public-link", headers=b)).status_code == 201
+        assert (await client.get(f"/api/teacher/courses/{cid}/{suffix}", headers=c)).json() == []
+    assert any(x["id"] == cid for x in (await client.get("/api/teacher/courses", headers=b)).json())
+
+
+async def test_shared_references_and_private_question_paper(client, env):
+    cid = env["course"]
+    b = env["b"]["headers"]
+    c = env["c"]["headers"]
+    assert (await client.get(f"/api/papers/{env['paper']}", headers=c)).status_code == 404
+    code = await publish(client, env)
+    await enter(client, env, code)
+    r = await client.get(f"/api/questions/{env['question']}", headers=b)
+    assert r.status_code == 200, r.text
+    q = await client.post(
+        "/api/questions",
+        headers=b,
+        json={
+            "type": "choice",
+            "title": "B private",
+            "difficulty": 1,
+            "content": {"stem": "2+2?"},
+            "options": {"A": "4", "B": "5"},
+            "answer": {"correct": "A"},
+            "knowledge_point_ids": [env["kp"]],
+        },
+    )
+    assert q.status_code == 201, q.text
+    qid = q.json()["id"]
+    for suffix in ("questions", "questions/paginated"):
+        own = (await client.get(f"/api/teacher/courses/{cid}/{suffix}", headers=b)).json()
+        other = (await client.get(f"/api/teacher/courses/{cid}/{suffix}", headers=c)).json()
+        if isinstance(own, dict):
+            own, other = own["items"], other["items"]
+        assert any(x["id"] == qid for x in own)
+        assert all(x["id"] != qid for x in other)
+    assert (await client.get(f"/api/questions/{qid}", headers=c)).status_code == 404
+    paper = await client.post(
+        "/api/papers",
+        headers=b,
+        json={
+            "title": "B private paper",
+            "root_knowledge_point_id": cid,
+            "source_paper_id": env["paper"],
+            "question_items": [{"question_id": env["question"]}, {"question_id": qid}],
+        },
+    )
+    assert paper.status_code == 201, paper.text
+    assert (await client.get(f"/api/papers/{paper.json()['id']}", headers=c)).status_code == 404
+    assert (await client.post("/api/exams", headers=c, json={"title": "No", "question_ids": [qid]})).status_code == 404
+    preview = (await client.get(f"/api/public/course-share/{code}/content")).json()
+    assert all(x["id"] != qid for x in preview["questions"])
+    assert all(x["id"] != paper.json()["id"] for x in preview["papers"])
+    stats = (await client.get(f"/api/public/course-share/{code}")).json()["stats"]
+    assert stats["question_count"] == 1 and stats["paper_count"] == 1
+
+
+@pytest.mark.parametrize("stale_path", [False, True])
+async def test_private_material_all_access_paths(client, env, monkeypatch, tmp_path, db_session, stale_path):
+    from app.job_models import router as resources
+    from app.uploads import router as uploads
+
+    monkeypatch.setattr(resources, "UPLOAD_DIR", tmp_path)
+    monkeypatch.setattr(uploads, "UPLOAD_DIR", tmp_path)
+    cid = env["course"]
+    b = env["b"]["headers"]
+    c = env["c"]["headers"]
+    code = await publish(client, env)
+    upload = await client.post(
+        f"/api/job-models/models/nodes/{cid}/resources/upload",
+        headers=b,
+        data={"title": "B private.txt", "node_type": "kp"},
+        files={"file": ("private.txt", b"PRIVATE", "text/plain")},
+    )
+    assert upload.status_code == 201, upload.text
+    r = upload.json()
+    rid = r["id"]
+    for path in (f"/api/teacher/courses/{cid}/materials", f"/api/job-models/models/nodes/{cid}/resources"):
+        assert any(x["id"] == rid for x in (await client.get(path, headers=b)).json())
+        assert all(x["id"] != rid for x in (await client.get(path, headers=c)).json())
+    assert (await client.get(r["url"], headers=b)).content == b"PRIVATE"
+    assert (await client.get(r["url"], headers=c)).status_code == 404
+    copied = await client.post(
+        f"/api/job-models/models/nodes/{cid}/resources?node_type=kp",
+        headers=c,
+        json={"title": "A URL is not an access grant", "resource_type": "link", "url": r["url"]},
+    )
+    assert copied.status_code == 201
+    assert (await client.get(r["url"], headers=c)).status_code == 404
+    assert (await client.get(r["url"], headers=b)).content == b"PRIVATE"
+    assert (await client.get(r["url"])).status_code == 404
+    assert (
+        await client.patch(f"/api/job-models/models/resources/{rid}", headers=c, json={"title": "stolen"})
+    ).status_code == 403
+    assert (await client.delete(f"/api/job-models/models/resources/{rid}", headers=c)).status_code == 403
+    assert (await client.get(f"/api/job-models/models/resources/{rid}/preview-html", headers=c)).status_code == 404
+    assert all(
+        x["id"] != rid for x in (await client.get(f"/api/public/course-share/{code}/content")).json()["materials"]
+    )
+    if stale_path:
+        import uuid
+
+        record = await db_session.get(LearningResource, uuid.UUID(rid))
+        record.file_path = "/old-deployment/uploads/" + r["url"].rsplit("/", 1)[-1]
+        await db_session.commit()
+    assert (await client.delete(f"/api/job-models/models/resources/{rid}", headers=b)).status_code == 204
+    assert (await client.get(r["url"])).status_code == 404
+    if stale_path:
+        assert (tmp_path / r["url"].rsplit("/", 1)[-1]).exists()
+
+
+async def test_registered_teacher_can_enter_and_manage_students(client, env):
+    code = await publish(client, env)
+    account = {
+        "username": "new_course_teacher",
+        "password": "password123",
+        "full_name": "新教师",
+        "role_name": "teacher",
     }
-
-
-@pytest.mark.asyncio
-async def test_course_publish_link_crud(client: AsyncClient, setup_course_env: dict):
-    env = setup_course_env
-    course_id = env["course"].id
-    author_auth = {"Authorization": f"Bearer {env['author_token']}"}
-    other_auth = {"Authorization": f"Bearer {env['other_token']}"}
-
-    # 1. Other teacher cannot publish author's course
-    resp = await client.post(f"/api/teacher/courses/{course_id}/publish-link", headers=other_auth)
-    assert resp.status_code == 403
-
-    # 2. Author creates publish link
-    resp = await client.post(f"/api/teacher/courses/{course_id}/publish-link", headers=author_auth)
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["course_id"] == str(course_id)
-    assert data["is_active"] is True
-    assert "share_code" in data
-    assert f"/c/{data['share_code']}" in data["share_url"]
-    share_code = data["share_code"]
-
-    # 3. Get publish link status
-    resp = await client.get(f"/api/teacher/courses/{course_id}/publish-link", headers=author_auth)
-    assert resp.status_code == 200
-    assert resp.json()["share_code"] == share_code
-    assert resp.json()["is_active"] is True
-
-    # 4. Revoke publish link
-    resp = await client.delete(f"/api/teacher/courses/{course_id}/publish-link", headers=author_auth)
-    assert resp.status_code == 204
-
-    # Now get returns null
-    resp = await client.get(f"/api/teacher/courses/{course_id}/publish-link", headers=author_auth)
-    assert resp.status_code == 200
-    assert resp.json() is None
-
-
-@pytest.mark.asyncio
-async def test_course_share_public_preview_and_direct_entry(client: AsyncClient, setup_course_env: dict):
-    env = setup_course_env
-    course_id = env["course"].id
-    author_auth = {"Authorization": f"Bearer {env['author_token']}"}
-
-    # Author publishes link
-    resp = await client.post(f"/api/teacher/courses/{course_id}/publish-link", headers=author_auth)
-    share_code = resp.json()["share_code"]
-
-    # Public preview without any token
-    preview_resp = await client.get(f"/api/public/course-share/{share_code}")
-    assert preview_resp.status_code == 200
-    preview_data = preview_resp.json()
-    assert preview_data["course_name"] == "Python Programming Course"
-    assert preview_data["stats"]["knowledge_point_count"] == 1
-    assert preview_data["stats"]["material_count"] == 1
-    assert preview_data["stats"]["question_count"] == 1
-    assert preview_data["stats"]["paper_count"] == 1
-
-    # Direct Entry as a new visitor (no login required!)
-    enter_resp = await client.post(
-        f"/api/public/course-share/{share_code}/enter",
-        json={"alias_name": "访客李老师"},
+    registered = await client.post("/api/auth/register", json=account)
+    assert registered.status_code == 201, registered.text
+    assert registered.json()["primary_org"]["role_name"] == "teacher"
+    login = await client.post(
+        "/api/auth/login",
+        json={"username": account["username"], "password": account["password"], "role_name": "teacher"},
     )
-    assert enter_resp.status_code == 200
-    enter_data = enter_resp.json()
-    assert enter_data["requires_password"] is False
-    assert enter_data["course_id"] == str(course_id)
-    assert enter_data["access_token"] is not None
-    assert enter_data["workspace_key"] is not None
-    guest_token = enter_data["access_token"]
-    ws_key = enter_data["workspace_key"]
-
-    # Use guest token to fetch course details directly
-    guest_auth = {"Authorization": f"Bearer {guest_token}"}
-    detail_resp = await client.get(f"/api/teacher/courses/{course_id}", headers=guest_auth)
-    assert detail_resp.status_code == 200
-    detail_data = detail_resp.json()
-    assert detail_data["name"] == "Python Programming Course"
-    assert detail_data["can_write"] is True  # Can write in workspace!
-    assert detail_data["is_owner"] is False  # But not root course owner
+    assert login.status_code == 200, login.text
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    assert (await client.post(f"/api/public/course-share/{code}/enter", json={}, headers=headers)).status_code == 200
+    assert (
+        await client.post("/api/rbac/students/classes", json={"name": "新教师班级"}, headers=headers)
+    ).status_code == 201
 
 
-@pytest.mark.asyncio
-async def test_course_workspace_password_flow(client: AsyncClient, setup_course_env: dict):
-    env = setup_course_env
-    course_id = env["course"].id
-    author_auth = {"Authorization": f"Bearer {env['author_token']}"}
-
-    # Author publishes
-    pub_resp = await client.post(f"/api/teacher/courses/{course_id}/publish-link", headers=author_auth)
-    share_code = pub_resp.json()["share_code"]
-
-    # 1. Visitor enters
-    enter_resp = await client.post(
-        f"/api/public/course-share/{share_code}/enter",
-        json={"alias_name": "王老师"},
+async def test_imported_questions_stay_in_teachers_course(client, env):
+    code = await publish(client, env)
+    await enter(client, env, code)
+    result = await client.post(
+        "/api/questions/import/bulk-create-job",
+        headers=env["b"]["headers"],
+        json={
+            "root_knowledge_point_id": env["course"],
+            "skip_knowledge_matching": True,
+            "questions": [
+                {
+                    "type": "short_answer",
+                    "title": "Private imported question",
+                    "content": {"text": "Explain a variable"},
+                    "answer": {"points": ["Named storage"]},
+                    "difficulty": 1,
+                    "score": 5,
+                }
+            ],
+        },
     )
-    enter_data = enter_resp.json()
-    guest_token = enter_data["access_token"]
-    ws_key = enter_data["workspace_key"]
-    guest_auth = {"Authorization": f"Bearer {guest_token}"}
+    assert result.status_code == 201, result.text
+    own = (await client.get(f"/api/teacher/courses/{env['course']}/questions", headers=env["b"]["headers"])).json()
+    other = (await client.get(f"/api/teacher/courses/{env['course']}/questions", headers=env["c"]["headers"])).json()
+    assert any(q["title"] == "Private imported question" for q in own)
+    assert all(q["title"] != "Private imported question" for q in other)
 
-    # 2. Check security initially: no password
-    sec_resp = await client.get(f"/api/teacher/courses/{course_id}/workspace-security", headers=guest_auth)
-    assert sec_resp.status_code == 200
-    assert sec_resp.json()["has_password"] is False
 
-    # 3. Set workspace password
-    set_resp = await client.post(
-        f"/api/teacher/courses/{course_id}/workspace-security/password",
-        json={"password": "mypassword888"},
-        headers=guest_auth,
+async def test_knowledge_retrieval_does_not_expose_private_material(client, env, db_session, monkeypatch):
+    import uuid
+    from app.course_kb import service as kb_service
+    from app.course_kb.models import CourseMaterialChunk
+
+    await publish(client, env)
+    resource = await client.post(
+        f"/api/job-models/models/nodes/{env['course']}/resources?node_type=kp",
+        headers=env["b"]["headers"],
+        json={"title": "Private knowledge", "resource_type": "link", "url": "https://example.com/private"},
     )
-    assert set_resp.status_code == 200
-    assert set_resp.json()["has_password"] is True
-
-    # 4. Now visitor visits short link again with workspace_key but no password
-    re_enter_no_pwd = await client.post(
-        f"/api/public/course-share/{share_code}/enter",
-        json={"workspace_key": ws_key},
+    assert resource.status_code == 201
+    db_session.add(
+        CourseMaterialChunk(
+            resource_id=uuid.UUID(resource.json()["id"]),
+            course_kp_id=uuid.UUID(env["course"]),
+            node_id=uuid.UUID(env["course"]),
+            ordinal=0,
+            heading_path=["Private"],
+            chunk_type="text",
+            text="Teacher B private knowledge",
+            token_count=6,
+            embedding=[1.0, 0.0],
+        )
     )
-    assert re_enter_no_pwd.status_code == 200
-    assert re_enter_no_pwd.json()["requires_password"] is True
-    assert re_enter_no_pwd.json()["has_password"] is True
-
-    # 5. Wrong password -> 401
-    wrong_pwd = await client.post(
-        f"/api/public/course-share/{share_code}/enter",
-        json={"workspace_key": ws_key, "password": "wrongpassword"},
-    )
-    assert wrong_pwd.status_code == 401
-
-    # 6. Correct password -> 200 with new token
-    correct_pwd = await client.post(
-        f"/api/public/course-share/{share_code}/enter",
-        json={"workspace_key": ws_key, "password": "mypassword888"},
-    )
-    assert correct_pwd.status_code == 200
-    assert correct_pwd.json()["access_token"] is not None
-    assert correct_pwd.json()["requires_password"] is False
-
-
-@pytest.mark.asyncio
-async def test_user_data_isolation_and_shared_base_resources(
-    client: AsyncClient, setup_course_env: dict, db_session: AsyncSession
-):
-    env = setup_course_env
-    course_id = env["course"].id
-    author_auth = {"Authorization": f"Bearer {env['author_token']}"}
-
-    pub_resp = await client.post(f"/api/teacher/courses/{course_id}/publish-link", headers=author_auth)
-    share_code = pub_resp.json()["share_code"]
-
-    # User B enters via share link
-    resp_b = await client.post(f"/api/public/course-share/{share_code}/enter", json={"alias_name": "Teacher B"})
-    token_b = resp_b.json()["access_token"]
-    auth_b = {"Authorization": f"Bearer {token_b}"}
-
-    # User C enters via share link
-    resp_c = await client.post(f"/api/public/course-share/{share_code}/enter", json={"alias_name": "Teacher C"})
-    token_c = resp_c.json()["access_token"]
-    auth_c = {"Authorization": f"Bearer {token_c}"}
-
-    # --- Verification 1: Base resources are visible to both User B and User C ---
-    mats_b = (await client.get(f"/api/teacher/courses/{course_id}/materials", headers=auth_b)).json()
-    mats_c = (await client.get(f"/api/teacher/courses/{course_id}/materials", headers=auth_c)).json()
-    assert any(m["title"] == "Course Syllabus" for m in mats_b)
-    assert any(m["title"] == "Course Syllabus" for m in mats_c)
-
-    qs_b = (await client.get(f"/api/teacher/courses/{course_id}/questions", headers=auth_b)).json()
-    qs_c = (await client.get(f"/api/teacher/courses/{course_id}/questions", headers=auth_c)).json()
-    assert any(q["title"] == "What is type(42)?" for q in qs_b)
-    assert any(q["title"] == "What is type(42)?" for q in qs_c)
-
-    papers_b = (await client.get("/api/papers", headers=auth_b)).json()
-    papers_c = (await client.get("/api/papers", headers=auth_c)).json()
-    assert any(p["title"] == "Midterm Exam Paper" for p in papers_b)
-    assert any(p["title"] == "Midterm Exam Paper" for p in papers_c)
-
-    # --- Verification 2: User B adds a private material ---
-    user_b_id = uuid.UUID(resp_b.json()["user"]["id"])
-    priv_mat = LearningResource(
-        node_id=course_id,
-        node_type="kp",
-        resource_type="document",
-        title="Teacher B Private Notes",
-        url="/api/uploads/b_notes.pdf",
-        uploaded_by=user_b_id,
-    )
-    db_session.add(priv_mat)
-
-    # User B adds a private question
-    bank_stmt = select(QuestionBank).where(
-        QuestionBank.owner_id == env["author"].id,
-        QuestionBank.name == root_knowledge_question_bank_name(env["course"].name),
-    )
-    bank = (await db_session.execute(bank_stmt)).scalar_one()
-
-    priv_q = Question(
-        type=QuestionType.CHOICE,
-        title="Teacher B Private Question",
-        content={"stem": "What is 2+2?"},
-        options={"A": "4", "B": "5"},
-        answer={"answer": "A"},
-        difficulty=1,
-        score=5.0,
-        question_bank_id=bank.id,
-        owner_id=user_b_id,
-        created_by=user_b_id,
-    )
-    priv_q.knowledge_points.append(env["kp1"])
-    db_session.add(priv_q)
-
-    # User B adds a private paper
-    priv_paper = Paper(
-        title="Teacher B Practice Paper",
-        root_knowledge_point_id=course_id,
-        owner_id=user_b_id,
-        created_by=user_b_id,
-        is_reusable=True,
-    )
-    db_session.add(priv_paper)
     await db_session.commit()
 
-    # --- Verification 3: User B sees their private additions; User C DOES NOT ---
-    mats_b_after = (await client.get(f"/api/teacher/courses/{course_id}/materials", headers=auth_b)).json()
-    mats_c_after = (await client.get(f"/api/teacher/courses/{course_id}/materials", headers=auth_c)).json()
-    assert any(m["title"] == "Teacher B Private Notes" for m in mats_b_after)
-    assert not any(m["title"] == "Teacher B Private Notes" for m in mats_c_after)
+    async def fake_embed(texts):
+        return [[1.0, 0.0] for _ in texts]
 
-    qs_b_after = (await client.get(f"/api/teacher/courses/{course_id}/questions", headers=auth_b)).json()
-    qs_c_after = (await client.get(f"/api/teacher/courses/{course_id}/questions", headers=auth_c)).json()
-    assert any(q["title"] == "Teacher B Private Question" for q in qs_b_after)
-    assert not any(q["title"] == "Teacher B Private Question" for q in qs_c_after)
-
-    papers_b_after = (await client.get("/api/papers", headers=auth_b)).json()
-    papers_c_after = (await client.get("/api/papers", headers=auth_c)).json()
-    assert any(p["title"] == "Teacher B Practice Paper" for p in papers_b_after)
-    assert not any(p["title"] == "Teacher B Practice Paper" for p in papers_c_after)
-
-    # --- Verification 4: User B can create their own semester ---
-    sem_resp = await client.post(
-        f"/api/teacher/courses/{course_id}/semesters",
-        json={"name": "2026 Spring Class B", "class_ids": []},
-        headers=auth_b,
-    )
-    assert sem_resp.status_code == 201
-    sem_data = sem_resp.json()
-    assert sem_data["name"] == "2026 Spring Class B"
-
-    # User B sees the semester
-    sems_b = (await client.get(f"/api/teacher/courses/{course_id}/semesters", headers=auth_b)).json()
-    assert any(s["name"] == "2026 Spring Class B" for s in sems_b)
-
-    # User C does NOT see User B's semester!
-    sems_c = (await client.get(f"/api/teacher/courses/{course_id}/semesters", headers=auth_c)).json()
-    assert not any(s["name"] == "2026 Spring Class B" for s in sems_c)
+    monkeypatch.setattr(kb_service, "embed_texts", fake_embed)
+    for who, expected in [("b", 1), ("c", 0)]:
+        stats = await client.get(f"/api/teacher/courses/{env['course']}/kb/stats", headers=env[who]["headers"])
+        assert stats.status_code == 200, stats.text
+        assert stats.json()["chunk_count"] == expected
+        hits = await client.get(
+            f"/api/teacher/courses/{env['course']}/kb/search?q=knowledge", headers=env[who]["headers"]
+        )
+        assert hits.status_code == 200, hits.text
+        assert len(hits.json()) == expected

@@ -1,3 +1,4 @@
+import { useGetIdentity } from "@refinedev/core";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
@@ -93,7 +94,8 @@ function CourseCard({
   const navigate = useNavigate();
   const showMajorLabel = course.major_name != null;
   const isDeleted = course.is_deleted;
-  const canPublish = !isDeleted && (course.is_owner ?? course.can_write);
+  const { data: identity } = useGetIdentity<{ primary_org?: { role_name: string } }>();
+  const canPublish = !isDeleted && identity?.primary_org?.role_name === "platform_admin";
 
   return (
     <Card

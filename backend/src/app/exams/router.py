@@ -7,7 +7,7 @@ from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from sqlalchemy import delete, select
+from sqlalchemy import delete, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -34,7 +34,10 @@ from app.exams.models import (
     StudentExamSubmission,
     StudentExamSubmissionAnswer,
 )
-from app.teacher_courses.models import ExamSemesterAssignment
+from app.teacher_courses.models import CourseSemester, ExamSemesterAssignment
+from app.teacher_courses.access import knowledge_read_filter, question_read_filter
+from app.rbac.models import TeacherStudent
+from app.auth.models import User
 from app.exams.schemas import (
     AnalysisOverall,
     AnswerRecord,
@@ -322,6 +325,52 @@ async def _sync_questions(db: AsyncSession, exam_id: uuid.UUID, question_items: 
         )
 
 
+async def _validate_exam_references(
+    db, user, *, question_ids=(), student_ids=(), course_id=None, semester_id=None, exam_id=None
+):
+    if await _is_exam_admin(db, user.id):
+        return
+    ids = set(question_ids)
+    if ids:
+        visible = set(
+            await db.scalars(
+                select(Question.id).where(
+                    Question.id.in_(ids),
+                    Question.deleted_at.is_(None),
+                    question_read_filter(user.id),
+                )
+            )
+        )
+        if visible != ids:
+            raise HTTPException(404, "题目不存在或无权使用")
+    ids = {uuid.UUID(str(sid)) for sid in student_ids}
+    if ids:
+        owned = exists().where(TeacherStudent.teacher_id == user.id, TeacherStudent.student_id == User.id)
+        if exam_id is not None:
+            owned = or_(owned, exists().where(ExamStudent.exam_id == exam_id, ExamStudent.student_id == User.id))
+        visible = set(await db.scalars(select(User.id).where(User.id.in_(ids), User.deleted_at.is_(None), owned)))
+        if visible != ids:
+            raise HTTPException(404, "学生不存在或不在当前教师名下")
+    if course_id is not None and not await db.scalar(
+        select(KnowledgePoint.id).where(
+            KnowledgePoint.id == course_id,
+            KnowledgePoint.deleted_at.is_(None),
+            knowledge_read_filter(user.id),
+        )
+    ):
+        raise HTTPException(404, "课程不存在或无权访问")
+    if semester_id is not None:
+        semester = await db.scalar(
+            select(CourseSemester).where(
+                CourseSemester.id == semester_id,
+                CourseSemester.owner_id == user.id,
+                CourseSemester.deleted_at.is_(None),
+            )
+        )
+        if semester is None or (course_id is not None and semester.course_id != course_id):
+            raise HTTPException(404, "学期不存在或不属于当前课程")
+
+
 async def _unique_exam_title_for_owner(
     db: AsyncSession,
     *,
@@ -602,6 +651,9 @@ async def create_exam(
     db: Annotated[AsyncSession, Depends(get_db)],
     user: CurrentUser,
 ) -> ExamDetailResponse:
+    await _validate_exam_references(db, user,
+        question_ids=[q.question_id for q in body.question_items] or body.question_ids,
+        student_ids=body.student_ids, course_id=body.course_kp_id, semester_id=body.course_semester_id)
     exam = Exam(
         category=body.category,
         title=body.title,
@@ -661,6 +713,9 @@ async def update_exam(
     user: CurrentUser,
 ) -> ExamDetailResponse:
     exam = await _get_writable_exam_or_404(db, exam_id, user)
+    await _validate_exam_references(db, user,
+        question_ids=[q.question_id for q in body.question_items or []] or body.question_ids or [],
+        student_ids=body.student_ids or [], course_id=body.course_kp_id, exam_id=exam_id)
 
     data = body.model_dump(exclude_unset=True)
     has_explicit_total_score = "total_score" in data
@@ -825,6 +880,7 @@ async def add_exam_questions(
     user: CurrentUser,
 ) -> dict:
     await _get_writable_exam_or_404(db, exam_id, user)
+    await _validate_exam_references(db, user, question_ids=[q.question_id for q in body])
 
     for item in body:
         db.add(
@@ -1251,6 +1307,7 @@ async def add_exam_students(
     await _get_writable_exam_or_404(db, exam_id, user)
 
     student_ids = body.get("student_ids", [])
+    await _validate_exam_references(db, user, student_ids=student_ids, exam_id=exam_id)
     for sid in student_ids:
         db.add(ExamStudent(exam_id=exam_id, student_id=uuid.UUID(sid)))
     await db.commit()

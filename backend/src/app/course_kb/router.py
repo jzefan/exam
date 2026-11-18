@@ -11,8 +11,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.teacher_courses.access import (
+    course_nodes,
+    knowledge_read_filter,
+    material_read_filter,
+    require_material_access,
+)
+
 from app.auth.dependencies import CurrentUser
-from app.common.resource_access import teacher_visible_resource_filter
 from app.course_kb import service
 from app.database import get_db
 from app.job_models.models import LearningResource
@@ -44,7 +50,7 @@ async def _visible_course(db: AsyncSession, course_id: uuid.UUID, user) -> Knowl
     stmt = select(KnowledgePoint).where(
         KnowledgePoint.id == course_id,
         KnowledgePoint.deleted_at.is_(None),
-        teacher_visible_resource_filter(KnowledgePoint, user.id),
+        knowledge_read_filter(user.id),
     )
     course = (await db.execute(stmt)).scalars().first()
     if course is None:
@@ -70,6 +76,10 @@ async def kb_ingest(
     """Start the chunk→embed→store pipeline for one material (async, returns at once)."""
     await _visible_course(db, course_id, user)
     resource = await _get_resource(db, resource_id)
+    nodes = course_nodes(course_id=course_id)
+    if resource.node_id not in set(await db.scalars(select(nodes.c.id))):
+        raise HTTPException(404, "资料不属于当前课程")
+    await require_material_access(db, resource, user.id, write=True)
     if not body.material_text.strip():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="资料文本为空，无法入库")
 
@@ -93,6 +103,10 @@ async def kb_status(
 ) -> KbStatusResponse:
     await _visible_course(db, course_id, user)
     resource = await _get_resource(db, resource_id)
+    nodes = course_nodes(course_id=course_id)
+    if resource.node_id not in set(await db.scalars(select(nodes.c.id))):
+        raise HTTPException(404, "资料不属于当前课程")
+    await require_material_access(db, resource, user.id)
     return KbStatusResponse(
         kb_status=resource.kb_status,
         kb_error=resource.kb_error,
@@ -120,7 +134,10 @@ async def kb_stats(
     await _visible_course(db, course_id, user)
     chunk_count = (
         await db.execute(
-            select(func.count(CourseMaterialChunk.id)).where(
+            select(func.count(CourseMaterialChunk.id))
+            .join(LearningResource, LearningResource.id == CourseMaterialChunk.resource_id)
+            .where(
+                material_read_filter(user.id),
                 CourseMaterialChunk.course_kp_id == course_id,
                 CourseMaterialChunk.deleted_at.is_(None),
             )
@@ -130,6 +147,7 @@ async def kb_stats(
     ready = (
         await db.execute(
             select(func.count(LearningResource.id)).where(
+                material_read_filter(user.id),
                 LearningResource.node_id.in_(node_ids),
                 LearningResource.node_type == "kp",
                 LearningResource.kb_status == "ready",
@@ -140,6 +158,7 @@ async def kb_stats(
     total = (
         await db.execute(
             select(func.count(LearningResource.id)).where(
+                material_read_filter(user.id),
                 LearningResource.node_id.in_(node_ids),
                 LearningResource.node_type == "kp",
                 LearningResource.kb_status.isnot(None),
@@ -160,7 +179,7 @@ async def kb_search(
 ) -> list[KbSearchHit]:
     """Debug retrieval endpoint (mirrors ArkLoop's KB search API)."""
     await _visible_course(db, course_id, user)
-    hits = await service.search_chunks(db, course_kp_id=course_id, query=q, k=min(k, 20))
+    hits = await service.search_chunks(db, course_kp_id=course_id, query=q, k=min(k, 20), user_id=user.id)
     return [
         KbSearchHit(score=h.score, chunk_type=h.chunk_type, heading_path=list(h.heading_path), text=h.text)
         for h in hits

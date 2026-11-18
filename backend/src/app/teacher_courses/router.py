@@ -17,8 +17,9 @@ from app.auth.security import hash_password_async, verify_password_async
 
 from app.auth.dependencies import CurrentUser, user_has_role
 from app.auth.models import User
+from app.teacher_courses.access import course_read_filter, course_question_filter, material_read_filter
 from app.common.data_visibility import VisibilityScope
-from app.common.resource_access import can_write_owned_resource, teacher_owned_resource_filter, teacher_visible_resource_filter
+from app.common.resource_access import can_write_owned_resource, teacher_owned_resource_filter
 from app.database import get_db
 from app.exams.models import (
     Exam,
@@ -251,20 +252,7 @@ async def _get_visible_course(
         .where(*conditions)
     )
     if not is_admin:
-        has_share_or_ws = or_(
-            teacher_visible_resource_filter(KnowledgePoint, user.id),
-            exists().where(
-                CourseShareLink.course_id == KnowledgePoint.id,
-                CourseShareLink.is_active.is_(True),
-                CourseShareLink.deleted_at.is_(None),
-            ),
-            exists().where(
-                CourseUserWorkspace.course_id == KnowledgePoint.id,
-                CourseUserWorkspace.user_id == user.id,
-                CourseUserWorkspace.deleted_at.is_(None),
-            ),
-        )
-        stmt = stmt.where(has_share_or_ws)
+        stmt = stmt.where(course_read_filter(user.id))
     row = (await db.execute(stmt)).one_or_none()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Course not found")
@@ -299,21 +287,13 @@ async def _course_counts(
     subtree = _course_subtree_cte(course_id, include_deleted_root=include_deleted_root)
     subtree_ids = select(subtree.c.id)
 
-    default_bank = await _get_course_default_question_bank(db, course)
-    question_count = 0
-    if default_bank is not None:
-        question_stmt = select(func.count(Question.id)).where(
-            Question.deleted_at.is_(None),
-            Question.question_bank_id == default_bank.id,
-        )
-        if not is_admin:
-            question_stmt = question_stmt.where(
-                or_(Question.owner_id == course.owner_id, Question.owner_id == user.id)
-            )
-        question_count = await db.scalar(question_stmt) or 0
+    question_count = await db.scalar(select(func.count(Question.id)).where(
+        course_question_filter(course.id, course.owner_id, user.id),
+    )) or 0
 
     material_stmt = select(func.count(LearningResource.id)).where(
         LearningResource.node_type == "kp",
+        LearningResource.deleted_at.is_(None),
         LearningResource.node_id.in_(subtree_ids),
     )
     if not is_admin:
@@ -423,36 +403,35 @@ async def _batch_course_counts(
     anchor = select(
         KnowledgePoint.id.label("course_id"),
         KnowledgePoint.id.label("kp_id"),
+        KnowledgePoint.owner_id.label("course_owner_id"),
+        KnowledgePoint.name.label("course_name"),
     ).where(
         KnowledgePoint.id.in_(course_ids),
     )
     subtree = anchor.cte(name="course_subtrees", recursive=True)
     child = (
-        select(subtree.c.course_id, KnowledgePoint.id.label("kp_id"))
+        select(subtree.c.course_id, KnowledgePoint.id.label("kp_id"), subtree.c.course_owner_id, subtree.c.course_name)
         .select_from(KnowledgePoint)
         .join(subtree, KnowledgePoint.parent_id == subtree.c.kp_id)
         .where(KnowledgePoint.deleted_at.is_(None))
     )
     subtree = subtree.union_all(child)
 
-    # 1) questions per course: a course owns the questions in its default question bank.
-    default_banks_by_course = await _get_course_default_question_banks(db, courses)
-    course_id_by_bank_id = {
-        bank.id: course_id for course_id, bank in default_banks_by_course.items()
-    }
-    if course_id_by_bank_id:
-        q_stmt = (
-            select(Question.question_bank_id, func.count(Question.id))
-            .where(
-                Question.deleted_at.is_(None),
-                Question.question_bank_id.in_(course_id_by_bank_id.keys()),
-            )
-            .group_by(Question.question_bank_id)
-        )
-        if not is_admin:
-            q_stmt = q_stmt.where(teacher_owned_resource_filter(Question, user.id))
-        for bank_id, count in (await db.execute(q_stmt)).all():
-            result[course_id_by_bank_id[bank_id]]["question_count"] = count
+    # Count shared author questions and this teacher's private additions once.
+    q_stmt = select(subtree.c.course_id, func.count(func.distinct(Question.id))).select_from(subtree).join(
+        Question, or_(
+            exists().where(question_knowledge_points.c.question_id == Question.id,
+                           question_knowledge_points.c.knowledge_point_id == subtree.c.kp_id),
+            exists().where(QuestionBank.id == Question.question_bank_id,
+                           QuestionBank.owner_id == subtree.c.course_owner_id,
+                           QuestionBank.name == func.substr(func.trim(subtree.c.course_name), 1, 197) + "-题库",
+                           QuestionBank.deleted_at.is_(None)),
+        ),
+    ).where(Question.deleted_at.is_(None),
+            or_(Question.owner_id == user.id, Question.owner_id == subtree.c.course_owner_id)
+    ).group_by(subtree.c.course_id)
+    for course_id, count in (await db.execute(q_stmt)).all():
+        result[course_id]["question_count"] = count
 
     # 2) materials per course
     m_stmt = (
@@ -462,6 +441,11 @@ async def _batch_course_counts(
             LearningResource,
             (LearningResource.node_id == subtree.c.kp_id) & (LearningResource.node_type == "kp"),
         )
+        .where(LearningResource.deleted_at.is_(None), or_(
+            LearningResource.uploaded_by == user.id,
+            LearningResource.uploaded_by == subtree.c.course_owner_id,
+            LearningResource.uploaded_by.is_(None),
+        ))
         .group_by(subtree.c.course_id)
     )
     for course_id, count in (await db.execute(m_stmt)).all():
@@ -691,16 +675,7 @@ async def create_teacher_course(
 
 @router.get("", response_model=list[TeacherCourseSummary])
 async def list_teacher_courses(db: DB, user: CurrentUser) -> list[TeacherCourseSummary]:
-    """My courses = courses I own.
-
-    Platform-shared root knowledge points belong to other teachers and don't
-    show up here on purpose: 「我的课程」literally means mine. Detail / write
-    access checks still use the broader visibility model so a shared course
-    fetched by direct link works.
-
-    Perf: one rows query + one batched-counts query (5 GROUP BYs) regardless
-    of how many courses the teacher owns. Earlier shape was N×5 round-trips.
-    """
+    """Owned and joined courses; platform administrators can manage every course."""
 
     is_admin = await _is_course_admin(db, user)
     rows_stmt = (
@@ -709,9 +684,10 @@ async def list_teacher_courses(db: DB, user: CurrentUser) -> list[TeacherCourseS
         .outerjoin(Major, Direction.major_id == Major.id)
         .where(
             KnowledgePoint.parent_id.is_(None),
-            KnowledgePoint.owner_id == user.id,
-            # 「我的课程」只列我自己的私有课程；标记为 platform 的课程是共享给别人用的资产，不在这里出现。
-            KnowledgePoint.visibility != VisibilityScope.PLATFORM,
+            or_(is_admin, KnowledgePoint.owner_id == user.id, exists().where(
+                CourseUserWorkspace.course_id == KnowledgePoint.id,
+                CourseUserWorkspace.user_id == user.id, CourseUserWorkspace.deleted_at.is_(None),
+            )),
         )
         .order_by(KnowledgePoint.updated_at.desc())
     )
@@ -800,6 +776,7 @@ async def list_teacher_course_materials(course_id: uuid.UUID, db: DB, user: Curr
         .join(KnowledgePoint, LearningResource.node_id == KnowledgePoint.id)
         .where(
             LearningResource.node_type == "kp",
+            LearningResource.deleted_at.is_(None),
             LearningResource.node_id.in_(select(subtree.c.id)),
         )
     )
@@ -815,6 +792,7 @@ async def list_teacher_course_materials(course_id: uuid.UUID, db: DB, user: Curr
     rows = (await db.execute(stmt)).all()
     return [
         TeacherCourseMaterial(
+            can_edit=is_admin or resource.uploaded_by == user.id,
             id=resource.id,
             node_id=resource.node_id,
             node_name=node_name,
@@ -1150,15 +1128,11 @@ async def list_teacher_course_questions(
         is_admin=is_admin,
         include_deleted=True,
     )
-    default_bank = await _get_course_default_question_bank(db, course)
-    if default_bank is None:
-        return []
-
     stmt = (
         select(Question)
         .where(
             Question.deleted_at.is_(None),
-            Question.question_bank_id == default_bank.id,
+            course_question_filter(course.id, course.owner_id, user.id),
         )
         .options(
             selectinload(Question.creator),
@@ -1253,16 +1227,12 @@ async def list_teacher_course_questions_paginated(
         is_admin=is_admin,
         include_deleted=True,
     )
-    default_bank = await _get_course_default_question_bank(db, course)
-    if default_bank is None:
-        return TeacherCourseQuestionList(items=[], total=0, type_counts={})
-
     q_clean = q.strip() if q else None
     kp_filter = knowledge_point_id is not None
 
     conditions: list = [
         Question.deleted_at.is_(None),
-        Question.question_bank_id == default_bank.id,
+        course_question_filter(course.id, course.owner_id, user.id),
     ]
     if not is_admin:
         conditions.append(or_(Question.owner_id == course.owner_id, Question.owner_id == user.id))
@@ -1299,7 +1269,7 @@ async def list_teacher_course_questions_paginated(
     # Type counts ignore the `types` filter so the UI can show available counts.
     type_conditions: list = [
         Question.deleted_at.is_(None),
-        Question.question_bank_id == default_bank.id,
+        course_question_filter(course.id, course.owner_id, user.id),
     ]
     if not is_admin:
         type_conditions.append(or_(Question.owner_id == course.owner_id, Question.owner_id == user.id))
@@ -1515,7 +1485,6 @@ async def get_teacher_course_knowledge_tree(course_id: uuid.UUID, db: DB, user: 
     )
     subtree = _course_subtree_cte(course_id, include_deleted_root=course.deleted_at is not None)
     subtree_ids = select(subtree.c.id)
-    default_bank = await _get_course_default_question_bank(db, course)
 
     nodes = (
         await db.execute(
@@ -1525,27 +1494,25 @@ async def get_teacher_course_knowledge_tree(course_id: uuid.UUID, db: DB, user: 
         )
     ).scalars().all()
 
-    q_rows = []
-    if default_bank is not None:
-        q_rows = (
-            await db.execute(
-                select(question_knowledge_points.c.knowledge_point_id, func.count(func.distinct(Question.id)))
-                .select_from(question_knowledge_points)
-                .join(Question, Question.id == question_knowledge_points.c.question_id)
-                .where(
-                    Question.deleted_at.is_(None),
-                    Question.question_bank_id == default_bank.id,
-                    question_knowledge_points.c.knowledge_point_id.in_(subtree_ids),
-                )
-                .group_by(question_knowledge_points.c.knowledge_point_id)
+    q_rows = (
+        await db.execute(
+            select(question_knowledge_points.c.knowledge_point_id, func.count(func.distinct(Question.id)))
+            .select_from(question_knowledge_points)
+            .join(Question, Question.id == question_knowledge_points.c.question_id)
+            .where(
+                Question.deleted_at.is_(None),
+                course_question_filter(course.id, course.owner_id, user.id),
+                question_knowledge_points.c.knowledge_point_id.in_(subtree_ids),
             )
-        ).all()
+            .group_by(question_knowledge_points.c.knowledge_point_id)
+        )
+    ).all()
     q_direct = {kp_id: count for kp_id, count in q_rows}
 
     m_rows = (
         await db.execute(
             select(LearningResource.node_id, func.count(LearningResource.id))
-            .where(LearningResource.node_type == "kp", LearningResource.node_id.in_(subtree_ids))
+            .where(LearningResource.node_type == "kp", LearningResource.node_id.in_(subtree_ids), material_read_filter(user.id))
             .group_by(LearningResource.node_id)
         )
     ).all()
@@ -1673,6 +1640,21 @@ async def list_course_semesters(
     ]
 
 
+async def _validate_semester_classes(db, class_ids, user, is_admin):
+    if not class_ids or is_admin:
+        return
+    requested = set(class_ids)
+    visible = set(await db.scalars(select(Class.id).where(
+        Class.id.in_(requested), Class.deleted_at.is_(None),
+        or_(Class.created_by == user.id, exists().where(
+            User.class_id == Class.id, TeacherStudent.student_id == User.id,
+            TeacherStudent.teacher_id == user.id, User.deleted_at.is_(None),
+        )),
+    )))
+    if visible != requested:
+        raise HTTPException(404, "班级不存在或不在当前教师名下")
+
+
 @router.post(
     "/{course_id}/semesters",
     response_model=CourseSemesterResponse,
@@ -1704,6 +1686,7 @@ async def create_course_semester(
     if (await db.execute(dupe_stmt)).scalar_one_or_none() is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="同名学期已存在")
 
+    await _validate_semester_classes(db, payload.class_ids, user, is_admin)
     semester = CourseSemester(
         course_id=course_id,
         name=name,
@@ -1746,9 +1729,10 @@ async def update_course_semester_classes(
     if semester is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="学期不存在")
 
-    if not is_admin and semester.owner_id != user.id and course.owner_id != user.id:
+    if not is_admin and semester.owner_id != user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权修改该课程的学期")
 
+    await _validate_semester_classes(db, payload.class_ids, user, is_admin)
     semester.class_ids = [str(class_id) for class_id in payload.class_ids]
     await db.commit()
     await db.refresh(semester)
@@ -1783,13 +1767,13 @@ async def _get_course_grade_students(
         is_admin=is_admin,
         include_deleted=True,
     )
-    if not is_admin and course.owner_id != user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权查看该课程的学生成绩")
 
     semester_stmt = select(CourseSemester).where(
         CourseSemester.course_id == course_id,
         CourseSemester.deleted_at.is_(None),
     )
+    if not is_admin:
+        semester_stmt = semester_stmt.where(CourseSemester.owner_id == user.id)
     if semester_id is not None:
         semester_stmt = semester_stmt.where(CourseSemester.id == semester_id)
     semesters = list((await db.execute(semester_stmt)).scalars().all())
@@ -2733,6 +2717,7 @@ async def archive_exam_to_semester(
     else:
         sem_stmt = select(CourseSemester).where(
             CourseSemester.id == payload.semester_id,
+            CourseSemester.owner_id == user.id,
             CourseSemester.course_id == course_id,
             CourseSemester.deleted_at.is_(None),
         )
@@ -2769,12 +2754,12 @@ async def create_course_publish_link(
     db: DB,
     user: CurrentUser,
 ) -> CourseShareLinkResponse:
-    is_admin = await _is_course_admin(db, user)
+    is_admin = await user_has_role(db, user.id, "platform_admin")
     course = await db.get(KnowledgePoint, course_id)
     if course is None or course.parent_id is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="课程不存在")
-    if not is_admin and course.owner_id != user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有课程所有者可以发布课程短链接")
+    if not is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有平台管理员可以发布课程短链接")
     if course.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="课程已删除，无法发布短链接")
 
@@ -2856,11 +2841,11 @@ async def revoke_course_publish_link(
     db: DB,
     user: CurrentUser,
 ) -> None:
-    is_admin = await _is_course_admin(db, user)
+    is_admin = await user_has_role(db, user.id, "platform_admin")
     course = await db.get(KnowledgePoint, course_id)
     if course is None or course.parent_id is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="课程不存在")
-    if not is_admin and course.owner_id != user.id:
+    if not is_admin:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权操作该课程发布短链接")
 
     stmt = select(CourseShareLink).where(

@@ -111,11 +111,12 @@ export function isRoleSelectionResponse(
 }
 
 export const authProvider: AuthProvider = {
-  login: async ({ username, password }) => {
+  login: async ({ username, password, role_name, redirectTo }) => {
     try {
       const { data } = await axios.post<ILoginResponse>(`${API_URL}/auth/login`, {
         username,
         password,
+        ...(role_name ? { role_name } : {}),
       });
       if (isRoleSelectionResponse(data)) {
         pendingRoleSelection = {
@@ -132,7 +133,7 @@ export const authProvider: AuthProvider = {
         };
       }
       storeAuthSession(data);
-      return { success: true, redirectTo: getRedirectAfterLogin(data) };
+      return { success: true, redirectTo: redirectTo || getRedirectAfterLogin(data) };
     } catch (error) {
       clearPendingRoleSelection();
       return { success: false, error: { name: "登录失败", message: getLoginErrorMessage(error) } };
@@ -186,7 +187,7 @@ export const authProvider: AuthProvider = {
     return { error };
   },
 
-  register: async ({ username, email, password, full_name, role_name, persona }: Record<string, string>) => {
+  register: async ({ username, email, password, full_name, role_name, persona, redirectTo }: Record<string, string>) => {
     let accountCreated = false;
     try {
       const normalizedEmail = email?.trim();
@@ -216,7 +217,7 @@ export const authProvider: AuthProvider = {
         };
       }
       storeAuthSession(data);
-      return { success: true, redirectTo: getRedirectAfterLogin(data) };
+      return { success: true, redirectTo: redirectTo || getRedirectAfterLogin(data) };
     } catch (error) {
       if (accountCreated) {
         return {

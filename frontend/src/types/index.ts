@@ -506,6 +506,7 @@ export interface ISwitchReportResponse {
 }
 
 export interface IQuestion {
+  owner_id?: string;
   id: string;
   type: QuestionType;
   title: string;

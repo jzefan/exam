@@ -1,3 +1,4 @@
+import { useCourseWorkspace } from "@/lib/course-workspace";
 import { useEffect, useRef, useState } from "react";
 import { useCreate } from "@refinedev/core";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
@@ -72,7 +73,12 @@ interface PaperExamSeedResponse {
 export function ExamCreate() {
   const navigate = useNavigate();
   const location = useLocation();
-  const navState = (location.state ?? {}) as {
+  const workspace = useCourseWorkspace();
+  const navState = {
+    ...(workspace ? { courseKpId: workspace.courseId, courseName: workspace.courseName,
+      backTo: "/", successTo: "/", courseOrigin: true } : {}),
+    ...(location.state ?? {}),
+  } as {
     successTo?: string;
     courseKpId?: string;
     courseSemesterId?: string;

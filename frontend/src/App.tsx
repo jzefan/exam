@@ -13,6 +13,8 @@ import { BackgroundTaskNoticeHost } from "./components/ui/background-task-notice
 import { Toaster } from "./components/ui/toaster";
 import { Layout } from "./components/layout";
 import { StudentLayout } from "./components/student-layout";
+import { courseWorkspaceEntry } from "./lib/course-workspace";
+import { CourseWorkspaceShell } from "./pages/courses/CourseShareEntryPage";
 import { useBrand } from "./lib/brand";
 
 import { ENTERPRISE_ROLES, getHomeRoute, STUDENT_ROLES, TEACHER_ROLES } from "@/utils/role-routing";
@@ -64,9 +66,6 @@ const Dashboard = lazyNamed(() => import("./pages/dashboard"), "Dashboard");
 const KnowledgeManagementPage = lazyNamed(() => import("./pages/knowledge"), "KnowledgeManagementPage");
 const CourseListPage = lazyNamed(() => import("./pages/courses/list"), "CourseListPage");
 const CourseDetailPage = lazyNamed(() => import("./pages/courses/detail"), "CourseDetailPage");
-const CourseShareEntryPage = lazy(
-  () => import("./pages/courses/CourseShareEntryPage"),
-);
 const QuestionGenTemplatesPage = lazyNamed(
   () => import("./pages/courses/question-gen-templates"),
   "QuestionGenTemplatesPage",
@@ -166,10 +165,11 @@ function StudentForcePasswordGuard() {
 }
 
 function App() {
+  const workspace = courseWorkspaceEntry(window.location.pathname);
   return (
     <ThemeProvider>
       <ThemeConfigProvider>
-        <BrowserRouter>
+        <BrowserRouter basename={workspace?.basePath}>
           <BrowserTitle />
           <Refine
             routerProvider={routerProvider}
@@ -241,10 +241,36 @@ function App() {
             }}
           >
             <Suspense fallback={<RouteFallback />}>
-              <Routes>
+              {workspace ? <CourseWorkspaceShell shareCode={workspace.shareCode}>
+                <Routes>
+                  <Route index element={<CourseDetailPage />} />
+                  <Route path="/courses/:id" element={<CourseDetailPage />} />
+                  <Route path="/courses/:id/papers/create" element={<CoursePaperCreatePage />} />
+                  <Route path="/courses/:id/question-skills" element={<QuestionGenTemplatesPage />} />
+                  <Route path="/questions/create" element={<QuestionCreate />} />
+                  <Route path="/questions/import" element={<QuestionImportPage />} />
+                  <Route path="/questions/ai-generate" element={<AIGeneratePage />} />
+                  <Route path="/questions/edit/:id" element={<QuestionEdit />} />
+                  <Route path="/questions" element={<Navigate to="/?tab=questions" replace />} />
+                  <Route path="/papers/import" element={<PaperImportPage />} />
+                  <Route path="/papers/:id/knowledge-coverage" element={<PaperKnowledgeCoveragePage />} />
+                  <Route path="/papers/:id" element={<PaperDetailPage />} />
+                  <Route path="/papers" element={<Navigate to="/?tab=papers" replace />} />
+                  <Route path="/exams/create" element={<ExamCreate />} />
+                  <Route path="/exams/practice/create" element={<PracticeCreate />} />
+                  <Route path="/exams/practice/edit/:id" element={<PracticeCreate />} />
+                  <Route path="/exams/:id/view" element={<ExamPaperViewPage />} />
+                  <Route path="/exams/:id/analysis" element={<ExamAnalysisPage />} />
+                  <Route path="/exams/edit/:id" element={<ExamEdit />} />
+                  <Route path="/exams/students" element={<ExamStudentsPage />} />
+                  <Route path="/exams/:examId/students/:studentId/result" element={<StudentAnswerPage />} />
+                  <Route path="/exams" element={<Navigate to="/?tab=exams" replace />} />
+                  <Route path="/grading" element={<GradingCenterPage />} />
+                  <Route path="/students" element={<StudentManagementPage />} />
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+              </CourseWorkspaceShell> : <Routes>
                 {/* External candidate and public course share routes — public, no application shell */}
-                <Route path="/c/:shareCode" element={<CourseShareEntryPage />} />
-                <Route path="/course-share/:shareCode" element={<CourseShareEntryPage />} />
                 <Route path="/exam-invite" element={<CandidateLanding />} />
                 <Route path="/exam-public" element={<CandidatePublicLanding />} />
                 <Route path="/exam-invite/take/:examId" element={<GuestExamTakePage />} />
@@ -396,7 +422,7 @@ function App() {
                   <Route path="/login" element={<LoginPage />} />
                   <Route path="/register" element={<RegisterPage />} />
                 </Route>
-              </Routes>
+              </Routes>}
             </Suspense>
           </Refine>
           <BackgroundTaskNoticeHost />

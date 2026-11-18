@@ -13,13 +13,15 @@ from typing import Any
 import httpx
 import pdfplumber
 from docx import Document
-from sqlalchemy import Select, and_, delete, exists, func, or_, select
+from sqlalchemy import Select, and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
+from app.teacher_courses.access import knowledge_read_filter, paper_read_filter, question_read_filter
+
 from app.auth.models import User
 from app.common.data_visibility import VisibilityScope
-from app.common.resource_access import can_write_owned_resource, teacher_owned_resource_filter, teacher_visible_resource_filter
+from app.common.resource_access import can_write_owned_resource, teacher_owned_resource_filter
 from app.learning.models import KnowledgePoint
 from app.papers.models import Paper, PaperImportSession, PaperQuestion, PaperQuestionKnowledgeSuggestion
 from app.papers.schemas import (
@@ -835,16 +837,7 @@ def paper_base_query() -> Select:
 def paper_scope_query(user: User, is_admin: bool) -> Select:
     query = paper_base_query()
     if not is_admin:
-        course_base_paper = and_(
-            Paper.root_knowledge_point_id.is_not(None),
-            Paper.is_reusable.is_(True),
-            exists().where(
-                KnowledgePoint.id == Paper.root_knowledge_point_id,
-                KnowledgePoint.owner_id == Paper.owner_id,
-                KnowledgePoint.deleted_at.is_(None),
-            ),
-        )
-        query = query.where(or_(teacher_owned_resource_filter(Paper, user.id), course_base_paper))
+        query = query.where(paper_read_filter(user.id))
     return query
 
 
@@ -1044,7 +1037,7 @@ async def _ensure_visible_source_paper(
         return
     query = select(Paper.id).where(Paper.id == source_paper_id, Paper.deleted_at.is_(None))
     if not is_admin:
-        query = query.where(teacher_owned_resource_filter(Paper, user.id))
+        query = query.where(paper_read_filter(user.id))
     if await db.scalar(query) is None:
         raise ValueError("source paper not found or not visible")
 
@@ -1063,7 +1056,7 @@ async def _ensure_visible_root_knowledge_point(
         KnowledgePoint.deleted_at.is_(None),
     )
     if not is_admin:
-        query = query.where(teacher_visible_resource_filter(KnowledgePoint, user.id))
+        query = query.where(knowledge_read_filter(user.id))
     if await db.scalar(query) is None:
         raise ValueError("knowledge point not found or not visible")
 
@@ -1081,16 +1074,7 @@ async def _ensure_visible_questions(
 
     query = select(Question.id).where(Question.id.in_(question_ids), Question.deleted_at.is_(None))
     if not is_admin:
-        query = query.outerjoin(QuestionBank, Question.question_bank_id == QuestionBank.id).where(
-            or_(
-                teacher_owned_resource_filter(Question, user.id),
-                and_(
-                    Question.question_bank_id.is_not(None),
-                    QuestionBank.deleted_at.is_(None),
-                    QuestionBank.visibility == VisibilityScope.PLATFORM,
-                ),
-            )
-        )
+        query = query.where(question_read_filter(user.id))
     visible_ids = set(await db.scalars(query))
     if visible_ids != question_ids:
         raise ValueError("question not found or not visible")

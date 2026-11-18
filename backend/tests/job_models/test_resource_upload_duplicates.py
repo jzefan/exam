@@ -6,9 +6,15 @@ from httpx import AsyncClient
 
 @pytest.mark.asyncio
 async def test_upload_node_resource_rejects_duplicate_title_for_same_node(
-    admin_client: AsyncClient,
+    admin_client: AsyncClient, router_db_session, admin_token: str,
 ) -> None:
-    node_id = uuid.uuid4()
+    from app.learning.models import KnowledgePoint
+    from app.auth.security import decode_access_token
+    owner_id = uuid.UUID(decode_access_token(admin_token)["sub"])
+    node = KnowledgePoint(name="上传资料的课程", owner_id=owner_id)
+    router_db_session.add(node)
+    await router_db_session.commit()
+    node_id = node.id
     files = {
         "file": (
             "可信数据空间画册_v2.pptx",

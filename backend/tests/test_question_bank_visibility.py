@@ -1656,22 +1656,22 @@ async def test_question_type_distribution_scopes_and_unions_difficulties(
 
     client.headers.update({"Authorization": f"Bearer {create_access_token(teacher.id, '')}"})
 
-    # 无筛选：统计可见范围内全部题型
+    # 无筛选：统计可见范围内全部展示题型；单选由 choice 归一为 single_choice。
     resp = await client.get("/api/questions/type-distribution")
     assert resp.status_code == 200
     counts = {row["type"]: row["count"] for row in resp.json()}
-    assert counts == {"choice": 2, "fill_in": 1, "short_answer": 1}  # 他人私有的 choice 未泄漏
+    assert counts == {"single_choice": 2, "fill_in": 1, "short_answer": 1}  # 他人私有的 choice 未泄漏
     assert resp.headers["x-total-count"] == "4"
 
     # 仅本人题库：排除平台题库
     resp_bank = await client.get(f"/api/questions/type-distribution?question_bank_id={own_bank.id}")
     counts_bank = {row["type"]: row["count"] for row in resp_bank.json()}
-    assert counts_bank == {"choice": 2, "fill_in": 1}
+    assert counts_bank == {"single_choice": 2, "fill_in": 1}
 
     # 难度并集 {2,4}：与无筛选一致（OR，不是 AND）
     resp_union = await client.get("/api/questions/type-distribution?difficulty_in=2,4")
     counts_union = {row["type"]: row["count"] for row in resp_union.json()}
-    assert counts_union == {"choice": 2, "fill_in": 1, "short_answer": 1}
+    assert counts_union == {"single_choice": 2, "fill_in": 1, "short_answer": 1}
 
     # 仅难度 {4}：只剩填空题
     resp_hard = await client.get("/api/questions/type-distribution?difficulty_in=4")
@@ -1758,22 +1758,22 @@ async def test_course_knowledge_tree_returns_nested_rollup_counts(
     response = await client.get(f"/api/teacher/courses/{course.id}/knowledge-tree")
 
     assert detail_response.status_code == 200
-    assert detail_response.json()["question_count"] == 3
+    assert detail_response.json()["question_count"] == 4
 
     assert questions_response.status_code == 200
-    assert {item["title"] for item in questions_response.json()} == {"Q1", "Q2", "Q3"}
+    assert {item["title"] for item in questions_response.json()} == {"Q1", "Q2", "Q3", "Q-outside-bank"}
 
     assert response.status_code == 200
     root = response.json()
     assert root["name"] == "大数据分析技术"
-    assert root["question_count"] == 3
+    assert root["question_count"] == 4
     assert root["material_count"] == 2
 
     intro_node = root["children"][0]
     assert intro_node["name"] == "课程导论"
-    assert intro_node["question_count"] == 3
+    assert intro_node["question_count"] == 4
     assert intro_node["material_count"] == 2
     assert {child["name"]: child["question_count"] for child in intro_node["children"]} == {
-        "大数据4V特征": 2,
+        "大数据4V特征": 3,
         "大数据生态": 1,
     }

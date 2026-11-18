@@ -248,6 +248,7 @@ class KnowledgeFragment(BaseModel):
 
 
 class TeacherCourseMaterial(BaseModel):
+    can_edit: bool = False
     id: uuid.UUID
     node_id: uuid.UUID
     node_name: str | None = None
@@ -378,6 +379,7 @@ class CourseSharePublicPreviewResponse(BaseModel):
 
 
 class CourseShareEnterRequest(BaseModel):
+    # Legacy fields are ignored; entry always uses the authenticated teacher.
     workspace_key: str | None = None
     password: str | None = None
     alias_name: str | None = None

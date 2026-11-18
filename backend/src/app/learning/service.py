@@ -15,9 +15,10 @@ import httpx
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.teacher_courses.access import knowledge_read_filter
+
 from app.auth.models import User
 from app.common.data_visibility import VisibilityScope
-from app.common.resource_access import teacher_visible_resource_filter
 from app.config import settings
 from app.learning.models import Direction, KnowledgePoint, KnowledgePointPrerequisite, Major
 from app.learning.schemas import (
@@ -271,7 +272,7 @@ async def list_root_knowledge_point_options(
         .order_by(Major.name, Direction.name, KnowledgePoint.name)
     )
     if not is_platform_admin and user is not None:
-        stmt = stmt.where(teacher_visible_resource_filter(KnowledgePoint, user.id))
+        stmt = stmt.where(knowledge_read_filter(user.id))
 
     rows = (await db.execute(stmt)).all()
     return [
@@ -409,7 +410,7 @@ async def direction_has_foreign_knowledge_points(
 def _visible_knowledge_point_query(*, user: User | None, is_platform_admin: bool):
     query = select(KnowledgePoint).where(KnowledgePoint.deleted_at.is_(None))
     if not is_platform_admin and user is not None:
-        query = query.where(teacher_visible_resource_filter(KnowledgePoint, user.id))
+        query = query.where(knowledge_read_filter(user.id))
     return query
 
 
@@ -433,7 +434,7 @@ async def get_direction_tree(
         .where(KnowledgePoint.direction_id == direction_id, KnowledgePoint.deleted_at.is_(None))
     )
     if not is_platform_admin and user is not None:
-        stmt = stmt.where(teacher_visible_resource_filter(KnowledgePoint, user.id))
+        stmt = stmt.where(knowledge_read_filter(user.id))
     rows = (await db.execute(stmt)).all()
 
     flat_nodes = [

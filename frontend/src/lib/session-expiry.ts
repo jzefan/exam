@@ -1,4 +1,5 @@
 import axios, { type AxiosInstance } from "axios";
+import { courseWorkspaceEntry, safeCourseReturnTo } from "./course-workspace";
 
 let redirectingToLogin = false;
 
@@ -16,6 +17,30 @@ function normalizeUrl(input: RequestInfo | URL) {
   return input.url;
 }
 
+export function sessionLoginUrl(pathname: string, search = "") {
+  const course = courseWorkspaceEntry(pathname);
+  if (!course) return "/login";
+  const relativePath = pathname.slice(course.basePath.length) || "/";
+  const returnTo = safeCourseReturnTo(
+    relativePath === "/login" || relativePath === "/register"
+      ? new URLSearchParams(search).get("to")
+      : relativePath + search,
+  );
+  return `${course.basePath}/login?to=${encodeURIComponent(returnTo)}`;
+}
+
+export function shouldExpireSession(
+  url: string,
+  authorization: string | null,
+  currentToken: string | null,
+) {
+  return (
+    !isAuthEndpoint(url) &&
+    !!currentToken &&
+    authorization === `Bearer ${currentToken}`
+  );
+}
+
 function redirectToLogin() {
   if (redirectingToLogin) {
     return;
@@ -23,15 +48,26 @@ function redirectToLogin() {
   redirectingToLogin = true;
   localStorage.removeItem("access_token");
   localStorage.removeItem("user");
-  if (window.location.pathname !== "/login") {
-    window.location.replace("/login");
+  const loginUrl = sessionLoginUrl(
+    window.location.pathname,
+    window.location.search,
+  );
+  if (window.location.pathname + window.location.search !== loginUrl) {
+    window.location.replace(loginUrl);
     return;
   }
   redirectingToLogin = false;
 }
 
-function handleUnauthorized(url: string) {
-  if (isAuthEndpoint(url)) {
+function handleUnauthorized(url: string, authorization: string | null) {
+  // Ignore anonymous requests and late responses from a signed-out/switched account.
+  if (
+    !shouldExpireSession(
+      url,
+      authorization,
+      localStorage.getItem("access_token"),
+    )
+  ) {
     return;
   }
   redirectToLogin();
@@ -41,13 +77,19 @@ function attachAxiosUnauthorizedHandler(instance: AxiosInstance) {
   instance.interceptors.response.use(
     (response) => {
       if (response.status === 401) {
-        handleUnauthorized(response.config.url ?? "");
+        handleUnauthorized(
+          response.config.url ?? "",
+          String(response.config.headers?.Authorization ?? ""),
+        );
       }
       return response;
     },
     (error) => {
       if (error?.response?.status === 401) {
-        handleUnauthorized(error.config?.url ?? "");
+        handleUnauthorized(
+          error.config?.url ?? "",
+          String(error.config?.headers?.Authorization ?? ""),
+        );
       }
       return Promise.reject(error);
     },
@@ -66,9 +108,13 @@ export function setupSessionExpiryHandling() {
 
   const originalFetch = window.fetch.bind(window);
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const headers = new Headers(
+      init?.headers ?? (input instanceof Request ? input.headers : undefined),
+    );
+    const authorization = headers.get("Authorization");
     const response = await originalFetch(input, init);
     if (response.status === 401) {
-      handleUnauthorized(normalizeUrl(input));
+      handleUnauthorized(normalizeUrl(input), authorization);
     }
     return response;
   };

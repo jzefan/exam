@@ -157,9 +157,9 @@ export function CoursePublishDialog({
                 <p className="font-medium text-foreground">访客权限说明：</p>
                 <ul className="list-inside list-disc space-y-0.5 pl-1">
                   <li>浏览课程知识树、课件资料与公开题库</li>
-                  <li>创建专属学期与班级，独立发布练习与考试</li>
+                  <li>注册或登录教师账号后，管理学期、学生、练习与考试</li>
                   <li>支持答卷批改与主观题 AI 辅助判分</li>
-                  <li>可设置专属工作区密码，自建数据相互隔离</li>
+                  <li>教师登录后创建的内容仅自己可见</li>
                 </ul>
               </div>
             </div>
@@ -170,7 +170,7 @@ export function CoursePublishDialog({
               </div>
               <p className="mt-2 text-sm font-medium text-foreground">尚未发布课程短链接</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                生成短链接后，你可以将其分享给其他教师或学生，他们可立即进入「{courseName}」。
+                生成短链接后，你可以将其分享给其他教师，他们可立即进入「{courseName}」。
               </p>
             </div>
           )}

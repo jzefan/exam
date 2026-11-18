@@ -6,12 +6,15 @@ import logging
 import re
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import CurrentUser
+from app.auth.dependencies import CurrentUser, OptionalUser, user_has_role
+from app.teacher_courses.access import material_read_filter, require_material_access, require_node_access
+
 from app.database import get_db
 from app.job_models.schemas import (
     DimensionCreate,
@@ -940,12 +943,13 @@ import pathlib
 async def list_node_resources(
     node_id: uuid.UUID,
     db: DbSession,
-    _user: CurrentUser,
+    user: CurrentUser,
 ) -> list[LearningResourceResponse]:
     """List all learning resources for a given node."""
     result = await db.execute(
         select(LearningResource)
-        .where(LearningResource.node_id == node_id)
+        .where(LearningResource.node_id == node_id, LearningResource.deleted_at.is_(None),
+               (LearningResource.node_type != "kp") | material_read_filter(user.id))
         .order_by(LearningResource.sort_order, LearningResource.created_at)
     )
     resources = result.scalars().all()
@@ -958,6 +962,7 @@ async def _ensure_unique_learning_resource_title(
     node_id: uuid.UUID,
     node_type: str,
     title: str,
+    user_id: uuid.UUID,
 ) -> None:
     normalized_title = title.strip()
     existing = await db.scalar(
@@ -965,6 +970,8 @@ async def _ensure_unique_learning_resource_title(
             LearningResource.node_id == node_id,
             LearningResource.node_type == node_type,
             LearningResource.title == normalized_title,
+            LearningResource.uploaded_by == user_id,
+            LearningResource.deleted_at.is_(None),
         )
     )
     if existing is not None:
@@ -984,12 +991,16 @@ async def create_node_resource(
     node_type: str = Query(..., pattern="^(dimension|skill|kp)$"),
 ) -> LearningResourceResponse:
     """Create a learning resource (link or video URL) for a node."""
+    await require_node_access(db, node_id, node_type, user.id)
     await _ensure_unique_learning_resource_title(
         db,
         node_id=node_id,
         node_type=node_type,
+        user_id=user.id,
         title=body.title,
     )
+    if body.file_path:
+        raise HTTPException(400, "请通过文件上传接口添加资料")
     resource = LearningResource(
         node_id=node_id,
         node_type=node_type,
@@ -1019,7 +1030,7 @@ async def upload_node_resource(
     user: CurrentUser,
     file: UploadFile = File(...),
     title: str = Form(...),
-    node_type: str = Form(...),
+    node_type: str = Form(..., pattern="^(dimension|skill|kp)$"),
     description: str = Form(""),
 ) -> LearningResourceResponse:
     """Upload a file as a learning resource for a node."""
@@ -1029,10 +1040,12 @@ async def upload_node_resource(
         raise HTTPException(status_code=400, detail="文件大小不能超过 180MB")
 
     normalized_title = title.strip()
+    await require_node_access(db, node_id, node_type, user.id)
     await _ensure_unique_learning_resource_title(
         db,
         node_id=node_id,
         node_type=node_type,
+        user_id=user.id,
         title=normalized_title,
     )
 
@@ -1070,7 +1083,7 @@ async def update_resource(
     resource_id: uuid.UUID,
     body: LearningResourceUpdate,
     db: DbSession,
-    _user: CurrentUser,
+    user: CurrentUser,
 ) -> LearningResourceResponse:
     result = await db.execute(
         select(LearningResource).where(LearningResource.id == resource_id)
@@ -1079,6 +1092,13 @@ async def update_resource(
     if resource is None:
         raise HTTPException(status_code=404, detail="资源不存在")
 
+    await require_material_access(
+        db, resource, user.id, write=True,
+        is_admin=await user_has_role(db, user.id, "platform_admin"),
+    )
+
+    if body.node_id is not None:
+        await require_node_access(db, body.node_id, resource.node_type, user.id)
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(resource, field, value)
     await db.commit()
@@ -1090,7 +1110,7 @@ async def update_resource(
 async def delete_resource(
     resource_id: uuid.UUID,
     db: DbSession,
-    _user: CurrentUser,
+    user: CurrentUser,
 ) -> Response:
     result = await db.execute(
         select(LearningResource).where(LearningResource.id == resource_id)
@@ -1098,7 +1118,17 @@ async def delete_resource(
     resource = result.scalar_one_or_none()
     if resource is None:
         raise HTTPException(status_code=404, detail="资源不存在")
-    await db.delete(resource)
+
+    await require_material_access(
+        db, resource, user.id, write=True,
+        is_admin=await user_has_role(db, user.id, "platform_admin"),
+    )
+    if resource.file_path:
+        path = pathlib.Path(resource.file_path).resolve()
+        if path.parent == UPLOAD_DIR.resolve():
+            path.unlink(missing_ok=True)
+    # Keep an ownership tombstone if a stale path leaves the physical file behind.
+    resource.deleted_at = datetime.now(timezone.utc)
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -1107,7 +1137,7 @@ async def delete_resource(
 async def preview_resource_html(
     resource_id: uuid.UUID,
     db: DbSession,
-    _user: CurrentUser,
+    user: OptionalUser,
 ) -> Response:
     """Convert a .doc/.docx file to HTML for inline preview."""
     import subprocess
@@ -1119,6 +1149,10 @@ async def preview_resource_html(
     resource = result.scalar_one_or_none()
     if resource is None:
         raise HTTPException(status_code=404, detail="资源不存在")
+
+    await require_material_access(db, resource, user.id if user else None,
+                                  write=False,
+                                  is_admin=bool(user and await user_has_role(db, user.id, "platform_admin")))
 
     file_path = resource.file_path
     if not file_path or not pathlib.Path(file_path).exists():

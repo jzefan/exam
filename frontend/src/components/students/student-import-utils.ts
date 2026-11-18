@@ -3,6 +3,17 @@ export interface StudentImportClassOption {
   name: string;
 }
 
+/** A same-school class returned by the pre-import name lookup. */
+export interface StudentImportClassMatch extends StudentImportClassOption {
+  member_count: number;
+  created_by_name?: string | null;
+}
+
+export interface StudentImportClassLookup {
+  name: string;
+  matches: StudentImportClassMatch[];
+}
+
 export interface ParsedStudentImportRow {
   full_name: string;
   phone: string;
@@ -27,7 +38,9 @@ export function getStudentImportAccount(row: Pick<ParsedStudentImportRow, "phone
 }
 
 function normalizeName(value: string): string {
-  return value.trim().toLowerCase();
+  // Mirrors the backend's school-level class identity: surrounding and doubled
+  // whitespace must not make the same class look new.
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
 function normalizeHeader(value: unknown): string {
@@ -150,4 +163,87 @@ export async function buildStudentBatchImportItems({
   }
 
   return { students, classes: nextClasses };
+}
+
+/**
+ * Before creating classes for an import, resolve the unknown names against the
+ * whole school. Class identity is school-scoped even though the teacher's class
+ * list is scoped to their own students, so a same-named class created by a
+ * colleague must be reused instead of duplicated. The caller owns the actual
+ * confirmation UI; this helper only decides whether a prompt is needed.
+ */
+export async function prepareStudentImportClasses({
+  rows,
+  classes,
+  lookup,
+  confirm,
+}: {
+  rows: ParsedStudentImportRow[];
+  classes: StudentImportClassOption[];
+  lookup: (names: string[]) => Promise<StudentImportClassLookup[]>;
+  confirm: (message: string) => boolean;
+}): Promise<StudentImportClassOption[]> {
+  // A name needs the school-wide lookup when the teacher's own list has no
+  // match, or has several matches (legacy duplicates) and cannot say which one
+  // is the real class.
+  const visibleByName = new Map<string, StudentImportClassOption[]>();
+  for (const item of classes) {
+    const key = normalizeName(item.name);
+    visibleByName.set(key, [...(visibleByName.get(key) ?? []), item]);
+  }
+  const needsResolution = new Map<string, string>();
+  for (const row of rows) {
+    const className = row.class_name.trim();
+    if (!className) continue;
+    const normalized = normalizeName(className);
+    if ((visibleByName.get(normalized)?.length ?? 0) === 1) continue;
+    if (!needsResolution.has(normalized)) {
+      needsResolution.set(normalized, className);
+    }
+  }
+  const missingNames = [...needsResolution.values()];
+  if (missingNames.length === 0) {
+    return classes;
+  }
+
+  const lookups = await lookup(missingNames);
+  const conflicts = lookups
+    .map(({ name, matches }) => ({
+      name,
+      matches: [...matches].sort((a, b) => b.member_count - a.member_count),
+    }))
+    .filter((item) => item.matches.length > 0);
+  if (conflicts.length === 0) {
+    return classes;
+  }
+
+  const lines = conflicts.map(({ name, matches }) => {
+    const best = matches[0];
+    const creator = best.created_by_name ? `，创建人 ${best.created_by_name}` : "";
+    const extra = matches.length > 1 ? `，同校共 ${matches.length} 个同名班级` : "";
+    return `·「${name}」→ 使用「${best.name}」（${best.member_count} 人${creator}${extra}）`;
+  });
+  const accepted = confirm(
+    `同校已存在同名班级：\n${lines.join("\n")}\n\n是否直接使用已有班级继续导入？` +
+      "选择“取消”将中止导入，请先修改表格中的班级名称。",
+  );
+  if (!accepted) {
+    throw new Error("已取消导入：同校班级不能重名，请修改表格中的班级名称后重试。");
+  }
+
+  // Drop every visible class sharing the resolved name: `buildStudentBatchImportItems`
+  // maps names to the last entry, so the chosen class must be the only one left.
+  const resolvedNames = new Set(
+    conflicts.map(({ matches }) => normalizeName(matches[0].name)),
+  );
+  const merged = classes.filter((item) => !resolvedNames.has(normalizeName(item.name)));
+  const knownIds = new Set(merged.map((item) => item.id));
+  for (const { matches } of conflicts) {
+    const best = matches[0];
+    if (!knownIds.has(best.id)) {
+      knownIds.add(best.id);
+      merged.push({ id: best.id, name: best.name });
+    }
+  }
+  return merged;
 }
